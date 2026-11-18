@@ -7,6 +7,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { ClockProvider } from "../../../../clock"
 import { useEdgePeek, type EdgePeekControls } from "../../../adapters/use-edge-peek"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { testStore } from "../../testing"
@@ -49,11 +50,13 @@ it("reveals again after Escape dismissed a reveal that held focus", async () => 
   vi.useFakeTimers()
   act(() =>
     react.render(
-      <Provider store={store}>
-        <OverviewQuietProvider store={store} root={{ current: host }}>
-          <Folded />
-        </OverviewQuietProvider>
-      </Provider>,
+      <ClockProvider now={() => 0} elapsed={() => 0}>
+        <Provider store={store}>
+          <OverviewQuietProvider store={store} root={{ current: host }}>
+            <Folded />
+          </OverviewQuietProvider>
+        </Provider>
+      </ClockProvider>,
     ),
   )
   act(() => peek.enter(free))

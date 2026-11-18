@@ -5882,6 +5882,91 @@ async fn a_note_past_where_one_committed_read_stops_is_still_found() {
     service.shutdown().await.unwrap();
 }
 
+/// Two granted peers that reuse one request id each keep their own note.
+/// Opening the conversation uses the grantor. The note records the peer.
+#[tokio::test]
+async fn two_peers_keep_separate_notes_under_one_request_id() {
+    use nessa_sdk::application::agent_execution::sessions::NoteDelivery;
+    use nessa_sdk::domain::agent_execution::executions::Initiator;
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            input_files: None,
+            access_policy: crate::conversation_test_support::access_policy(),
+            agents: only(Arc::new(Provider::new(provider))),
+            storage,
+            metadata: repository,
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+            environment: crate::infrastructure::in_process_environment().into(),
+            tool_config: Default::default(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let owner = caller("panel", "same");
+    let mut first = owner.clone();
+    first.principal_id = PrincipalId::new("gateway:one").unwrap();
+    let mut second = owner.clone();
+    second.principal_id = PrincipalId::new("gateway:two").unwrap();
+    service
+        .leave_attributed_note(
+            id.clone(),
+            owner.clone(),
+            first.actor().unwrap(),
+            Initiator::Owner,
+            "from one".into(),
+            NoteDelivery::RecordOnly,
+        )
+        .await
+        .unwrap();
+    service
+        .leave_attributed_note(
+            id.clone(),
+            owner.clone(),
+            second.actor().unwrap(),
+            Initiator::Owner,
+            "from two".into(),
+            NoteDelivery::RecordOnly,
+        )
+        .await
+        .unwrap();
+    let one = service
+        .note_status_of(id.clone(), owner.clone(), &first.principal_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let two = service
+        .note_status_of(id, owner, &second.principal_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(one.0.text.as_str(), "from one");
+    assert_eq!(one.0.actor.principal_id(), "gateway:one");
+    assert_eq!(two.0.text.as_str(), "from two");
+    assert_eq!(two.0.actor.principal_id(), "gateway:two");
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn committed_reads_recheck_tombstone_after_title_lookup() {
     for pending_mode in [false, true] {

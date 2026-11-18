@@ -221,6 +221,10 @@ pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
 mod usage_limit_policy;
+mod window_control_audit;
+pub use window_control_audit::{
+    WindowControlAudit, WindowControlAuditRecord, WindowControlOutcome, WindowControlVia,
+};
 mod workspace_windows;
 pub use crate::domain::ReceiverBinding;
 pub use access_policy::{
@@ -241,7 +245,10 @@ pub use owner_phone_policy::{
     AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
     OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
 };
-pub use workspace_windows::{PublishedWindow, WindowPublished, WindowSlot, WorkspaceWindows};
+pub use workspace_windows::{
+    CommandRefusal, PublishedWindow, WindowAnswer, WindowCommand, WindowPublished, WindowSlot,
+    WorkspaceWindows, MAX_WINDOW_COMMANDS,
+};
 // The port itself, which placement and the service use on every host.
 pub use command_environment::CommandEnvironment;
 pub use command_environment::{CommandPublication, CommandResult, PublicationOutcome};
@@ -357,11 +364,14 @@ pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,
 };
-pub use service::{PaneConversation, WindowReading};
+pub use service::{
+    PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
+    WINDOW_ANSWER_TIMEOUT,
+};
 pub use session_key::conversation_session;
 pub use share_grants::{
-    binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ResourceKind,
-    RevisionHold, ShareConversation, ShareGrant, ShareGrantChange, ShareGrantList,
+    binding_of, note_candidates, paired_facts, GrantUse, GrantedShare, HeldGrant, Reader,
+    ResourceKind, RevisionHold, ShareConversation, ShareGrant, ShareGrantChange, ShareGrantList,
     ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
@@ -409,9 +419,9 @@ mod local_golden_tests;
 #[path = "../../tests/conversation/leases.rs"]
 mod lease_tests;
 
+pub(crate) use placement::rest_cause;
 #[cfg(unix)]
 pub use placement::ThreadEnvironments;
-pub use placement::WorkspaceRest;
 pub use placement::MAX_RETAINED_ENVIRONMENTS;
 
 #[cfg(unix)]

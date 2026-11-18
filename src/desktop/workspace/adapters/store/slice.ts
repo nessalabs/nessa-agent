@@ -72,6 +72,8 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; widget: WidgetRef }>,
     ) => chatPanel.closePanelTab(state, payload),
+    panelSet: (state, { payload }: Payload<{ open: boolean }>) =>
+      chatPanel.setPanel(state, payload),
     // Panes
     focusPane: (state, { payload }: Payload<{ pane: PaneKey }>) =>
       panes.focusPane(state, payload.pane),
@@ -244,6 +246,8 @@ const workspaceSlice = createSlice({
     ) => updates.transcriptFailed(state, payload),
     transcriptRetried: (state, { payload }: Payload<{ sessionId: string }>) =>
       updates.transcriptRetried(state, payload),
+    sessionHeld: (state, { payload }: Payload<{ sessionId: string | null }>) =>
+      updates.sessionHeld(state, payload),
     messageSent: (
       state,
       {

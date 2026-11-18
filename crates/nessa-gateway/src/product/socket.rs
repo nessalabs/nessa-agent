@@ -12,7 +12,7 @@ use crate::browser_session::application::{
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
     access_refusal, AccessDecision, ConversationAdmissionToken, RecordReadLease,
-    ReviewNoticeAuditFailure, WindowSlot,
+    ReviewNoticeAuditFailure, WindowCommand, WindowSlot,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::conversation_test_support as conversation_support;
@@ -42,10 +42,10 @@ use nessa_protocol::product::generated::{
     CredentialListResult, CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
     IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductLane,
     ProductMethod, ProductSessionReady, SessionAuthenticateParams, SessionChallenge,
-    SessionTermination, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
-    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
-    MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
-    PRODUCT_VERSION,
+    SessionTermination, WorkspaceCommand, MAX_NATIVE_HOOKS_REQUEST_ID_BYTES,
+    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
+    MAX_RECORD_RESPONSE_BYTES, MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD,
+    PRODUCT_READY_METHODS, PRODUCT_VERSION,
 };
 use nessa_protocol::product::handshake::{authentication_close_reason, supports_product_version};
 use nessa_protocol::product_contract::generated::SessionCloseReason;
@@ -596,6 +596,11 @@ enum WireResponse {
         payload: PermissionReviewWaiting,
         generation: u64,
     },
+    /// A change asked of this connection's window, numbered the same way.
+    /// Boxed, so a queued response stays as small as its record fields.
+    WindowCommand {
+        payload: Box<WorkspaceCommand>,
+    },
 }
 
 impl WireResponse {
@@ -961,12 +966,26 @@ async fn run_authenticated<S>(
     });
     // This connection's place for its window (`workspace.publish`), withdrawn
     // when the socket goes and this is dropped.
-    let window = Arc::new(state.conversation.service.as_ref().map(|conversations| {
-        conversations.workspace_windows().open(
-            session.context().organization_id().clone(),
-            session.context().principal_id().clone(),
-        )
-    }));
+    let (window, window_commands) = match state.conversation.service.as_ref() {
+        Some(conversations) => {
+            let (slot, commands) = conversations.workspace_windows().open(
+                session.context().organization_id().clone(),
+                session.context().principal_id().clone(),
+            );
+            (Some(slot), Some(commands))
+        }
+        None => (None, None),
+    };
+    let window = Arc::new(window);
+    // Changes asked of this connection's window (`workspace.command`), sent
+    // on the ordinary lane like a review notice, and aborted with it.
+    let command_task = window_commands.map(|commands| {
+        tokio::spawn(forward_window_commands(
+            commands,
+            ordinary_send.clone(),
+            Arc::clone(&ordinary_slots),
+        ))
+    });
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -1410,10 +1429,39 @@ async fn run_authenticated<S>(
         task.abort();
         let _ = task.await;
     }
+    if let Some(task) = command_task {
+        task.abort();
+        let _ = task.await;
+    }
     drop(ordinary_send);
     drop(record_send);
     if !writer_finished {
         let _ = writer.await;
+    }
+}
+
+/// Send each change asked of this connection's window, in the order asked.
+/// A command waits for a place on the ordinary lane as a review notice does.
+async fn forward_window_commands(
+    mut commands: mpsc::Receiver<WindowCommand>,
+    send: mpsc::Sender<QueuedResponse>,
+    slots: Arc<Semaphore>,
+) {
+    while let Some(command) = commands.recv().await {
+        let Ok(permit) = slots.clone().acquire_owned().await else {
+            break;
+        };
+        let queued = QueuedResponse {
+            message: WireResponse::WindowCommand {
+                payload: Box::new(super::workspace::command(&command)),
+            },
+            _slot: Arc::new(permit),
+            _record_work: None,
+            _mount: None,
+        };
+        if send.send(queued).await.is_err() {
+            break;
+        }
     }
 }
 
@@ -1636,6 +1684,17 @@ fn fitted_review_set(reviews: Vec<PermissionReviewNotice>) -> PermissionReviewWa
 /// is unchanged. `None` when the numbering is spent: the socket keeps going,
 /// and a later change of the set is sent with a number if one remains.
 fn number_review_notice(message: WireResponse, sequence: &EventSequence) -> Option<WireResponse> {
+    if let WireResponse::WindowCommand { payload } = &message {
+        let seq = sequence.next()?;
+        let frame = EventFrame::push(
+            product_event::WORKSPACE_COMMAND,
+            payload,
+            seq,
+            payload.command_id,
+        )
+        .ok()?;
+        return Some(WireResponse::ordinary(OutgoingMessage::Event(frame)));
+    }
     let WireResponse::ReviewWaiting {
         payload,
         generation,
@@ -1975,6 +2034,10 @@ async fn dispatch_authorized(
     let (frame, initiation) = authorized.into_parts();
     match method {
         ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),
+        ProductMethod::WorkspaceAnswer => super::workspace::answer(window, frame),
+        ProductMethod::WorkspaceArrange | ProductMethod::WorkspaceClosePane => {
+            super::workspace::control(state, session, frame).await
+        }
         ProductMethod::AgentsList => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
@@ -2112,7 +2175,8 @@ async fn dispatch_authorized(
         ProductMethod::PeerEnroll
         | ProductMethod::PeerList
         | ProductMethod::PeerForget
-        | ProductMethod::PeerRelay => super::peers::dispatch(state, session, frame).await,
+        | ProductMethod::PeerRelay
+        | ProductMethod::PeerFollow => super::peers::dispatch(state, session, frame).await,
         ProductMethod::ServerReach => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
@@ -2590,7 +2654,7 @@ async fn send_queued<S: Sink<Message> + Unpin>(
         }
         // Numbered before it reaches here. A snapshot that was not is not a
         // record and is not sent on this path.
-        WireResponse::ReviewWaiting { .. } => Err(()),
+        WireResponse::ReviewWaiting { .. } | WireResponse::WindowCommand { .. } => Err(()),
     }
 }
 
@@ -2631,7 +2695,7 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // review snapshots go on the ordinary lane, so this arm is never
         // reached. It is still delivered as `send_queued` would, under this
         // response's deadline, rather than dropped.
-        message @ WireResponse::ReviewWaiting { .. } => {
+        message @ (WireResponse::ReviewWaiting { .. } | WireResponse::WindowCommand { .. }) => {
             drop((slot, record_work, mount));
             return missed_record_deadline(
                 within_deadline(deadline, send_queued(write_timeout, socket, message)).await,

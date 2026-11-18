@@ -24,6 +24,7 @@
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
+use super::peer_discovery::{LanTask, RegistryDiscovery};
 use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress};
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
@@ -300,6 +301,10 @@ pub(super) struct BoundNative {
     peers: Arc<PeerCommands>,
     audit: Arc<DurablePeerAudit>,
     clock: Arc<dyn Clock>,
+    registry: Arc<LocalCredentialStore>,
+    /// Concrete address a paired peer can dial. Absent when the listener is
+    /// loopback, ephemeral, or has no routable address: nothing is announced.
+    dial_address: Option<SocketAddr>,
     /// The tunnel's bound ingress and what it serves, started with the
     /// listener.
     #[cfg(unix)]
@@ -400,9 +405,13 @@ pub(super) async fn bind(
                 .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
         }
     }
-    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
+    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry.clone())));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
-        .with_protected_sessions(Arc::new(sessions));
+        .with_protected_sessions(Arc::new(sessions))
+        .with_discovery(Arc::new(RegistryDiscovery {
+            store: registry.clone(),
+            clock: wall.clone(),
+        }));
     let connections = Arc::new(match environments {
         Some(environments) => connections.with_environment_peers(environments),
         None => connections,
@@ -481,6 +490,10 @@ pub(super) async fn bind(
         None => None,
     };
     let accept = TunneledAccept::new(RelayedAccept::new(socket, relayed), tunneled);
+    let dial_address = (address.port() != 0)
+        .then(|| advertised_endpoint(bound, route))
+        .flatten()
+        .filter(|endpoint| !endpoint.ip().is_loopback());
     Ok(BoundNative {
         gateway,
         audience,
@@ -492,6 +505,8 @@ pub(super) async fn bind(
         peers,
         audit,
         clock: wall,
+        registry,
+        dial_address,
         #[cfg(unix)]
         tunnel,
     })
@@ -536,6 +551,8 @@ pub(super) struct RunningNative {
     peers: Arc<PeerCommands>,
     /// Their audit: closed and drained once the commands are.
     audit: Arc<DurablePeerAudit>,
+    /// LAN announcement of paired gateways. Withdrawn with the listener.
+    lan: Option<LanTask>,
     /// The local-network announcement, withdrawn first on stop.
     announced: Option<Box<dyn Announced>>,
     /// The tunnel's ingress and supervisor, and their stop: stopped with
@@ -559,6 +576,12 @@ pub(super) fn start(
     failure: watch::Sender<Option<ErrorKind>>,
 ) -> RunningNative {
     let poller = bound.start_poller();
+    let lan = Some(LanTask::start(
+        bound.peers.clone(),
+        bound.registry.clone(),
+        bound.clock.clone(),
+        bound.dial_address,
+    ));
     // Announced only once serving is about to start, and never fatal: a phone
     // can still pair by address.
     let announced = bound.announcer.as_ref().and_then(|announcer| {
@@ -622,6 +645,7 @@ pub(super) fn start(
         peers,
         audit,
         announced,
+        lan,
         tunnel,
     }
 }
@@ -644,6 +668,9 @@ impl RunningNative {
             tunnel.stop.send_replace(true);
         }
         self.poller.signal_stop();
+        if let Some(lan) = &self.lan {
+            lan.signal_stop();
+        }
     }
 
     /// Wait for the listener to collect its peers and drain its connection
@@ -659,6 +686,9 @@ impl RunningNative {
         // The poller's read and status workers end before anything else is
         // waited on: they hold sockets to peers and those peers' turns.
         self.poller.join().await;
+        if let Some(lan) = self.lan.take() {
+            lan.join().await;
+        }
         // Then the owner's peer commands: none takes the turn from now (it
         // is refused, with its outcome, before any effect), and those already
         // between their intent and their outcome are waited for, so no

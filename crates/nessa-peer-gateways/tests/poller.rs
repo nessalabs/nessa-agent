@@ -875,3 +875,60 @@ fn owner_record() -> PeerAuditRecord {
         peer: DeviceKey::new([7; 32]),
     }
 }
+
+#[derive(Default)]
+struct FollowEvidence(Mutex<Vec<PeerAuditRecord>>);
+impl PeerAudit for FollowEvidence {
+    fn record(&self, record: PeerAuditRecord) -> PeerAuditFuture<'static> {
+        self.0.lock().unwrap().push(record);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn local_follow_recovery_audits_deletion_even_when_directory_sync_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let audit = Arc::new(FollowEvidence::default());
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let commands = slot_commands(&root.path().join("gateway"), clock.clone(), audit.clone());
+    let key = DeviceKey::new([7; 32]);
+    let records = commands.records();
+    drop(
+        nessa_client_core::retained::RetainedCache::open(
+            &records.cache_path(&key),
+            Arc::new(Ticks(AtomicU64::new(1))),
+            clock,
+        )
+        .unwrap(),
+    );
+    records.fail_next_cache_sync();
+    let (_stop, stopped) = watch::channel(false);
+    let shared = Shared {
+        commands: commands.clone(),
+        inputs: PollInputs {
+            policy: POLICY,
+            wall: Arc::new(Ticks(AtomicU64::new(1))),
+            entropy: Arc::new(|| {
+                Box::new(nessa_auth::adapters::pairing::OsEntropy)
+                    as Box<dyn crate::infrastructure::EnrollmentEntropy>
+            }),
+        },
+        stopped,
+    };
+    let mut changes = Vec::new();
+    assert!(!shared.reconcile_follow(key, &mut changes).await);
+    assert!(!records.cache_path(&key).exists());
+    assert!(matches!(
+        audit.0.lock().unwrap().last(),
+        Some(PeerAuditRecord::PollerChanged {
+            cause: PollerCause::FollowReset {
+                default: true,
+                replica_reset: true,
+                replica_reset_durable: false,
+                ..
+            },
+            outcome: Err("peer_unavailable"),
+            ..
+        })
+    ));
+}

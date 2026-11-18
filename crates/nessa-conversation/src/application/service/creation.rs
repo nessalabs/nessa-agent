@@ -181,7 +181,9 @@ impl ConversationService {
             Ok(Some(lease)) => lease,
             Ok(None) | Err(CreationStorageError::ForeignRequest) => return Ok(false),
             Err(CreationStorageError::Storage(error)) => return Err(error.into()),
-            Err(CreationStorageError::TaskFault(_)) => return Err(ConversationError::Unavailable),
+            Err(
+                CreationStorageError::TaskFault(_) | CreationStorageError::UnsupportedObservation,
+            ) => return Err(ConversationError::Unavailable),
         };
         match lease.load(binding.actor().request_id()).await {
             Ok(Some(receipt)) if receipt.binding() == &binding => match receipt.stage() {
@@ -191,7 +193,9 @@ impl ConversationService {
             },
             Ok(_) | Err(CreationStorageError::ForeignRequest) => Ok(false),
             Err(CreationStorageError::Storage(error)) => Err(error.into()),
-            Err(CreationStorageError::TaskFault(_)) => Err(ConversationError::Unavailable),
+            Err(
+                CreationStorageError::TaskFault(_) | CreationStorageError::UnsupportedObservation,
+            ) => Err(ConversationError::Unavailable),
         }
     }
 
@@ -211,9 +215,9 @@ impl ConversationService {
         let storage = self.commands().ok_or(ConversationError::Unavailable)?;
         let failure = |error| match error {
             CreationStorageError::Storage(error) => ConversationError::from(error),
-            CreationStorageError::TaskFault(_) | CreationStorageError::ForeignRequest => {
-                ConversationError::Unavailable
-            }
+            CreationStorageError::TaskFault(_)
+            | CreationStorageError::ForeignRequest
+            | CreationStorageError::UnsupportedObservation => ConversationError::Unavailable,
         };
         for observed in storage
             .creations(parent.owner().as_str().into())

@@ -52,9 +52,6 @@ export function accessRefusalCopy(refusal: {
   return `Access didn’t change. ${failureCopy(refusal.reason)}`
 }
 
-/** What the composer says of a choice the agent's turn holds back. */
-export const pendingAccessCopy = "Access changes when the agent stops."
-
 /** The shield's value, its change handler, and what to say of its last choice, for a session's composer. */
 export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
@@ -70,12 +67,13 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
+    // A choice the running turn holds back says nothing: the shield already
+    // shows it, and it takes effect when the agent stops. Only a refusal is
+    // said, because then the shield's choice did not happen.
     const notice: ComposerAccess["notice"] =
-      said?.state === "pending"
-        ? { tone: "neutral", text: pendingAccessCopy }
-        : said?.state === "refused"
-          ? { tone: "warning", text: accessRefusalCopy(said) }
-          : undefined
+      said?.state === "refused"
+        ? { tone: "warning", text: accessRefusalCopy(said) }
+        : undefined
     return { value: shieldFor(mode), onChange, ...(notice ? { notice } : {}) }
   }, [mode, onChange, said])
 }

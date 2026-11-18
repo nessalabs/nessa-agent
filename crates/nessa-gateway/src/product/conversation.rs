@@ -6,7 +6,7 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    binding_of, error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
     RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
@@ -68,7 +68,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
+use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -159,7 +159,35 @@ async fn answer(
             value
         }};
     }
-    let caller = |request_id: String| caller(session, request_id);
+    // A device signs in as the binding owner, so its session already names
+    // the conversation's owner. A peer signs in as itself. The grant admitted
+    // the command; the conversation is still the grantor's, so opening it
+    // asks `owner.act` of that owner. A note records the session principal.
+    // A send or a stop is stored under that same principal and request. The
+    // session store and the command history each key by principal and
+    // request, so two peers that reuse one request id each keep their own. The
+    // saved initiation stays the grant. The admission audit names the gateway
+    // principal.
+    let grantor = if matches!(initiation.initiator(), Initiator::Grant(_)) {
+        match state.reads.passive_read.as_ref() {
+            Some((receivers, _, _)) => binding_of(receivers.as_ref(), session.context())
+                .await
+                .ok()
+                .flatten()
+                .map(|binding| binding.owner_id),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let session_caller = |request_id: String| caller(session, request_id);
+    let caller = |request_id: String| {
+        let mut acting = session_caller(request_id);
+        if let Some(owner) = &grantor {
+            acting.principal_id = owner.clone();
+        }
+        acting
+    };
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
@@ -434,7 +462,8 @@ async fn answer(
                     SubmissionMode::Queue
                 };
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
                 // The clock is this moment, before the agent is asked, so the
                 // wait includes getting the turn under way. It is registered
@@ -464,10 +493,11 @@ async fn answer(
                         .await
                         .is_ok();
                 let submitted = service
-                    .submit_command_notifying(
+                    .submit_command_for(
                         store,
                         id.clone(),
-                        caller.clone(),
+                        access.clone(),
+                        command,
                         initiation,
                         offers_remember,
                         execution_id.clone(),
@@ -484,7 +514,7 @@ async fn answer(
                     Some(receipt) => receipt,
                     None => {
                         service
-                            .current_submission(id.clone(), caller, execution_id)
+                            .current_submission(id.clone(), access, execution_id)
                             .await?
                     }
                 };
@@ -494,10 +524,11 @@ async fn answer(
                 let params = target_params!(ConversationStopParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let receipt = service
-                    .stop_command(
+                    .stop_command_as(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()),
                         params.execution_id,
                     )
                     .await
@@ -511,13 +542,14 @@ async fn answer(
                 let params = target_params!(ConversationReceiptParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let result = match params.operation {
                     ConversationCommandOperation::Create => service
                         .lookup_creation(
                             store,
                             id,
-                            caller,
+                            access,
                             requested_conversation_from_receipt(&params)?,
                         )
                         .await
@@ -537,13 +569,13 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::submit_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                                 &message,
                                 mode,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access, binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
@@ -564,11 +596,11 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::stop_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access.clone(), binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
@@ -586,10 +618,13 @@ async fn answer(
             }
             "conversation.message" => {
                 let params = target_params!(ConversationMessageParams);
+                let sender = session_caller(params.request_id.clone());
+                let actor = sender.actor()?;
                 let (note, state) = service
-                    .leave_note(
+                    .leave_attributed_note(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        actor,
                         initiation.initiator().clone(),
                         params.text,
                         match params.delivery {
@@ -612,10 +647,12 @@ async fn answer(
             }
             "conversation.messageStatus" => {
                 let params = target_params!(ConversationMessageStatusParams);
+                let sender = session_caller(params.request_id.clone());
                 let found = service
-                    .note_status(
+                    .note_status_of(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        &sender.principal_id,
                     )
                     .await?;
                 Ok(success(
@@ -666,9 +703,10 @@ async fn answer(
                 let params = target_params!(ConversationAnswerQuestionParams);
                 interaction_key(&params.question)?;
                 service
-                    .answer_question(
+                    .answer_question_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.question_id,
                         params.question,
@@ -728,9 +766,10 @@ async fn answer(
                     }
                 }
                 service
-                    .answer(
+                    .answer_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,
@@ -800,9 +839,10 @@ async fn answer(
                 let params = target_params!(ConversationCancelParams);
                 interaction_key(&params.review)?;
                 service
-                    .cancel_permission(
+                    .cancel_permission_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,

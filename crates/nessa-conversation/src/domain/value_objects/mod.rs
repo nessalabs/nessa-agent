@@ -13,6 +13,7 @@ mod settings_scope;
 mod share_access;
 mod tool_call;
 mod vm_lifetime;
+mod window_action;
 mod workspace_window;
 pub use channel::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
@@ -29,6 +30,7 @@ pub use share_access::{
     ToolPolicyError, ToolPreset, ToolRules,
 };
 pub use tool_call::{ToolCall, ToolSource};
+pub use window_action::{OpenPlace, WindowAction, WindowActionSeverity, WindowSide, WindowView};
 pub use workspace_window::{
     PaneContent, PanePlace, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
     WindowRefusal, WindowShowing, WorkspaceWindow, MAX_PANEL_TABS,
@@ -37,4 +39,4 @@ pub use workspace_window::{
 pub use place::{Place, UnknownPlace};
 pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
 pub use settings_scope::SettingsScope;
-pub use vm_lifetime::{VmLifetime, VmLifetimeSettings};
+pub use vm_lifetime::{RestCause, VmLifetime, VmLifetimeSettings};

@@ -17,6 +17,7 @@ use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_B
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_attachments::application::{AttachmentLimits, HeldReads};
+use nessa_peer_gateways::application::DISCOVERY_WINDOW;
 use nessa_peer_gateways::infrastructure::{
     AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
     WITHDRAWN_PER_READ,
@@ -462,13 +463,13 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.preempt",
             tier: "fixed",
             owner: "PREEMPT in crates/nessa-peer-gateways/src/infrastructure/commands.rs",
-            meaning: "the longest peer.forget or peer.relay waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
+            meaning: "the longest peer.forget, peer.relay, or peer.follow waits for the read of the peer it names to give back that peer's turn; peer.enroll does not stop a read. At least twice the read's unstoppable connect (the 5 s handshake), and the read only queues its audit records before it gives the turn back, so past it the command answers peer_busy only if local storage stalls",
         },
         Limit {
             id: "peer.audit_queue",
             tier: "fixed",
             owner: "AUDIT_QUEUE in crates/nessa-peer-gateways/src/infrastructure/audit.rs",
-            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget or peer.relay answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
+            meaning: "the most peer audit records waiting to be written, one at a time in the order they were handed over; sized for every read running at once plus two owner records, and a further owner command waits for a place inside its 5 s audit deadline; a record past it is refused at once, its sequence left as a gap, so peer.enroll, peer.forget, peer.relay, or peer.follow answers peer_audit_unavailable before any effect and a peer read's change stands with its record logged as not kept",
         },
         Limit {
             id: "peer.reads_at_once",
@@ -481,6 +482,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "WITHDRAWN_PER_READ in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
             meaning: "the most conversations one read of a peer gateway withdraws, sixteen records of 64; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
+        },
+        Limit {
+            id: "peer.discovery_window",
+            tier: "fixed",
+            owner: "DISCOVERY_WINDOW in crates/nessa-peer-gateways/src/application/discovery.rs",
+            meaning: "how long one LAN announcement token is the token for its window; a paired peer also accepts the window on either side. The window index is Unix milliseconds divided by this, with integer division",
         },
         Limit {
             id: "command.default_timeout_ms",
@@ -750,6 +757,7 @@ pub fn effective_json(
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
+    put("peer.discovery_window", millis(DISCOVERY_WINDOW));
     put(
         "command.default_timeout_ms",
         CommandWork::DEFAULT_TIMEOUT_MS,

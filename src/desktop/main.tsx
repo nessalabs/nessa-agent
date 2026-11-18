@@ -62,6 +62,7 @@ import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
 import {
   followCallWithPill,
+  keepCallChat,
   scriptedTransport,
   storeConversations,
   VoiceController,
@@ -74,7 +75,13 @@ import {
   openReviewEvent,
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
-import { followWorkspace, loadWorkspace, openSession, type PathPicker } from "./workspace"
+import {
+  followWorkspace,
+  holdSession,
+  loadWorkspace,
+  openSession,
+  type PathPicker,
+} from "./workspace"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
@@ -220,10 +227,21 @@ const voice = dependencies.voice
       },
     })
   : undefined
-// While a call is open and this window is not the one in front, its switches
-// float over the other apps on a pill, the host's second window. A browser
-// has none, and there nothing is shown.
-if (voice)
+// While a call is open and its composer is not in view (this window is not
+// the one in front, or shows other chats), its switches float on a pill, the
+// host's second window. A browser has none, and there nothing is shown.
+if (voice) {
+  // A call goes on while no pane shows its chat: the window keeps following
+  // that chat, and a call whose chat is gone is ended.
+  keepCallChat({
+    call: voice,
+    hold: (sessionId) => void store.dispatch(holdSession({ sessionId })),
+    has: (sessionId) => {
+      const { sessions, drafts } = store.getState().workspace
+      return Object.hasOwn(sessions, sessionId) || Object.hasOwn(drafts, sessionId)
+    },
+    onChats: (listener) => store.subscribe(listener),
+  })
   followCallWithPill({
     call: voice,
     pill: {
@@ -248,11 +266,11 @@ if (voice)
       return Object.hasOwn(sessions, sessionId) ? sessions[sessionId].title : null
     },
     onTitles: (listener) => store.subscribe(listener),
-    // The chat a call talks to is always in a pane (the call ends when it
-    // is not), so opening it focuses that pane. Not the notice's path, which
-    // opens a chat only while a review waits in it.
+    // Focuses the pane that shows the chat, or opens it when none does. Not
+    // the notice's path, which opens a chat only while a review waits in it.
     showChat: (sessionId) => void store.dispatch(openSession({ sessionId })),
   })
+}
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
@@ -308,7 +326,21 @@ createRoot(container).render(
                                         <SavedLoginsProvider
                                           gateway={dependencies.savedLogins}
                                         >
-                                          <VoiceProvider controller={voice}>
+                                          <VoiceProvider
+                                            controller={voice}
+                                            title={(sessionId) => {
+                                              const sessions =
+                                                store.getState().workspace.sessions
+                                              return Object.hasOwn(sessions, sessionId)
+                                                ? sessions[sessionId].title
+                                                : null
+                                            }}
+                                            showChat={(sessionId) =>
+                                              void store.dispatch(
+                                                openSession({ sessionId }),
+                                              )
+                                            }
+                                          >
                                             {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,

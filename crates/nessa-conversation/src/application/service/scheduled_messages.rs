@@ -2147,6 +2147,7 @@ impl ConversationService {
             .submit_command_permitted(
                 commands,
                 id,
+                caller.clone(),
                 caller,
                 initiation,
                 false,

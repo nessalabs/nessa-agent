@@ -47,7 +47,7 @@ use super::{
 };
 use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
-    ToolSource,
+    RestCause, ToolSource,
 };
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
@@ -145,7 +145,10 @@ pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };
-pub use workspace_windows::{PaneConversation, WindowReading};
+pub use workspace_windows::{
+    PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
+    WINDOW_ANSWER_TIMEOUT,
+};
 
 use tokio::{
     sync::{
@@ -950,6 +953,8 @@ struct Inner {
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
     workspace_windows: Arc<super::WorkspaceWindows>,
+    /// Where each window change is recorded; unbound, every change is refused.
+    window_control_audit: OnceLock<Arc<dyn super::WindowControlAudit>>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
     ownership: OnceLock<owned_threads::Ownership>,
@@ -1498,6 +1503,7 @@ impl ConversationService {
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
+                window_control_audit: OnceLock::new(),
                 thread_reports: Default::default(),
                 ownership: OnceLock::new(),
                 thread_admission: Arc::new(Mutex::new(())),
@@ -5151,12 +5157,31 @@ impl ConversationService {
         key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_question_as(id, caller, actor, execution, question, key, choices)
+            .await
+    }
+
+    /// [`Self::answer_question`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer is not the owner. The answer is the
+    /// peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_question_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        question: String,
+        key: String,
+        choices: Option<Vec<QuestionChoiceInput>>,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
         supervised(async move {
             let _admission = service.admit().await?;
             // Kept, not merely checked: who answered is the one fact an audit of
             // an explicit answer exists to record.
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let question_id =
@@ -5205,10 +5230,39 @@ impl ConversationService {
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_as(
+            id,
+            caller,
+            actor,
+            execution,
+            permission,
+            review,
+            option,
+            permission_caller,
+        )
+        .await
+    }
+
+    /// [`Self::answer`] opening the conversation as `access` and recording
+    /// `actor`. A granted peer's approval stays that peer's decision.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        option: String,
+        permission_caller: PermissionCaller,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
@@ -5229,13 +5283,10 @@ impl ConversationService {
             }
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live.app_reviews.answer(
-                &execution,
-                &permission,
-                &review,
-                &option,
-                answerer(&caller),
-            ) {
+            match live
+                .app_reviews
+                .answer(&execution, &permission, &review, &option, answered_by)
+            {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
@@ -5355,13 +5406,32 @@ impl ConversationService {
         review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.cancel_permission_as(id, caller, actor, execution, permission, review, reason)
+            .await
+    }
+
+    /// [`Self::cancel_permission`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer's cancellation stays that peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn cancel_permission_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        reason: String,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
             if reason.len() > 1024 {
                 return Err(ConversationError::InvalidInput);
             }
-            let actor = caller.actor()?;
             let reason = CustomPermissionCancellationReason::new("gateway_request", reason)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let execution_id =
@@ -5371,7 +5441,7 @@ impl ConversationService {
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, &review, answerer(&caller))
+                .cancel(&execution, &permission, &review, answered_by)
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
@@ -7172,7 +7242,7 @@ impl ConversationService {
                             if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;
                             }
-                            if let Some(rest) = super::WorkspaceRest::of(cause) {
+                            if let Some(rest) = super::rest_cause(cause) {
                                 self.rest_workspace(id, rest);
                             }
                         }
@@ -7203,7 +7273,7 @@ impl ConversationService {
     /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
     /// agent has stopped: nothing for a conversation that has none, nor
     /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId, cause: super::WorkspaceRest) {
+    fn rest_workspace(&self, id: &ConversationId, cause: RestCause) {
         let service = self.clone();
         let id = id.clone();
         tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
@@ -7401,6 +7471,15 @@ fn initiator_of(actor: &ActionContext) -> McpAppInitiator {
 }
 
 /// Who answered an app's review: the caller of `conversation.answer`.
+fn answerer_of(actor: &ActionContext) -> Result<ReviewAnswerer, ConversationError> {
+    Ok(ReviewAnswerer {
+        principal_id: PrincipalId::new(actor.principal_id())
+            .map_err(|_| ConversationError::InvalidInput)?,
+        surface_id: actor.surface_id().to_owned(),
+        request_id: actor.request_id().to_owned(),
+    })
+}
+
 fn answerer(caller: &ConversationCaller) -> ReviewAnswerer {
     ReviewAnswerer {
         principal_id: caller.principal_id.clone(),

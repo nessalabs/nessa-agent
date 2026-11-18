@@ -1291,14 +1291,24 @@ sequenceDiagram
 Part 2b-3 reads what each peer granted. One task per gateway,
 `PeerPoller`, started and joined with native pairing, schedules the kept
 peers and reads up to `READS_AT_ONCE` (4) of them side by side. Each cycle
-holds that peer's turn. `peer.forget` and `peer.relay` stop the cycle of the
-peer they name and go ahead; a cycle of any other peer keeps going. A peer,
-however slow, never keeps an owner command waiting except the command that
-names it, and never keeps the other peers' reads waiting past its own place
-in the cap. `peer.enroll` does not stop a read. It shares the record set
-with `peer.forget` and `peer.relay`, one at a time: enroll and forget both
-change how many records are kept and `MAX_PEERS` is checked against that
-set, and a relay that cannot take the set does not stop a read.
+holds that peer's turn. `peer.forget`, `peer.relay`, and `peer.follow` stop
+the cycle of the peer they name and go ahead; a cycle of any other peer
+keeps going. A peer, however slow, never keeps an owner command waiting
+except the command that names it, and never keeps the other peers' reads
+waiting past its own place in the cap. `peer.enroll` does not stop a read.
+It shares the record set with `peer.forget`, `peer.relay`, and `peer.follow`,
+one at a time: enroll and forget both change how many records are kept and
+`MAX_PEERS` is checked against that set, and a relay or follow that cannot
+take the set does not stop a read.
+
+`peer.follow` is the follower's rule for that peer: which granted
+conversations to replicate, and how many bytes of the local replica to keep.
+Nothing is stored until the person chooses, and the poller then replicates
+the intersection of that rule and the grants. A granted chat with no rule
+can still be opened, and that open does not write the replica. Changing the
+set or the byte ceiling drops the replica. Naming a conversation the peer
+did not grant does not grant it, the peer is not dialed, and the rule is
+not sent. Forgetting the peer removes the rule with the record.
 
 ```mermaid
 sequenceDiagram
@@ -1320,7 +1330,7 @@ sequenceDiagram
     P->>A: catalogueHead (unchanged, and a finished walk noted there: done)
     P->>A: catalogue manifest pass and resolve
     P->>C: what A grants, by its owner's catalogue stream
-    P->>A: recordsHead for each cached conversation, while the budget lasts
+    P->>A: recordsHead for each cached conversation the follow rule names, while the budget lasts
     A-->>P: wrong_owner: no longer granted
     P->>C: withdraw it (entry and transcript)
     P->>A: record pages for the rest (cache full: heads only, to withdraw)
@@ -1624,6 +1634,37 @@ control cannot pass by masking an unrelated A failure.
 | C ended and A source never released | Reject A completion first; a C failure cannot mask it |
 | Cleanup, including the negative control | Save both results and phase evidence, release sources, join work, then assert |
 
+## Local discovery
+
+With at least one paired gateway whose discovery field is `installed` and
+whose credential is still current, this gateway may announce itself on the
+local network (`_nessa-peer._tcp`). The announcement carries a dial address,
+a port, and one HMAC-SHA256 token per such peer. Its DNS-SD host is a
+random `<instance>.local` name. On macOS the system responder does not
+create that name's address record, so the registration publishes the
+advertised address and removes it when the service is withdrawn. The token covers the window
+index, the address family, the address, and the port. The window length is
+`peer.discovery_window` in [limits](../../limits.md). A paired peer
+recomputes the token for the current window and one window on either side.
+A match names which pinned peer announced and which address to dial. The
+connection is still the pinned TLS session and the issued credential.
+Pairing still requires the one-use code.
+
+The pinned key, its fingerprint, any other stable gateway id, the owner, the
+organization, conversation ids, directories, and grants are not in the
+announcement. With no such peer, nothing is sent. A revoked or expired
+credential is not announced, and that does not change the phase and does not
+remove the discovery key. A peer row with no discovery key is left out; alpha
+does not invent one.
+
+The discovery key is agreed after enrollment is `Active`, on the pinned
+session (`openDiscovery`, carrying the exact public enrollment intent and issued credential ID, not a bearer secret). Both stores compare the expected previous discovery state before each write, so overlapping attempts cannot replace a newer committed generation. The dialer stores the field on the peer file. The
+granting gateway stores it on the pairing record that already keeps that
+peer's pin and `class: "peer"`. The public half is X25519(private, basepoint
+9). The MAC key is HKDF-SHA256 of the shared secret, not the raw secret and
+not the enrollment PAKE. `openDiscovery` from a key that is not an Active
+paired gateway is refused and writes no enrollment. Only a typed NotCurrent answer after the full request identity matches can stop the dialer’s announcement. Unknown enrollment, unsupported discovery, storage failure, and network loss do not infer revocation. Installed dialers read the grantor response on reconnect, not merely send their local installed state.
+
 ## What this part does not do
 
 H as a whole is larger than one change. Part 1 (#725) is the granting side;
@@ -1632,13 +1673,10 @@ the client and gives the head an access path by receiver
 (`share_grant_changes_by_receiver`); part 2b-2 enrolls and part 2b-3 reads
 (above). The rest:
 
-- **The peer table's last addresses and local discovery.** The issue lists
-  them; the ADR places local discovery in slice I, and the map leaves "whether
-  to announce at all, and what it reveals" unresolved. This side's peer table
-  is the registry's rows: the principal (named by the key), the pinned key
-  (the pairing's claim) and the grants (the credential's). Last addresses
-  belong to the side that dials, whose record keeps the one that last
-  answered (above).
+- **The peer table's last addresses.** Last addresses belong to the side
+  that dials, whose record keeps the one that last answered (above). Local
+  discovery of an already paired gateway is [below](#local-discovery). It
+  does not enroll and it does not replace the pinned credential.
 - **A Share or Linked gateways control on the desktop.** The method and the
   generated client take `enrollee`; the UI is a separate change with its
   browser verification.

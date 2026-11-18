@@ -4,8 +4,9 @@
  * floats over other apps (`pill/`); it holds no call of its own.
  *
  * A pill is drawn only for an open call. The host shows it only while the
- * desktop window is not the one in front (`src-tauri/src/call_pill.rs`): in
- * front, the composer already carries the same switches.
+ * call's composer is not in view (`src-tauri/src/call_pill.rs`): the desktop
+ * window is not the one in front, or no pane in it shows the call's chat.
+ * In view, the composer already carries the same switches.
  */
 import type { VoicePhase } from "./phase"
 

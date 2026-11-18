@@ -2,11 +2,13 @@ import { useNow } from "../../../../clock"
 import { type Activity, type Message } from "../../model/transcript"
 import { liveActivity, type TranscriptView } from "../../model/transcript-view"
 import { elapsed } from "../../model/time-labels"
-import { StatusGlyph } from "../chrome/status-glyph"
+import { WorkingWords } from "../chrome/working-words"
+import { useSettledWorking } from "../chrome/use-settled-working"
 
 /**
  * What a running agent is doing now, and for how long, set where its reply
- * will appear (`after` is what is drawn above it). Where a live tool run
+ * will appear (`after` is what is drawn above it), as shimmering words with
+ * no glyph beside them (`WorkingWords`). Where a live tool run
  * already shows it (`shownActivity`), it is said to a screen reader only:
  * the trace keeps no status of its own. It is one status either way, so a
  * new label is announced as it changes, drawn or not. The compact view draws
@@ -23,14 +25,17 @@ export function LiveRow({
   /** How much of the agent's work to show; detailed where not said. */
   view?: TranscriptView
 }) {
+  // Drawn only once the work lasts: a send refused at once never flickers.
+  const settled = useSettledWorking(reported !== null, reported?.since)
   if (!reported) return null
   const shown = liveActivity(view, after, reported)
-  const drawn = shown !== null
+  const drawn = shown !== null && settled
   const activity = shown ?? reported
   return (
     <div className={drawn ? "workspace-live" : "workspace-live-spoken"} role="status">
-      {drawn ? <StatusGlyph status="running" /> : null}
-      <span className={drawn ? "workspace-shimmer" : undefined}>{activity.label}</span>
+      <WorkingWords working={drawn} settled>
+        {activity.label}
+      </WorkingWords>
       {drawn ? <LiveTime since={activity.since} /> : null}
     </div>
   )

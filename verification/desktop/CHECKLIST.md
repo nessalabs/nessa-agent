@@ -867,13 +867,21 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   and without it and is steady without it, and where it cannot the composer
   wears a still ring (`data-rim="plain"`, never in Chromium). With no call
   there is no rim. With less motion nothing circles and neither brightness
-  nor reach follows a voice (`voice/model/rim.test.ts`). _Check:_
+  nor reach follows a voice (`voice/model/rim.test.ts`). Words said or heard
+  stay on one line above the composer: the newest are kept, the older run off
+  its start, and short words sit centred. _Check:_
   `conversation-stress` step `voice` (Chromium and WebKit, `local-auth.yml`).
-- [ ] **Away from the window, the call's switches are on the pill.** With a
+- [ ] **Away from its composer, the call's switches are on the pill.** With a
   call open and the desktop window not in front, the pill names the chat and
   its state; its microphone, voice and End are the call's own, and the
   composer follows them. In front again, or with no call, the pill draws
-  nothing. The motion chosen in Settings governs the pill's page as it does
+  nothing.
+  Opening another chat in the call's pane ends nothing: the call goes on,
+  the pill shows over the front window, what is said still reaches the agent
+  and the reply the voice, and the chat's name on the pill brings the chat
+  back and puts the pill away. Talk in another chat asks before it ends the
+  open call (Cancel leaves it, Talk here moves it), and a call that drops
+  with its chat in no pane is said in the window, naming the chat. The motion chosen in Settings governs the pill's page as it does
   the window's. _Check:_ `conversation-stress` step `voice` (the pill is a second
   page; the fake host carries the picture and presses as
   `src-tauri/src/call_pill.rs` does). Not checked by a script: the real
@@ -2634,7 +2642,8 @@ vault dialog blocking the main conversation click.
   then each connected computer by name, and a computer saved earlier but not
   connected is still listed. Every button ends one inset from the dialog's
   right edge (the title's left inset, within 1 px), and the dialog has no row
-  of tabs. _Check:_ `boat-runtime-settings.mjs` measures the four menus and
+  of tabs, and no note under the order explaining how Any picks a computer
+  (Devices keeps it). _Check:_ `boat-runtime-settings.mjs` measures the four menus and
   picks through them in Chromium and WebKit, columns and sidebar; the
   conversation stress `channel` and `place` steps pick Boat, This Mac and a
   paired worker from them; `channel-settings.test.tsx` lists the menu's items.

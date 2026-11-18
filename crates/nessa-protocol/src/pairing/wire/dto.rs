@@ -139,6 +139,12 @@ pub(super) enum WireRequest<'a> {
     },
     OpenProduct {},
     OpenEnvironment {},
+    /// Identify existing discovery enrollment; the credential ID is not a bearer secret.
+    /// This grants nothing; pairing still requires the one-use code.
+    OpenDiscovery {
+        public: WirePublic<'a>,
+        credential: Cow<'a, str>,
+    },
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]

@@ -13,7 +13,11 @@ import {
   thinkingLevelsFor,
 } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
-import { CatalogueModelPicker, findComposerModel } from "./catalogue-model-picker"
+import {
+  CatalogueModelPicker,
+  findComposerModel,
+  ModelMark,
+} from "./catalogue-model-picker"
 import { DesktopIcon } from "./icons"
 import { IconButton } from "./icon-button"
 import { ThinkingControl } from "./thinking-control"
@@ -175,6 +179,8 @@ export function Composer({
       className="desktop-composer"
       // A turn is running: the composer offers Stop (a quiet pane shows only that).
       data-running={onStop ? "" : undefined}
+      // Nothing typed or attached: a quiet pane folds it to a circle (`conversation.css`).
+      data-empty={draft === "" && images.length === 0 ? "" : undefined}
       onSubmit={(event) => {
         event.preventDefault()
         send()
@@ -250,7 +256,12 @@ export function Composer({
         </StatusLabel>
       ) : null}
       {modelNotice ? (
-        <StatusLabel role="status" tone="neutral" className="desktop-composer-notice">
+        <StatusLabel
+          role="status"
+          tone="neutral"
+          icon={null}
+          className="desktop-composer-notice"
+        >
           {modelNotice}
         </StatusLabel>
       ) : null}
@@ -258,6 +269,7 @@ export function Composer({
         <StatusLabel
           tone={access.notice.tone}
           role="status"
+          icon={access.notice.tone === "neutral" ? null : undefined}
           className="desktop-composer-notice"
         >
           {access.notice.text}
@@ -356,6 +368,26 @@ export function Composer({
           )}
         </div>
       </div>
+      {/*
+       * Shown only where a quiet pane folds an empty composer to a circle
+       * (`conversation.css`): focus on it focuses the pane, whose caret lands
+       * in the field, and the whole composer grows back out of this corner.
+       */}
+      <button
+        type="button"
+        className="desktop-composer-wake"
+        aria-label="Write a message"
+        {...tooltip("Write a message", { side: "above" })}
+        // Focus on the circle is focus into the pane: the pane takes it, and
+        // the caret follows into the field (`workspace/adapters/dom/focus.ts`).
+        onClick={(event) => event.currentTarget.focus()}
+      >
+        {shown && model ? (
+          <ModelMark provider={shown.provider} />
+        ) : (
+          <DesktopIcon name="edit" />
+        )}
+      </button>
     </form>
   )
 }

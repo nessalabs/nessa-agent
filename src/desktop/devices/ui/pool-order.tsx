@@ -141,8 +141,10 @@ export function PoolOrder({
         surface="flat"
         aria-label="Thread order"
         disabled={!pool || busy || mode === "default"}
+        // How Any picks a computer is said on Devices; a channel's settings
+        // leave it out (#1340 follow-up).
         footnote={
-          pool
+          pool && channelId === undefined
             ? `New threads on Any computer go to the first one here that’s online and under ${pool.busyCpuPercent}% CPU and ${pool.busyMemoryPercent}% memory. When every one is busy, Boat takes it if it’s connected, or else the first one here.`
             : undefined
         }

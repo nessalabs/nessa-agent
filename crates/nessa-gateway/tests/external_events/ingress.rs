@@ -1,5 +1,8 @@
 //! Real loopback HTTP -> real Cedar -> durable command store -> real SDK runner.
 //! Only the provider, clock and credential proof are local deterministic fixtures.
+#[path = "http_client.rs"]
+mod http_client;
+
 use super::{
     application::EventBinding,
     domain::EventId,
@@ -30,8 +33,9 @@ use nessa_sdk::{
     },
     infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock},
 };
+use reqwest::header::HeaderMap;
 use serde_json::{json, Value};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     path::Path,
     sync::{
@@ -200,6 +204,7 @@ struct CommandGate {
 }
 struct Store {
     inner: Arc<RecordStorage>,
+    open_attempts: AtomicU64,
     fail: AtomicBool,
     fail_terminal: Arc<AtomicBool>,
     gate: Mutex<Option<Arc<CommandGate>>>,
@@ -213,6 +218,7 @@ impl CreationStorage for Store {
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
+            self.open_attempts.fetch_add(1, Ordering::SeqCst);
             if self.fail.load(Ordering::SeqCst) {
                 return Err(CreationStorageError::Storage(StorageError::Closed));
             }
@@ -348,6 +354,7 @@ impl Fixture {
         let (authority, session) = authority().await;
         let commands = Arc::new(Store {
             inner: records.clone(),
+            open_attempts: AtomicU64::new(0),
             fail: AtomicBool::new(false),
             fail_terminal: Arc::new(AtomicBool::new(false)),
             gate: Mutex::new(None),
@@ -384,7 +391,11 @@ impl Fixture {
         let task = tokio::spawn(async move {
             axum::serve(listener, routes).await.unwrap();
         });
-        HttpServer { address, task }
+        HttpServer {
+            address,
+            task,
+            client: http_client::client(),
+        }
     }
     async fn completed(&self, execution: &str) {
         self.terminal(
@@ -427,6 +438,7 @@ impl Fixture {
 struct HttpServer {
     address: std::net::SocketAddr,
     task: JoinHandle<()>,
+    client: reqwest::Client,
 }
 impl Drop for HttpServer {
     fn drop(&mut self) {
@@ -435,26 +447,18 @@ impl Drop for HttpServer {
 }
 impl HttpServer {
     async fn request(&self, body: &str, timestamp: &str, key: &[u8]) -> (u16, Value) {
-        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
-        mac.update(b"nessa-event\nci\n");
-        mac.update(timestamp.as_bytes());
-        mac.update(b"\n");
-        mac.update(body.as_bytes());
-        let signature = STANDARD.encode(mac.finalize().into_bytes());
-        self.raw(body, &format!("Content-Type: application/json\r\nx-nessa-timestamp: {timestamp}\r\nx-nessa-signature: {signature}\r\n")).await
+        self.raw(body, signed_headers(body, timestamp, key)).await
     }
-    async fn raw(&self, body: &str, headers: &str) -> (u16, Value) {
-        let mut socket = TcpStream::connect(self.address).await.unwrap();
-        socket.write_all(format!("POST /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        let mut response = Vec::new();
-        tokio::time::timeout(Duration::from_secs(20), socket.read_to_end(&mut response))
+    async fn raw(&self, body: &str, headers: HeaderMap) -> (u16, Value) {
+        http_client::exchange(&self.client, self.address, body, headers)
             .await
-            .unwrap()
-            .unwrap();
-        let response = String::from_utf8(response).unwrap();
-        let (head, body) = response.split_once("\r\n\r\n").unwrap();
-        let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
-        (status, serde_json::from_str(body).unwrap())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "loopback HTTP reply failed: request_bytes={} request_sha256={:x} error={error:?}",
+                    body.len(),
+                    Sha256::digest(body.as_bytes()),
+                )
+            })
     }
     async fn event(&self, id: &str) -> (u16, Value) {
         self.request(
@@ -464,6 +468,19 @@ impl HttpServer {
         )
         .await
     }
+}
+fn signed_headers(body: &str, timestamp: &str, key: &[u8]) -> HeaderMap {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+    mac.update(b"nessa-event\nci\n");
+    mac.update(timestamp.as_bytes());
+    mac.update(b"\n");
+    mac.update(body.as_bytes());
+    let signature = STANDARD.encode(mac.finalize().into_bytes());
+    http_client::headers(&[
+        ("Content-Type", "application/json"),
+        ("x-nessa-timestamp", timestamp),
+        ("x-nessa-signature", &signature),
+    ])
 }
 fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
@@ -535,6 +552,26 @@ async fn concurrent_duplicates_share_a_turn_and_changed_payload_conflicts() {
     fixture.shutdown().await;
 }
 #[tokio::test]
+async fn valid_mac_duplicate_signed_fields_are_refused_before_command_store_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(root.path(), id()).await;
+    let server = fixture.server().await;
+    let body = r#"{"id":"duplicate","payload":{}}"#;
+    let reads = fixture.authority.clock_reads.load(Ordering::SeqCst);
+    for name in ["x-nessa-timestamp", "x-nessa-signature"] {
+        let mut headers = signed_headers(body, "100", &KEY);
+        headers.append(name, headers.get(name).unwrap().clone());
+        let (status, response) = server.raw(body, headers).await;
+        assert_eq!(status, 401, "{name}: {response}");
+    }
+    assert_eq!(fixture.authority.clock_reads.load(Ordering::SeqCst), reads);
+    assert_eq!(fixture.commands.open_attempts.load(Ordering::SeqCst), 0);
+    assert!(fixture.provider.executions.lock().unwrap().is_empty());
+    drop(server);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_before_execution() {
     let root = tempfile::tempdir().unwrap();
     let fixture = Fixture::new(root.path(), id()).await;
@@ -548,16 +585,49 @@ async fn rejects_invalid_signatures_freshness_shapes_and_oversized_payloads_befo
     assert_eq!(server.request(valid, "0100", &KEY).await.0, 401);
     assert_eq!(
         server
-            .raw(valid, "Content-Type: application/json\r\n")
+            .raw(
+                valid,
+                http_client::headers(&[("Content-Type", "application/json")])
+            )
             .await
             .0,
         401
     );
-    assert_eq!(server.raw(valid, "").await.0, 415);
+    assert_eq!(server.raw(valid, HeaderMap::new()).await.0, 415);
     for signature in ["short".to_owned(), "!".repeat(44)] {
-        assert_eq!(server.raw(valid,&format!("Content-Type: application/json\r\nx-nessa-timestamp: 100\r\nx-nessa-signature: {signature}\r\n")).await.0,401);
+        assert_eq!(
+            server
+                .raw(
+                    valid,
+                    http_client::headers(&[
+                        ("Content-Type", "application/json"),
+                        ("x-nessa-timestamp", "100"),
+                        ("x-nessa-signature", &signature),
+                    ])
+                )
+                .await
+                .0,
+            401
+        );
     }
-    assert_eq!(server.raw(valid,"Content-Type: application/json\r\nx-nessa-timestamp: 100\r\nx-nessa-timestamp: 100\r\nx-nessa-signature: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\r\n").await.0,401);
+    assert_eq!(
+        server
+            .raw(
+                valid,
+                http_client::headers(&[
+                    ("Content-Type", "application/json"),
+                    ("x-nessa-timestamp", "100"),
+                    ("x-nessa-timestamp", "100"),
+                    (
+                        "x-nessa-signature",
+                        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                    ),
+                ])
+            )
+            .await
+            .0,
+        401
+    );
 
     for body in [
         "{",

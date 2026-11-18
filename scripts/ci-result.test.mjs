@@ -169,6 +169,14 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     assert.ok(serverCommand)
     assert.equal(localCommand[1], "2")
     assert.equal(serverCommand[1], "2")
+    // The process pool and libtest each own a separate concurrency bound.
+    // Keep every case and its internal stress/deadline contract unchanged.
+    assert.match(
+      server,
+      /env:\r?\n(?:[ \t]+#[^\r\n]*\r?\n)*[ \t]+RUST_TEST_THREADS: "2"\r?\n/,
+    )
+    assert.match(server, /timeout-minutes: 95/)
+    assert.match(server, /timeout-minutes: 90/)
     assert.equal(localCommand[2], "${{ matrix.partition }}")
     assert.equal(serverCommand[2], "${{ matrix.partition }}")
     assert.match(server, /partition: \[server-conversation, server-other\]/)

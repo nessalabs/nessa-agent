@@ -518,6 +518,30 @@ async fn a_rest_stops_the_vm_only_once_nothing_uses_it_and_never_deletes_it() {
     assert_eq!(provider.connects.lock().unwrap().len(), 2);
 }
 #[tokio::test]
+async fn each_use_of_a_vm_is_named_and_a_rest_waits_for_the_last_one() {
+    let (service, _, provider) = fixture();
+    provider.proceed.add_permits(1);
+    let thread = id(1).to_string();
+    let runtime = service.open(id(1), true, None).await.unwrap();
+    assert_eq!(service.uses(&thread), ["opening"]);
+    let command = runtime.background("true".into()).await.unwrap();
+    let mut uses = service.uses(&thread);
+    uses.sort();
+    assert_eq!(uses, ["background command", "opening"]);
+    // A connection that could not be served keeps no use.
+    assert!(runtime.serve(ServedCopy::Image).await.is_err());
+    drop(runtime);
+    assert_eq!(service.uses(&thread), ["background command"]);
+    assert_eq!(
+        service.rest(id(1), RestCause::Idle).await.stopped,
+        Ok(false)
+    );
+    assert!(provider.stops.lock().unwrap().is_empty());
+    drop(command);
+    assert!(service.uses(&thread).is_empty());
+    assert_eq!(service.rest(id(1), RestCause::Idle).await.stopped, Ok(true));
+}
+#[tokio::test]
 async fn each_stop_is_recorded_with_its_cause_before_and_after_and_a_failed_record_never_holds_it_back(
 ) {
     let (service, _, provider, audit) = fixture_with_audit();
@@ -694,7 +718,7 @@ async fn two_threads_receive_distinct_vm_identities() {
     assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 #[tokio::test]
-async fn an_uncertain_intent_and_accounting_never_create_a_replacement() {
+async fn an_uncertain_intent_asks_boat_again_and_accounting_never_does() {
     let (service, store, provider) = fixture();
     store.records.lock().unwrap().insert(
         id(1).to_string(),
@@ -702,8 +726,9 @@ async fn an_uncertain_intent_and_accounting_never_create_a_replacement() {
             thread: id(1).to_string(),
         },
     );
+    // Accounting neither makes nor finishes a VM.
     assert!(matches!(
-        service.open(id(1), true, None).await,
+        service.open(id(1), false, None).await,
         Err(Failure::ProvisioningUncertain)
     ));
     assert!(matches!(
@@ -711,6 +736,15 @@ async fn an_uncertain_intent_and_accounting_never_create_a_replacement() {
         Err(Failure::Missing)
     ));
     assert_eq!(provider.creates.load(Ordering::SeqCst), 0);
+    // An opening asks Boat again under the thread's key, and keeps the VM
+    // it answers with.
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        store.records.lock().unwrap().get(&id(1).to_string()),
+        Some(Assignment::Assigned { vm, .. }) if *vm == format!("vm-{}", id(1))
+    ));
 }
 #[tokio::test]
 async fn each_failed_opening_is_recorded_with_what_can_be_done_about_it() {
@@ -721,7 +755,7 @@ async fn each_failed_opening_is_recorded_with_what_can_be_done_about_it() {
             thread: id(1).to_string(),
         },
     );
-    assert!(service.open(id(1), true, None).await.is_err());
+    assert!(service.open(id(1), false, None).await.is_err());
     assert!(service.open(id(2), false, None).await.is_err());
     provider.proceed.add_permits(1);
     assert!(service.open(id(3), true, None).await.is_ok());
@@ -928,11 +962,52 @@ async fn failed_receipt_storage_attempts_cleanup_and_preserves_uncertainty() {
         ]
     );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
-    assert!(matches!(
-        service.open(id(1), true, None).await,
-        Err(Failure::ProvisioningUncertain)
-    ));
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    // Once a receipt can be saved, the next opening asks Boat again under
+    // the same key, and keeps the VM it answers with.
+    store.fail_receipt.store(false, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(1), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
+}
+
+/// ADR 1160 rows B16a and B16b: a receipt that could not be saved leaves the
+/// intent, whatever the rollback did. The next opening asks Boat again under
+/// the same key, and Boat's answer to that is a replay of the VM it remembers,
+/// so it is never rolled back again: a refusal keeps it, and no second VM is
+/// made while one may exist.
+#[tokio::test]
+async fn a_retry_after_a_lost_receipt_never_rolls_back_the_vm_boat_replays() {
+    for confirmed in [false, true] {
+        let (service, store, provider) = fixture();
+        provider.confirm_remove.store(confirmed, Ordering::SeqCst);
+        store.fail_receipt.store(true, Ordering::SeqCst);
+        provider.proceed.add_permits(1);
+        assert!(matches!(
+            service.open(id(1), true, None).await,
+            Err(Failure::ReceiptRecovery { cleanup, .. })
+                if cleanup == if confirmed { CleanupOutcome::Confirmed } else { CleanupOutcome::Unconfirmed }
+        ));
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            store.records.lock().unwrap().get(&id(1).to_string()),
+            Some(Assignment::Provisioning { .. })
+        ));
+        // Boat answers the same key with the VM it remembers ("ready"); this
+        // build refuses it, and the replayed VM is kept, never removed.
+        store.fail_receipt.store(false, Ordering::SeqCst);
+        *provider.created_disposition.lock().unwrap() = RefusalDisposition::RetainTarget;
+        *provider.refusal_on_connect.lock().unwrap() = Some(rejection());
+        provider.proceed.add_permits(1);
+        assert!(matches!(
+            service.open(id(1), true, None).await,
+            Err(Failure::AdmissionRecovery {
+                cleanup: CleanupOutcome::Retained,
+                ..
+            })
+        ));
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
+        assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[tokio::test]
@@ -996,11 +1071,13 @@ async fn receipt_recovery_keeps_target_and_attempts_cleanup_across_all_audit_fai
                         thread: id(2).to_string()
                     })
                 );
-                assert_eq!(
-                    service.open(id(2), true, None).await.err(),
-                    Some(Failure::ProvisioningUncertain)
-                );
-                assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+                // Once a receipt can be saved, the next opening asks Boat again
+                // under the same key, and keeps the VM it answers with.
+                store.fail_receipt.store(false, Ordering::SeqCst);
+                store.panic_receipt.store(false, Ordering::SeqCst);
+                provider.proceed.add_permits(1);
+                assert!(service.open(id(2), true, None).await.is_ok());
+                assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
             }
         }
     }
@@ -1040,11 +1117,13 @@ async fn lost_waiter_retains_failed_receipt_target_and_rollback_evidence() {
     );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
     assert!(provider.connects.lock().unwrap().is_empty());
-    assert_eq!(
-        service.open(id(3), true, None).await.err(),
-        Some(Failure::ProvisioningUncertain)
-    );
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    // Once a receipt can be saved, the next opening asks Boat again
+    // under the same key, and keeps the VM it answers with.
+    store.fail_receipt.store(false, Ordering::SeqCst);
+    store.panic_receipt.store(false, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(3), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -1132,11 +1211,13 @@ async fn recovery_port_panics_keep_cleanup_and_target_evidence_owned() {
         *audit.events.lock().unwrap(),
         vec![recovery_events(&id(3), false)[1].clone()]
     );
-    assert_eq!(
-        service.open(id(3), true, None).await.err(),
-        Some(Failure::ProvisioningUncertain)
-    );
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    // Once a receipt can be saved, the next opening asks Boat again
+    // under the same key, and keeps the VM it answers with.
+    store.fail_receipt.store(false, Ordering::SeqCst);
+    store.panic_receipt.store(false, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(3), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -1158,11 +1239,13 @@ async fn receipt_publication_panic_keeps_external_target_in_the_recovery_owner()
         recovery_events(&id(4), false)
     );
     assert_eq!(provider.deletes.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        service.open(id(4), true, None).await.err(),
-        Some(Failure::ProvisioningUncertain)
-    );
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    // Once a receipt can be saved, the next opening asks Boat again
+    // under the same key, and keeps the VM it answers with.
+    store.fail_receipt.store(false, Ordering::SeqCst);
+    store.panic_receipt.store(false, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(4), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 
 pub(super) fn admission() -> EnvironmentIdentity {
@@ -1237,20 +1320,30 @@ async fn refused_creations_keep_the_target_and_cleanup_outcome_across_storage_an
                         ]
                     );
                     assert!(provider.connects.lock().unwrap().is_empty());
-                    let retry = service.open(id(4), true, None).await.err();
+                    if receipt_failed {
+                        // The refusal was never saved, so the intent is still
+                        // open: the next opening asks Boat again under the
+                        // same key and is refused the same way.
+                        store.fail_refusal.store(false, Ordering::SeqCst);
+                        provider.proceed.add_permits(1);
+                        assert!(matches!(
+                            service.open(id(4), true, None).await,
+                            Err(Failure::AdmissionRecovery { .. })
+                        ));
+                        assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
+                    }
                     assert_eq!(
-                        retry,
-                        Some(if receipt_failed {
-                            Failure::ProvisioningUncertain
-                        } else {
-                            Failure::RefusedWorkspace {
-                                vm: format!("vm-{}", id(4)),
-                                rejection: rejection(),
-                                disposition: RefusalDisposition::RollbackNewVm,
-                            }
+                        service.open(id(4), true, None).await.err(),
+                        Some(Failure::RefusedWorkspace {
+                            vm: format!("vm-{}", id(4)),
+                            rejection: rejection(),
+                            disposition: RefusalDisposition::RollbackNewVm,
                         })
                     );
-                    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+                    assert_eq!(
+                        provider.creates.load(Ordering::SeqCst),
+                        1 + usize::from(receipt_failed)
+                    );
                 }
             }
         }
@@ -1349,11 +1442,13 @@ async fn replayed_or_unverified_receipt_targets_are_retained_when_publication_fa
             disposition: RefusalDisposition::RetainTarget
         }]
     );
-    assert_eq!(
-        service.open(id(7), true, None).await.err(),
-        Some(Failure::ProvisioningUncertain)
-    );
-    assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+    // Once a receipt can be saved, the next opening asks Boat again
+    // under the same key, and keeps the VM it answers with.
+    store.fail_receipt.store(false, Ordering::SeqCst);
+    store.panic_receipt.store(false, Ordering::SeqCst);
+    provider.proceed.add_permits(1);
+    assert!(service.open(id(7), true, None).await.is_ok());
+    assert_eq!(provider.creates.load(Ordering::SeqCst), 2);
 }
 #[tokio::test]
 async fn an_initial_connection_refusal_cannot_delete_a_replayed_workspace() {

@@ -62,6 +62,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AdmissionRwLock};
 
 mod pairing;
+pub use pairing::GrantorPeer;
 
 pub use pairing::DeviceCredentialVerifier;
 use pairing::StoredPairing;

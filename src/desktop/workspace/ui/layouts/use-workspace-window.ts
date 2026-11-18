@@ -71,6 +71,7 @@ import {
   selectInFront,
   selectPaneShape,
   selectPanelAsked,
+  selectPanelSet,
   selectPanes,
   selectSession,
   selectSessionListOpen,
@@ -371,6 +372,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
   if (!panelOpen && panelMaximized) setPanelMaximized(false)
   usePanelHeldByChat(panelMaximized, setPanelMaximized)
   usePanelAsked(panelPlace, setPanelPlace)
+  usePanelSet(panelPlace, setPanelPlace)
   const panelDrawnWidth = panelWidth(panelPlace.width, fullWidth)
   // The rail and the panel stand beside the workspace's columns, not among
   // them: the columns fit what is left. The fit itself is `ColumnFit`, so
@@ -464,6 +466,23 @@ function usePanelAsked(place: PanelPlace, setPlace: (place: PanelPlace) => void)
     answered.current = asked
     if (!latest.current.open) setPlace({ ...latest.current, open: true })
   }, [asked, setPlace])
+}
+
+/**
+ * The panel set open or closed on purpose (`panelSet`, an agent's
+ * `arrange_window`), kept as the person's own toggle is. Only a change of
+ * the count sets it: the count the window starts with has been answered.
+ */
+function usePanelSet(place: PanelPlace, setPlace: (place: PanelPlace) => void) {
+  const set = useWorkspaceSelector(selectPanelSet)
+  const answered = useRef(set.count)
+  const latest = useRef(place)
+  latest.current = place
+  useEffect(() => {
+    if (set.count === answered.current) return
+    answered.current = set.count
+    if (latest.current.open !== set.open) setPlace({ ...latest.current, open: set.open })
+  }, [set, setPlace])
 }
 
 function useColumnDrag(

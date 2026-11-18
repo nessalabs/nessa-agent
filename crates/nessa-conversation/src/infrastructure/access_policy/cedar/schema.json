@@ -279,14 +279,8 @@
     "actions": {
       "conversation.locate": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -294,14 +288,8 @@
       },
       "conversation.act": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -309,14 +297,8 @@
       },
       "conversation.erase": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -324,14 +306,8 @@
       },
       "conversation.list": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Catalogue"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Catalogue"],
           "context": {
             "type": "Ask"
           }
@@ -339,14 +315,8 @@
       },
       "conversation.read": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -354,13 +324,8 @@
       },
       "catalogue.entry": {
         "appliesTo": {
-          "principalTypes": [
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -368,13 +333,8 @@
       },
       "conversation.comment": {
         "appliesTo": {
-          "principalTypes": [
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -382,13 +342,8 @@
       },
       "conversation.drive": {
         "appliesTo": {
-          "principalTypes": [
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -396,13 +351,8 @@
       },
       "conversation.write": {
         "appliesTo": {
-          "principalTypes": [
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Catalogue"
-          ],
+          "principalTypes": ["Reader", "WebhookReader"],
+          "resourceTypes": ["Catalogue"],
           "context": {
             "type": "Ask"
           }
@@ -410,14 +360,8 @@
       },
       "conversation.share": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -425,14 +369,8 @@
       },
       "conversation.unshare": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -440,14 +378,8 @@
       },
       "conversation.shares": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -455,14 +387,8 @@
       },
       "artifact.read": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "Reader",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["Person", "Reader", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -470,13 +396,8 @@
       },
       "note.deliver": {
         "appliesTo": {
-          "principalTypes": [
-            "GrantHolder",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["GrantHolder", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -484,13 +405,8 @@
       },
       "review.notice": {
         "appliesTo": {
-          "principalTypes": [
-            "ReviewRecipient",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["ReviewRecipient", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -498,13 +414,8 @@
       },
       "conversation.agent_tools": {
         "appliesTo": {
-          "principalTypes": [
-            "AgentTurn",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Conversation"
-          ],
+          "principalTypes": ["AgentTurn", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
           "context": {
             "type": "Ask"
           }
@@ -512,13 +423,17 @@
       },
       "workspace.read": {
         "appliesTo": {
-          "principalTypes": [
-            "Person",
-            "WebhookReader"
-          ],
-          "resourceTypes": [
-            "Workspace"
-          ],
+          "principalTypes": ["Person", "WebhookReader"],
+          "resourceTypes": ["Workspace"],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "workspace.control": {
+        "appliesTo": {
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Workspace"],
           "context": {
             "type": "Ask"
           }
@@ -526,12 +441,8 @@
       },
       "channel.create": {
         "appliesTo": {
-          "principalTypes": [
-            "Person"
-          ],
-          "resourceTypes": [
-            "Catalogue"
-          ],
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Catalogue"],
           "context": {
             "type": "Ask"
           }
@@ -539,12 +450,8 @@
       },
       "channel.list": {
         "appliesTo": {
-          "principalTypes": [
-            "Person"
-          ],
-          "resourceTypes": [
-            "Catalogue"
-          ],
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Catalogue"],
           "context": {
             "type": "Ask"
           }
@@ -552,12 +459,8 @@
       },
       "channel.use": {
         "appliesTo": {
-          "principalTypes": [
-            "Person"
-          ],
-          "resourceTypes": [
-            "Channel"
-          ],
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Channel"],
           "context": {
             "type": "Ask"
           }
@@ -565,12 +468,8 @@
       },
       "channel.settings": {
         "appliesTo": {
-          "principalTypes": [
-            "Person"
-          ],
-          "resourceTypes": [
-            "Channel"
-          ],
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Channel"],
           "context": {
             "type": "Ask"
           }

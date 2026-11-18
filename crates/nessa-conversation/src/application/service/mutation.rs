@@ -106,6 +106,44 @@ impl ConversationService {
         mode: SubmissionMode,
         on_admission: Option<Arc<dyn AdmissionNotice>>,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
+        self.submit_command_for(
+            storage,
+            id,
+            caller.clone(),
+            caller,
+            initiation,
+            offers_remember,
+            execution_id,
+            message,
+            mode,
+            on_admission,
+        )
+        .await
+    }
+
+    /// [`Self::submit_command_notifying`] with the principal who may open the
+    /// conversation (`access`) separated from the principal the command
+    /// receipt is stored under (`command`).
+    ///
+    /// A granted peer is not the conversation's owner. Opening it asks
+    /// `owner.act` of the grantor. The durable send is the peer's: the
+    /// command history is one stream per principal and request, so two peers
+    /// that reuse one request id each keep their own, including across
+    /// conversations.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_command_for(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        access: ConversationCaller,
+        command: ConversationCaller,
+        initiation: Initiation,
+        offers_remember: bool,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        on_admission: Option<Arc<dyn AdmissionNotice>>,
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let service = self.clone();
         tokio::spawn(async move {
             let _threads = service.inner.thread_admission.clone().lock_owned().await;
@@ -113,7 +151,8 @@ impl ConversationService {
                 .submit_command_origin(
                     storage,
                     id,
-                    caller,
+                    access,
+                    command,
                     initiation,
                     offers_remember,
                     execution_id,
@@ -133,7 +172,8 @@ impl ConversationService {
         &self,
         storage: Arc<dyn CreationStorage>,
         id: ConversationId,
-        caller: ConversationCaller,
+        access: ConversationCaller,
+        command: ConversationCaller,
         initiation: Initiation,
         offers_remember: bool,
         execution_id: String,
@@ -145,7 +185,8 @@ impl ConversationService {
         self.submit_command_permitted(
             storage,
             id,
-            caller,
+            access,
+            command,
             initiation,
             offers_remember,
             execution_id,
@@ -164,7 +205,8 @@ impl ConversationService {
         &self,
         storage: Arc<dyn CreationStorage>,
         id: ConversationId,
-        caller: ConversationCaller,
+        access: ConversationCaller,
+        command: ConversationCaller,
         initiation: Initiation,
         offers_remember: bool,
         execution_id: String,
@@ -178,7 +220,7 @@ impl ConversationService {
             Initiator::Agent(source) => Some(source),
             _ => None,
         };
-        let binding = submit_binding(&id, &caller, &execution_id, &message, mode, agent_source)
+        let binding = submit_binding(&id, &command, &execution_id, &message, mode, agent_source)
             .map_err(MutationFailure::Target)?;
         let binding = if from_agent {
             let mut digest = Sha256::new();
@@ -203,7 +245,7 @@ impl ConversationService {
             message.clone(),
         )
         .map_err(MutationFailure::Target)?;
-        refuse_deleted(self, &id, &caller)
+        refuse_deleted(self, &id, &access)
             .await
             .map_err(MutationFailure::Target)?;
         self.refuse_linked_files_elsewhere(&id, !message.files.is_empty())
@@ -227,7 +269,7 @@ impl ConversationService {
             let target = Arc::new(SubmitTarget {
                 service: service.clone(),
                 id,
-                caller,
+                caller: access,
                 initiation,
                 offers_remember,
                 execution_id,
@@ -318,15 +360,32 @@ impl ConversationService {
         caller: ConversationCaller,
         execution_id: String,
     ) -> Result<MutationReceipt, MutationFailure<ConversationError>> {
+        self.stop_command_as(storage, id, caller.clone(), caller, execution_id)
+            .await
+    }
+
+    /// [`Self::stop_command`] with the principal who may open the conversation
+    /// (`access`) separated from the principal the stop receipt is stored
+    /// under (`command`). A granted peer's stop is that peer's request. Two
+    /// peers that reuse one request id do not share a command stream.
+    pub async fn stop_command_as(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        access: ConversationCaller,
+        command: ConversationCaller,
+        execution_id: String,
+    ) -> Result<MutationReceipt, MutationFailure<ConversationError>> {
         if self.inner.ownership.get().is_some() {
             return self
-                .stop_owned_command(storage, id, caller, execution_id)
+                .stop_owned_command(storage, id, access, command, execution_id)
                 .await;
         }
-        let binding = stop_binding(&id, &caller, &execution_id).map_err(MutationFailure::Target)?;
+        let binding =
+            stop_binding(&id, &command, &execution_id).map_err(MutationFailure::Target)?;
         ExecutionId::new(&execution_id)
             .map_err(|_| MutationFailure::Target(ConversationError::InvalidInput))?;
-        refuse_deleted(self, &id, &caller)
+        refuse_deleted(self, &id, &access)
             .await
             .map_err(MutationFailure::Target)?;
         let service = self.clone();
@@ -339,7 +398,7 @@ impl ConversationService {
             let target = Arc::new(StopTarget {
                 service: service.clone(),
                 id,
-                caller,
+                caller: access,
                 execution_id,
             });
             MutationCoordinator::new(storage)
@@ -597,13 +656,14 @@ impl MutationTarget for StopTarget {
         let id = self.id.clone();
         let caller = self.caller.clone();
         let turn = binding.turn_id().clone();
+        // Access stays the grantor (`caller`). The cancellation is the peer
+        // who stopped: that identity is the command binding, not the owner
+        // used to open the conversation.
+        let actor = binding.actor().clone();
         Box::pin(async move {
             let live = service
                 .resolve(&id, &caller)
                 .await
-                .map_err(CreationInitializationFailure::Target)?;
-            let actor = caller
-                .actor()
                 .map_err(CreationInitializationFailure::Target)?;
             // Checked queued or running, and still one or the other unless it
             // ended: a turn leaving the queue is neither for a moment, between

@@ -90,3 +90,25 @@ impl VmLifetimeSettings {
         crate::settings::resolve_inherited(self.default, [self.channel])
     }
 }
+
+/// Why a conversation's cloud VM is stopped, keeping its disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestCause {
+    /// The agent sat idle and was parked.
+    Idle,
+    /// The agent closed its thread.
+    Closed,
+    /// A VM this creation made is still wiping what its image carried:
+    /// waking it is the restart that ends the wipe, so it is stopped before
+    /// it is first connected.
+    Wiping,
+}
+impl RestCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Closed => "closed",
+            Self::Wiping => "wiping",
+        }
+    }
+}

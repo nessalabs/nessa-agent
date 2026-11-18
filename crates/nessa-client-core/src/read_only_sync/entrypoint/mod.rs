@@ -5,5 +5,5 @@ pub(crate) mod follow;
 pub(crate) mod held_file;
 pub(crate) mod online;
 mod output;
-pub(crate) use arguments::{parse, Command, CommandError, Operation};
+pub(crate) use arguments::{parse, Command, CommandError, Operation, PairClass};
 pub(crate) use output::run_local;

@@ -43,6 +43,10 @@ pub(crate) struct StoredPairing {
     history: Vec<StoredStep>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner_phone_original: Option<StoredOwnerPhoneOriginal>,
+    /// Discovery key agreement for this peer enrollment. Absent means `none`.
+    /// The pairing phase is not stored here and is not changed by writing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    discovery: Option<String>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,7 +196,14 @@ impl StoredPairing {
             same_person: intent.same_person(),
             history: Vec::new(),
             owner_phone_original: None,
+            discovery: None,
         })
+    }
+    pub(crate) fn discovery_json(&self) -> Option<&str> {
+        self.discovery.as_deref()
+    }
+    pub(crate) fn set_discovery_json(&mut self, discovery: Option<String>) {
+        self.discovery = discovery;
     }
     pub(super) fn new_owner_phone(
         record: &PairingRecord,

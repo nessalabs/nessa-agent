@@ -27,6 +27,7 @@ import { useBesideKey } from "../session-actions"
 import { branchCap, statusLabels } from "../../model/session-groups"
 import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
+import { WorkingWords } from "../chrome/working-words"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"
 import { tooltip } from "../../../ui/tooltip"
@@ -96,14 +97,11 @@ export const ChannelBranch = memo(function ChannelBranch({
           <DesktopIcon name="chevronRight" />
         </span>
       }
-      // Folded, it still says whether something waits or runs, in the slot
-      // its + takes under the pointer.
+      // Folded, it still says that something waits, in the slot its + takes
+      // under the pointer; that something runs, its name shimmers.
       badge={
-        summary ? (
-          <StatusGlyph
-            status={activity.waiting > 0 ? "needs-you" : "running"}
-            decorative
-          />
+        summary && activity.waiting > 0 ? (
+          <StatusGlyph status="needs-you" decorative />
         ) : undefined
       }
       trailing={
@@ -120,7 +118,9 @@ export const ChannelBranch = memo(function ChannelBranch({
       showTrailingOnHover
       submenu={expanded ? <BranchSessions channelId={channel.id} /> : undefined}
     >
-      {channel.name}
+      <WorkingWords working={summary !== null && activity.waiting === 0}>
+        {channel.name}
+      </WorkingWords>
     </SidebarMenuItem>
   )
 })

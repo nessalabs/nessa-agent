@@ -307,6 +307,10 @@
     "readOnly": false,
     "destructive": false
   },
+  "peer.follow": {
+    "readOnly": false,
+    "destructive": false
+  },
   "conversation.unsubscribe": {
     "readOnly": false,
     "destructive": false
@@ -334,6 +338,14 @@
   "workspace.publish": {
     "readOnly": false,
     "destructive": false
+  },
+  "workspace.arrange": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "workspace.closePane": {
+    "readOnly": false,
+    "destructive": true
   },
   "channel.create": {
     "readOnly": false,

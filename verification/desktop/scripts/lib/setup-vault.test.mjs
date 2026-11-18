@@ -34,6 +34,9 @@ function fixture({ state = "locked", prompts = 0 } = {}) {
     waitForTimeout: async (ms) => {
       calls.push(`settle:${ms}`)
     },
+    close: async () => {
+      calls.push("close")
+    },
     locator: (selector) => {
       if (selector === ".nessa-setup-window")
         return {
@@ -93,4 +96,6 @@ test("an unlocked vault: the same, and its state is not read or changed", async 
 test("a vault dialog drawn by onboarding on its own refuses the window", async () => {
   const f = fixture({ prompts: 1 })
   await assert.rejects(setupWindow(f.run), /opened a vault dialog on its own/)
+  // The refused window is closed, not left open for the steps after it.
+  assert.equal(f.calls.at(-1), "close")
 })

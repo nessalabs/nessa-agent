@@ -29,7 +29,34 @@ fn explicit_online_counts_and_arity_are_checked_before_composition() {
 #[test]
 fn device_commands_take_only_a_profile() {
     let pair = ["pair", "profile"].map(str::to_owned);
-    assert!(matches!(parse(&pair), Ok(Command::Pair { .. })));
+    assert!(matches!(
+        parse(&pair),
+        Ok(Command::Pair {
+            class: PairClass::Device,
+            ..
+        })
+    ));
+    let peer = ["pair", "profile", "peer"].map(str::to_owned);
+    assert!(matches!(
+        parse(&peer),
+        Ok(Command::Pair {
+            class: PairClass::Peer,
+            ..
+        })
+    ));
+    let target = Uuid::new_v4().to_string();
+    let comment = ["comment", "profile", &target, "a", "note"].map(str::to_owned);
+    assert!(matches!(
+        parse(&comment),
+        Ok(Command::Comment { text, .. }) if text == "a note"
+    ));
+    let drive = ["drive", "profile", &target, "stress reply"].map(str::to_owned);
+    assert!(matches!(
+        parse(&drive),
+        Ok(Command::Drive { text, .. }) if text == "stress reply"
+    ));
+    let blank = ["comment", "profile", &target, " "].map(str::to_owned);
+    assert!(matches!(parse(&blank), Err(CommandError::Arguments)));
     let status = ["status", "profile"].map(str::to_owned);
     assert!(matches!(parse(&status), Ok(Command::Status { .. })));
     // Review F2: online commands take no cache; the profile names its one.

@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "boat_client"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=3d080310209ef055361a3c3efa5e206f7fe8a003#3d080310209ef055361a3c3efa5e206f7fe8a003"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
 dependencies = [
  "base64 0.22.1",
  "fastrand",
@@ -3881,6 +3881,7 @@ dependencies = [
  "nessa-auth",
  "nessa-client-core",
  "nessa-local-storage",
+ "nessa-peer-gateways",
  "nessa-protocol",
  "nessa-timer",
  "serde",
@@ -4090,6 +4091,9 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "hkdf",
+ "hmac",
+ "mdns-sd",
  "nessa-auth",
  "nessa-client-core",
  "nessa-local-storage",
@@ -4097,11 +4101,13 @@ dependencies = [
  "nessa-timer",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "tempfile",
  "tokio",
  "tracing",
  "uuid",
+ "x25519-dalek",
  "zeroize",
 ]
 
@@ -4176,6 +4182,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures-util",
+ "getrandom 0.3.4",
  "libc",
  "nessa-agent-credentials",
  "nessa-agent-install",
@@ -8854,7 +8861,7 @@ dependencies = [
 [[package]]
 name = "workspace_sdk"
 version = "0.2.0"
-source = "git+https://github.com/nessalabs/workspace-sdk?rev=3d080310209ef055361a3c3efa5e206f7fe8a003#3d080310209ef055361a3c3efa5e206f7fe8a003"
+source = "git+https://github.com/nessalabs/workspace-sdk?rev=7501f6b2fda1212fa118698f1bbd599a28459eea#7501f6b2fda1212fa118698f1bbd599a28459eea"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8962,6 +8969,18 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
+
+[[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.6.4",
+ "serde",
+ "zeroize",
+]
 
 [[package]]
 name = "x509-parser"

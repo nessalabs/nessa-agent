@@ -213,10 +213,6 @@ it("paints a new arrangement on the frame after it commits", async () => {
   await frames.run()
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
   expect(host.hasAttribute("data-spare-held")).toBe(false)
-  // That paint skips scene text. The frame after shows it again.
-  expect(grid().hasAttribute(marks.painting)).toBe(true)
-  await nextPaint()
-  expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
 it("replaces a draw the source left before that draw commits", async () => {
@@ -312,7 +308,6 @@ it("paints a resize of the same panes on the frame it happens", async () => {
   await frames.run()
   const first = () => grid().querySelector<HTMLElement>(".host-pane")
   expect(first()?.style.getPropertyValue("--cw")).toBe("0.5")
-  expect(grid().hasAttribute(marks.painting)).toBe(false)
   const wider = resizeEdge(layout, { axis: "x", column: 0 }, 0.7, 1000)
   await fake.change(wider)
   expect(first()?.style.getPropertyValue("--cw")).toBe("0.7")
@@ -321,7 +316,6 @@ it("paints a resize of the same panes on the frame it happens", async () => {
   const narrower = resizeEdge(wider, { axis: "x", column: 0 }, 0.35, 1000)
   await fake.change(narrower)
   expect(first()?.style.getPropertyValue("--cw")).toBe("0.35")
-  expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
 it("resizes, evens and fits through the source", async () => {

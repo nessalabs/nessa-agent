@@ -68,6 +68,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("swipe"), knobs.swipes)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
+  assert.equal(count("peer"), knobs.peers)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -169,6 +170,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
         windows: "0",
+        controls: "0",
         linkings: "0",
         mcpServers: "0",
         rails: "0",
@@ -198,6 +200,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         channels: "0",
         huddles: "0",
         webhooks: "0",
+        peers: "0",
         pastes: "0",
         attaches: "0",
         swipes: "0",
@@ -245,6 +248,15 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       "restore",
     ],
   )
+})
+
+test("a granted peer comments and drives once by default and three times at the raised count", () => {
+  const count = (options) =>
+    plan(knobsFrom(options, {})).filter((step) => step.kind === "peer").length
+  assert.equal(count({}), 1)
+  assert.equal(count({ peers: "3" }), 3)
+  assert.equal(count({ peers: "0" }), 0)
+  assert.equal(knobsFrom({}, { NESSA_STRESS_PEERS: "3" }).peers, 3)
 })
 
 test("webhook capture/no-send runs once by default and three times at the raised count", () => {
