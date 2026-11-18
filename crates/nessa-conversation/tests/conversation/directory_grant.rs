@@ -144,11 +144,13 @@ fn the_marker_and_a_hard_link_of_it_are_refused() {
 }
 
 #[test]
-fn a_different_file_with_a_folded_name_is_readable_on_a_case_sensitive_disk() {
+fn a_case_folded_marker_name_is_the_marker_when_the_disk_folds_case() {
     let root = private();
     let shared = root.path().join("shared");
     fs::create_dir(&shared).unwrap();
     fs::write(shared.join(".NESSA-BINDING"), b"other").unwrap();
+    let folds =
+        fs::read(shared.join(".nessa-binding")).ok().as_deref() == Some(b"other".as_slice());
     let store_dir = private();
     let access = service(
         Arc::new(LocalDirectoryFiles),
@@ -156,8 +158,27 @@ fn a_different_file_with_a_folded_name_is_readable_on_a_case_sensitive_disk() {
         Arc::new(RecordingAudit::new()),
         [4; BINDING_LEN],
     );
-    share_read(&access, shared.to_str().unwrap(), "peer");
-    assert_eq!(access.read("peer", ".NESSA-BINDING").unwrap(), b"other");
+    let shared_path = shared.to_str().unwrap();
+    if folds {
+        let refused = access
+            .share(ShareDirectory {
+                environment: "local".into(),
+                path: shared_path.into(),
+                subject: DirectorySubject {
+                    principal_id: Some("peer".into()),
+                    receiver_id: None,
+                },
+                capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+                rules: crate::domain::CommandRules::none(),
+                initiator: "owner".into(),
+            })
+            .unwrap_err();
+        assert!(matches!(refused, DirectoryRefusal::MarkerSize));
+        assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), b"other");
+    } else {
+        share_read(&access, shared_path, "peer");
+        assert_eq!(access.read("peer", ".NESSA-BINDING").unwrap(), b"other");
+    }
 }
 
 #[test]
