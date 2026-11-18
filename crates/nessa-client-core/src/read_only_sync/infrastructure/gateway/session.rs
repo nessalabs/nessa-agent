@@ -113,6 +113,12 @@ pub(super) enum RpcKind {
 /// shows, so a burst past [`QUEUED_VIEWS`] drops the oldest and keeps the
 /// newest in arrival order.
 const QUEUED_VIEWS: usize = 4;
+/// Grant frames kept while a record read shares this connection. A further
+/// frame closes it. Dropping one would skip an incremental page; the follow
+/// retries from the cursor it has committed.
+const QUEUED_GRANT_FRAMES: usize = 8;
+/// Bytes of those queued frames, measured as the event payload's JSON.
+const QUEUED_GRANT_BYTES: usize = 512 * 1024;
 
 struct Parked {
     views: Vec<ConversationViewed>,
@@ -174,8 +180,10 @@ struct Events {
     /// No kept view in this incarnation may sit behind this cursor. It starts
     /// as `conversation.subscribe`'s `after` and moves to each view kept.
     floor: Option<ConversationViewCursor>,
-    /// Grant frames for this connection's one `grants.subscribe`.
-    grants: Vec<GrantsChanged>,
+    /// Grant frames for this connection's one `grants.subscribe`, with the
+    /// payload bytes counted toward [`QUEUED_GRANT_BYTES`].
+    grants: Vec<(usize, GrantsChanged)>,
+    grant_bytes: usize,
     grant_ended: Option<ConversationSubscriptionEnded>,
     grant_id: Option<String>,
     /// Set while `grants.subscribe` is unanswered, so a frame that arrives
@@ -192,6 +200,7 @@ impl Events {
             opening_conversation: None,
             floor: None,
             grants: Vec::new(),
+            grant_bytes: 0,
             grant_ended: None,
             grant_id: None,
             grant_opening: false,
@@ -337,8 +346,29 @@ impl Events {
         } else if !self.grant_opening {
             return self.count_unexpected();
         }
-        self.grants.push(changed);
+        let bytes = serde_json::to_string(&changed)
+            .map(|text| text.len())
+            .unwrap_or(usize::MAX);
+        if self.grants.len() >= QUEUED_GRANT_FRAMES
+            || self.grant_bytes.saturating_add(bytes) > QUEUED_GRANT_BYTES
+        {
+            tracing::warn!(
+                limit = "client.grant_frames",
+                "product session hit an operational limit"
+            );
+            return Err(GatewayError::Protocol);
+        }
+        self.grant_bytes = self.grant_bytes.saturating_add(bytes);
+        self.grants.push((bytes, changed));
         Ok(())
+    }
+    fn pop_grant(&mut self) -> Option<GrantsChanged> {
+        if self.grants.is_empty() {
+            return None;
+        }
+        let (bytes, changed) = self.grants.remove(0);
+        self.grant_bytes = self.grant_bytes.saturating_sub(bytes);
+        Some(changed)
     }
     fn observe_grant_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
         let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
@@ -701,6 +731,7 @@ impl Session {
             Err(error) => {
                 self.events.grant_opening = false;
                 self.events.grants.clear();
+                self.events.grant_bytes = 0;
                 self.events.grant_ended = None;
                 return Err(error);
             }
@@ -750,8 +781,8 @@ impl Session {
         if self.events.grant_id.is_none() {
             return Err(GatewayError::Busy);
         }
-        if !self.events.grants.is_empty() {
-            return Ok(Some(GrantDelivery::Changed(self.events.grants.remove(0))));
+        if let Some(changed) = self.events.pop_grant() {
+            return Ok(Some(GrantDelivery::Changed(changed)));
         }
         if let Some(ended) = self.events.grant_ended.take() {
             self.events.grant_id = None;
@@ -1186,4 +1217,77 @@ fn conforming_subscription_id(id: &str) -> bool {
                     .expect("generated pattern compiles")
             })
             .is_match(id)
+}
+
+#[cfg(test)]
+mod grant_inbox_tests {
+    use super::{Events, QUEUED_GRANT_BYTES, QUEUED_GRANT_FRAMES};
+    use crate::read_only_sync::application::GatewayPolicy;
+    use nessa_protocol::product::generated::{product_event, GrantStreamCursor, GrantsChanged};
+    use nessa_protocol::protocol::EventFrame;
+    fn events() -> Events {
+        let mut events = Events::new(GatewayPolicy::new(1_000, 1_000, 4).unwrap());
+        events.grant_opening = true;
+        events
+    }
+
+    fn frame(id: &str, marker: &str) -> GrantsChanged {
+        GrantsChanged {
+            subscription_id: id.to_owned(),
+            cursor: GrantStreamCursor {
+                incarnation: "inc".to_owned(),
+                position: "1".to_owned(),
+            },
+            complete: true,
+            replaces: false,
+            snapshot_id: None,
+            grants: vec![nessa_protocol::product::generated::GrantFrameEntry {
+                conversation_id: marker.to_owned(),
+                absent: false,
+                capabilities: Some("read".to_owned()),
+                policy_revision: Some("1".to_owned()),
+            }],
+        }
+    }
+
+    fn push(
+        events: &mut Events,
+        changed: &GrantsChanged,
+    ) -> Result<(), crate::read_only_sync::application::GatewayError> {
+        let event = EventFrame::push(product_event::GRANTS_CHANGED, changed, 1, 1).unwrap();
+        events.observe(event)
+    }
+
+    #[test]
+    fn one_grant_frame_past_the_count_closes_the_inbox() {
+        let mut events = events();
+        for index in 0..QUEUED_GRANT_FRAMES {
+            push(&mut events, &frame("1", &index.to_string())).unwrap();
+        }
+        let extra = push(&mut events, &frame("1", "extra"));
+        assert!(extra.is_err());
+        assert_eq!(events.grants.len(), QUEUED_GRANT_FRAMES);
+        let first = events.pop_grant().unwrap();
+        assert_eq!(first.grants[0].conversation_id, "0");
+        push(&mut events, &frame("1", "after")).unwrap();
+    }
+
+    #[test]
+    fn one_grant_frame_past_the_byte_bound_is_not_kept() {
+        let mut events = events();
+        let mut heavy = frame("1", "heavy");
+        heavy.grants[0].capabilities = Some("x".repeat(QUEUED_GRANT_BYTES));
+        assert!(push(&mut events, &heavy).is_err());
+        assert!(events.grants.is_empty());
+        push(&mut events, &frame("1", "small")).unwrap();
+        assert_eq!(events.grants.len(), 1);
+    }
+
+    #[test]
+    fn a_grant_frame_for_no_subscription_is_not_queued() {
+        let mut events = events();
+        events.grant_opening = false;
+        push(&mut events, &frame("1", "stray")).unwrap();
+        assert!(events.grants.is_empty());
+    }
 }

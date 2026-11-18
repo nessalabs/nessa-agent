@@ -95,3 +95,5 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 
 | client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/follow.rs` | how many times a preparing read is asked again |
 | client.foreground_sends | client | the client's own | `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | how many times one foreground phone send is asked |
+| client.grant_frames | client | the client's own | `QUEUED_GRANT_FRAMES` in `crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/session.rs` | grant frames kept while a record read shares the subscription connection; one more closes the connection so the follow retries from its cursor instead of dropping a page |
+| client.grant_frame_bytes | client | the client's own | `QUEUED_GRANT_BYTES` in `crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/session.rs` | bytes of those queued frames; past this the connection closes the same way |
