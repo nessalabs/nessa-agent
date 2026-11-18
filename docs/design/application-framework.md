@@ -66,11 +66,11 @@ comment on that module records why: a gateway that pairs no device has no
 binding, so every session reads as the owner.
 
 A paired device is the other path. It has a receiver. Its credential holds
-`conversation.read`. Comment and drive are the share row, and Cedar's
-`grant.comment` and `grant.drive` also require `signedInAs == bindingOwner`
+`conversation.read`. Comment and drive are the share row. Cedar's
+`grant.comment` and `grant.drive` permit the capability
 (`crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar`).
-A device meets that because it signs in as the owner. A peer gateway signs
-in as itself, so those two permits do not match it. The grant lookup is
+A device signs in as the owner. A peer gateway signs in as itself. Either
+is admitted when the grant names the capability. The grant lookup is
 `receiver_id`. A row with no receiver is not that lookup
 (`crates/nessa-conversation/src/infrastructure/store/share_grants.rs`).
 
@@ -2678,8 +2678,8 @@ The grant is the scope.
 **Treat a stored grant row as enough.** That is the paired-device path,
 and this principal does not walk it. No receiver means
 `admit_conversation` returns success and `reader` says `Owner`.
-`grant.comment` requires `signedInAs == bindingOwner`. A row with a null
-`receiver_id` is not the lookup. Slice 1 asks Cedar with the registration.
+`grant.comment` permits a grant that includes comment. A row with a null
+`receiver_id` is not the paired lookup. Slice 1 asks Cedar with the registration.
 It does not store a row and stop.
 
 **Turn the owner fallback off for every integration.** `nessa auth token`

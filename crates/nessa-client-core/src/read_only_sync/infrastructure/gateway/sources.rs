@@ -1,5 +1,5 @@
 //! Private core facades share the admitted session and retain one typed outcome.
-use super::session::{RpcKind, Session};
+use super::session::{CommandExchange, RpcKind, Session};
 use crate::read_only_sync::application::{
     follow::{Subscribed, Wait},
     GatewayAttempt, GatewayError, GatewayOutcome,
@@ -70,6 +70,26 @@ pub(crate) struct GatewayConnection(pub(super) Rc<RefCell<Session>>);
 impl GatewayConnection {
     pub(crate) fn new(session: Session) -> Self {
         Self(Rc::new(RefCell::new(session)))
+    }
+    /// One product command on the admitted session. A typed refusal leaves the
+    /// connection up; a lost exchange closes it.
+    pub(crate) fn command<T: Serialize>(
+        &self,
+        method: &str,
+        params: &T,
+    ) -> Result<serde_json::Value, CommandExchange> {
+        let mut session = self
+            .0
+            .try_borrow_mut()
+            .map_err(|_| CommandExchange::Lost(GatewayError::Busy))?;
+        if let Err(error) = session.begin() {
+            return Err(CommandExchange::Lost(error));
+        }
+        let result = session.product_command(method, params);
+        if session.finish().is_err() {
+            return Err(CommandExchange::Lost(GatewayError::Transport));
+        }
+        result
     }
     pub(crate) fn begin(&self) -> Result<u64, GatewayError> {
         self.0

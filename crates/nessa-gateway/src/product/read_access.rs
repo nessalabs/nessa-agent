@@ -31,8 +31,8 @@ use super::{
 };
 use crate::conversation::application::{
     binding_of, error_code, load_conversation, paired_facts, AccessAction, AuditedReviewSelection,
-    ConversationAccessPolicyEvaluator, ConversationError, OwnerAccess, PairedAccess, PairedParty,
-    PairedRefusal, Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause,
+    ConversationAccessPolicyEvaluator, ConversationError, GrantUse, OwnerAccess, PairedAccess,
+    PairedParty, PairedRefusal, Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause,
     ReviewNoticeAuditFailure, SelectReviewNotice, ShareConversation, ShareGrant,
     MAX_POLICY_REVISION,
 };
@@ -485,12 +485,12 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 12] = [
 /// `conversation.read`, and then the access policy for the action on the
 /// one conversation the command names, with the role its receiver holds
 /// there and what the command carries, so a Drive grant is what lets the
-/// device drive that conversation and no other (row J11), a Comment or
-/// Drive grant what lets it leave notes there, a driver sends text only
-/// (row J14), and a peer gateway does neither. Refused, it is told
-/// `forbidden` when it may read the conversation, and otherwise what a read
-/// would tell it: a peer gateway learns no more from a refused command than
-/// from a refused read.
+/// holder drive that conversation and no other (row J11), a Comment or
+/// Drive grant what lets it leave notes there, and a driver sends text only
+/// (row J14). A peer gateway is admitted by the same capability. Refused,
+/// it is told `forbidden` when it may read the conversation, and otherwise
+/// what a read would tell it: a peer gateway learns no more from a refused
+/// command than from a refused read.
 ///
 /// Admitted, a request is answered with who it is from: a turn it starts, or
 /// a note it leaves, is saved with the grant that admitted it and the
@@ -533,9 +533,9 @@ pub(super) async fn admit_request(
     let Some(binding) = paired_binding(state, session).await? else {
         return as_owner().await;
     };
-    // A device signs in as its owner, so its command is the owner's from
-    // the device's surface. A peer gateway signs in as its own principal
-    // and forwards its people's commands in a later slice.
+    // A device signs in as its owner. A peer gateway signs in as its own
+    // principal. Comment and drive are the grant's capability either way,
+    // and the turn is saved as that grant.
     let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
     let action = paired_action(method);
     if action == AccessAction::Write {
@@ -565,6 +565,27 @@ pub(super) async fn admit_request(
     // Every paired permit asks for a grant held, so an admitted command
     // always has one.
     let held = held.ok_or("forbidden")?;
+    if matches!(action, AccessAction::Comment | AccessAction::Drive) {
+        // The audit names the grant's principal and the epoch just read, and
+        // the person when a same-person link is committed. A failure refuses
+        // the command before it runs. A retry of this receiver's command
+        // keeps the first record. Another receiver, or another command, is
+        // recorded on its own.
+        grants
+            .record_use(GrantUse {
+                conversation_id: id,
+                action: action.name(),
+                command: method.to_owned(),
+                principal_id: held.principal_id.clone(),
+                receiver_id: binding.receiver_id.clone(),
+                policy_revision: held.policy_revision,
+                person: held.person.clone(),
+                request_id: command_request_id(frame),
+                observed_at_ms: state.clock.unix_milliseconds(),
+            })
+            .await
+            .map_err(|_| paired_code(PairedRefusal::Unavailable))?;
+    }
     // A receiver id is at most 128 bytes, inside what a record keeps; one of
     // only blanks, which no pairing mints, is refused as unverifiable.
     // The turn names the grant and its revision; what that revision allowed is
@@ -577,6 +598,17 @@ pub(super) async fn admit_request(
 /// The grant pairing mints a device (`device_pairing`), which a Drive
 /// command or a Comment note asks Cedar for in place of `conversation.write`.
 const PAIRING_GRANT: &str = "conversation.read";
+
+/// The command's request id, or the frame id when the command names none.
+fn command_request_id(frame: &RequestFrame) -> String {
+    frame
+        .params
+        .get("requestId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(frame.id.as_str())
+        .to_owned()
+}
 
 /// The conversation a Drive command or a Comment note names. Its params are
 /// checked in full by the handler; a command naming none, or no valid id, is

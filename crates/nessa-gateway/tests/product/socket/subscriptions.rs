@@ -2638,13 +2638,12 @@ async fn share_refuses_what_the_owner_cannot_grant() {
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }
 
-/// Comment and drive are written only when Cedar permits `grant.comment` and
-/// `grant.drive`. A principal that is not signed in as the binding owner — a
-/// gateway, or any other principal — is refused `capabilities_refused`. The answer names
-/// the policy ids Cedar named, and nothing is written. A match on the
-/// `gateway:` prefix would let the other principal through.
+/// Comment and drive are written when Cedar permits `grant.comment` and
+/// `grant.drive`. That is the capability, for a gateway and for any other
+/// principal the binding reads. The journal names the principal. A match on
+/// the `gateway:` prefix is not what lets it through.
 #[tokio::test]
-async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
+async fn a_peer_is_granted_comment_and_drive_and_the_journal_names_the_principal() {
     use crate::conversation::application::ShareGrants;
     use nessa_auth::domain::PrincipalId;
     let fixture = SubscriptionFixture::new()
@@ -2686,7 +2685,6 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
             granted["payload"]["applied"], true,
             "{credential}: {granted}"
         );
-        let before = fixture.metadata.grants(&fixture.id).await.unwrap();
         let journal = journal_rows(&fixture);
         for (request, capabilities) in [
             ("share-comment", json!(["read", "comment"])),
@@ -2699,17 +2697,31 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
             }
             let answer = fixture.call("conversation.share", params).await;
             assert_eq!(
-                answer["error"]["code"], "capabilities_refused",
+                answer["payload"]["applied"], true,
                 "{credential} {request}: {answer}"
             );
-            assert_eq!(
-                answer["error"]["details"]["policies"],
-                json!([]),
-                "{credential} {request}: {answer}"
+            assert!(
+                journal_rows(&fixture) > journal,
+                "{credential} {request} was not journaled"
             );
         }
-        assert_eq!(fixture.metadata.grants(&fixture.id).await.unwrap(), before);
-        assert_eq!(journal_rows(&fixture), journal);
+        let held = fixture.metadata.grants(&fixture.id).await.unwrap();
+        let row = held
+            .grants
+            .iter()
+            .find(|grant| grant.credential_id.as_str() == credential)
+            .unwrap();
+        assert_eq!(
+            row.principal_id.as_str(),
+            if credential == "peer" {
+                "gateway:peer"
+            } else {
+                "other-person"
+            }
+        );
+        assert!(row.access.capabilities().contains(
+            crate::conversation::domain::Capability::Drive
+        ));
     }
     let listed = fixture
         .call(
@@ -2719,9 +2731,7 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
         .await;
     let items = listed["payload"]["items"].as_array().unwrap();
     assert!(
-        items
-            .iter()
-            .all(|item| item["capabilities"] == json!(["read"])),
+        items.iter().all(|item| item["capabilities"] == json!(["read", "comment", "drive"])),
         "{listed}"
     );
 }
@@ -2740,6 +2750,301 @@ fn journal_rows(fixture: &SubscriptionFixture) -> i64 {
         row.get(0)
     })
     .unwrap()
+}
+
+fn grant_file(fixture: &SubscriptionFixture) -> std::path::PathBuf {
+    fixture
+        ._directory
+        .path()
+        .join("conversations/metadata.sqlite3")
+        .with_extension("grants.sqlite3")
+}
+
+fn grant_uses(fixture: &SubscriptionFixture) -> Vec<Value> {
+    let directory = grant_file(fixture).with_file_name("grant-uses");
+    let mut files: Vec<_> = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+        .collect()
+}
+
+fn use_for<'a>(uses: &'a [Value], request: &str) -> &'a Value {
+    uses.iter()
+        .find(|record| record["requestId"] == request)
+        .unwrap_or_else(|| panic!("no grant use for {request}: {uses:?}"))
+}
+
+async fn grant_gateway(
+    fixture: &SubscriptionFixture,
+    transition: crate::conversation::application::ShareGrantTransition,
+) -> Option<u64> {
+    use crate::conversation::application::{ConversationCaller, ShareGrantChange, ShareGrants};
+    use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
+    let receipt = fixture
+        .metadata
+        .change(ShareGrantChange {
+            transition,
+            conversation_id: fixture.id.clone(),
+            principal_id: Some(PrincipalId::new("gateway:peer").unwrap()),
+            receiver_id: Some("receiver".into()),
+            credential_id: CredentialId::new("credential").unwrap(),
+            expected_policy_revision: None,
+            initiator: ConversationCaller {
+                organization_id: OrganizationId::new("organization").unwrap(),
+                principal_id: PrincipalId::new("principal").unwrap(),
+                surface_id: "owner".into(),
+                action_id: uuid::Uuid::new_v4().to_string(),
+            },
+            at_ms: 1,
+        })
+        .await
+        .unwrap();
+    assert!(receipt.applied);
+    receipt.policy_revision
+}
+
+fn link_person(fixture: &SubscriptionFixture) {
+    let connection = nessa_local_database::rusqlite::Connection::open(grant_file(fixture)).unwrap();
+    connection.busy_timeout(Duration::from_secs(5)).unwrap();
+    connection
+        .execute(
+            "INSERT INTO person_links (organization_id, gateway_principal, person_principal, credential_id, invitation) VALUES ('organization', 'gateway:peer', 'principal', 'credential', 'invite-1')",
+            [],
+        )
+        .unwrap();
+}
+
+/// A peer with comment leaves a note and cannot send. With drive it sends
+/// text and is refused an image or a linked file. It cannot delete or
+/// re-share. A command on a conversation with no grant is not found. Revoke
+/// refuses the next command. The turn already admitted keeps its epoch. The
+/// audit names the gateway principal and the epoch, and the person when a
+/// same-person link is committed. The link does not add the capability.
+#[tokio::test]
+async fn a_peer_comments_and_drives_under_its_grant() {
+    use crate::conversation::application::ShareGrantTransition;
+    use crate::conversation::domain::{Capabilities, ShareAccess};
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiator};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let other = fixture.create().await;
+    let fixture = fixture.with_devices(this_device(true));
+    let comment_epoch = grant_gateway(
+        &fixture,
+        ShareGrantTransition::Grant(ShareAccess::new(Capabilities::comment(), None).unwrap()),
+    )
+    .await
+    .unwrap();
+    let fixture = fixture
+        .signed_in_as_peer(&[
+            "conversation.read",
+            "server.read",
+            "conversation.write",
+            "credential.manage",
+        ])
+        .await;
+    let note = fixture
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "before-link", "a note"),
+        )
+        .await;
+    assert_eq!(note["ok"], true, "{note}");
+    let saved = fixture
+        .notes()
+        .await
+        .into_iter()
+        .find(|note| note.actor.request_id() == "before-link")
+        .unwrap();
+    assert_eq!(saved.actor.principal_id(), "gateway:peer");
+    assert_eq!(
+        saved.author,
+        Initiator::Grant(GrantInitiator::new("receiver", comment_epoch).unwrap())
+    );
+    let uses = grant_uses(&fixture);
+    let recorded = use_for(&uses, "before-link");
+    assert_eq!(recorded["grant"]["principalId"], "gateway:peer");
+    assert_eq!(recorded["grant"]["policyRevision"], comment_epoch);
+    assert!(recorded["grant"]["personId"].is_null());
+    assert_eq!(recorded["target"]["action"], "conversation.comment");
+    let send = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "before-link"),
+        )
+        .await;
+    assert_eq!(send["error"]["code"], "forbidden", "{send}");
+    link_person(&fixture);
+    let linked = fixture
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "with-link", "still a note"),
+        )
+        .await;
+    assert_eq!(linked["ok"], true, "{linked}");
+    let uses = grant_uses(&fixture);
+    let linked_use = use_for(&uses, "with-link");
+    assert_eq!(linked_use["grant"]["personId"], "principal");
+    assert_eq!(linked_use["grant"]["policyRevision"], comment_epoch);
+    let still = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "linked"),
+        )
+        .await;
+    assert_eq!(still["error"]["code"], "forbidden", "{still}");
+    let drive_epoch = grant_gateway(&fixture, ShareGrantTransition::Grant(drive_access()))
+        .await
+        .unwrap();
+    assert!(drive_epoch > comment_epoch);
+    fixture.turn("driven").await;
+    let driven = fixture.initiation_of("driven").await;
+    let grant = GrantInitiator::new("receiver", drive_epoch).unwrap();
+    assert_eq!(
+        driven,
+        nessa_sdk::domain::agent_execution::executions::Initiation::checked_grant(grant)
+    );
+    let uses = grant_uses(&fixture);
+    let driven_use = use_for(&uses, "send-driven");
+    assert_eq!(driven_use["grant"]["principalId"], "gateway:peer");
+    assert_eq!(driven_use["grant"]["policyRevision"], drive_epoch);
+    assert_eq!(driven_use["grant"]["personId"], "principal");
+    assert_eq!(driven_use["target"]["action"], "conversation.drive");
+    let session = crate::conversation::application::conversation_session(&fixture.id);
+    let actor = fixture
+        .storage
+        .read_committed(session)
+        .await
+        .unwrap()
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == "driven")
+        .unwrap()
+        .actor
+        .principal_id()
+        .to_owned();
+    assert_eq!(actor, "principal");
+    for (field, value) in [
+        (
+            "attachments",
+            json!([{"digest": "a".repeat(64), "mimeType": "image/png", "size": 1}]),
+        ),
+        ("files", json!([{"path": "/home/owner/.ssh/id_ed25519"}])),
+    ] {
+        let mut params = drive_params("conversation.send", &fixture.id, "named");
+        params[field] = value;
+        let answer = fixture.call("conversation.send", params).await;
+        assert_eq!(answer["error"]["code"], "forbidden", "{field}: {answer}");
+    }
+    for method in [
+        "conversation.delete",
+        "conversation.archive",
+        "conversation.setModel",
+    ] {
+        let answer = fixture
+            .call(method, drive_params(method, &fixture.id, "owner-act"))
+            .await;
+        assert_eq!(answer["error"]["code"], "forbidden", "{method}: {answer}");
+    }
+    let before = fixture.metadata.grants(&fixture.id).await.unwrap();
+    let share = fixture
+        .call(
+            "conversation.share",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "reshare",
+                "credentialId": "credential",
+                "capabilities": ["read"],
+            }),
+        )
+        .await;
+    assert_eq!(share["ok"], false, "{share}");
+    // The grant row is what a re-share would replace. The conversation's
+    // catalogue revision also moves when the turn is saved, which can land
+    // after this read.
+    assert_eq!(
+        fixture.metadata.grants(&fixture.id).await.unwrap().grants,
+        before.grants
+    );
+    let absent = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &other, "elsewhere"),
+        )
+        .await;
+    assert_eq!(
+        absent["error"]["code"], "conversation_not_found",
+        "{absent}"
+    );
+    grant_gateway(&fixture, ShareGrantTransition::Revoke).await;
+    let next = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "after-revoke"),
+        )
+        .await;
+    assert_eq!(
+        next["error"]["code"], "conversation_not_found",
+        "{next}"
+    );
+    assert_eq!(fixture.initiation_of("driven").await, driven);
+}
+
+/// The admission audit is part of the command. When it cannot be written,
+/// the note is refused and nothing is saved.
+#[tokio::test]
+async fn a_peer_command_is_refused_when_its_admission_audit_cannot_be_recorded() {
+    use crate::conversation::application::ShareGrantTransition;
+    use crate::conversation::domain::{Capabilities, ShareAccess};
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("first").await;
+    let fixture = fixture.with_devices(this_device(true));
+    grant_gateway(
+        &fixture,
+        ShareGrantTransition::Grant(ShareAccess::new(Capabilities::comment(), None).unwrap()),
+    )
+    .await;
+    let fixture = fixture
+        .signed_in_as_peer(&["conversation.read", "server.read"])
+        .await;
+    let blocked = grant_file(&fixture).with_file_name("grant-uses");
+    std::fs::write(&blocked, b"not a directory").unwrap();
+    let refused = fixture
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "unaudited", "no"),
+        )
+        .await;
+    assert_eq!(
+        refused["error"]["code"], "temporarily_unavailable",
+        "{refused}"
+    );
+    assert!(fixture
+        .notes()
+        .await
+        .iter()
+        .all(|note| note.actor.request_id() != "unaudited"));
+    std::fs::remove_file(&blocked).unwrap();
+    let saved = fixture
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "unaudited", "no"),
+        )
+        .await;
+    assert_eq!(saved["ok"], true, "{saved}");
+    let uses = grant_uses(&fixture);
+    assert_eq!(
+        use_for(&uses, "unaudited")["grant"]["principalId"],
+        "gateway:peer"
+    );
 }
 
 /// Rows J29 and J30 on the wire: `conversation.share` answers the grant's
@@ -3112,9 +3417,9 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
             );
         }
     }
-    // A peer gateway, signed in as its own principal, drives nothing here
-    // even holding Drive; it may read the conversation, so it is told
-    // `forbidden`.
+    // A peer gateway, signed in as its own principal and holding Drive,
+    // drives that conversation. Delete, archive, and a model change stay
+    // forbidden, even when the credential also holds `conversation.write`.
     fixture
         .grant_to(ShareGrantTransition::Grant(drive_access()))
         .await;
@@ -3125,6 +3430,16 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
         let answer = fixture
             .call(method, drive_params(method, &fixture.id, "peer"))
             .await;
+        assert!(admitted(&answer), "peer {method}: {answer}");
+    }
+    for method in [
+        "conversation.delete",
+        "conversation.archive",
+        "conversation.setModel",
+    ] {
+        let answer = fixture
+            .call(method, drive_params(method, &fixture.id, "owner-act"))
+            .await;
         assert_eq!(
             answer["error"]["code"], "forbidden",
             "peer {method}: {answer}"
@@ -3132,11 +3447,10 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     }
 }
 
-/// A peer gateway signs in as its own principal and neither drives nor
-/// comments, but what it is told of a refused command is what a read would
-/// tell it: a missing id and a conversation it holds no grant on both answer
-/// `conversation_not_found`, so a command is no oracle for which ids exist;
-/// only a conversation it may read answers `forbidden`.
+/// A peer gateway signs in as its own principal. A missing id and a
+/// conversation it holds no grant on both answer `conversation_not_found`,
+/// so a command is no oracle for which ids exist. The conversation it holds
+/// Drive on admits the command.
 #[tokio::test]
 async fn a_peer_gateway_learns_no_more_from_a_refused_command_than_from_a_read() {
     use crate::conversation::application::ShareGrantTransition;
@@ -3176,8 +3490,8 @@ async fn a_peer_gateway_learns_no_more_from_a_refused_command_than_from_a_read()
             ungranted["error"]["code"], absent["error"]["code"],
             "{method} ungranted: {ungranted}"
         );
-        assert_eq!(
-            granted["error"]["code"], "forbidden",
+        assert!(
+            admitted(&granted),
             "{method} granted: {granted}"
         );
     }
@@ -3782,19 +4096,36 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
             ("drive".to_owned(), grant(driven)),
         ]
     );
-    // A peer gateway, signed in as its own principal, leaves no note here
-    // even holding Comment.
+    // A peer gateway, signed in as its own principal, leaves a note under
+    // the comment grant. The credential's `conversation.write` is not what
+    // admits it.
     fixture.grant_to(ShareGrantTransition::Grant(comment)).await;
+    let commented = revision().await;
     let fixture = fixture
-        .signed_in_as_peer(&["conversation.write", "conversation.read", "server.read"])
+        .signed_in_as_peer(&["conversation.read", "server.read"])
         .await;
     let answer = fixture
         .call(
             "conversation.message",
-            note_params(&fixture.id, "peer", "x"),
+            note_params(&fixture.id, "peer", "from the peer"),
         )
         .await;
-    assert_eq!(answer["error"]["code"], "forbidden", "{answer}");
+    assert_eq!(answer["ok"], true, "{answer}");
+    let peer_note = fixture
+        .notes()
+        .await
+        .into_iter()
+        .find(|note| note.actor.request_id() == "peer")
+        .unwrap();
+    assert_eq!(peer_note.actor.principal_id(), "gateway:peer");
+    assert_eq!(peer_note.author, grant(commented));
+    let send = fixture
+        .call(
+            "conversation.send",
+            drive_params("conversation.send", &fixture.id, "peer"),
+        )
+        .await;
+    assert_eq!(send["error"]["code"], "forbidden", "{send}");
 }
 
 /// Row J18: the same request again answers its first receipt, unchanged and
@@ -4349,9 +4680,7 @@ async fn shares_returns_one_page_and_refuses_a_page_size_past_its_bound() {
 #[tokio::test]
 async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     let fixture = sharing_fixture().await;
-    // Drive is written for the principal signed in as the binding owner
-    // (tablet, the session). Phone is another principal and holds read, so
-    // the two grants stay two rows.
+    // Tablet holds drive. Phone holds read. The two grants stay two rows.
     reads_as(&fixture, "phone", "reader-phone");
     let share = |request: &str, credential: &str, terms: Value| {
         let mut params = json!({
