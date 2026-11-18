@@ -5,7 +5,10 @@ use nessa_auth::{
         PairingCryptoError, RngCore,
     },
     application::pairing::{ClientPendingStore, PairingWorkerFault, PrivateStateError},
-    domain::pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
+    domain::{
+        pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
+        CredentialId,
+    },
 };
 use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
@@ -344,6 +347,50 @@ impl NativeEnrollmentClient {
         })
         .await
     }
+
+    /// Open discovery on the pinned session. Sends `openDiscovery` and nothing
+    /// else of the enrollment exchange: no code, no new credential, no phase change.
+    pub async fn open_discovery<T: Send + 'static>(
+        &self,
+        stream: TcpStream,
+        expected: PublicIntent,
+        credential: CredentialId,
+        exchange: impl FnOnce(&mut EnrollmentChannel<DeadlineStream>) -> Result<T, NativeClientError>
+            + Send
+            + 'static,
+    ) -> Result<T, NativeClientError> {
+        let endpoint = client_endpoint(&stream)?;
+        let (stream, deadline) = DeadlineStream::new(stream, self.clock.clone(), endpoint.clone())
+            .map_err(physical_error)?;
+        self.dispatch_owned(vec![endpoint], move |pending| {
+            let saved = pending
+                .load_credential()
+                .map_err(NativeClientError::Storage)?
+                .ok_or(NativeClientError::NoPending)?;
+            if saved.intent() != expected || saved.credential() != &credential {
+                return Err(NativeClientError::Storage(PrivateStateError::Conflict));
+            }
+            let (key, pin, _) = saved.into_enrollment().into_parts();
+            let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
+            stream.blocking().map_err(physical_error)?;
+            let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
+                .map_err(NativeClientError::Handshake)?;
+            let mut channel = EnrollmentChannel::new(channel);
+            begin_enrollment_phase(&deadline).map_err(physical_error)?;
+            send(
+                &mut channel,
+                NativePairingRequest::OpenDiscovery {
+                    public: expected,
+                    credential,
+                },
+            )?;
+            let result = exchange(&mut channel)?;
+            check_deadline(&deadline).map_err(physical_error)?;
+            Ok(result)
+        })
+        .await
+    }
+
     pub(super) async fn dispatch_owned<T: Send + 'static>(
         &self,
         endpoints: Vec<Arc<WakeEndpoint>>,

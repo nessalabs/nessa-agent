@@ -79,6 +79,7 @@ models link back to the source that owns those decisions.
 - [Verify, quarantine and accept a backup](backup-restore.md)
 - [Delegate to another agent thread](agent-thread-tools.md)
 - [Enroll, read and forget peer gateways](peer-gateways.md)
+- [Announce a paired gateway on the local network](peer-discovery.md)
 - [Run harnesses through environment leases](environment-leases.md)
 - [Reach a gateway through a tunnel](tunnel-connectivity.md)
 - [Pair a device through current receiver holding](device-pairing.md)

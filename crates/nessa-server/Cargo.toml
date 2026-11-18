@@ -57,6 +57,7 @@ nessa-auth = { path = "../nessa-auth" }
 nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
+getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps each mcpServers entry's original JSON so a repeated
 # `env` name is still visible. Decoding the entry as a `Value` first would
