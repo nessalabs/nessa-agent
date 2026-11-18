@@ -11600,7 +11600,11 @@ async function startGrantor(run) {
  * refusal off the console check.
  */
 async function setWindowLinking(run, enabled) {
-  const held = await run.restartConsole.during(run.opened, async () => {
+  // `during` reclassifies the restart's console lines and then resolves
+  // undefined. The window came back when this flag is set, which is the
+  // browser's next conversation read inside the observation.
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
     let result
     for (let tries = 0; tries < 20; tries += 1) {
       try {
@@ -11611,13 +11615,17 @@ async function setWindowLinking(run, enabled) {
         await sleep(500)
       }
     }
-    if (result.applies !== "restarting") return true
+    if (result.applies !== "restarting") {
+      held = true
+      return true
+    }
     run.client.close()
     if (!(await run.restartConsole.readable(60_000))) return false
     run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    held = true
     return true
   })
-  if (held !== true)
+  if (!held)
     throw new Error(`the window did not come back with linking ${enabled ? "on" : "off"}`)
 }
 
