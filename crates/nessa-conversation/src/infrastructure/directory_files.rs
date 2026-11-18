@@ -477,12 +477,10 @@ fn is_regular(file: &File) -> Result<bool, DirectoryRefusal> {
 /// Move `.nessa-binding` aside, then delete it only when that file is the one
 /// already validated. A different file is renamed back and not removed.
 fn remove_validated(dir: RawFd, validated: &File) -> Result<(), DirectoryRefusal> {
-    let aside = aside_name();
-    match rename_at(dir, MARKER_NAME, &aside, false) {
-        Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(()),
-        Err(error) => return Err(error),
-        Ok(()) => {}
-    }
+    let aside = match reserve_aside(dir)? {
+        Some(name) => name,
+        None => return Ok(()),
+    };
     let moved = open_named(dir, &aside)?;
     if same_inode(validated.as_raw_fd(), moved.as_raw_fd()) {
         return unlink_named(dir, &aside);
@@ -491,6 +489,19 @@ fn remove_validated(dir: RawFd, validated: &File) -> Result<(), DirectoryRefusal
         Ok(()) | Err(DirectoryRefusal::Io(std::io::ErrorKind::AlreadyExists)) => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn reserve_aside(dir: RawFd) -> Result<Option<String>, DirectoryRefusal> {
+    for _ in 0..32 {
+        let aside = aside_name();
+        match rename_at(dir, MARKER_NAME, &aside, true) {
+            Ok(()) => return Ok(Some(aside)),
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => return Ok(None),
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::AlreadyExists)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(DirectoryRefusal::Io(std::io::ErrorKind::AlreadyExists))
 }
 
 fn aside_name() -> String {
@@ -528,14 +539,18 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
             leave: PathLeave::DotDot,
         });
     }
-    let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
     if directory {
         flags |= libc::O_DIRECTORY;
     }
     let name = c_name(name)?;
     let fd = unsafe { libc::openat(dir, name.as_ptr(), flags) };
     if fd >= 0 {
-        return Ok(unsafe { File::from_raw_fd(fd) });
+        let file = unsafe { File::from_raw_fd(fd) };
+        if !directory && !is_regular(&file)? {
+            return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
+        }
+        return Ok(file);
     }
     let error = std::io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ELOOP) || is_symlink(dir, &name) {
@@ -618,6 +633,50 @@ mod marker_identity {
             .release_created_marker(shared.to_str().unwrap(), &[1; BINDING_LEN])
             .unwrap());
         assert!(marker.exists());
+    }
+
+    #[test]
+    fn a_fifo_inside_the_directory_does_not_block_the_walk() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let path = shared.to_str().unwrap();
+        LocalDirectoryFiles
+            .create_marker(path, &[4; BINDING_LEN])
+            .unwrap();
+        let pipe = shared.join("pipe");
+        let name = std::ffi::CString::new(pipe.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let session = LocalDirectoryFiles.open_session(path).unwrap();
+        session.marker().unwrap();
+        let started = std::time::Instant::now();
+        let error = session.walk("pipe").unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
+        ));
+        assert!(pipe.exists());
+    }
+
+    #[test]
+    fn cleanup_does_not_replace_an_existing_aside_file() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let path = shared.to_str().unwrap();
+        LocalDirectoryFiles
+            .create_marker(path, &[3; BINDING_LEN])
+            .unwrap();
+        let taken = aside_name();
+        let n: u64 = taken.rsplit('-').next().unwrap().parse().unwrap();
+        let occupied = format!(".nessa-cleanup-{}-{}", std::process::id(), n + 1);
+        std::fs::write(shared.join(&occupied), b"user-data").unwrap();
+        assert!(LocalDirectoryFiles
+            .release_created_marker(path, &[3; BINDING_LEN])
+            .unwrap());
+        assert_eq!(std::fs::read(shared.join(&occupied)).unwrap(), b"user-data");
+        assert!(!shared.join(MARKER_NAME).exists());
     }
 
     #[test]

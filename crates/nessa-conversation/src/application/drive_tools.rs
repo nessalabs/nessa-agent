@@ -359,6 +359,10 @@ fn command_arguments(json: &str) -> ParsedCommand {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
         return ParsedCommand::Skip;
     };
+    let value = value
+        .get("arguments")
+        .filter(|item| item.get("command").is_some() || item.get("argv").is_some())
+        .unwrap_or(&value);
     if let Some(argv) = value.get("argv").and_then(|item| item.as_array()) {
         let mut parts = Vec::new();
         for item in argv {
@@ -444,6 +448,15 @@ mod command_parse {
             command_arguments("{\"command\":\"ls .\\nrm victim\"}"),
             ParsedCommand::Unsafe
         ));
+        match command_arguments(
+            r#"{"server":"nessa","tool":"shell","arguments":{"command":"cat .nessa-binding"}}"#,
+        ) {
+            ParsedCommand::Run { program, arguments } => {
+                assert_eq!(program, "cat");
+                assert_eq!(arguments, [".nessa-binding"]);
+            }
+            other => panic!("{other:?}"),
+        }
         match command_arguments(r#"{"command":"ls -l"}"#) {
             ParsedCommand::Run { program, arguments } => {
                 assert_eq!(program, "ls");
