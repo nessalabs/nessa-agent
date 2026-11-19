@@ -125,7 +125,7 @@ export function SavedLoginsGroup() {
     <SettingGroup
       id="saved-logins"
       pending={!state.gateway}
-      note="Agents on your SSH hosts and Boat workspaces sign in with these, and on a paired computer once you turn it on in Devices. A computer's own login wins."
+      note="Agents on your SSH hosts and cloud workspaces (Boat, Agent37) sign in with these, and on a paired computer once you turn it on in Devices. A computer's own login wins."
     >
       {agents.map((agent) => (
         <SavedLoginRow key={agent.id} agent={agent} state={state} />

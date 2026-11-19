@@ -247,8 +247,9 @@ export const settingsEntries = [
   {
     id: "cloud-choice",
     tab: "accounts",
-    label: "Cloud for new thread VMs",
-    detail: "Which connected cloud makes a new thread's VM when its channel names none.",
+    label: "Default cloud",
+    detail:
+      "Where a thread's VM is made when its channel names no cloud. Shown once two clouds are connected.",
     keywords: "cloud vm boat agent37 default provider workspace choose",
   },
   {

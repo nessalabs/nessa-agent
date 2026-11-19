@@ -102,7 +102,7 @@ it("authenticates Boat once, says it is waiting, and says when it is kept", asyn
     await React.act(async () => finish())
     expect(button()).toBeNull()
     expect(container.textContent).toContain(
-      "Signed in for Boat workspaces. Send your message again.",
+      "Signed in for cloud workspaces. Send your message again.",
     )
   } finally {
     await React.act(async () => root.unmount())

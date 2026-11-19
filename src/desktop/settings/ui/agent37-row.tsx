@@ -7,14 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { NessaAgent37Error, type Agent37Status, type Cloud } from "@nessa/client"
+import { NessaAgent37Error, type Agent37Status } from "@nessa/client"
 import { Dialog } from "@nessa-ui/react/dialog"
 import type { Agent37Gateway } from "../adapters/agent37-gateway"
 import { useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
-import { Choice, FoundSetting, ItemRow, RowAction } from "./settings-controls"
-import { cloudChoices } from "../../clouds/model/clouds"
-import { useBoatConnection } from "./boat-row"
+import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 
 const Agent37Context = createContext<Agent37Gateway | undefined>(undefined)
 export function Agent37Provider({
@@ -38,9 +36,9 @@ function failure(cause: unknown): string {
 }
 
 /**
- * Settings › Connections › Accounts › Agent37: where it stands and one
- * button. The key is pasted in a dialog that Connect… opens. Below it, which
- * cloud new thread VMs are made on.
+ * Settings › Accounts › Agent37: where it stands and one button. The key is
+ * pasted in a dialog that Connect… opens. Which cloud a thread uses is its
+ * channel's choice, or the default cloud's (`DefaultCloudRow`).
  */
 export function Agent37Row({
   onChange,
@@ -51,14 +49,10 @@ export function Agent37Row({
   const gateway = useContext(Agent37Context)
   const ensure = useVaultUnlock()
   const found = useContext(FoundSetting) === "agent37"
-  const choiceFound = useContext(FoundSetting) === "cloud-choice"
   const entry = setting("agent37")
-  const choiceEntry = setting("cloud-choice")
-  const boatState = useBoatConnection().status?.state
   const reads = useRef(0)
   const keyId = useId()
   const [status, setStatus] = useState<Agent37Status>()
-  const [cloud, setCloud] = useState<Cloud>()
   const [key, setKey] = useState("")
   const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -71,12 +65,8 @@ export function Agent37Row({
     setUnread(false)
     void gateway
       ?.read()
-      .then(async (value) => {
-        const choice = await gateway.cloud()
-        if (current && revision === reads.current) {
-          setStatus(value)
-          setCloud(choice.cloud)
-        }
+      .then((value) => {
+        if (current && revision === reads.current) setStatus(value)
       })
       .catch(() => {
         if (current && revision === reads.current) {
@@ -135,10 +125,7 @@ export function Agent37Row({
               data-agent37-action="disconnect"
               onClick={() =>
                 void act(
-                  async (gateway) => {
-                    setStatus(await gateway.disconnect())
-                    setCloud((await gateway.cloud()).cloud)
-                  },
+                  async (gateway) => setStatus(await gateway.disconnect()),
                   () => "Agent37 could not be disconnected. Try again.",
                 )
               }
@@ -170,33 +157,6 @@ export function Agent37Row({
               Connect…
             </RowAction>
           )
-        }
-      />
-      <ItemRow
-        setting="cloud-choice"
-        found={choiceFound}
-        label={choiceEntry.label}
-        detail={
-          cloud === "agent37" && state !== "connected"
-            ? "Agent37 is chosen; unlock to see its connection. A thread whose VM exists stays on the cloud it was made on."
-            : "A thread whose VM exists stays on the cloud it was made on. Agent37 VMs sleep after the VM lifetime idle (5 minutes to a day)."
-        }
-        unavailable={!gateway || cloud === undefined || busy}
-        data-cloud-choice={cloud ?? "reading"}
-        control={
-          <Choice
-            label={choiceEntry.label}
-            value={cloud}
-            options={cloudChoices((id) =>
-              id === "agent37" ? state === "connected" : boatState !== "disconnected",
-            ).map(({ id, label, disabled }) => ({ id, label, disabled }))}
-            onChange={(next: Cloud) =>
-              void act(
-                async (gateway) => setCloud((await gateway.chooseCloud(next)).cloud),
-                () => "The cloud could not be changed. Connect it first, then try again.",
-              )
-            }
-          />
         }
       />
       {asking ? (
