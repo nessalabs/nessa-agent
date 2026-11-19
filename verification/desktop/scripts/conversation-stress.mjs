@@ -873,6 +873,20 @@ async function swipeColumns(run, step, message, port, failures) {
   const back = fling.map((each) => -each)
   await swipe(words, [...back, ...back])
   await expect("two swipes right back to back", all, 2)
+  // The second swipe while the first one's momentum is still slowing, a
+  // few pixels an event and never down to nothing: read as the fingers
+  // pick up, not after the momentum has died away.
+  const fading = [15, 15, 15, 15, 15, 15, 12, 10, 8, 6, 5, 4, 3]
+  const picking = [4, 8, 14, 18, 18, 18, 18, 18]
+  await swipe(words, [...fading, ...picking])
+  await expect(
+    "a second swipe left while the first one's momentum fades",
+    { rail: "open", sidebar: "closed", list: "closed" },
+    2,
+  )
+  const neg = (xs) => xs.map((each) => -each)
+  await swipe(words, [...neg(fading), ...neg(picking)])
+  await expect("a second swipe right while the first one's momentum fades", all, 2)
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The conversation still takes a message.

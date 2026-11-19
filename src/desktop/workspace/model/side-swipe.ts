@@ -99,6 +99,18 @@ export const SETTLED = 1
  * next swipe at once: momentum never turns round.
  */
 export const REVERSAL = 4
+/**
+ * Momentum only ever slows. Once a gesture's events have slowed this many
+ * times running, to half their fastest or less, it is fading; then an event
+ * at least twice the slowest since (and `PICK_UP` px more) is new fingers:
+ * the next swipe, read at once instead of after the momentum has died away,
+ * which on a Mac can take a second or more. New fingers may speed up over a
+ * few events, so it is the slowest one that is compared, not the last.
+ * Fingers still on the trackpad speed up and slow down as they please, so a
+ * swipe that is still being made needs the fading first.
+ */
+export const FADING = 3
+export const PICK_UP = 2
 
 /** One wheel event, in pixels, with x positive when the fingers moved left. */
 export interface SwipeSample {
@@ -115,6 +127,9 @@ export interface SwipeSample {
  * toggles again. `moved` is one that has had an event larger than
  * `SETTLED`, and `settled` one whose events then came down to it: its
  * momentum is over. A gesture that only began small has not settled.
+ * `speed` is its last event's size, `peak` its largest since it ended,
+ * `slowest` its smallest, `falls` how many events running have been no
+ * larger than the one before, and `fading` whether it has faded (`FADING`).
  */
 export type SwipeState =
   | { readonly phase: "idle" }
@@ -129,6 +144,11 @@ export type SwipeState =
       readonly last: number
       readonly moved: boolean
       readonly settled: boolean
+      readonly speed: number
+      readonly peak: number
+      readonly slowest: number
+      readonly falls: number
+      readonly fading: boolean
       /** For `done`: 1 when the fingers went left, -1 right. */
       readonly way?: 1 | -1
     }
@@ -138,10 +158,31 @@ export const idleSwipe: SwipeState = { phase: "idle" }
 const small = (sample: SwipeSample) =>
   Math.abs(sample.x) <= SETTLED && Math.abs(sample.y) <= SETTLED
 
+const size = (sample: SwipeSample) => Math.abs(sample.x) + Math.abs(sample.y)
+
+/** A gesture that has ended, as its first event leaves it. */
+const ended = (sample: SwipeSample) => ({
+  last: sample.at,
+  speed: size(sample),
+  peak: size(sample),
+  slowest: size(sample),
+  falls: 0,
+  fading: false,
+})
+
+/** Momentum that was slowing down and picks up again: new fingers. */
+function picksUp(
+  state: { readonly slowest: number; readonly fading: boolean },
+  sample: SwipeSample,
+): boolean {
+  const now = size(sample)
+  return state.fading && now >= state.slowest * 2 && now >= state.slowest + PICK_UP
+}
+
 /**
  * Whether a wheel event begins a new gesture rather than continuing this
- * one: after a pause, after the last one's momentum settled, or against the
- * way the last swipe went. WebKit says nothing of a wheel's phase, so the
+ * one: after a pause, after the last one's momentum settled or as it picks
+ * up again while fading, or against the way the last swipe went. WebKit says nothing of a wheel's phase, so the
  * events themselves are read: on a Mac the next swipe often starts before
  * the last one's momentum has stopped.
  */
@@ -149,6 +190,7 @@ export function beginsGesture(state: SwipeState, sample: SwipeSample): boolean {
   if (state.phase === "idle" || sample.at - state.last > GESTURE_GAP) return true
   if (state.phase === "tracking") return false
   if (state.settled && !small(sample)) return true
+  if (picksUp(state, sample)) return true
   return (
     state.phase === "done" &&
     state.way !== undefined &&
@@ -172,7 +214,7 @@ export function swipeStep(
       return {
         state: {
           phase: "skipped",
-          last: sample.at,
+          ...ended(sample),
           moved: !small(sample),
           settled: false,
         },
@@ -183,12 +225,19 @@ export function swipeStep(
   if (state.phase === "tracking") return measure(state, sample)
   if (state.phase === "idle") return { state, swiped: null }
   const moved = state.moved || !small(sample)
+  const now = size(sample)
+  const falls = now <= state.speed ? state.falls + 1 : 0
   return {
     state: {
       ...state,
       last: sample.at,
       moved,
       settled: state.settled || (moved && small(sample)),
+      speed: now,
+      peak: Math.max(state.peak, now),
+      slowest: Math.min(state.slowest, now),
+      falls,
+      fading: state.fading || (falls >= FADING && now <= state.peak / 2),
     },
     swiped: null,
   }
@@ -202,14 +251,14 @@ function measure(
   const y = state.y + sample.y
   if (Math.abs(y) >= SCROLL_LOCK && Math.abs(y) >= Math.abs(x))
     return {
-      state: { phase: "scroll", last: sample.at, moved: true, settled: false },
+      state: { phase: "scroll", ...ended(sample), moved: true, settled: false },
       swiped: null,
     }
   if (Math.abs(x) >= SWIPE_DISTANCE && Math.abs(x) >= Math.abs(y) * SWIPE_RATIO)
     return {
       state: {
         phase: "done",
-        last: sample.at,
+        ...ended(sample),
         moved: true,
         settled: false,
         way: x > 0 ? 1 : -1,
