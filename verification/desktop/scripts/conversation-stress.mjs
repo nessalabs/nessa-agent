@@ -1551,15 +1551,16 @@ function footerThroughToggle(page) {
     if (from === undefined || !name())
       failures.push("no pane name in the chat's titlebar")
     const to = names.at(-1)
-    // Within a pixel: the pane, its counter-scaled bar and the name each move
-    // on their own transform, and WebKit can land their sum a fraction of a
-    // pixel off (0.7px seen). Riding the pane's flight moves it tens of pixels.
+    // Within 2px: the pane, its counter-scaled bar and the name each move on
+    // their own transform, and WebKit lands their sum a little off (0.7px and
+    // 1.3px seen in CI; Chromium stays within 0.5px). Riding the pane's
+    // flight, as before, moves the name 32px or more.
     const strayed = names.find(
-      (left) => left < Math.min(from, to) - 1 || left > Math.max(from, to) + 1,
+      (left) => left < Math.min(from, to) - 2 || left > Math.max(from, to) + 2,
     )
     if (strayed !== undefined)
       failures.push(
-        `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled`,
+        `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled (every frame: ${names.map((left) => left.toFixed(1)).join(" ")})`,
       )
     // Agents' icon is on screen only with the sidebar open.
     const icon = document.querySelector(
