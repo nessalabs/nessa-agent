@@ -59,12 +59,15 @@ use std::{fmt, io, path::Path};
 
 pub use rusqlite;
 
+type SchemaValidation = fn(&Connection) -> Result<(), OpenError>;
+
 /// A context's tables, and the version they are.
 #[derive(Clone, Copy, Debug)]
 pub struct Schema {
     version: u32,
     definition: &'static str,
     upgrades: &'static [Upgrade],
+    validate: Option<SchemaValidation>,
 }
 impl Schema {
     /// `definition` holds the statements that create every table and index,
@@ -75,6 +78,7 @@ impl Schema {
             version: stated_version(definition).ok_or(OpenError::UnversionedSchema)?,
             definition,
             upgrades: &[],
+            validate: None,
         })
     }
     /// The steps that bring an older file to this version, oldest first. Each
@@ -94,6 +98,14 @@ impl Schema {
         }
         Ok(Self { upgrades, ..self })
     }
+    /// Validate the resulting current shape inside the opening transaction,
+    /// before schema commit or persistent journal configuration. The callback
+    /// runs for fresh, current and successfully upgraded schemas.
+    pub fn with_validation(mut self, validate: fn(&Connection) -> Result<(), OpenError>) -> Self {
+        self.validate = Some(validate);
+        self
+    }
+
     /// The version the definition states.
     pub fn version(&self) -> u32 {
         self.version
@@ -152,6 +164,12 @@ pub enum OpenError {
     File(io::Error),
     /// SQLite refused the file, a pragma, or the schema.
     Database(rusqlite::Error),
+    /// The schema was committed at this version, but persistent journal
+    /// configuration failed afterward. A retry opens the committed schema.
+    ConfigurationAfterCommit {
+        version: u32,
+        cause: rusqlite::Error,
+    },
     /// The file is not a database, or SQLite found it damaged. Opening it
     /// again reads the same bytes
     /// (`a_file_that_is_not_a_database_is_refused_and_left_as_it_was`).
@@ -181,6 +199,9 @@ impl fmt::Display for OpenError {
             Self::Directory(error) => write!(output, "database directory: {error}"),
             Self::File(error) => write!(output, "database file: {error}"),
             Self::Database(error) => write!(output, "database: {error}"),
+            Self::ConfigurationAfterCommit { version, cause } => write!(
+                output, "database schema version {version} committed; journal configuration failed: {cause}"
+            ),
             Self::Unreadable(error) => write!(output, "not a readable database: {error}"),
             Self::Damaged(problem) => write!(output, "damaged database: {problem}"),
             Self::Version { found, expected } => write!(
@@ -296,9 +317,6 @@ fn open_mode(
     // changed in it, its journal mode included, so it is left as it was
     // (`another_version_is_refused_and_left_as_it_was`).
     accepted(&connection, schema)?;
-    // A file left in write-ahead mode is brought back to the rollback
-    // journal (`a_file_left_in_write_ahead_mode_is_opened_in_the_rollback_journal`).
-    connection.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
     // Asked again, and when empty given its schema, under one write lock, so
     // two openers of an empty file cannot both set about creating it.
     // An older file is upgraded under the same lock, so a second opener
@@ -320,7 +338,11 @@ fn open_mode(
             return Err(OpenError::Damaged(problem));
         }
         if upgrades.is_empty() {
+            if let Some(validate) = schema.validate {
+                validate(&transaction)?;
+            }
             drop(transaction);
+            connection.pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))?;
             return Ok(connection);
         }
         // Every step or none: dropping the transaction on an error rolls
@@ -343,7 +365,16 @@ fn open_mode(
                 });
             }
         }
+        if let Some(validate) = schema.validate {
+            validate(&transaction)?;
+        }
         transaction.commit()?;
+        connection
+            .pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))
+            .map_err(|cause| OpenError::ConfigurationAfterCommit {
+                version: schema.version(),
+                cause,
+            })?;
         return Ok(connection);
     }
     // The definition sets its own version, inside the same transaction, and
@@ -356,6 +387,17 @@ fn open_mode(
             expected: schema.version,
         });
     }
+    if let Some(validate) = schema.validate {
+        validate(&transaction)?;
+    }
     transaction.commit()?;
+    // Normalize the persistent journal mode only after successful validation
+    // and upgrades, so a rejected upgrade retains the source mode.
+    connection
+        .pragma_update_and_check(None, "journal_mode", "DELETE", |_| Ok(()))
+        .map_err(|cause| OpenError::ConfigurationAfterCommit {
+            version: schema.version(),
+            cause,
+        })?;
     Ok(connection)
 }
