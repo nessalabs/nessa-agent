@@ -284,6 +284,9 @@ pub struct ReadStop {
 /// A socket belongs to one read, even when several reads share cancellation.
 struct StopSocket {
     owner: Arc<()>,
+    /// This socket alone, so it leaves the list when it closes, while other
+    /// sockets of the same read stay.
+    id: Arc<()>,
     socket: TcpStream,
 }
 impl ReadStop {
@@ -329,17 +332,24 @@ impl ReadStop {
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<StopSocket>> {
         self.sockets.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<()> {
+    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<()>> {
         let handle = socket.try_clone()?;
+        let id = Arc::new(());
         self.lock().push(StopSocket {
             owner: owner.clone(),
+            id: id.clone(),
             socket: handle,
         });
         // A stop between the check in `connect` and here still reaches it.
         if self.is_stopped() {
             self.stop();
         }
-        Ok(())
+        Ok(id)
+    }
+    /// One socket closed: drop its handle, so a read that reopens sessions
+    /// for as long as it lives does not keep every closed one open.
+    fn forget(&self, id: &Arc<()>) {
+        self.lock().retain(|socket| !Arc::ptr_eq(&socket.id, id));
     }
     fn release(&self, owner: &Arc<()>) {
         self.lock()
@@ -385,7 +395,7 @@ impl Stopping {
         self.until
             .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
     }
-    fn register(&self, socket: &TcpStream) -> IoResult<()> {
+    fn register(&self, socket: &TcpStream) -> IoResult<Arc<()>> {
         self.stop.register(&self.owner, socket)
     }
     fn release(&self) {
@@ -606,8 +616,8 @@ impl GatewayConnector for StoppableConnector {
             Ordering::SeqCst,
         );
         let socket = connected?;
-        self.ending.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
+        let id = self.ending.register(&socket)?;
+        Ok(Box::new(Socket::new(socket, self.ending.stop.clone(), id)))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -617,14 +627,22 @@ impl GatewayConnector for StoppableConnector {
 struct Socket {
     stream: TcpStream,
     stop: Arc<ReadStop>,
+    /// Its entry in `stop`, removed when this socket is dropped.
+    id: Arc<()>,
     read_for: Cell<Duration>,
     write_for: Cell<Duration>,
 }
+impl Drop for Socket {
+    fn drop(&mut self) {
+        self.stop.forget(&self.id);
+    }
+}
 impl Socket {
-    fn new(stream: TcpStream, stop: Arc<ReadStop>) -> Self {
+    fn new(stream: TcpStream, stop: Arc<ReadStop>, id: Arc<()>) -> Self {
         Self {
             stream,
             stop,
+            id,
             read_for: Cell::new(STOP_SLICE),
             write_for: Cell::new(STOP_SLICE),
         }
@@ -2281,5 +2299,28 @@ mod grant_frames {
         assert_eq!(staged[0].conversation_id, "kept");
         assert_eq!(bytes, STAGED_GRANT_BYTES);
         assert_eq!(snapshot.as_deref(), Some("7"));
+    }
+}
+
+#[cfg(test)]
+mod stop_sockets {
+    use super::ReadStop;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    #[test]
+    fn a_closed_socket_leaves_the_stop_and_the_others_stay() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = ReadStop::new();
+        let read = Arc::new(());
+        let first = TcpStream::connect(address).unwrap();
+        let second = TcpStream::connect(address).unwrap();
+        let first_id = stop.register(&read, &first).unwrap();
+        let _second_id = stop.register(&read, &second).unwrap();
+        stop.forget(&first_id);
+        assert_eq!(stop.lock().len(), 1);
+        stop.release(&read);
+        assert!(stop.lock().is_empty());
     }
 }
