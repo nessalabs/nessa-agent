@@ -1551,8 +1551,11 @@ function footerThroughToggle(page) {
     if (from === undefined || !name())
       failures.push("no pane name in the chat's titlebar")
     const to = names.at(-1)
+    // Within a pixel: the pane, its counter-scaled bar and the name each move
+    // on their own transform, and WebKit can land their sum a fraction of a
+    // pixel off (0.7px seen). Riding the pane's flight moves it tens of pixels.
     const strayed = names.find(
-      (left) => left < Math.min(from, to) - 0.5 || left > Math.max(from, to) + 0.5,
+      (left) => left < Math.min(from, to) - 1 || left > Math.max(from, to) + 1,
     )
     if (strayed !== undefined)
       failures.push(
