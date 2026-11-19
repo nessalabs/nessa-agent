@@ -5063,6 +5063,9 @@ const steps = {
     }
     const lockedAccounts = async () => {
       await leaveSettings()
+      // A gateway restarted by an earlier step ends the app's vault session;
+      // a status read reconnects it, as the app does, before the lock.
+      await run.stack.vault.command({ operation: "status" })
       const lock = await run.stack.vault.command({ operation: "lock" })
       if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
       await openAccounts(run.page)
