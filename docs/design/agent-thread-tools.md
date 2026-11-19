@@ -38,7 +38,9 @@ an input nobody relayed. Each turn in the answer says its `origin` (`person`,
 `grant`, `agent`, `resumed`, `app`, `internal`) and what it `said`, exactly as
 saved; `startedBy` names the origin the chain starts at. It keeps no copy: the
 SDK records are written once at admission and never changed, so the words the
-chain ends at are the owner's own. It decides nothing either. The reading agent
+chain ends at are the owner's own. With `earlier` (at most 3) a chain that
+reaches the person also brings their messages before it in that thread, and
+the thread's first, so the agent can tell what they meant. It decides nothing either. The reading agent
 judges whether those words cover what it is asked to do.
 
 ```mermaid
