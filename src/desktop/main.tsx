@@ -1,3 +1,4 @@
+import { Agent37Provider } from "./settings/ui/agent37-row"
 import { BoatProvider } from "./settings/ui/boat-row"
 import { DevicesProvider } from "./devices"
 import { VaultProvider, nativeVault } from "../vault"
@@ -10,6 +11,7 @@ import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { CodeBlockProvider } from "@nessa-ui/react/code-block"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import {
   askReviewNoticeAccess,
   chooseChannelFolder,
@@ -280,6 +282,10 @@ const hapticTick = () => void performHaptic().catch(() => {})
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
+// Agent replies are drawn by Words, which compiles its WebAssembly as it
+// loads; loading it now means the first reply never shows as plain text.
+void preloadReplyMarkdown()
+
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
@@ -318,46 +324,50 @@ createRoot(container).render(
                                   gateway={dependencies.permissionRules}
                                 >
                                   <BoatProvider gateway={dependencies.boat}>
-                                    <GithubProvider
-                                      gateway={dependencies.github}
-                                      avatar={githubAvatar}
-                                    >
-                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
-                                        <SavedLoginsProvider
-                                          gateway={dependencies.savedLogins}
-                                        >
-                                          <VoiceProvider
-                                            controller={voice}
-                                            title={(sessionId) => {
-                                              const sessions =
-                                                store.getState().workspace.sessions
-                                              return Object.hasOwn(sessions, sessionId)
-                                                ? sessions[sessionId].title
-                                                : null
-                                            }}
-                                            showChat={(sessionId) =>
-                                              void store.dispatch(
-                                                openSession({ sessionId }),
-                                              )
-                                            }
+                                    <Agent37Provider gateway={dependencies.agent37}>
+                                      <GithubProvider
+                                        gateway={dependencies.github}
+                                        avatar={githubAvatar}
+                                      >
+                                        <VoiceKeyProvider gateway={dependencies.voiceKey}>
+                                          <SavedLoginsProvider
+                                            gateway={dependencies.savedLogins}
                                           >
-                                            {/* The window is dark only (desktop.html's
+                                            <VoiceProvider
+                                              controller={voice}
+                                              title={(sessionId) => {
+                                                const sessions =
+                                                  store.getState().workspace.sessions
+                                                return Object.hasOwn(sessions, sessionId)
+                                                  ? sessions[sessionId].title
+                                                  : null
+                                              }}
+                                              showChat={(sessionId) =>
+                                                void store.dispatch(
+                                                  openSession({ sessionId }),
+                                                )
+                                              }
+                                            >
+                                              {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                            <CodeBlockProvider mode="dark">
-                                              <HapticProvider tick={hapticTick}>
-                                                <DesktopWindow
-                                                  hostKind={host.kind}
-                                                  browserSurface={host.kind === "browser"}
-                                                  inspectable={import.meta.env.DEV}
-                                                />
-                                              </HapticProvider>
-                                            </CodeBlockProvider>
-                                          </VoiceProvider>
-                                        </SavedLoginsProvider>
-                                      </VoiceKeyProvider>
-                                    </GithubProvider>
+                                              <CodeBlockProvider mode="dark">
+                                                <HapticProvider tick={hapticTick}>
+                                                  <DesktopWindow
+                                                    hostKind={host.kind}
+                                                    browserSurface={
+                                                      host.kind === "browser"
+                                                    }
+                                                    inspectable={import.meta.env.DEV}
+                                                  />
+                                                </HapticProvider>
+                                              </CodeBlockProvider>
+                                            </VoiceProvider>
+                                          </SavedLoginsProvider>
+                                        </VoiceKeyProvider>
+                                      </GithubProvider>
+                                    </Agent37Provider>
                                   </BoatProvider>
                                 </PermissionRulesProvider>
                               </NativeHooksProvider>

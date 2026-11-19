@@ -973,13 +973,15 @@ fn workspace_admission_refusal_retains_expected_and_observed_identity_in_the_rea
     let event = RecoveryEvent::AdmissionRefused {
         thread: "d49640a4-fd71-40a4-b3e9-a35e8753db78".into(),
         vm: "bx_fixture".into(),
-        admission: EnvironmentIdentity::new(
-            "11111111-1111-4111-8111-111111111111".into(),
-            "nessa".into(),
-            "22222222-2222-4222-8222-222222222222".into(),
-            2,
-        )
-        .unwrap(),
+        admission: crate::workspaces::domain::Admitted::Boat(
+            EnvironmentIdentity::new(
+                "11111111-1111-4111-8111-111111111111".into(),
+                "nessa".into(),
+                "22222222-2222-4222-8222-222222222222".into(),
+                2,
+            )
+            .unwrap(),
+        ),
         disposition: crate::workspaces::domain::RefusalDisposition::RetainTarget,
         rejection: AdmissionRejection::new(
             AdmissionRefusal::WrongVersion,

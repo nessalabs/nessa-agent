@@ -13,8 +13,8 @@
 use crate::workspaces::{
     application::{Provider, RestCause, WorkspaceReceipt, WorkspaceRuntime},
     domain::{
-        AdmissionRefusal, AdmissionRejection, BoatAccount, EnvironmentIdentity, Failure,
-        ObservedEnvironment, RefusalDisposition, VmSpec,
+        AdmissionRefusal, AdmissionRejection, Admitted, BoatAccount, CloudAccount,
+        EnvironmentIdentity, Failure, ObservedEnvironment, RefusalDisposition, VmSpec,
     },
 };
 use async_trait::async_trait;
@@ -45,8 +45,6 @@ const CONNECT_BUDGET: Duration = Duration::from_secs(115);
 const MACHINE_TYPE: &str = "small";
 /// Where each thread's workspace is made inside its VM.
 const WORKSPACES: &str = "/home/user/.nessa/workspaces";
-/// The VM's own `nessa` configuration, private to its account.
-const VM_CONFIG: &str = "/home/user/.nessa/config.json";
 /// The workspace supervisor the image carries.
 const VM_SUPERVISOR: &str = "/opt/nessa/bin/workspace-supervisor";
 /// Writing the configuration is one short command.
@@ -118,13 +116,14 @@ impl BoatProvider {
             .connection(Some(forward))
             .await
             .map_err(|_| Failure::Provider)?;
-        write_config(link.as_ref(), &root).await?;
+        write_config(link.as_ref(), &root, super::ssh::BOAT_DATA_DIR).await?;
         let access = super::ssh::VmLink::new(
             link,
             self.relay_socket.clone(),
             self.relay_program.clone(),
             root,
             vm,
+            super::ssh::BOAT_DATA_DIR,
         )?;
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
@@ -149,7 +148,8 @@ fn spec(vm: &VmSpec, thread: Option<&str>) -> Result<MachineSpec, Failure> {
 
 #[async_trait]
 impl Provider for BoatProvider {
-    async fn validate(&self, account: &BoatAccount, vm: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, account: &CloudAccount, vm: &VmSpec) -> Result<(), Failure> {
+        let account = boat(account)?;
         // Nessa admits only its own environment: a name it would refuse on
         // every creation is refused before anything is made for it.
         nessa_environment(&vm.environment)?;
@@ -161,10 +161,11 @@ impl Provider for BoatProvider {
     }
     async fn create(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         vm: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
+        let account = boat(account)?;
         nessa_environment(&vm.environment)?;
         let spec = spec(vm, Some(thread))?;
         let machines = self.machines(account)?;
@@ -177,7 +178,7 @@ impl Provider for BoatProvider {
         let refusal = created.refusal().map(rejection_from);
         Ok(WorkspaceReceipt {
             vm: created.vm().into(),
-            admission: identity_from(created.admission())?,
+            admission: Admitted::Boat(identity_from(created.admission())?),
             refusal,
             disposition: match created.disposition() {
                 Disposition::RollbackNewVm => RefusalDisposition::RollbackNewVm,
@@ -187,12 +188,14 @@ impl Provider for BoatProvider {
     }
     async fn connect(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         made: &VmSpec,
         thread: &str,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
+        let account = boat(account)?;
+        let admission = boat_admission(admission)?;
         let deadline = crate::timer::clock::now() + CONNECT_BUDGET;
         let machines = self.machines(account)?;
         machines
@@ -206,7 +209,13 @@ impl Provider for BoatProvider {
             .await
             .map_err(|_| Failure::Provider)?
     }
-    async fn stop(&self, account: &BoatAccount, vm: &str, cause: RestCause) -> Result<(), Failure> {
+    async fn stop(
+        &self,
+        account: &CloudAccount,
+        vm: &str,
+        cause: RestCause,
+    ) -> Result<(), Failure> {
+        let account = boat(account)?;
         // Boat archives it: its disk is kept as a snapshot, nothing runs or
         // is billed, and `connect` resumes it.
         let cause = match cause {
@@ -221,10 +230,12 @@ impl Provider for BoatProvider {
     }
     async fn remove(
         &self,
-        account: &BoatAccount,
+        account: &CloudAccount,
         vm: &str,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
     ) -> Result<(), Failure> {
+        let account = boat(account)?;
+        let admission = boat_admission(admission)?;
         // Only a VM this creation made is ever removed; the workspace's
         // cleanup asks only for one. Acceptance alone is not confirmed
         // erasure, so this always ends uncertain.
@@ -238,6 +249,21 @@ impl Provider for BoatProvider {
             .roll_back(&created)
             .await
             .map_err(failure)
+    }
+}
+
+/// The Boat account a connection to Boat carries.
+fn boat(account: &CloudAccount) -> Result<&BoatAccount, Failure> {
+    match account {
+        CloudAccount::Boat(account) => Ok(account),
+        CloudAccount::Agent37(_) => Err(Failure::InvalidInput),
+    }
+}
+/// What a Boat VM was admitted under.
+fn boat_admission(admission: &Admitted) -> Result<&EnvironmentIdentity, Failure> {
+    match admission {
+        Admitted::Boat(identity) => Ok(identity),
+        Admitted::Agent37(_) => Err(Failure::InvalidInput),
     }
 }
 
@@ -267,12 +293,13 @@ pub fn vm_config(root: &str) -> Result<serde_json::Value, Failure> {
     Ok(config)
 }
 
-/// The VM's `nessa` configuration: its agents run in the thread's
-/// workspace `root`. Written through the connection's standard input, so
+/// The VM's `nessa` configuration, `config.json` in its `data_dir`: its
+/// agents run in the thread's workspace `root`. Written through the connection's standard input, so
 /// nothing of it is in a command line, and only its account can read it.
-async fn write_config(
+pub(super) async fn write_config(
     link: &dyn workspace_sdk::ports::IConnection,
     root: &str,
+    data_dir: &str,
 ) -> Result<(), Failure> {
     let config = vm_config(root)?;
     let mut input = tempfile::tempfile().map_err(|_| Failure::Storage)?;
@@ -283,9 +310,9 @@ async fn write_config(
     let written = link
         .run(
             &format!(
-                "umask 077 && mkdir -p /home/user/.nessa && chmod 700 /home/user/.nessa \
-                 && cat > {VM_CONFIG}.new && chmod 600 {VM_CONFIG}.new \
-                 && mv -f {VM_CONFIG}.new {VM_CONFIG}"
+                "umask 077 && mkdir -p {data_dir} && chmod 700 {data_dir} \
+                 && cat > {data_dir}/config.json.new && chmod 600 {data_dir}/config.json.new \
+                 && mv -f {data_dir}/config.json.new {data_dir}/config.json"
             ),
             Some(input),
             CONFIG_WRITE,

@@ -171,6 +171,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         inputFiles: "0",
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
+        cloudChoices: "0",
         windows: "0",
         controls: "0",
         linkings: "0",

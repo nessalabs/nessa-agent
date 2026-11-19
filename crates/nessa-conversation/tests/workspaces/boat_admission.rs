@@ -2,7 +2,7 @@
 use crate::workspaces::{
     application::{Provider, RestCause},
     domain::{
-        AdmissionRefusal, AdmissionRejection, BoatAccount, BoatConnection, Failure,
+        AdmissionRefusal, AdmissionRejection, BoatConnection, CloudAccount, Failure,
         RefusalDisposition, VmSpec,
     },
     infrastructure::BoatProvider,
@@ -425,8 +425,8 @@ async fn server() -> Server {
 fn connection() -> BoatConnection {
     BoatConnection::new("fixture-token".into(), "nessa".into(), "bsh_fixture".into()).unwrap()
 }
-fn account() -> BoatAccount {
-    connection().account
+fn account() -> CloudAccount {
+    CloudAccount::Boat(connection().account)
 }
 fn spec() -> VmSpec {
     connection().new_vm(
