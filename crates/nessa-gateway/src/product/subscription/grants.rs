@@ -293,23 +293,14 @@ async fn fresh_frame(
     }
     if let Some(after) = after {
         let position = after.position;
-        let entries = grants
+        let mut entries = grants
             .grant_log_after(receiver, position)
             .await
             .map_err(|_| ())?;
-        *snapshots = snapshots.saturating_add(1);
-        let mut pin = Pin {
-            id: *snapshots,
-            replaces: false,
-            incarnation: stream.incarnation.clone(),
-            head: stream.head,
-            pending: entries.iter().map(log_entry).collect(),
-            covered: position,
-            incremental: true,
-        };
-        let frame = take_page(&mut pin);
-        let rest = (!pin.pending.is_empty()).then_some(pin);
-        return Ok((frame, rest));
+        entries.retain(|entry| entry.position <= stream.head);
+        if continues_cursor(&entries, stream.head, position) {
+            return Ok(incremental_frame(&entries, stream, position, snapshots));
+        }
     }
     let entries = grants.grant_snapshot(receiver).await.map_err(|_| ())?;
     *snapshots = snapshots.saturating_add(1);
@@ -325,6 +316,36 @@ async fn fresh_frame(
     let frame = take_page(&mut pin);
     let rest = (!pin.pending.is_empty()).then_some(pin);
     Ok((frame, rest))
+}
+
+/// The head and the log are two reads. If the log was trimmed between them,
+/// the records right after the cursor are gone, and the caller sends a
+/// replacement snapshot instead of a delta with a hole in it.
+fn continues_cursor(entries: &[GrantLogEntry], head: u64, position: u64) -> bool {
+    entries.first().map_or(head == position, |first| {
+        first.position == position.saturating_add(1)
+    })
+}
+
+fn incremental_frame(
+    entries: &[GrantLogEntry],
+    stream: &GrantStream,
+    position: u64,
+    snapshots: &mut u64,
+) -> (GrantsChanged, Option<Pin>) {
+    *snapshots = snapshots.saturating_add(1);
+    let mut pin = Pin {
+        id: *snapshots,
+        replaces: false,
+        incarnation: stream.incarnation.clone(),
+        head: stream.head,
+        pending: entries.iter().map(log_entry).collect(),
+        covered: position,
+        incremental: true,
+    };
+    let frame = take_page(&mut pin);
+    let rest = (!pin.pending.is_empty()).then_some(pin);
+    (frame, rest)
 }
 
 /// Move a fitting prefix of `pin` into one frame. A complete frame's cursor
@@ -528,10 +549,28 @@ async fn wait_registered(
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_entry, event_len, fitting_prefix, page_continues, preview, take_page, Pin,
-        MAX_PAYLOAD_BYTES,
+        continues_cursor, copy_entry, event_len, fitting_prefix, page_continues, preview,
+        take_page, GrantLogEntry, Pin, MAX_PAYLOAD_BYTES,
     };
     use nessa_protocol::product::generated::GrantFrameEntry;
+
+    fn logged(position: u64) -> GrantLogEntry {
+        GrantLogEntry {
+            position,
+            conversation_id: format!("conversation-{position}"),
+            capabilities: None,
+            policy: None,
+            policy_revision: None,
+        }
+    }
+
+    #[test]
+    fn a_delta_with_a_trimmed_start_is_not_sent() {
+        assert!(continues_cursor(&[logged(4), logged(5)], 5, 3));
+        // Records 4 and 5 were trimmed after the head was read.
+        assert!(!continues_cursor(&[logged(6)], 5, 3));
+        assert!(!continues_cursor(&[], 5, 3));
+    }
 
     #[test]
     fn a_page_continues_only_the_open_pin() {
