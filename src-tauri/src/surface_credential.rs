@@ -450,8 +450,8 @@ mod tests {
         assert_eq!(credential.reads(), 2);
     }
 
-    /// Before the gateway is ready — never started, or failed — a desktop
-    /// window read that does not wait is refused, and its asking starts
+    /// Before the gateway is ready — still starting, or failed — a desktop
+    /// window read that does not wait is refused, as each, and its asking starts
     /// nothing: no registration, no reconciliation, no token read (H2′).
     #[test]
     fn a_desktop_window_read_that_does_not_wait_is_refused_until_the_gateway_is_ready_and_starts_nothing(
@@ -461,7 +461,7 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(
                 load(DESKTOP_WINDOW, Some(&gateway), &credential).err(),
-                Some(SurfaceCommandError::not_ready())
+                Some(SurfaceCommandError::still_starting())
             );
         }
         assert_eq!(*host.registrations.lock().unwrap(), 0);
@@ -481,7 +481,7 @@ mod tests {
     }
 
     /// The host's own launch startup is in flight: a desktop window that does
-    /// not wait is refused, starts no second reconciliation and reads nothing; once that
+    /// not wait is refused as still starting, starts no second reconciliation and reads nothing; once that
     /// startup is ready the window is served, the panel never having asked
     /// (H2″, H9).
     #[test]
@@ -515,7 +515,7 @@ mod tests {
         let while_starting =
             while_starting.expect("the window's asks waited on the host's startup");
         for told in while_starting {
-            assert_eq!(told.err(), Some(SurfaceCommandError::not_ready()));
+            assert_eq!(told.err(), Some(SurfaceCommandError::still_starting()));
         }
         assert_eq!(registered, 1);
         assert_eq!(read, 0);
@@ -633,7 +633,7 @@ mod tests {
 
     /// A startup that failed is refused at once, however long the window
     /// would wait: only a bundled surface starts it again. One that never
-    /// ends is refused when the wait does.
+    /// ends is refused when the wait does, as still starting, not failed.
     #[test]
     fn a_waiting_desktop_window_is_refused_a_failed_startup_at_once_and_a_running_one_at_its_deadline(
     ) {
@@ -685,7 +685,7 @@ mod tests {
                 Duration::from_secs(15)
             )
             .err(),
-            Some(SurfaceCommandError::not_ready())
+            Some(SurfaceCommandError::still_starting())
         );
         assert_eq!(clock.paused(), Duration::from_secs(15));
         assert_eq!(*host.registrations.lock().unwrap(), 0);

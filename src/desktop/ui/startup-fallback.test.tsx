@@ -83,12 +83,30 @@ it("stays off a window that is only signed out", async () => {
   expect(host.querySelector("[data-nessa-startup-screen]")).toBeNull()
 })
 
+// A startup still running when the host's hold ended is no failure (the
+// 26.7 s launch on a busy Mac that showed STARTUP_GATEWAY): no screen.
+it("stays off a window whose server is still starting", async () => {
+  const source = fakeSource()
+  source.refuse("index", "still-starting")
+  const store = testStore(source)
+  await store.dispatch(loadWorkspace())
+  await act(async () =>
+    root.render(
+      <Provider store={store}>
+        <StartupFallback />
+      </Provider>,
+    ),
+  )
+  expect(host.querySelector("[data-nessa-startup-screen]")).toBeNull()
+})
+
 it("gives each startup reason its code", () => {
   expect(startupFailureCode("not-started")).toBe("STARTUP_GATEWAY")
   expect(startupFailureCode("not-ready")).toBe("STARTUP_GATEWAY")
   expect(startupFailureCode("not-listening")).toBe("STARTUP_GATEWAY")
   expect(startupFailureCode("wrong-stage")).toBe("STARTUP_STAGE")
   expect(startupFailureCode("signed-out")).toBeNull()
+  expect(startupFailureCode("still-starting")).toBeNull()
   expect(startupFailureCode("unavailable")).toBeNull()
   expect(startupFailureCode(null)).toBeNull()
 })

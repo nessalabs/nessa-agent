@@ -27,6 +27,8 @@ pub struct HostRefusal {
 pub enum HostRefusalReason {
     NotProvisioned,
     NotReady,
+    /// Startup is still running: not a failure, so no startup screen.
+    StillStarting,
     WrongStage,
 }
 
@@ -56,6 +58,14 @@ impl SurfaceCommandError {
         })
     }
 
+    pub(crate) fn still_starting() -> Self {
+        Self::Refusal(HostRefusal {
+            reason: HostRefusalReason::StillStarting,
+            bundle: None,
+            requested: None,
+        })
+    }
+
     pub(crate) fn wrong_stage(bundle: impl Into<String>, requested: impl Into<String>) -> Self {
         let bundle = bundle.into();
         let requested = requested.into();
@@ -75,6 +85,7 @@ impl From<GatewayUnread> for SurfaceCommandError {
     fn from(error: GatewayUnread) -> Self {
         match error {
             GatewayUnread::NotReady => Self::not_ready(),
+            GatewayUnread::StillStarting => Self::still_starting(),
             GatewayUnread::Other(message) => Self::message(message),
         }
     }
@@ -136,6 +147,14 @@ mod tests {
         assert_eq!(
             SurfaceCommandError::from(GatewayUnread::NotReady),
             SurfaceCommandError::not_ready()
+        );
+        assert_eq!(
+            SurfaceCommandError::from(GatewayUnread::StillStarting),
+            SurfaceCommandError::still_starting()
+        );
+        assert_eq!(
+            serde_json::to_value(SurfaceCommandError::still_starting()).unwrap()["reason"],
+            "still-starting"
         );
         assert_eq!(
             SurfaceCommandError::from(GatewayUnread::Other("disk".into())),
