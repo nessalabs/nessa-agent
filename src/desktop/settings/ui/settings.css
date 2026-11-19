@@ -996,6 +996,13 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   color: var(--background);
 }
 
+/* As specific as the plain button's hover and later, so a hovered primary
+   keeps its fill instead of taking the plain button's faint one under its
+   dark label. */
+.settings-button-primary:hover:not(:disabled) {
+  background: var(--settings-accent);
+}
+
 /* Rows holding the place of a list on its way. */
 .settings-skeleton {
   display: flex;

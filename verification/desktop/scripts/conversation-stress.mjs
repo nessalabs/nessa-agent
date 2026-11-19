@@ -191,8 +191,14 @@ import {
  *               gateway is found by a DNS-SD browse on its port, and Pair a
  *               device opens a code with the window's own sign-in, in a
  *               modal with one signal orb; Escape hides it, Show code
- *               brings the same code back, Cancel closes it, and leaving
- *               the tab and coming back still shows linking on
+ *               brings the same code back. A device then enters that code
+ *               the way the phone does, Approve in the modal (keeping its
+ *               fill on hover) makes it active and the device reads itself
+ *               paired; it is listed as the owner's phone, Pair a device
+ *               stays offered through the tab's polls, and Revoke drops it
+ *               with a "Revoked." that a later poll clears. A second code's
+ *               Cancel closes it, and leaving the tab and coming back still
+ *               shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -12780,6 +12786,16 @@ async function pairFromWindow(run, failures) {
   const again = await codeIn().catch(() => "")
   if (again !== code)
     failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  if (failures.length !== before) return false
+  // A device enters the code the way the phone does, is approved in this
+  // modal, ends paired, and is revoked again from the list.
+  if (!(await phonePairs(run, code, failures))) return false
+  // A second code is cancelled from its modal.
+  await page.locator(selectorFor.linkedAction("pair")).click()
+  await dialog
+    .locator(css.pairingCode)
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device opened no second code"))
   await dialog.locator(selectorFor.linkedAction("cancel")).click()
   await dialog
     .waitFor({ state: "detached", timeout: 10_000 })
@@ -12789,6 +12805,175 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Pair a real device with the open `code`, the way the phone does: the
+ * native client (`read_only_sync pair`, the device class an owner's phone
+ * code accepts) redeems it on the native port, its key shows in the modal,
+ * and Approve there makes it active. The client must read its own active
+ * status, which is where a phone holding an older wire contract failed while
+ * the window already listed it. Approve keeps its primary fill on hover. The
+ * device is then listed as the owner's phone, Pair a device stays offered
+ * through the tab's quiet polls, and Revoke drops it with a "Revoked." that a
+ * later poll clears. Resolves whether all of that held. The modal is closed
+ * and nothing is left open.
+ */
+async function phonePairs(run, code, failures) {
+  const { page } = run
+  const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const root = mkdtempSync(join(tmpdir(), "nessa-stress-phone-"))
+  const stateRoot = join(root, "state")
+  const cache = join(root, "cache")
+  mkdirSync(stateRoot, { mode: 0o700 })
+  mkdirSync(cache, { mode: 0o700 })
+  const profile = join(root, "profile.json")
+  writeFileSync(
+    profile,
+    JSON.stringify({
+      stateRoot,
+      stateDirectory: "device",
+      cache,
+      gatewayAddress: run.nativeAddress,
+    }),
+    { mode: 0o600 },
+  )
+  const child = spawn(peerExampleBin(), ["pair", profile], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => (stdout += chunk))
+  child.stderr.on("data", (chunk) => (stderr += chunk))
+  const exited = new Promise((resolve) => child.once("exit", resolve))
+  child.stdin.end(`${code}\n`)
+  try {
+    const approve = dialog.locator(selectorFor.linkedAction("approve"))
+    const claimed = await approve
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!claimed) {
+      failures.push(
+        `the device's key never showed in the pairing modal: ${stderr.trim() || stdout.trim()}`,
+      )
+      return false
+    }
+    if (await approve.isDisabled()) failures.push("Approve was drawn disabled")
+    // Hovered, Approve keeps a primary fill under its dark label: it must
+    // not take the plain button's faint hover, which Deny shows.
+    // Both are read once their fill has stopped moving: mid-transition, any
+    // two buttons can differ.
+    const deny = dialog.locator(selectorFor.linkedAction("deny"))
+    await deny.hover()
+    const plain = await restingFill(deny)
+    await approve.hover()
+    const fill = await restingFill(approve)
+    if (fill === plain)
+      failures.push(`hovered Approve has the plain button's fill ${plain}`)
+    if (run.evidence)
+      await page
+        .screenshot({ path: join(run.evidence, `pairing-${run.engine}-approve.png`) })
+        .catch(() => {})
+    await approve.click()
+    const status = await Promise.race([exited, sleep(30_000).then(() => "timeout")])
+    let enrollment = peerOutcome(stdout)?.enrollment
+    if (status === "timeout")
+      failures.push(`the device's pairing did not finish: ${stderr.trim()}`)
+    else if (status !== 0 || enrollment?.phase !== "active") {
+      const read = peerExample(["status", profile])
+      enrollment = read.outcome?.enrollment ?? enrollment
+      if (enrollment?.phase !== "active")
+        failures.push(
+          `the device did not read itself paired (exit ${status}, ${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
+        )
+    }
+    if (failures.length !== before) return false
+    await page.keyboard.press("Escape")
+    await dialog.waitFor({ state: "detached", timeout: 10_000 }).catch(() => {})
+    const row = page.locator(
+      `${css.linked} [data-credential="${enrollment.credentialId}"]`,
+    )
+    const listed = await row
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!listed) {
+      failures.push("the paired device was not listed under Your devices")
+      return false
+    }
+    if (!(await row.innerText()).includes(OWNER_PHONE_LABEL))
+      failures.push(
+        `the paired device is not listed as ${JSON.stringify(OWNER_PHONE_LABEL)}`,
+      )
+    if (!(await pairOfferedThroughPolls(run, failures))) return false
+    await row.locator(selectorFor.linkedAction("revoke")).click()
+    await row.locator(selectorFor.linkedAction("confirm-revoke")).click()
+    await row
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .catch(() => failures.push("the revoked device stayed listed"))
+    const notice = page.locator(`${css.linked} [data-linked-notice]`)
+    const said = await waitFor(
+      async () =>
+        ((await notice.innerText().catch(() => "")) || "").startsWith("Revoked."),
+      5_000,
+    )
+    if (!said) failures.push("Revoke said nothing")
+    // The next quiet poll has read the list without it: the line goes.
+    const spent = await waitFor(async () => (await notice.count()) === 0, 15_000)
+    if (!spent)
+      failures.push(`"Revoked." stayed under the page after the list was read again`)
+    return failures.length === before
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** A button's background once two reads 200 ms apart agree. */
+async function restingFill(button) {
+  const read = () => button.evaluate((node) => getComputedStyle(node).backgroundColor)
+  let last = await read()
+  for (let tries = 0; tries < 20; tries++) {
+    await sleep(200)
+    const now = await read()
+    if (now === last) return now
+    last = now
+  }
+  return last
+}
+
+/** How the window lists a phone paired with a code from the window. */
+const OWNER_PHONE_LABEL = "Your phone · full access"
+
+/**
+ * Pair a device stays offered while the tab sits: its quiet poll, every few
+ * seconds, is not a request the person waits on, so it does not grey the
+ * button out. Sampled across more than one poll.
+ */
+async function pairOfferedThroughPolls(run, failures) {
+  const pair = run.page.locator(selectorFor.linkedAction("pair"))
+  const offered = await pair
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!offered) {
+    failures.push("Pair a device was not offered once the device was paired")
+    return false
+  }
+  const end = Date.now() + 9_000
+  while (Date.now() < end) {
+    if (await pair.isDisabled()) {
+      failures.push("Pair a device greyed out while the tab only polled")
+      return false
+    }
+    await sleep(100)
+  }
+  return true
 }
 
 /**

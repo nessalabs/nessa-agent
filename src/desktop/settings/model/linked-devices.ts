@@ -361,7 +361,7 @@ export function canToggle(state: LinkedDevicesState): boolean {
   return (
     state.connection === "connected" &&
     (state.linking === "on" || state.linking === "off") &&
-    state.pending === null &&
+    !busy(state) &&
     state.switching === null
   )
 }
@@ -373,9 +373,16 @@ export function linkingShown(state: LinkedDevicesState): boolean {
 
 /** One request at a time, while linking is on and the gateway can be reached. */
 export function canAct(state: LinkedDevicesState): boolean {
-  return (
-    state.connection === "connected" && state.linking === "on" && state.pending === null
-  )
+  return state.connection === "connected" && state.linking === "on" && !busy(state)
+}
+
+/**
+ * A request the person is waiting on is in flight. The quiet poll is not one:
+ * an action taken during it replaces it, and its late answer is dropped by
+ * `seq`, so the controls never grey out every few seconds while the tab sits.
+ */
+export function busy(state: LinkedDevicesState): boolean {
+  return state.pending !== null && !(state.pending.kind === "read" && state.pending.poll)
 }
 
 /**
@@ -464,6 +471,7 @@ function closed(
 function project(
   state: LinkedDevicesState,
   value: Extract<ReadValue, { kind: "on" }>,
+  poll: boolean,
 ): LinkedDevicesState {
   const enrollments = value.enrollments
   let code = state.code
@@ -506,7 +514,7 @@ function project(
       return match?.fingerprint ? { ...device, fingerprint: match.fingerprint } : device
     }),
   )
-  const notice = noticeAfterRead(state, hidden !== null)
+  const notice = noticeAfterRead(state, hidden !== null, poll)
   const confirm =
     state.confirmRevoke !== null &&
     devices.some((device) => device.credentialId === state.confirmRevoke)
@@ -525,9 +533,19 @@ function project(
   }
 }
 
-/** An action's words stay. A read's words are whatever this read found. */
-function noticeAfterRead(state: LinkedDevicesState, hidden: boolean): Notice | null {
-  if (state.notice?.from === "action") return state.notice
+/**
+ * An action's words stay. A read's words are whatever this read found. A
+ * done revoke is the exception: once a quiet poll has read the list without
+ * the device, the list says it, and "Revoked." would otherwise stay under the
+ * page for as long as the tab is open.
+ */
+function noticeAfterRead(
+  state: LinkedDevicesState,
+  hidden: boolean,
+  poll: boolean,
+): Notice | null {
+  const spent = poll && state.notice?.kind === "revoked"
+  if (state.notice?.from === "action" && !spent) return state.notice
   return hidden ? said("codeHidden", "read") : null
 }
 
@@ -651,7 +669,7 @@ function answeredRead(
   }
   if (outcome.value.kind === "off") return closed(state, "off")
   if (outcome.value.kind === "refused") return closed(state, "refused")
-  return project(state, outcome.value)
+  return project(state, outcome.value, pending.poll === true)
 }
 
 function answeredCreate(
@@ -920,7 +938,7 @@ export function linkedDevicesReducer(
         return state
       return { ...state, confirmRevoke: event.credentialId, notice: null }
     case "cancelRevoke":
-      if (state.pending) return state
+      if (busy(state)) return state
       return { ...state, confirmRevoke: null }
     case "confirmRevoke": {
       if (!canAct(state) || state.confirmRevoke === null) return state
