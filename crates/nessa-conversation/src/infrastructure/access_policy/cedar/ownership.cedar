@@ -126,6 +126,21 @@ when {
     !resource.deleted
 };
 
+// Where the owner's saved turns came from is read by any turn of the owner's
+// agents, one another agent started included: reading the chain that reached
+// a turn is how its agent tells what the owner asked. It changes nothing.
+@id("owner.read_turns")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.read_turns",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};
+
 // The owner's agent reads what the owner's desktop windows show: which
 // panes are open, where, and what each holds. An agent tool acts as the
 // person whose turn admitted it (`conversation.agent_tools`), so the reader

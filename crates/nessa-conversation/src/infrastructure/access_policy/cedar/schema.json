@@ -420,6 +420,14 @@
             "type": "Ask"
           }
         }
+      },      "conversation.read_turns": {
+        "appliesTo": {
+          "principalTypes": ["AgentTurn", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
+          "context": {
+            "type": "Ask"
+          }
+        }
       },
       "workspace.read": {
         "appliesTo": {

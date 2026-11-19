@@ -276,7 +276,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             _ => on(&live),
         };
         let subject = match action {
-            AccessAction::AgentTools => AccessSubject::AgentTurn {
+            AccessAction::AgentTools | AccessAction::ReadTurns => AccessSubject::AgentTurn {
                 organization: &org,
                 principal: &owner,
                 owner_initiated: true,
@@ -1601,4 +1601,50 @@ fn agent_tools_require_an_owner_origin_and_matching_live_source_owner() {
             }
         }
     }
+}
+
+/// A turn another agent started reads where the owner's turns came from, and
+/// still holds none of the owner's other agent tools. Another owner's
+/// conversation, and a deleted one, it cannot read.
+#[test]
+fn an_agent_started_turn_reads_turns_but_holds_no_other_agent_tool() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |action, conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+            },
+            action,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &live, false),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &live, true),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(AccessAction::AgentTools, &live, false),
+        AccessDecision::Deny(_)
+    ));
+    let others = conversation("org", "someone-else", false);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &others, false),
+        AccessDecision::Deny(_)
+    ));
+    let deleted = conversation("org", "owner", true);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &deleted, false),
+        AccessDecision::Deny(_)
+    ));
 }

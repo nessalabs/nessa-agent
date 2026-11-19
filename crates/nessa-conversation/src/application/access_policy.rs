@@ -94,6 +94,9 @@ pub enum AccessSubject<'a> {
 pub enum AccessAction {
     /// Delegate the source owner's authority to its running agent turn.
     AgentTools,
+    /// Let a running agent turn read where the owner's saved turns came from
+    /// (`read_turn`). Reading only: a turn another agent started may ask it.
+    ReadTurns,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -144,8 +147,9 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::AgentTools,
+        Self::ReadTurns,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -173,6 +177,7 @@ impl AccessAction {
     pub fn name(self) -> &'static str {
         match self {
             Self::AgentTools => "conversation.agent_tools",
+            Self::ReadTurns => "conversation.read_turns",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",

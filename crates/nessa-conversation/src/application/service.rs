@@ -13,6 +13,7 @@ mod records;
 mod scheduled_messages;
 mod thread_report_admission;
 mod thread_reports;
+mod turn_origins;
 mod workspace_windows;
 use self::mutation::SubmissionPermit;
 use super::background_tasks::BackgroundTarget;
@@ -49,6 +50,7 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
+pub use agent_tools::READ_TURN_TOOL;
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
 };
@@ -144,6 +146,9 @@ use std::{
 pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
+};
+pub use turn_origins::{
+    ChainEnd, TurnChain, TurnOrigin, TurnReading, MAX_EARLIER_TURNS, MAX_TURN_HOPS,
 };
 pub use workspace_windows::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,

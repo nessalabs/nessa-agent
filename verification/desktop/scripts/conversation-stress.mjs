@@ -113,6 +113,11 @@ import {
  *               its agent is parked though followed (its lease ends `idle`),
  *               a read then opens it, still closed, and it is parked again;
  *               only the next message sent there starts it again
+ *   provenance  a person's request in the main chat reaches a thread its
+ *               agent creates; the thread follows the message back with
+ *               read_turn to the person's exact words and says them; the
+ *               parent's close_thread of a thread it did not create is
+ *               refused, of its own is taken, and that thread is parked
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -9297,6 +9302,78 @@ const steps = {
         },
       )
     })
+  },
+
+  async provenance(run, step, failures) {
+    // A thread the parent did not create: the parent's close of it is refused.
+    const strangerId = randomUUID()
+    await run.client.conversation.create({
+      conversationId: strangerId,
+      agent: run.stack.agent,
+    })
+    run.checked.push(strangerId)
+    const text = prompt(
+      run,
+      STRESS.provenance,
+      step,
+      ` args:${JSON.stringify({ threadId: strangerId })} :args`,
+    )
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const found = new RegExp(
+      `${SAYS.provenance}([0-9a-f-]{36}) \\| (.*?) \\| (.*?) \\| (.*)`,
+      "s",
+    ).exec(said)
+    if (!found) {
+      failures.push(
+        `the provenance turn did not say what happened: ${said.slice(0, 200)}`,
+      )
+      return
+    }
+    const [, childId, refused, closing, reply] = found
+    run.checked.push(childId)
+    // The thread read the message back to the person's exact words: the turn
+    // the check typed, not the parent agent's relay of it.
+    if (!reply.includes(`${SAYS.origin}person: ${text}`))
+      failures.push(
+        `the thread did not follow its message back to the person's words: ${reply.slice(0, 200)}`,
+      )
+    // Asked for, the person's earlier words in the main chat come with it:
+    // each the person's, none the turn the chain starts at.
+    const before = reply.split(SAYS.earlier)[1]
+    let earlier
+    try {
+      earlier = before === "${chain.earlier}" ? [] : JSON.parse(before)
+    } catch {
+      earlier = null
+    }
+    if (
+      !Array.isArray(earlier) ||
+      earlier.some((each) => each.origin !== "person" || each.said === text)
+    )
+      failures.push(
+        `the thread's read of the person's earlier words was wrong: ${before?.slice(0, 200)}`,
+      )
+    else log(`provenance earlier ${earlier.length}`)
+    if (!refused.startsWith("not_your_thread"))
+      failures.push(
+        `closing a thread the parent did not create was not refused: ${refused}`,
+      )
+    if (closing !== "true")
+      failures.push(`the parent's close of its own thread answered closing ${closing}`)
+    // The closed thread's agent is parked; the stranger, never closed, is not.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, childId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, childId)).lease
+      failures.push(
+        `the thread its parent closed was not parked: its lease is ${lease?.state ?? "missing"}`,
+      )
+    }
   },
 
   async close(run, step, failures) {

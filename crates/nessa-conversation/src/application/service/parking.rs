@@ -30,6 +30,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AttachmentPhase, permissions::ActionContext,
 };
 use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
@@ -80,6 +81,49 @@ impl ConversationService {
         self.inner.metadata.close_thread(id).await?;
         slot.closing.store(true, Ordering::SeqCst);
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
+        Ok(())
+    }
+
+    /// Whether `child` is a thread `parent`'s agent created with
+    /// `create_thread`. The SDK's ownership record of the spawn is the one
+    /// place that says so; it keeps closed history, so a child that already
+    /// ended is still its parent's.
+    pub fn created_thread(&self, parent: &ConversationId, child: &ConversationId) -> bool {
+        let Some(ownership) = self.inner.ownership.get() else {
+            return false;
+        };
+        let Ok(session) = SessionId::new(child.to_string()) else {
+            return false;
+        };
+        ownership
+            .coordinator
+            .child_lifetime_for_session(&session)
+            .and_then(|lifetime| ownership.coordinator.spawn_binding_for_lifetime(&lifetime))
+            .is_some_and(|binding| binding.parent_session.as_str() == parent.to_string())
+    }
+
+    /// `parent` closes `child`, a thread it created (`close_thread` with a
+    /// `threadId`). The same close as the child's own: open now, it stops
+    /// once its turn ends; not open now, the mark alone keeps whatever opens
+    /// it before a new message parked.
+    ///
+    /// # Errors
+    /// [`ConversationError::NotFound`] when `child` is not a thread `parent`
+    /// created, and [`Self::close_after_turn`]'s errors when it is open.
+    pub async fn close_created_thread(
+        &self,
+        parent: &ConversationId,
+        child: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        if !self.created_thread(parent, child) {
+            return Err(ConversationError::NotFound);
+        }
+        let open = self.inner.conversations.lock().await.contains_key(child);
+        if open {
+            return self.close_after_turn(child).await;
+        }
+        self.inner.metadata.close_thread(child).await?;
+        tracing::info!(conversation_id = %child, parent = %parent, "a thread was closed by the thread that created it");
         Ok(())
     }
 

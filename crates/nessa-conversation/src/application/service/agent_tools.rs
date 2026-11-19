@@ -11,6 +11,11 @@ use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+/// The one agent tool that only reads, and so is admitted under
+/// [`AccessAction::ReadTurns`] in any turn of the owner's, one another agent
+/// started included.
+pub const READ_TURN_TOOL: &str = "read_turn";
+
 impl ConversationService {
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {
         let _ = self.inner.agent_tool_audit.set(audit);
@@ -106,7 +111,11 @@ impl ConversationService {
                 principal: &principal,
                 owner_initiated,
             },
-            action: AccessAction::AgentTools,
+            action: if tool == READ_TURN_TOOL {
+                AccessAction::ReadTurns
+            } else {
+                AccessAction::AgentTools
+            },
             resource: AccessResource::of(&record),
             held: None,
             request: RequestShape::default(),

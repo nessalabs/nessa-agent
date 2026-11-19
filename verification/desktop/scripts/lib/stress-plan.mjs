@@ -97,6 +97,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations whose agent closes its own thread (close_thread) while the window shows it, parked once the turn ends, then talked to again",
   },
+  provenances: {
+    default: 1,
+    what: "turns where a person's request reaches a thread through its parent's agent: the thread follows the message back with read_turn to the person's exact words, and the parent closes that thread with close_thread but not one it did not create",
+  },
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
@@ -394,6 +398,8 @@ export function plan(knobs, accessScenario = "full") {
   // After the shuffle, with restores: a new default must not reshuffle a seed.
   for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
   add(knobs.swipes, () => ({ kind: "swipe" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.provenances, () => ({ kind: "provenance" }))
   add(knobs.touchIds, () => ({ kind: "touchId" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
