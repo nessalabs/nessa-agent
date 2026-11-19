@@ -547,9 +547,9 @@ fn open_error(error: OpenError) -> CacheError {
         OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {
             CacheError::Corrupt
         }
-        OpenError::Database(error) | OpenError::Upgrade { cause: error, .. } => {
-            rows::database_error(error)
-        }
+        OpenError::Database(error)
+        | OpenError::Upgrade { cause: error, .. }
+        | OpenError::ConfigurationAfterCommit { cause: error, .. } => rows::database_error(error),
         OpenError::UnversionedSchema => CacheError::InvalidPolicy,
         OpenError::Directory(_) | OpenError::File(_) => CacheError::Unavailable,
     }

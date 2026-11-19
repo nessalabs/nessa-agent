@@ -226,3 +226,61 @@ async fn contradictory_revoke_selectors_cannot_choose_between_same_principal_rec
         .unwrap()
         .is_some());
 }
+
+#[test]
+fn a_refused_grant_upgrade_preserves_the_original_schema_and_file() {
+    let opened = opened();
+    let grants = opened.path.with_extension("grants.sqlite3");
+    drop(opened.store);
+    let connection = Connection::open(&grants).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE grant_streams; DROP TABLE grant_log;
+         DROP TABLE person_links; PRAGMA user_version=1;",
+        )
+        .unwrap();
+    drop(connection);
+    let before = std::fs::read(&grants).unwrap();
+    assert!(LocalConversationStore::open(&opened.path).is_err());
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+    let connection = Connection::open(&grants).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='grant_log'",
+                [],
+                |r| r.get::<_, u32>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn a_refused_current_grant_shape_preserves_wal_mode_and_contents() {
+    let opened = opened();
+    let grants = opened.path.with_extension("grants.sqlite3");
+    drop(opened.store);
+    let connection = Connection::open(&grants).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute_batch("DROP TABLE person_links; PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    let before = std::fs::read(&grants).unwrap();
+    assert!(LocalConversationStore::open(&opened.path).is_err());
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+}

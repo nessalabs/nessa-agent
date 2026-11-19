@@ -225,6 +225,7 @@ impl RunError {
             // compile until someone says whether it can clear.
             OpenError::Directory(_)
             | OpenError::File(_)
+            | OpenError::ConfigurationAfterCommit { .. }
             | OpenError::Database(_)
             | OpenError::UnversionedSchema => {
                 Self::Agent(format!("{dataset} at {}: {cause}", path.display()))

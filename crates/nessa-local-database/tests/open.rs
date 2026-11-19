@@ -446,3 +446,110 @@ fn upgrades_must_chain_to_the_schemas_version() {
     assert!(five().with_upgrades(&STEPS).is_ok());
     assert!(five().with_upgrades(&[]).is_ok());
 }
+
+#[test]
+fn a_failed_upgrade_keeps_wal_mode_and_the_original_contents() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    let connection = rusqlite_connection(&path);
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute_batch("INSERT INTO parents VALUES ('kept'); CREATE TABLE later (id TEXT) STRICT;")
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    assert!(matches!(
+        open(&path, &upgraded()),
+        Err(OpenError::Upgrade { from: 4, .. })
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM parents", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "kept"
+    );
+    assert_eq!(tables(&path), ["children", "later", "parents"]);
+}
+
+#[test]
+fn journal_configuration_failure_reports_the_already_committed_schema() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    let reader = rusqlite_connection(&path);
+    reader.pragma_update(None, "journal_mode", "WAL").unwrap();
+    reader
+        .execute_batch(
+            "INSERT INTO parents VALUES ('kept'); PRAGMA wal_checkpoint(TRUNCATE); BEGIN;",
+        )
+        .unwrap();
+    assert_eq!(
+        reader
+            .query_row("SELECT count(*) FROM parents", [], |r| r.get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    assert!(matches!(
+        open(&path, &upgraded()),
+        Err(OpenError::ConfigurationAfterCommit { version: 5, .. })
+    ));
+    reader.execute_batch("ROLLBACK;").unwrap();
+    drop(reader);
+    let connection = open(&path, &upgraded()).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM parents", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "kept"
+    );
+}
+
+#[test]
+fn failed_resulting_shape_validation_rolls_back_the_upgrade_chain() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    let connection = rusqlite_connection(&path);
+    connection
+        .execute_batch("INSERT INTO parents VALUES ('kept');")
+        .unwrap();
+    drop(connection);
+    let before = std::fs::read(&path).unwrap();
+    let target = upgraded().with_validation(|connection| {
+        connection.prepare("SELECT missing FROM parents")?;
+        Ok(())
+    });
+    assert!(open(&path, &target).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(tables(&path), ["children", "parents"]);
+    assert_eq!(
+        rusqlite_connection(&path)
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        3
+    );
+}

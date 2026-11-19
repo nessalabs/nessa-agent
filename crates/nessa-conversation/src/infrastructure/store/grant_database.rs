@@ -23,13 +23,13 @@ pub(super) fn path(metadata: &Path) -> PathBuf {
 static UPGRADES: [Upgrade; 1] = [Upgrade::new(1, include_str!("grants_from_1.sql"))];
 
 fn schema() -> Result<Schema, OpenError> {
-    Schema::new(include_str!("grants.sql"))?.with_upgrades(&UPGRADES)
+    Ok(Schema::new(include_str!("grants.sql"))?
+        .with_upgrades(&UPGRADES)?
+        .with_validation(|connection| validate_shape(connection, "")))
 }
 
 pub(super) fn open(path: &Path) -> Result<Connection, OpenError> {
-    let connection = nessa_local_database::open(path, &schema()?)?;
-    validate_shape(&connection, "")?;
-    Ok(connection)
+    nessa_local_database::open(path, &schema()?)
 }
 
 pub(super) fn attach(
