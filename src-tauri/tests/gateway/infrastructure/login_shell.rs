@@ -353,6 +353,89 @@ fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// A terminal-launched host still probes without a controlling terminal. Merely
+/// redirecting stdin leaves zsh in a background process group of that terminal,
+/// where its interactive startup stops on job control until the probe expires.
+#[test]
+fn a_real_zsh_probe_from_a_terminal_does_not_stop_on_job_control() {
+    use std::{
+        os::{
+            fd::{FromRawFd, OwnedFd},
+            unix::process::CommandExt,
+        },
+        process::Stdio,
+        thread,
+    };
+
+    let mut controller = -1;
+    let mut terminal = -1;
+    // SAFETY: openpty initializes both descriptors; no optional name or sizing.
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut controller,
+                &mut terminal,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    // SAFETY: these descriptors were just opened and have no other owner.
+    let (_controller, terminal) = unsafe {
+        (
+            OwnedFd::from_raw_fd(controller),
+            OwnedFd::from_raw_fd(terminal),
+        )
+    };
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    const PROBE: &str =
+        "gateway::infrastructure::login_shell::tests::a_real_zsh_reports_the_tools_its_zshrc_adds";
+    command
+        .args(["--exact", PROBE, "--nocapture", "--color", "never"])
+        .stdin(Stdio::from(terminal))
+        .stdout(output.as_file().try_clone().unwrap())
+        .stderr(output.as_file().try_clone().unwrap());
+    // SAFETY: only async-signal-safe calls in the child before exec. The child
+    // owns a real controlling terminal independently of this test runner.
+    let child = unsafe {
+        command
+            .pre_exec(|| {
+                if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            })
+            .spawn()
+            .unwrap()
+    };
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = OwnedChild(child);
+    let until = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < until, "terminal fixture did not finish");
+        thread::sleep(Duration::from_millis(10));
+    };
+    let receipt = fs::read_to_string(output.path()).unwrap();
+    assert!(status.success(), "{receipt}");
+    assert!(
+        receipt.contains(&format!("test {PROBE} ... ok")),
+        "{receipt}"
+    );
+    assert!(receipt.contains("test result: ok. 1 passed;"), "{receipt}");
+}
+
 /// bash is not zsh, and the reason `-i` earns its place for it is different.
 /// `bash -i -l -c` does not read `.bashrc` — it reads the login files, exactly
 /// as `bash -l -c` does. What it does reach is a `.bashrc` that `.bash_profile`

@@ -365,7 +365,8 @@ mod unix {
             until: Instant,
         ) -> Result<String, LoginShellError> {
             let unavailable = |error: io::Error| LoginShellError::Unavailable(error.to_string());
-            let mut child = Command::new(&self.shell)
+            let mut command = Command::new(&self.shell);
+            command
                 .args(probe.arguments())
                 .arg(marker.command())
                 // Nothing of this process's environment reaches the user's
@@ -387,12 +388,25 @@ mod unix {
                 // directory would otherwise answer differently for a packaged
                 // launch and a developer's, and this answer is part of the
                 // service definition.
-                .current_dir(self.working_directory())
-                // Its own process group, so a profile that leaves something
-                // running is stopped with the shell rather than outliving it.
-                .process_group(0)
-                .spawn()
-                .map_err(unavailable)?;
+                .current_dir(self.working_directory());
+            // A separate process group alone still inherits the host's
+            // controlling terminal. Interactive zsh can then stop itself on
+            // job control when the host was launched from a terminal. A new
+            // session has no controlling terminal and its own process group,
+            // retaining the same group-wide timeout cleanup.
+            // SAFETY: setsid is async-signal-safe and touches only the child
+            // between fork and exec; no locks or allocations in this closure.
+            let mut child = unsafe {
+                command
+                    .pre_exec(|| {
+                        if libc::setsid() == -1 {
+                            return Err(io::Error::last_os_error());
+                        }
+                        Ok(())
+                    })
+                    .spawn()
+            }
+            .map_err(unavailable)?;
             let deadline = (Instant::now() + self.deadline).min(until);
             let group = child.id() as i32;
             let mut output = child
