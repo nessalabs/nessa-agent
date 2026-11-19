@@ -2093,6 +2093,17 @@ async function pickerStep(run, step, failures) {
     failures.push("the established conversation's model chip is disabled")
     return
   }
+  // An earlier step can leave the chat at Auto or Full, which not every model
+  // offers on every platform (only Ask is verified for all of them), and a
+  // model that cannot keep the chat's access refuses the change. A person
+  // would step down to Ask first, so the step does too.
+  if ((await readWithReviews(run.client, run.main.id)).approvalMode !== "ask") {
+    await pickAccess(page, "ask")
+    if (!(await accessIs(run, run.main.id, "ask"))) {
+      failures.push("the chat did not come back to Ask before the model change")
+      return
+    }
+  }
   const before = await readWithReviews(run.client, run.main.id)
   const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
   const bars = (model) =>
