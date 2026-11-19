@@ -18,7 +18,10 @@ use zeroize::Zeroizing;
 
 /// Why the fingerprint path did not produce a passphrase. Every one of them
 /// leaves the passphrase form as the way in.
+/// Only a real fingerprint reader (macOS) can answer cancelled, changed or
+/// missing; elsewhere `NoBiometrics` only ever answers unavailable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum BiometricFailure {
     /// No fingerprint reader, none enrolled, locked out, or the store refused.
     #[serde(rename = "biometric_unavailable")]
@@ -28,7 +31,6 @@ pub enum BiometricFailure {
     Cancelled,
     /// Fingerprints were added or removed since the passphrase was saved; the
     /// saved copy has been dropped. Only a fingerprint reader can tell.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     #[serde(rename = "biometric_changed")]
     Changed,
     /// Nothing is saved.
