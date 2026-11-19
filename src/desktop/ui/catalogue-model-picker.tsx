@@ -154,11 +154,13 @@ export function ComposerModelPicker({
       onValueChange={({ providerId, modelId, level }) => {
         const next = findComposerModel(providerId, modelId)
         if (!next) return
-        const switching =
-          next.provider !== value?.provider || next.modelId !== value?.modelId
-        if (switching) {
-          if (!onModelChange) return
+        // Every pick of a model is passed on, the one shown too: while another
+        // client's change is still arriving, choosing the shown model is what
+        // keeps it, and the application decides whether anything must change.
+        if (onModelChange) {
           onModelChange({ provider: next.provider, modelId: next.modelId })
+        } else if (next.provider !== value?.provider || next.modelId !== value?.modelId) {
+          return
         }
         if (level !== undefined) onThinkingChange(level)
       }}

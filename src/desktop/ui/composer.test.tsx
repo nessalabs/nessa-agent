@@ -427,6 +427,21 @@ it("chooses a model and its level with one press of a bar, and a name keeps the 
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently GPT-5.6 Sol, High",
     )
+    // Choosing the model shown is passed on too: it keeps that model while
+    // another client's change is still arriving.
+    await act(async () => chip()?.click())
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
+    )
+    await act(async () =>
+      document
+        .querySelector<HTMLElement>(
+          '[data-slot="model-level-picker-row"][data-model="gpt-5.6-sol"]',
+        )
+        ?.click(),
+    )
+    expect(picks.at(-1)).toEqual({ provider: "openai", modelId: "gpt-5.6-sol" })
+    expect(picks).toHaveLength(3)
   } finally {
     await act(async () => root.unmount())
   }
