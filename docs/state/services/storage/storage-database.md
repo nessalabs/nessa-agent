@@ -3,6 +3,7 @@ id: storage-database
 title: Database opening and version refusal
 kind: operation
 status: implemented
+sourceRevision: 7cb240392c95a72d1592d2aca61cf63ac24722ef
 summary: "Nessa opens its private database only when the file and format are
   acceptable."
 parent: storage
@@ -62,7 +63,7 @@ Direct model: One version-2 database with an explicitly supported upgrade to ver
 
 The finite model checks safety only. Fresh schema creation, current-version open, multiple migration steps, SQL contents, private path and encrypted-key boundaries remain source contracts; arbitrary older versions are still refused. Terminal states may stutter; no eventual completion or implementation proof is claimed.
 
-This is a scoped source review at `77a6b620af4d94b234294f6d273fd74b3dfb44c7`. It adds the stated abstraction and does not refresh all earlier narrative claims. Existing page checkpoints are retained where present; reading regression sources is not a test run.
+This scoped review covers validation, upgrade commit, journal configuration and the unchanged main grant schema at the source revision above. The database-helper suite passed 20 tests on Linux. Native platforms and full CI remain outside this evidence.
 
 Optional encrypted opening supplies a validated database key before schema access. Encryption/key management and platform private-file permissions are boundary contracts, not migration states.
 
