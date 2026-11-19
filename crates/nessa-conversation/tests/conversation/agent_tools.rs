@@ -1635,6 +1635,7 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
 }
 
 /// Send `text` to `target` as the person and wait until its turn settles.
+#[cfg(unix)]
 async fn settled_send(
     service: &ConversationService,
     target: &ConversationId,
@@ -1673,6 +1674,7 @@ async fn settled_send(
 /// A thread a person's turn asked an agent to message can follow that
 /// message back to the person's own words, and the thread that created it can
 /// close it. A thread it did not create it cannot.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() {
     let directory = tempfile::tempdir().unwrap();
