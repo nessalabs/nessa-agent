@@ -12883,9 +12883,15 @@ async function phonePairs(run, code, failures) {
     let enrollment = peerOutcome(stdout)?.enrollment
     if (status === "timeout")
       failures.push(`the device's pairing did not finish: ${stderr.trim()}`)
-    else if (status !== 0 || enrollment?.phase !== "active") {
-      const read = peerExample(["status", profile])
-      enrollment = read.outcome?.enrollment ?? enrollment
+    else {
+      // `pair` can return once its claim is confirmed, before the approval
+      // has activated it: ask the device again until it reads itself active.
+      let read = { stderr: "" }
+      for (let tries = 0; enrollment?.phase !== "active" && tries < 40; tries += 1) {
+        if (tries > 0) await sleep(250)
+        read = peerExample(["status", profile])
+        enrollment = read.outcome?.enrollment ?? enrollment
+      }
       if (enrollment?.phase !== "active")
         failures.push(
           `the device did not read itself paired (exit ${status}, ${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
