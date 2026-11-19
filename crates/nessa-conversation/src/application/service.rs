@@ -2094,16 +2094,22 @@ impl ConversationService {
                             // opens it, a read or a restart's resumption, until
                             // a new message opens it again: this agent is
                             // parked once idle, as the one that closed it was.
-                            let closed = service
-                                .inner
-                                .metadata
-                                .thread_closed(&id)
-                                .await
-                                .map_err(|cause| OpeningFailure {
-                                    cause,
-                                    holds: false,
-                                })?;
-                            owner.closing.store(closed, Ordering::SeqCst);
+                            // One change with the read, so a parent's close
+                            // written meanwhile (`close_created_thread`) is
+                            // never overwritten by what this read before it.
+                            {
+                                let _change = owner.closing_changes.lock().await;
+                                let closed = service
+                                    .inner
+                                    .metadata
+                                    .thread_closed(&id)
+                                    .await
+                                    .map_err(|cause| OpeningFailure {
+                                        cause,
+                                        holds: false,
+                                    })?;
+                                owner.closing.store(closed, Ordering::SeqCst);
+                            }
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
                             // and never opened on some other agent. A

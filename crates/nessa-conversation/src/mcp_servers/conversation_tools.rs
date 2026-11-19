@@ -1060,31 +1060,56 @@ fn turn_chain(chain: &TurnChain) -> Value {
             TurnOrigin::Internal => "internal",
             TurnOrigin::Agent { .. } | TurnOrigin::Resumed { .. } => "agent",
         });
-    let mut answer = json!({"turns": entries.clone(), "ended": ended, "startedBy": started_by, "mostTurns": MAX_TURN_HOPS});
-    if !chain.earlier.is_empty() {
-        answer["earlier"] = json!(chain
-            .earlier
-            .iter()
-            .map(|turn| turn_entry(turn, EARLIER_SAID_BYTES))
-            .collect::<Vec<_>>());
-    }
-    // The start's own words are the point: cut them, not the relays, until
-    // the answer fits.
-    while !fits(&answer) {
-        let Some(last) = entries.last_mut() else {
-            break;
-        };
-        let said = last["said"].as_str().unwrap_or_default();
-        let keep = said.len() / 2;
-        let (said, _) = cut_text(said, keep);
-        last["said"] = json!(said);
-        last["saidCut"] = json!(true);
-        answer["turns"] = json!(entries.clone());
-        if keep == 0 {
-            break;
+    let mut earlier: Vec<Value> = chain
+        .earlier
+        .iter()
+        .map(|turn| turn_entry(turn, EARLIER_SAID_BYTES))
+        .collect();
+    let answer = |entries: &[Value], earlier: &[Value]| {
+        let mut answer = json!({"turns": entries, "ended": ended, "startedBy": started_by, "mostTurns": MAX_TURN_HOPS});
+        if !earlier.is_empty() {
+            answer["earlier"] = json!(earlier);
         }
+        answer
+    };
+    // Escaping can make the text several times its bytes, so the cuts are
+    // made against the serialized answer. The start's own words are the
+    // point: cut the person's earlier messages first, then the relays, and
+    // the start's words last, each time halving the longest in that group.
+    let relays = if reached {
+        count.saturating_sub(1)
+    } else {
+        count
+    };
+    loop {
+        let current = answer(&entries, &earlier);
+        if fits(&current) {
+            return current;
+        }
+        let longest = |group: &[Value]| -> Option<usize> {
+            group
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (index, entry["said"].as_str().map_or(0, str::len)))
+                .filter(|(_, len)| *len > 0)
+                .max_by_key(|(_, len)| *len)
+                .map(|(index, _)| index)
+        };
+        let entry = if let Some(index) = longest(&earlier) {
+            &mut earlier[index]
+        } else if let Some(index) = longest(&entries[..relays]) {
+            &mut entries[index]
+        } else if let Some(index) = longest(&entries[relays..]) {
+            &mut entries[relays + index]
+        } else {
+            // Only the ids and origins are left, which always fit.
+            return current;
+        };
+        let said = entry["said"].as_str().unwrap_or_default();
+        let (said, _) = cut_text(said, said.len() / 2);
+        entry["said"] = json!(said);
+        entry["saidCut"] = json!(true);
     }
-    answer
 }
 /// One turn of a `read_turn` answer, its said cut to `room` bytes.
 fn turn_entry(turn: &TurnReading, room: usize) -> Value {
@@ -1658,6 +1683,56 @@ fn turn_value(execution: &str, (outcome, reply): (&'static str, Option<String>))
 mod tests {
     use super::*;
     use serde_json::Map;
+
+    #[test]
+    fn a_read_turn_answer_cuts_context_first_and_keeps_the_start_whole() {
+        let thread = ConversationId::new("00000000-0000-4000-8000-000000000001").expect("id");
+        let reading = |execution: &str, origin: TurnOrigin, said: String| TurnReading {
+            thread: thread.clone(),
+            execution: execution.into(),
+            origin,
+            said,
+        };
+        // Quotes double in JSON and control characters take six bytes: four
+        // earlier messages and eight relays of them overflow the answer alone.
+        let mut turns: Vec<TurnReading> = (0..7)
+            .map(|hop| {
+                reading(
+                    &format!("relay-{hop}"),
+                    TurnOrigin::Agent {
+                        thread: "00000000-0000-4000-8000-000000000001".into(),
+                        execution: format!("relay-{}", hop + 1),
+                    },
+                    "\u{1}".repeat(4 * 1024),
+                )
+            })
+            .collect();
+        turns.push(reading("start", TurnOrigin::Person, "close it".into()));
+        let chain = TurnChain {
+            turns,
+            end: ChainEnd::Start,
+            earlier: (0..4)
+                .map(|at| {
+                    reading(
+                        &format!("earlier-{at}"),
+                        TurnOrigin::Person,
+                        "\"".repeat(8 * 1024),
+                    )
+                })
+                .collect(),
+        };
+        let answer = turn_chain(&chain);
+        assert!(fits(&answer), "the answer fits");
+        let turns = answer["turns"].as_array().expect("turns");
+        assert_eq!(turns.len(), 8, "every turn is listed");
+        let start = turns.last().expect("start");
+        assert_eq!(start["said"], "close it", "the start's words are whole");
+        assert!(start.get("saidCut").is_none());
+        assert_eq!(answer["startedBy"], "person");
+        let earlier = answer["earlier"].as_array().expect("earlier");
+        assert_eq!(earlier.len(), 4, "every earlier message is still named");
+        assert!(earlier.iter().all(|entry| entry["saidCut"] == true));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn an_end_not_yet_readable_is_looked_for_again_until_it_is() {
