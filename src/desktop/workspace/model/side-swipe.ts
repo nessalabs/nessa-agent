@@ -112,8 +112,9 @@ export interface SwipeSample {
  * that went vertical first, `skipped` one that began over something that
  * scrolls sideways itself (a wide table, a code block) or was a pinch;
  * `done` one that already toggled, the way it went. None of those three
- * toggles again. `settled` is one whose events came down to `SETTLED`: its
- * momentum is over.
+ * toggles again. `moved` is one that has had an event larger than
+ * `SETTLED`, and `settled` one whose events then came down to it: its
+ * momentum is over. A gesture that only began small has not settled.
  */
 export type SwipeState =
   | { readonly phase: "idle" }
@@ -126,6 +127,7 @@ export type SwipeState =
   | {
       readonly phase: "scroll" | "skipped" | "done"
       readonly last: number
+      readonly moved: boolean
       readonly settled: boolean
       /** For `done`: 1 when the fingers went left, -1 right. */
       readonly way?: 1 | -1
@@ -168,15 +170,26 @@ export function swipeStep(
   if (beginsGesture(state, sample)) {
     if (skip)
       return {
-        state: { phase: "skipped", last: sample.at, settled: small(sample) },
+        state: {
+          phase: "skipped",
+          last: sample.at,
+          moved: !small(sample),
+          settled: false,
+        },
         swiped: null,
       }
     return measure({ phase: "tracking", last: sample.at, x: 0, y: 0 }, sample)
   }
   if (state.phase === "tracking") return measure(state, sample)
   if (state.phase === "idle") return { state, swiped: null }
+  const moved = state.moved || !small(sample)
   return {
-    state: { ...state, last: sample.at, settled: state.settled || small(sample) },
+    state: {
+      ...state,
+      last: sample.at,
+      moved,
+      settled: state.settled || (moved && small(sample)),
+    },
     swiped: null,
   }
 }
@@ -188,10 +201,19 @@ function measure(
   const x = state.x + sample.x
   const y = state.y + sample.y
   if (Math.abs(y) >= SCROLL_LOCK && Math.abs(y) >= Math.abs(x))
-    return { state: { phase: "scroll", last: sample.at, settled: false }, swiped: null }
+    return {
+      state: { phase: "scroll", last: sample.at, moved: true, settled: false },
+      swiped: null,
+    }
   if (Math.abs(x) >= SWIPE_DISTANCE && Math.abs(x) >= Math.abs(y) * SWIPE_RATIO)
     return {
-      state: { phase: "done", last: sample.at, settled: false, way: x > 0 ? 1 : -1 },
+      state: {
+        phase: "done",
+        last: sample.at,
+        moved: true,
+        settled: false,
+        way: x > 0 ? 1 : -1,
+      },
       swiped: x > 0 ? "left" : "right",
     }
   return { state: { phase: "tracking", last: sample.at, x, y }, swiped: null }

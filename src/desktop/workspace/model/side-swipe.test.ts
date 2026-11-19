@@ -169,6 +169,20 @@ describe("swipeStep", () => {
     expect(result.state.phase).toBe("skipped")
   })
 
+  it("keeps a skipped gesture skipped when it begins with a small event", () => {
+    // Fingers that start gently over a table, then speed up over the chat:
+    // a small first event is a start, not momentum that settled.
+    let state: SwipeState = idleSwipe
+    const swiped: (SwipeDirection | null)[] = []
+    ;[{ at: 0, x: 0.5, y: 0 }, ...gesture(16, 5, 15)].forEach((sample, i) => {
+      const next = swipeStep(state, sample, i === 0)
+      state = next.state
+      swiped.push(next.swiped)
+    })
+    expect(swiped.filter(Boolean)).toEqual([])
+    expect(state.phase).toBe("skipped")
+  })
+
   it("decides skipping where the gesture began, not on each event", () => {
     let state: SwipeState = idleSwipe
     const swiped: (SwipeDirection | null)[] = []

@@ -760,18 +760,43 @@ async function swipeColumns(run, step, message, port, failures) {
     // `x` is each event's travel, or a list of them for a gesture whose
     // events differ (a fling's momentum dying down, then the next swipe).
     const xs = Array.isArray(x) ? x : Array.from({ length: events }, () => x)
-    for (const [i, each] of xs.entries()) {
-      if (input)
-        await input.send("Input.dispatchMouseEvent", {
-          type: "mouseWheel",
-          x: point.x,
-          y: point.y,
-          deltaX: each,
-          deltaY: y,
-          timestamp: clock + i * 0.016,
-        })
-      else await page.mouse.wheel(each, y)
-    }
+    if (!input && Array.isArray(x))
+      // Elsewhere a gesture with no pause in it goes in from the page, one
+      // wheel event a frame, as a trackpad sends them: a slow round trip
+      // from the script cannot open a pause, and the window draws between
+      // events as it would.
+      await page.evaluate(
+        async ({ point, xs, y }) => {
+          const target = document.elementFromPoint(point.x, point.y)
+          for (const deltaX of xs) {
+            await new Promise((done) => requestAnimationFrame(done))
+            target?.dispatchEvent(
+              new WheelEvent("wheel", {
+                bubbles: true,
+                cancelable: true,
+                clientX: point.x,
+                clientY: point.y,
+                deltaX,
+                deltaY: y,
+              }),
+            )
+          }
+        },
+        { point, xs, y },
+      )
+    else
+      for (const [i, each] of xs.entries()) {
+        if (input)
+          await input.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: each,
+            deltaY: y,
+            timestamp: clock + i * 0.016,
+          })
+        else await page.mouse.wheel(each, y)
+      }
     await page.waitForTimeout(400)
   }
   let ticks = (await columns()).haptics
@@ -825,18 +850,17 @@ async function swipeColumns(run, step, message, port, failures) {
   // Two swipes with no pause between them, the second starting as the
   // first one's momentum dies down: each folds a column, with its own tick.
   // The pointer stays where it was, as two fingers on a trackpad leave it.
-  if (input) {
-    const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
-    await swipe(words, [...fling, ...fling])
-    await expect(
-      "two swipes left back to back",
-      { rail: "open", sidebar: "closed", list: "closed" },
-      2,
-    )
-    await swipe(words, -15)
-    await swipe(words, -15)
-    await expect("two swipes right", all, 2)
-  }
+  // Every engine: this is what the shipping WKWebView is read for.
+  const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
+  await swipe(words, [...fling, ...fling])
+  await expect(
+    "two swipes left back to back",
+    { rail: "open", sidebar: "closed", list: "closed" },
+    2,
+  )
+  const back = fling.map((each) => -each)
+  await swipe(words, [...back, ...back])
+  await expect("two swipes right back to back", all, 2)
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The conversation still takes a message.
