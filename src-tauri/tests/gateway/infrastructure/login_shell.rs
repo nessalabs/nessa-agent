@@ -391,11 +391,11 @@ fn a_real_zsh_probe_from_a_terminal_does_not_stop_on_job_control() {
     };
     let output = tempfile::NamedTempFile::new().unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
-    command.args([
-        "--exact",
-        "gateway::infrastructure::login_shell::tests::a_real_zsh_reports_the_tools_its_zshrc_adds",
-        "--nocapture",
-    ]).stdin(Stdio::from(terminal))
+    const PROBE: &str =
+        "gateway::infrastructure::login_shell::tests::a_real_zsh_reports_the_tools_its_zshrc_adds";
+    command
+        .args(["--exact", PROBE, "--nocapture", "--color", "never"])
+        .stdin(Stdio::from(terminal))
         .stdout(output.as_file().try_clone().unwrap())
         .stderr(output.as_file().try_clone().unwrap());
     // SAFETY: only async-signal-safe calls in the child before exec. The child
@@ -427,11 +427,13 @@ fn a_real_zsh_probe_from_a_terminal_does_not_stop_on_job_control() {
         assert!(Instant::now() < until, "terminal fixture did not finish");
         thread::sleep(Duration::from_millis(10));
     };
+    let receipt = fs::read_to_string(output.path()).unwrap();
+    assert!(status.success(), "{receipt}");
     assert!(
-        status.success(),
-        "{}",
-        fs::read_to_string(output.path()).unwrap()
+        receipt.contains(&format!("test {PROBE} ... ok")),
+        "{receipt}"
     );
+    assert!(receipt.contains("test result: ok. 1 passed;"), "{receipt}");
 }
 
 /// bash is not zsh, and the reason `-i` earns its place for it is different.
