@@ -61,9 +61,9 @@ for (const alone of [false, true])
             const controls = pane.querySelector("header")
             const art = pane.querySelector("[data-sliver]")
             if (!controls || !art) throw new Error("header fixture is incomplete")
-            const reserved =
-              (corner === "actual" || corner === "preview") &&
-              (alone || flight === "this pane")
+            // A flight never changes it: the header is laid out where its pane
+            // lands, and its name slides there on its own (`flip.tsx`).
+            const reserved = (corner === "actual" || corner === "preview") && alone
             // Selector destinations, not simulated animation geometry. The
             // maintained safe-area browser check samples the moving boxes.
             expect(getComputedStyle(art).left).toBe("0px")

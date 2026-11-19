@@ -474,6 +474,16 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menus') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menus 1 --evidence "$STRESS_EVIDENCE/menu-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-webkit.log"
         timeout-minutes: 10
+      # The side rail ships in WKWebView too: the chat's title in the pane's
+      # bar stays between where it stood and where it lands, every frame, as
+      # the rail toggles, and stands still with the panes alone.
+      - name: Run the rail stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'rails') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --rails 1 --evidence "$STRESS_EVIDENCE/rail-webkit" 2>&1 | tee "$STRESS_EVIDENCE/rail-webkit.log"
+        timeout-minutes: 10
       # The model picker ships in WKWebView too: a star, a sideways swipe
       # over a row that steps its thinking level, and a press of a bar.
       - name: Run the model picker stress step in WebKit

@@ -137,16 +137,12 @@
  * In the window's corner, with nothing beside it, the header steps past the
  * window controls — and so it does where a drag's preview would put it
  * (`data-drag-corner`, `split-panes/adapters/dom/drag.ts`), and not where it
- * would leave. A column's reopening clears `data-panes-alone` before the
- * corner pane lands; keep the header's inset through that flight. The
- * picture behind the header still reaches the window's edge.
+ * would leave. The picture behind the header still reaches the window's edge.
+ * A flight changes none of this: the header is laid out where it lands, and
+ * its name slides there straight from where it stood (`pane-header-frame.tsx`),
+ * so it never rides its pane from under the window's controls, nor stands
+ * where neither end of the flight puts it.
  */
-.workspace
-  .workspace-pane[data-split-flying]:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-header,
 .workspace[data-panes-alone]
   .workspace-pane:is(
     [data-split-corner]:not([data-drag-corner="no"]),
@@ -158,13 +154,6 @@
 
 /* With the side rail open the panes start after it: the header steps past
    the window's controls by what is left of them past the rail. */
-.workspace-window[data-rail="open"]
-  .workspace
-  .workspace-pane[data-split-flying]:is(
-    [data-split-corner]:not([data-drag-corner="no"]),
-    [data-drag-corner="yes"]
-  )
-  .workspace-pane-header,
 .workspace-window[data-rail="open"]
   .workspace[data-panes-alone]
   .workspace-pane:is(
