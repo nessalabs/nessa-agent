@@ -18,6 +18,8 @@ sources:
   - crates/nessa-gateway/src/vault/infrastructure/legacy_github.rs
   - crates/nessa-server/src/composition/vault_session.rs
   - src-tauri/src/vault/infrastructure/process.rs
+  - src-tauri/src/vault/application/biometrics.rs
+  - src-tauri/src/vault/infrastructure/keychain.rs
   - src/vault/ui/provider.tsx
   - src/vault/ui/change-control.tsx
   - src/vault/ui/change-dialog.tsx
@@ -125,6 +127,35 @@ process protections and same-format passphrase change preserve the encrypted for
 The gateway remains trusted with the full decrypted map. Rollback protection,
 independently authenticated audit history and full same-user isolation require
 separate architectural work. See the [vault security boundary](../../../../crates/nessa-vault/README.md#security-boundary).
+
+## Touch ID unlock (macOS)
+
+On a Mac that can check a fingerprint, the unlock dialog offers "Use Touch ID to
+unlock next time", ticked. The gateway still only takes a passphrase, so the app
+host keeps it: after the gateway accepts a typed unlock (or setup) that asked to
+remember, the host saves the passphrase in the login keychain with the enrolled
+fingerprints' state hash. On a later unlock the dialog asks for the fingerprint
+once on its own; the host reads the keychain item only after the prompt passes
+and sends an ordinary unlock down the same vault session.
+
+```mermaid
+stateDiagram-v2
+    [*] --> NotKept
+    NotKept --> Kept: typed unlock accepted with Use Touch ID ticked
+    Kept --> Kept: fingerprint passes and the gateway unlocks
+    Kept --> Kept: passphrase changed (copy replaced)
+    Kept --> NotKept: fingerprints added or removed
+    Kept --> NotKept: gateway refuses the copy as a wrong passphrase
+    Kept --> NotKept: turned off in Settings
+```
+
+A dismissed prompt leaves the passphrase form and a Use Touch ID button; it is
+not shown as a failure and is not asked again on its own for that request. The
+keychain item's access list trusts only the app's own signature; the fingerprint
+gate is the app's, not the keychain's, because a biometric keychain access
+control needs an entitlement the Developer ID app does not carry. Anyone who can
+run code as the app while it is open can unlock the vault either way. Other
+platforms, and browser development, never offer it.
 
 ## Bounded rule model
 

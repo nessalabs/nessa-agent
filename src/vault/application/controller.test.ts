@@ -140,3 +140,106 @@ describe("one reusable vault dialog", () => {
     expect(controller.snapshot()).toEqual({ kind: "closed" })
   })
 })
+describe("Touch ID in the unlock dialog", () => {
+  function withTouchId(saved: boolean) {
+    const backend = source("locked")
+    let kept = saved
+    const unlock = vi.fn(async (): Promise<VaultState> => "unlocked")
+    const biometrics = {
+      status: vi.fn(async () => ({ available: true, saved: kept })),
+      unlock,
+      forget: vi.fn(async () => {
+        kept = false
+        return { available: true, saved: false }
+      }),
+    }
+    return {
+      backend: { ...backend, biometrics } satisfies VaultSource,
+      biometrics,
+      forgetCopy: () => {
+        kept = false
+      },
+    }
+  }
+  const settle = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve()
+  }
+  it("offers to keep a typed passphrase and passes the choice on", async () => {
+    const { backend, biometrics } = withTouchId(false)
+    const controller = new VaultController(backend)
+    const pending = controller.ensure()
+    await settle()
+    expect(controller.snapshot()).toEqual({
+      kind: "unlock",
+      busy: false,
+      biometric: { available: true, saved: false },
+    })
+    expect(biometrics.unlock).not.toHaveBeenCalled()
+    await controller.submit("private test passphrase", true)
+    expect(backend.unlock).toHaveBeenCalledWith("private test passphrase", true)
+    expect(await pending).toBe(true)
+  })
+  it("never asks to remember where Touch ID is not available", async () => {
+    const backend = source("locked")
+    const controller = new VaultController(backend)
+    void controller.ensure()
+    await settle()
+    await controller.submit("private test passphrase", true)
+    expect(backend.unlock).toHaveBeenCalledWith("private test passphrase", false)
+  })
+  it("asks for the fingerprint on its own once, and a pass unlocks", async () => {
+    const { backend, biometrics } = withTouchId(true)
+    const controller = new VaultController(backend)
+    const pending = controller.ensure()
+    await settle()
+    expect(await pending).toBe(true)
+    expect(biometrics.unlock).toHaveBeenCalledTimes(1)
+    expect(backend.unlock).not.toHaveBeenCalled()
+  })
+  it("leaves the form after a dismissed prompt, without a failure or a second prompt", async () => {
+    const { backend, biometrics } = withTouchId(true)
+    biometrics.unlock.mockRejectedValueOnce(new VaultRefusal("biometric_cancelled"))
+    const controller = new VaultController(backend)
+    const pending = controller.ensure()
+    await settle()
+    expect(controller.snapshot()).toEqual({
+      kind: "unlock",
+      busy: false,
+      biometric: { available: true, saved: true },
+    })
+    // The window regains focus when the system prompt closes.
+    controller.refreshPending()
+    await settle()
+    expect(biometrics.unlock).toHaveBeenCalledTimes(1)
+    await controller.useBiometric()
+    expect(biometrics.unlock).toHaveBeenCalledTimes(2)
+    expect(await pending).toBe(true)
+  })
+  it("says the fingerprints changed and offers to keep the passphrase again", async () => {
+    const { backend, biometrics, forgetCopy } = withTouchId(true)
+    biometrics.unlock.mockImplementationOnce(async () => {
+      forgetCopy()
+      throw new VaultRefusal("biometric_changed")
+    })
+    const controller = new VaultController(backend)
+    void controller.ensure()
+    await settle()
+    expect(controller.snapshot()).toEqual({
+      kind: "unlock",
+      busy: false,
+      failure: "biometric_changed",
+      biometric: { available: true, saved: false },
+    })
+  })
+  it("shows the fingerprint wait while the prompt is up", async () => {
+    const { backend, biometrics } = withTouchId(true)
+    const prompt = deferred<VaultState>()
+    biometrics.unlock.mockReturnValueOnce(prompt.promise)
+    const controller = new VaultController(backend)
+    const pending = controller.ensure()
+    await settle()
+    expect(controller.snapshot()).toMatchObject({ busy: true, fingerprint: true })
+    prompt.resolve("unlocked")
+    expect(await pending).toBe(true)
+  })
+})

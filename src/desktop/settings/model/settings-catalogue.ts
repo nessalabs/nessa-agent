@@ -259,6 +259,14 @@ export const settingsEntries = [
     detail: "Protect saved credentials on this gateway.",
     keywords: "change password security encryption unlock",
   },
+  {
+    id: "vault-touch-id",
+    tab: "accounts",
+    label: "Unlock with Touch ID",
+    detail:
+      "Your fingerprint instead of your passphrase. Turn it on with “Use Touch ID” when you next unlock.",
+    keywords: "fingerprint biometric touch id unlock password passphrase keychain",
+  },
   // Connections › MCP servers
   {
     id: "mcp-servers",

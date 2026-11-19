@@ -12,7 +12,7 @@
   font-size: 13px;
   font-weight: 500;
 }
-.vault-dialog input {
+.vault-dialog input:not([type="checkbox"]) {
   width: 100%;
 }
 .vault-hint,
@@ -45,4 +45,10 @@
   list-style: disc;
   padding-left: 18px;
   margin-top: 14px;
+}
+.vault-dialog .vault-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
 }
