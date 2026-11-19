@@ -593,3 +593,11 @@ button.devices-tile:focus-visible,
   align-items: center;
   gap: 4px;
 }
+
+/* A cloud's mark is square: smaller than the wide device drawings. */
+.devices-tile-figure.cloud-mark {
+  width: 72px;
+}
+.devices-detail-figure.cloud-mark {
+  width: 96px;
+}

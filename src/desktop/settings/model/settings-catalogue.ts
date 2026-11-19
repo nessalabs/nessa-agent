@@ -245,6 +245,13 @@ export const settingsEntries = [
     keywords: "cloud vm compute workspace key agent37 instance",
   },
   {
+    id: "cloud-choice",
+    tab: "accounts",
+    label: "Cloud for new thread VMs",
+    detail: "Which connected cloud makes a new thread's VM when its channel names none.",
+    keywords: "cloud vm boat agent37 default provider workspace choose",
+  },
+  {
     id: "vault-passphrase",
     tab: "accounts",
     label: "Vault passphrase",

@@ -1194,8 +1194,8 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         records[0].change,
         crate::application::SettingsChange::ChannelPlacement {
             channel: made.id().clone(),
-            before: made.execution().clone(),
-            after: boat.clone(),
+            before: Box::new(made.execution().clone()),
+            after: Box::new(boat.clone()),
             coordinator: made.coordinator_id(),
         }
     );

@@ -15,6 +15,7 @@
 //! (`composition/agent.rs`). Every value here is checked when it is made and
 //! when it is read back; a stored row that is not one is not a channel.
 use super::Place;
+use crate::workspaces::domain::Cloud;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -252,45 +253,66 @@ pub struct ChannelDefaults {
 
 /// Where the channel's main agent and its threads run. The two are chosen
 /// apart, and each may be any [`Place`]: here, a cloud VM of each
-/// conversation's own, any paired computer (the pool, in the order the
-/// pool's preferences give, a cloud VM as overflow), or one named computer.
-/// Stored and sent as one word each: `local`, `boat` and `pool` for the
-/// kinds, and a named computer by its place name (an SSH destination, or a
-/// paired computer's `peer:<key>`).
+/// conversation's own on one named cloud, any paired computer (the pool, in
+/// the order the pool's preferences give, a cloud VM as overflow), or one
+/// named computer. Stored and sent as one word each: `local` and `pool` for
+/// those kinds, a cloud by its name ([`Cloud::as_str`]: `boat`, `agent37`),
+/// and a named computer by its place name (an SSH destination, or a paired
+/// computer's `peer:<key>`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelExecution {
-    coordinator: Place,
-    threads: Place,
+    coordinator: ChannelSpot,
+    threads: ChannelSpot,
+}
+
+/// One of a channel's two places, and the cloud its VMs are made on when
+/// that place is a cloud VM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChannelSpot {
+    place: Place,
+    cloud: Option<Cloud>,
+}
+
+impl ChannelSpot {
+    fn of(place: Place) -> Self {
+        let cloud = matches!(place, Place::CloudVm).then_some(Cloud::Boat);
+        Self { place, cloud }
+    }
 }
 
 /// A word that names no place a channel can run in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownChannelPlace;
 
-/// The place `word` names: a kind of place by its channel word, else one
-/// named computer by its place name. A kind is spelled one way only, so
-/// `here`, `peer:any` and `boat:thread` name nothing here, and the three
-/// words are kept for the kinds: an SSH host named `local`, `boat` or
-/// `pool` cannot be a channel's computer.
-fn channel_place(word: &str) -> Result<Place, UnknownChannelPlace> {
+/// The place `word` names: a kind of place by its channel word, a cloud by
+/// its name, else one named computer by its place name. A kind is spelled
+/// one way only, so `here`, `peer:any` and `boat:thread` name nothing here,
+/// and the kind and cloud words are kept for them: an SSH host named
+/// `local`, `pool` or a cloud's name cannot be a channel's computer.
+fn channel_place(word: &str) -> Result<ChannelSpot, UnknownChannelPlace> {
+    if let Some(cloud) = Cloud::parse(word) {
+        return Ok(ChannelSpot {
+            place: Place::CloudVm,
+            cloud: Some(cloud),
+        });
+    }
     match word {
-        "local" => Ok(Place::Here),
-        "boat" => Ok(Place::CloudVm),
-        "pool" => Ok(Place::Pool),
+        "local" => Ok(ChannelSpot::of(Place::Here)),
+        "pool" => Ok(ChannelSpot::of(Place::Pool)),
         named => match Place::named(named) {
-            Ok(computer @ (Place::Host(_) | Place::Peer(_))) => Ok(computer),
+            Ok(computer @ (Place::Host(_) | Place::Peer(_))) => Ok(ChannelSpot::of(computer)),
             _ => Err(UnknownChannelPlace),
         },
     }
 }
 
-/// `place`'s channel word, as [`channel_place`] reads it.
-fn channel_word(place: &Place) -> String {
-    match place {
+/// `spot`'s channel word, as [`channel_place`] reads it.
+fn channel_word(spot: &ChannelSpot) -> String {
+    match &spot.place {
         Place::Here => "local".to_owned(),
-        Place::CloudVm => "boat".to_owned(),
+        Place::CloudVm => spot.cloud.unwrap_or(Cloud::Boat).as_str().to_owned(),
         Place::Pool => "pool".to_owned(),
-        Place::Host(_) | Place::Peer(_) => place.name(),
+        place @ (Place::Host(_) | Place::Peer(_)) => place.name(),
     }
 }
 
@@ -302,11 +324,12 @@ impl Default for ChannelExecution {
 }
 
 impl ChannelExecution {
-    /// The main agent on `coordinator` and threads on `threads`.
+    /// The main agent on `coordinator` and threads on `threads`; a cloud VM
+    /// among them is on Boat.
     pub fn new(coordinator: Place, threads: Place) -> Self {
         Self {
-            coordinator,
-            threads,
+            coordinator: ChannelSpot::of(coordinator),
+            threads: ChannelSpot::of(threads),
         }
     }
     /// The places the channel words `coordinator` and `threads` name.
@@ -314,18 +337,26 @@ impl ChannelExecution {
     /// # Errors
     /// [`UnknownChannelPlace`] for a word that names none.
     pub fn parse(coordinator: &str, threads: &str) -> Result<Self, UnknownChannelPlace> {
-        Ok(Self::new(
-            channel_place(coordinator)?,
-            channel_place(threads)?,
-        ))
+        Ok(Self {
+            coordinator: channel_place(coordinator)?,
+            threads: channel_place(threads)?,
+        })
     }
     /// Where the main agent runs.
     pub fn coordinator(&self) -> &Place {
-        &self.coordinator
+        &self.coordinator.place
     }
     /// Where the channel's threads run.
     pub fn threads(&self) -> &Place {
-        &self.threads
+        &self.threads.place
+    }
+    /// The cloud the main agent's VM is made on, when it runs on a cloud VM.
+    pub fn coordinator_cloud(&self) -> Option<Cloud> {
+        self.coordinator.cloud
+    }
+    /// The cloud a thread's VM is made on, when threads run on a cloud VM.
+    pub fn threads_cloud(&self) -> Option<Cloud> {
+        self.threads.cloud
     }
     /// The main agent's place as its channel word.
     pub fn coordinator_word(&self) -> String {

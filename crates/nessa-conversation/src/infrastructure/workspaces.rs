@@ -9,9 +9,12 @@ use crate::{
         ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
         MAX_RETAINED_ENVIRONMENTS,
     },
-    domain::{BackgroundCommand, RestCause, TaskStop},
+    domain::{BackgroundCommand, ChannelId, RestCause, TaskStop},
     env::LEASE_PROTOCOL,
-    workspaces::application::{ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces},
+    workspaces::{
+        application::{ServedCopy, WorkspaceRuntime, WorkspaceStream, Workspaces},
+        domain::Cloud,
+    },
 };
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -161,6 +164,40 @@ impl RemoteShell for VmShell<'_> {
         self.0.run(command, input)
     }
 }
+/// The stored channel `conversation` is in, and the cloud that channel
+/// names for its place: its main agent's or its threads'. A place that is
+/// not a cloud VM (a pool's overflow, say) names none, so a new VM goes to
+/// the cloud chosen for new thread VMs.
+///
+/// # Errors
+/// `EnvironmentUnreachable` when its channel cannot be read: a VM is never
+/// made somewhere its channel did not say.
+pub async fn channel_cloud(
+    channels: &dyn ChannelStore,
+    conversation: &ConversationId,
+) -> Result<(Option<ChannelId>, Option<Cloud>), LeaseRefusal> {
+    let channel = channels
+        .channel_of(conversation)
+        .await
+        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+    let mut cloud = None;
+    if let Some(id) = &channel {
+        let found = channels
+            .get(id)
+            .await
+            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
+            .filter(|found| found.id() == id)
+            .ok_or(LeaseRefusal::EnvironmentUnreachable)?;
+        let execution = found.execution();
+        cloud = if *conversation == found.coordinator_id() {
+            execution.coordinator_cloud()
+        } else {
+            execution.threads_cloud()
+        };
+    }
+    Ok((channel, cloud))
+}
+
 /// The channel and allocation checks shared by agent and background sessions.
 async fn open_workspace(
     service: &Workspaces,
@@ -168,22 +205,9 @@ async fn open_workspace(
     conversation: &ConversationId,
     provision: bool,
 ) -> Result<Arc<dyn WorkspaceRuntime>, LeaseRefusal> {
-    let channel = channels
-        .channel_of(conversation)
-        .await
-        .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
-    if let Some(id) = &channel {
-        if channels
-            .get(id)
-            .await
-            .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?
-            .is_none_or(|found| found.id() != id)
-        {
-            return Err(LeaseRefusal::EnvironmentUnreachable);
-        }
-    }
+    let (channel, cloud) = channel_cloud(channels, conversation).await?;
     service
-        .open(conversation.clone(), provision, channel)
+        .open(conversation.clone(), provision, channel, cloud)
         .await
         .map_err(|error| {
             tracing::warn!(

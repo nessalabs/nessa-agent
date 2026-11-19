@@ -528,8 +528,8 @@ impl ConversationService {
                 caller: caller.clone(),
                 change: SettingsChange::ChannelPlacement {
                     channel: id.clone(),
-                    before: current.execution().clone(),
-                    after: execution.clone(),
+                    before: Box::new(current.execution().clone()),
+                    after: Box::new(execution.clone()),
                     coordinator: coordinator.clone(),
                 },
                 outcome,

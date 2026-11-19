@@ -27,8 +27,8 @@ export function placeNote(
     return conversationLeasePlace(lease)
   if (placement === undefined) return undefined
   switch (channelPlaceKind(placement)) {
-    case "boat":
-      return conversationLeasePlace({ environment: "boat" })
+    case "cloud":
+      return `${channelPlaceWords(placement)} workspace`
     case "local":
       return conversationLeasePlace({ environment: "here" })
     default:

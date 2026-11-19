@@ -93,7 +93,8 @@ stays in its source's channel, even after the channel moved.
 
 A channel says where its main agent runs and where its threads run
 (`ChannelExecution`). Each is any place: this machine (`local`), a cloud VM
-of each conversation's own (`boat`), any paired computer (`pool`), or one
+of each conversation's own on a named cloud (`boat`, `agent37`: the
+channel keeps which), any paired computer (`pool`), or one
 computer by its place name, an SSH destination this gateway serves or a
 paired computer's `peer:<key>` (channels.sqlite3 v6). A computer is checked
 when it is asked for: one this gateway does not serve, or a paired computer
