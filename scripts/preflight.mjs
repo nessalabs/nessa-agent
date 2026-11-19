@@ -218,7 +218,7 @@ function main() {
   const stage = checkStage((process.argv[2] ?? "dev").trim())
   const instance = process.env.NESSA_INSTANCE
   say(
-    `stage ${stage}${instance ? `, instance ${instance}` : ""}, gateway :${gatewayPort(stage)}`,
+    `stage ${stage}${instance ? `, instance ${instance}` : ""}, gateway :${selectedPort()}`,
   )
   checkHarness()
   checkAgent(stage)
