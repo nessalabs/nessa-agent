@@ -103,7 +103,17 @@
 //! preference receipts, history fences, and per-model-request usage-limit
 //! invalidations. Invalidation, open-row cancellation, and their audit share
 //! one transaction; `accept` checks the retained causal invalidation.
+pub mod directory_policy;
 pub mod owner_phone_policy;
+pub use directory_policy::CedarDirectoryPolicyEvaluator;
+mod directory_audit;
+pub use directory_audit::FileDirectoryAudit;
+mod directory_store;
+pub use directory_store::SqliteDirectoryStore;
+#[cfg(unix)]
+mod directory_files;
+#[cfg(unix)]
+pub use directory_files::LocalDirectoryFiles;
 pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
 mod usage_limit_policy;
 pub use usage_limit_policy::CedarUsageLimitPreferencePolicy;

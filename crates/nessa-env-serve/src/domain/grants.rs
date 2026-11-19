@@ -257,6 +257,40 @@ impl PeerGrant {
             ..self
         }
     }
+
+    /// Whether `self` lets the peer do something `owner` does not.
+    pub fn widens(&self, owner: &PeerGrant) -> bool {
+        agents_widen(self.agents(), owner.agents())
+            || commands_widen(self.commands(), owner.commands())
+            || lease_widens(self.max_lease(), owner.max_lease())
+            || (self.logins() && !owner.logins())
+    }
+}
+
+fn agents_widen(proposed: &Agents, owner: &Agents) -> bool {
+    match (owner, proposed) {
+        (Agents::All, _) => false,
+        (_, Agents::All) => true,
+        (Agents::Named(owned), Agents::Named(proposed)) => {
+            proposed.iter().any(|name| !owned.contains(name))
+        }
+    }
+}
+
+fn commands_widen(proposed: Option<CommandGrant>, owner: Option<CommandGrant>) -> bool {
+    match (owner, proposed) {
+        (None, Some(_)) => true,
+        (Some(owner), Some(proposed)) => proposed.max_timeout_ms() > owner.max_timeout_ms(),
+        _ => false,
+    }
+}
+
+fn lease_widens(proposed: Option<MaxLease>, owner: Option<MaxLease>) -> bool {
+    match (owner, proposed) {
+        (Some(_), None) => true,
+        (Some(owner), Some(proposed)) => proposed.ms() > owner.ms(),
+        (None, _) => false,
+    }
 }
 
 /// One change this host's owner makes to a peer's grant, as `nessa env

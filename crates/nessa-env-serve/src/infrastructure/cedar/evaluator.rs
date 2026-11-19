@@ -1,7 +1,10 @@
 //! The lease policy bundle, loaded and validated once, and each lease
 //! decided by it.
 use crate::{
-    application::{Denial, LeaseAsk, LeaseDecision, LeaseFacts, LeasePolicyEvaluator},
+    application::{
+        Denial, GatewayWriteDecision, GatewayWriteFacts, GatewayWritePolicy, LeaseAsk,
+        LeaseDecision, LeaseFacts, LeasePolicyEvaluator,
+    },
     domain::{Agents, Peer},
 };
 use cedar_policy::{
@@ -127,6 +130,66 @@ impl CedarLeasePolicy {
             Decision::Deny if policies.is_empty() => LeaseDecision::Deny(Denial::NotPermitted),
             Decision::Deny => LeaseDecision::Deny(Denial::Forbidden { policies }),
         })
+    }
+}
+
+impl GatewayWritePolicy for CedarLeasePolicy {
+    fn replace(&self, facts: &GatewayWriteFacts<'_>) -> GatewayWriteDecision {
+        self.decide_replace(facts)
+            .unwrap_or(GatewayWriteDecision::Unavailable)
+    }
+}
+
+impl CedarLeasePolicy {
+    fn decide_replace(
+        &self,
+        facts: &GatewayWriteFacts<'_>,
+    ) -> Result<GatewayWriteDecision, Unavailable> {
+        let principal = peer(&LeaseFacts {
+            peer: facts.peer,
+            written: true,
+            grant: facts.owner,
+            ask: LeaseAsk::Command,
+        })?;
+        let action = uid("NessaEnv::Action", "grants.replace")?;
+        let resource = Entity::new_no_attrs(uid("NessaEnv::Grants", "grants")?, HashSet::new());
+        let context = Context::from_json_value(
+            serde_json::json!({ "widens": facts.widens }),
+            Some((&self.schema, &action)),
+        )
+        .map_err(|error| Unavailable::at("the context", error))?;
+        let request = Request::new(
+            principal.uid(),
+            action,
+            resource.uid(),
+            context,
+            Some(&self.schema),
+        )
+        .map_err(|error| Unavailable::at("the request", error))?;
+        let entities = Entities::from_entities([principal, resource], Some(&self.schema))
+            .map_err(|error| Unavailable::at("the entities", error))?;
+        let response = self
+            .authorizer
+            .is_authorized(&request, &self.policies, &entities);
+        if let Some(error) = response.diagnostics().errors().next() {
+            return Err(Unavailable::at("evaluation", error));
+        }
+        let policies: Vec<String> = response
+            .diagnostics()
+            .reason()
+            .filter_map(|id| self.policies.annotation(id, "id"))
+            .map(str::to_owned)
+            .collect();
+        if policies.iter().any(|id| id == "gateway.wider") {
+            return Ok(GatewayWriteDecision::Wider);
+        }
+        if policies.iter().any(|id| id == "gateway.not_owner") {
+            return Ok(GatewayWriteDecision::NotOwner);
+        }
+        Err(Unavailable::at(
+            "evaluation",
+            "no gateway write policy matched",
+        ))
     }
 }
 

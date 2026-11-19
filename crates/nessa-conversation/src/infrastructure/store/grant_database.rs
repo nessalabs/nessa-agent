@@ -100,6 +100,10 @@ fn validate_shape(connection: &Connection, database: &str) -> Result<(), OpenErr
         ("share_grant_changes","sequence, principal_id, resource_kind, resource_id, receiver_id, credential_id, before, after, policy_before, policy_after, initiator, surface, request, changed_at_ms, revision"),
         ("person_links","organization_id, gateway_principal, person_principal, credential_id, invitation"),
         ("person_link_changes","sequence, organization_id, gateway_principal, credential_id, invitation, person_before, person_after, cause, initiator_kind, initiator_id, observed_at_ms"),
+        ("directory_resources","resource_id, environment, canonical_path, binding"),
+        ("directory_cleanup","environment, canonical_path, binding, unlinked, audit_done, initiator"),
+        ("directory_open_audits","resource_id, cause, initiator, audit_done"),
+        ("directory_pending_audits","sequence, resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms"),
     ] {
         connection.prepare(&format!("SELECT {columns} FROM {database}{table} LIMIT 0")).map_err(|cause| OpenError::Damaged(format!("grant table {table}: {cause}")))?;
     }

@@ -395,6 +395,48 @@ pub enum Changed<E> {
     Refused(E),
 }
 
+/// Why a gateway may not replace `grants.json`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayWrite {
+    /// The proposed grant allows more than the owner's entry.
+    Wider,
+    /// The gateway is not the owner of the file. The owner's entry stays.
+    NotOwner,
+    /// The policy could not decide, so the file was not replaced.
+    Unavailable,
+    /// The file could not be read, so it was not replaced.
+    Unreadable,
+}
+
+impl FileGrants {
+    /// Refuse a gateway's replacement of `peer`'s entry. The policy decides
+    /// whether the proposal is wider than the owner's entry or the gateway
+    /// is not the owner. The file is not written.
+    pub fn gateway_write(
+        &self,
+        peer: &Peer,
+        proposed: &PeerGrant,
+        policy: &dyn crate::application::GatewayWritePolicy,
+    ) -> Result<(), GatewayWrite> {
+        let grants = self.read().map_err(|_| GatewayWrite::Unreadable)?;
+        let owner = grants
+            .get(peer)
+            .cloned()
+            .unwrap_or_else(|| crate::domain::unwritten(peer));
+        let decision = policy.replace(&crate::application::GatewayWriteFacts {
+            peer,
+            proposed,
+            owner: &owner,
+            widens: proposed.widens(&owner),
+        });
+        Err(match decision {
+            crate::application::GatewayWriteDecision::Wider => GatewayWrite::Wider,
+            crate::application::GatewayWriteDecision::NotOwner => GatewayWrite::NotOwner,
+            crate::application::GatewayWriteDecision::Unavailable => GatewayWrite::Unavailable,
+        })
+    }
+}
+
 impl PeerGrants for FileGrants {
     fn entry(&self, peer: &Peer) -> Result<Option<PeerGrant>, String> {
         self.read()

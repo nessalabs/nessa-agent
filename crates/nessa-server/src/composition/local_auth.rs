@@ -1947,6 +1947,32 @@ async fn conversations(
         evaluator: Arc::new(evaluator),
         audit: Arc::new(drive_audit),
     });
+    #[cfg(unix)]
+    {
+        let directory_store =
+            crate::conversation::infrastructure::SqliteDirectoryStore::open(&grants_path)
+                .map_err(|error| RunError::Agent(format!("directory grants: {error}")))?;
+        let directory_policy =
+            crate::conversation::infrastructure::CedarDirectoryPolicyEvaluator::new().map_err(
+                |_| RunError::Agent("the directory policy bundle does not validate".into()),
+            )?;
+        let directory_audit = crate::conversation::infrastructure::FileDirectoryAudit::new(
+            root.join("audit").join("directory-grants.jsonl"),
+        );
+        let directory_access = crate::conversation::application::DirectoryAccess::new(
+            Arc::new(crate::conversation::infrastructure::LocalDirectoryFiles),
+            Arc::new(directory_store),
+            Arc::new(directory_policy),
+            Arc::new(directory_audit),
+            Arc::new(crate::conversation::application::RandomBinding),
+        );
+        directory_access.reconcile().map_err(|error| {
+            RunError::Agent(format!(
+                "directory grant audit could not be reconciled: {error}"
+            ))
+        })?;
+        service.bind_directory_access(Arc::new(directory_access));
+    }
     service.bind_permission_rules(permission_memory.clone());
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());

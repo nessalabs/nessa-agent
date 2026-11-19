@@ -57,6 +57,13 @@
           "attributes": {},
           "additionalAttributes": false
         }
+      },
+      "Grants": {
+        "shape": {
+          "type": "Record",
+          "attributes": {},
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -89,6 +96,22 @@
           "context": {
             "type": "Record",
             "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "grants.replace": {
+        "appliesTo": {
+          "principalTypes": ["Peer"],
+          "resourceTypes": ["Grants"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "widens": {
+                "type": "Boolean",
+                "required": true
+              }
+            },
             "additionalAttributes": false
           }
         }

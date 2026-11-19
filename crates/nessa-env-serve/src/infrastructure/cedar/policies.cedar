@@ -48,3 +48,21 @@ permit (
     resource is NessaEnv::Build
 )
 when { principal.commands };
+
+// A gateway does not replace grants.json. A proposal wider than the owner's
+// entry is one refusal. Every other proposal is the other. The file is not written.
+@id("gateway.wider")
+forbid (
+    principal is NessaEnv::Peer,
+    action == NessaEnv::Action::"grants.replace",
+    resource is NessaEnv::Grants
+)
+when { context.widens };
+
+@id("gateway.not_owner")
+forbid (
+    principal is NessaEnv::Peer,
+    action == NessaEnv::Action::"grants.replace",
+    resource is NessaEnv::Grants
+)
+when { !context.widens };

@@ -43,7 +43,7 @@ use crate::application::{
     CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
     PublicationOutcome, ToolDecision,
 };
-use crate::domain::{Place, ToolCall, ToolPolicy, ToolSource};
+use crate::domain::{Place, SandboxKind, ToolCall, ToolPolicy, ToolSource};
 use crate::timer::clock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::lease::{Collection, CollectionRefusal};
@@ -363,6 +363,30 @@ impl ConversationService {
         };
         if let Err(refusal) = admitted {
             return self.refuse(&live, &refused, refusal).await;
+        }
+        if let Some(directory) = self.inner.directory.get() {
+            let arguments: Vec<String> = work
+                .argv()
+                .iter()
+                .skip(1)
+                .map(|argument| argument.to_string())
+                .collect();
+            let profile = match call.sandbox {
+                SandboxProfile::None => SandboxKind::None,
+                SandboxProfile::HarnessDefault => SandboxKind::Harness,
+            };
+            if let Err(error) = directory.admit_execution(
+                actor.principal_id(),
+                work.program(),
+                &arguments,
+                profile,
+                &[],
+            ) {
+                tracing::warn!(?error, "a directory grant refused the command");
+                return self
+                    .refuse(&live, &refused, CommandRefusal::CommandDenied)
+                    .await;
+            }
         }
         if let Err(refusal) = SandboxProfiles::UNENCLOSED.admit(call.sandbox) {
             return self

@@ -11,7 +11,9 @@ use crate::conversation::application::{
     PUBLISH_CALL_WAIT,
 };
 use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
-use crate::conversation::domain::{CommandHosts, ToolRules};
+use crate::conversation::domain::{
+    ArgvPattern, CommandHosts, CommandMatcher, CommandRules, ToolRules, MAX_ENCODED_GRANT_BYTES,
+};
 use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
@@ -307,6 +309,30 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
             meaning: "the longest command host a drive grant's policy names, in bytes, the longest SSH destination config.json accepts; a conversation.share with a longer one is refused invalid_request",
+        },
+        Limit {
+            id: "directory.command_rules",
+            tier: "fixed",
+            owner: "CommandRules::MAX_RULES in crates/nessa-conversation/src/domain/directory_grant.rs",
+            meaning: "the command matchers one directory grant stores, in the owner's order; a share with more is refused and the grant row is unchanged",
+        },
+        Limit {
+            id: "directory.command_rule_program_bytes",
+            tier: "fixed",
+            owner: "CommandMatcher::MAX_PROGRAM_BYTES in crates/nessa-conversation/src/domain/directory_grant.rs",
+            meaning: "the longest program file name a directory command matcher stores, in bytes; a share naming a path or a longer name is refused",
+        },
+        Limit {
+            id: "directory.command_argv_pattern_bytes",
+            tier: "fixed",
+            owner: "ArgvPattern::MAX_BYTES in crates/nessa-conversation/src/domain/directory_grant.rs",
+            meaning: "the longest argv pattern on a directory command matcher, in bytes; a longer pattern is refused",
+        },
+        Limit {
+            id: "directory.grant_bytes",
+            tier: "fixed",
+            owner: "MAX_ENCODED_GRANT_BYTES in crates/nessa-conversation/src/domain/directory_grant.rs",
+            meaning: "the encoded directory grant that fits in one 64 KiB product frame after the share overhead; a larger grant is refused before the marker is read, and the row is unchanged",
         },
         Limit {
             id: "record.read_work_budget",
@@ -701,6 +727,16 @@ pub fn effective_json(
         "conversation.tool_policy_command_host_bytes",
         count(CommandHosts::MAX_HOST_BYTES),
     );
+    put("directory.command_rules", count(CommandRules::MAX_RULES));
+    put(
+        "directory.command_rule_program_bytes",
+        count(CommandMatcher::MAX_PROGRAM_BYTES),
+    );
+    put(
+        "directory.command_argv_pattern_bytes",
+        count(ArgvPattern::MAX_BYTES),
+    );
+    put("directory.grant_bytes", count(MAX_ENCODED_GRANT_BYTES));
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
     put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);

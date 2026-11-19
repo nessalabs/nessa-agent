@@ -13,6 +13,7 @@
 //! commands on.
 mod background_task;
 mod command_policy;
+mod directory_grant;
 pub use background_task::{
     BackgroundCommand, BackgroundTaskId, TaskCause, TaskDelivery, TaskInitiator, TaskInputError,
     TaskLifecycle, TaskOutcome, TaskStop, TaskTransitionError,
@@ -22,6 +23,11 @@ mod receiver;
 mod scheduled_message;
 mod value_objects;
 pub use command_policy::{program_name, CommandPolicy};
+pub use directory_grant::{
+    encoded_grant, join_argv, ArgvPattern, CommandMatcher, CommandRules, DirectoryCapabilities,
+    DirectoryShapeError, PathLeave, RuleEffect, SandboxKind, WalkFacts, BINDING_LEN, MARKER_NAME,
+    MAX_ENCODED_GRANT_BYTES, PRODUCT_FRAME_BYTES, SHARE_FRAME_OVERHEAD_BYTES,
+};
 pub use entities::{Conversation, ConversationRefusal};
 pub use receiver::{
     PairedReceiver, ReceiverBinding, ReceiverInitiator, ReceiverIntent, ReceiverTransition,

@@ -47,11 +47,13 @@
 use super::share_grants::ShareGrants;
 use super::tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator};
 use super::ConversationFuture;
-use crate::domain::{ToolCall, ToolPolicy, ToolSource};
+use crate::domain::{SandboxKind, ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::hooks::{
-    HookError, InvocationHook, InvocationObservationWindow, ProposedToolCall, ToolVerdict,
+    HookError, InvocationContext, InvocationHook, InvocationObservationWindow, ProposedToolCall,
+    ToolVerdict,
 };
 use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
@@ -241,6 +243,10 @@ pub struct DriveToolHook {
     pub drive: Arc<OnceLock<DriveTools>>,
     pub admitted: Arc<AdmittedPolicies>,
     pub source: ToolSource,
+    /// Directory grants, when composition bound them.
+    pub directory: Arc<OnceLock<Arc<super::DirectoryAccess>>>,
+    /// The principal opening the conversation. Command rules are that subject's.
+    pub directory_subject: String,
 }
 
 impl InvocationHook for DriveToolHook {
@@ -249,17 +255,215 @@ impl InvocationHook for DriveToolHook {
         call: &ProposedToolCall<'_>,
         _: &InvocationObservationWindow<'_>,
     ) -> Result<ToolVerdict, HookError> {
-        Ok(
-            match refusal(
-                &self.drive,
-                &self.admitted,
-                call.initiation(),
-                ToolCall::new(self.source, call.name()),
+        if let Some(reason) = refusal(
+            &self.drive,
+            &self.admitted,
+            call.initiation(),
+            ToolCall::new(self.source, call.name()),
+        ) {
+            return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
+        }
+        if let Some(reason) = directory_command(self, call) {
+            return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
+        }
+        Ok(ToolVerdict::Allow)
+    }
+
+    fn after_invocation(
+        &self,
+        context: &InvocationContext<'_>,
+        _: &Result<
+            nessa_sdk::domain::agent_execution::executions::ExecutionOutcome,
+            nessa_sdk::application::agent_execution::agents::AgentError,
+        >,
+    ) -> Result<(), HookError> {
+        let Some(directory) = self.directory.get() else {
+            return Ok(());
+        };
+        let mut asked = std::collections::HashSet::new();
+        let mut calls = Vec::new();
+        for event in context.observations.iter() {
+            match event.update() {
+                ExecutionUpdate::PermissionRequested { tool_id, .. } => {
+                    asked.insert(tool_id.clone());
+                }
+                ExecutionUpdate::Tool(tool) => {
+                    let name = tool.title().clone().unwrap_or_else(|| "tool".to_owned());
+                    calls.push((tool.id().clone(), name));
+                }
+                _ => {}
+            }
+        }
+        let mut reported = std::collections::HashSet::new();
+        for (id, name) in calls {
+            if asked.contains(&id) || !reported.insert(id) {
+                continue;
+            }
+            directory
+                .report_unasked(&self.directory_subject, &name)
+                .map_err(|error| HookError::Failed(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
+fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Option<String> {
+    let directory = hook.directory.get()?;
+    match command_arguments(call.arguments_json()) {
+        ParsedCommand::Skip => None,
+        ParsedCommand::Unsafe => {
+            if let Err(error) =
+                directory.admit_shell(&hook.directory_subject, SandboxKind::None, &[])
+            {
+                return Some(error.to_string());
+            }
+            match directory.command_constrained(&hook.directory_subject) {
+                Ok(false) => None,
+                Ok(true) => Some("the command is not a single program".to_owned()),
+                Err(error) => Some(error.to_string()),
+            }
+        }
+        ParsedCommand::Run { program, arguments } => {
+            match directory.admit_execution(
+                &hook.directory_subject,
+                &program,
+                &arguments,
+                SandboxKind::None,
+                &[],
             ) {
-                None => ToolVerdict::Allow,
-                Some(reason) => ToolVerdict::refuse(reason, RefusalOutcome::Continue),
-            },
-        )
+                Ok(()) => None,
+                Err(error) => Some(error.to_string()),
+            }
+        }
+    }
+}
+
+/// What a permission review's arguments are, as a command.
+#[derive(Debug)]
+enum ParsedCommand {
+    /// The review is not a command.
+    Skip,
+    /// A shell string whose programs cannot all be named.
+    Unsafe,
+    /// One program and its literal arguments.
+    Run {
+        program: String,
+        arguments: Vec<String>,
+    },
+}
+
+/// A command the harness is asking about: an `argv` array of literals, or a
+/// `command` string that is one program and its arguments. A string the shell
+/// would split into more than those tokens is [`ParsedCommand::Unsafe`].
+fn command_arguments(json: &str) -> ParsedCommand {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return ParsedCommand::Skip;
+    };
+    let value = value
+        .get("arguments")
+        .filter(|item| item.get("command").is_some() || item.get("argv").is_some())
+        .unwrap_or(&value);
+    if let Some(argv) = value.get("argv").and_then(|item| item.as_array()) {
+        let mut parts = Vec::new();
+        for item in argv {
+            let Some(text) = item.as_str() else {
+                return ParsedCommand::Unsafe;
+            };
+            parts.push(text.to_owned());
+        }
+        let Some(program) = parts.first().cloned() else {
+            return ParsedCommand::Unsafe;
+        };
+        return ParsedCommand::Run {
+            program,
+            arguments: parts.into_iter().skip(1).collect(),
+        };
+    }
+    let Some(command) = value.get("command").and_then(|item| item.as_str()) else {
+        return ParsedCommand::Skip;
+    };
+    if command
+        .chars()
+        .any(|character| character.is_whitespace() && character != ' ')
+    {
+        return ParsedCommand::Unsafe;
+    }
+    let mut parts = Vec::new();
+    for token in command.split_whitespace() {
+        if !literal_token(token) {
+            return ParsedCommand::Unsafe;
+        }
+        parts.push(token.to_owned());
+    }
+    let Some(program) = parts.first().cloned() else {
+        return ParsedCommand::Unsafe;
+    };
+    ParsedCommand::Run {
+        program,
+        arguments: parts.into_iter().skip(1).collect(),
+    }
+}
+
+/// A token a shell runs as itself: no metacharacter, quote, or expansion.
+fn literal_token(token: &str) -> bool {
+    !token.is_empty()
+        && token.chars().all(|character| {
+            matches!(
+                character,
+                'a'..='z'
+                    | 'A'..='Z'
+                    | '0'..='9'
+                    | '/'
+                    | '.'
+                    | '_'
+                    | '-'
+                    | '+'
+                    | '='
+                    | ':'
+                    | '@'
+                    | ','
+            )
+        })
+}
+
+#[cfg(test)]
+mod command_parse {
+    use super::{command_arguments, ParsedCommand};
+
+    #[test]
+    fn a_shell_string_that_runs_another_program_is_refused() {
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls .; rm victim"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls | rm"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments(r#"{"command":"ls $(rm victim)"}"#),
+            ParsedCommand::Unsafe
+        ));
+        assert!(matches!(
+            command_arguments("{\"command\":\"ls .\\nrm victim\"}"),
+            ParsedCommand::Unsafe
+        ));
+        match command_arguments(
+            r#"{"server":"nessa","tool":"shell","arguments":{"command":"cat .nessa-binding"}}"#,
+        ) {
+            ParsedCommand::Run { program, arguments } => {
+                assert_eq!(program, "cat");
+                assert_eq!(arguments, [".nessa-binding"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        match command_arguments(r#"{"command":"ls -l"}"#) {
+            ParsedCommand::Run { program, arguments } => {
+                assert_eq!(program, "ls");
+                assert_eq!(arguments, ["-l"]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
 
