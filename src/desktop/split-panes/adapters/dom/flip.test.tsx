@@ -90,11 +90,18 @@ it("slides a carried element by its own difference, wherever the browser draws a
 })
 
 it("holds a pane's pinned name where it stands while its pane moves under it", async () => {
-  const durations = new Map<string, number | undefined>()
+  const played = new Map<
+    string,
+    { frames: Keyframe[]; options: KeyframeAnimationOptions }
+  >()
   const animate = Element.prototype.animate
   Element.prototype.animate = function (this: Element, keyframes, options) {
     const id = (this as HTMLElement).dataset.flipId
-    if (id) durations.set(id, (options as KeyframeAnimationOptions).duration as number)
+    if (id)
+      played.set(id, {
+        frames: keyframes as Keyframe[],
+        options: options as KeyframeAnimationOptions,
+      })
     return animate.call(this, keyframes, options)
   }
   // A flight shorter than a column's slide, so the name can only match its pane's.
@@ -129,9 +136,23 @@ it("holds a pane's pinned name where it stands while its pane moves under it", a
     await act(async () => open())
     // Its pane flies in from 64px left; the name answers it with 64px right: still.
     expect(begun.find(({ id }) => id === "name:a")).toEqual({ id: "name:a", shift: 64 })
-    // On the pane's clock, so the two cancel frame for frame.
-    expect(durations.get("name:a")).toBe(200)
-    expect(durations.get("a")).toBe(200)
+    // On the pane's clock and its samples, so the two cancel frame for frame.
+    const name = played.get("name:a")
+    const pane = played.get("a")
+    if (!name || !pane) throw new Error("the pane or its name did not fly")
+    expect(name.options).toMatchObject({ duration: 200, easing: "linear" })
+    expect(pane.options).toMatchObject({ duration: 200, easing: "linear" })
+    // Not a column's slide: `holdStill` must not undo it alone.
+    expect(name.options.id).toBeUndefined()
+    const x = (frame: Keyframe, pattern: RegExp) =>
+      Number(pattern.exec(String(frame.transform))?.[1])
+    expect(name.frames).toHaveLength(pane.frames.length)
+    name.frames.forEach((frame, i) =>
+      expect(
+        x(frame, /translateX\((-?[\d.e]+)px\)/) +
+          x(pane.frames[i], /translate\((-?[\d.e]+)px/),
+      ).toBeCloseTo(0, 6),
+    )
   } finally {
     Element.prototype.animate = animate
     globalThis.getComputedStyle = style

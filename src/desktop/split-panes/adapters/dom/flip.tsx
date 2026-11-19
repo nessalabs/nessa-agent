@@ -17,8 +17,9 @@
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
  *   another slide, or inside a flown pane, moves only by its own difference:
  *   sideways it goes straight from where it was to where it landed, whatever
- *   carries it (up or down it rides its pane). A pane's title pinned past the window's controls therefore stays put
- *   while its pane moves under it (`pane-header-frame.tsx`).
+ *   carries it (up or down it rides its pane). A pane's title pinned past the
+ *   window's controls therefore stays put while its pane moves under it
+ *   (`pane-header-frame.tsx`).
  *
  * The scope marks an active flight and each pane it moves. Styles pause the
  * moving panes' blur and shadows; stationary panes stay live.
