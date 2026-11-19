@@ -126,6 +126,13 @@ import {
  *               haptic tick and a swipe with nothing left to move gives
  *               none; over a wide table the swipe scrolls the table and a
  *               vertical scroll that drifts sideways folds nothing
+ *   touchId     the vault is sealed and Settings › Accounts asks for it,
+ *               with a fake Touch ID on: the dialog offers Touch ID ticked
+ *               and keeps the typed passphrase; the next unlock is the
+ *               fingerprint alone; a dismissed prompt leaves the form with
+ *               no failure and a Use Touch ID button that unlocks; changed
+ *               fingerprints drop the copy and say so; the Settings switch
+ *               turns it off and then rests
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
  *               where the host puts them above a compact rail; the top bar
@@ -5038,6 +5045,140 @@ const steps = {
           "Explicit unlock after passphrase change was not reflected by gateway",
         )
       await closeSettings(run.page)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async touchId(run, step, failures) {
+    const touchId = run.stack.vault.touchId
+    const dialog = run.page.locator('[data-vault-dialog="unlock"]')
+    const remember = dialog.getByLabel("Use Touch ID to unlock next time", {
+      exact: true,
+    })
+    const useTouchId = dialog.getByRole("button", { name: "Use Touch ID", exact: true })
+    const state = async () => (await run.client.vault.status()).state
+    // Sealed, then Accounts opened: its rows ask for the vault, as a launch does.
+    const leaveSettings = async () => {
+      if (await run.page.$(css.settings)) await closeSettings(run.page)
+    }
+    const lockedAccounts = async () => {
+      await leaveSettings()
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      await openAccounts(run.page)
+    }
+    await run.exclusive(async () => {
+      touchId.available = true
+      touchId.saved = null
+      touchId.answer = "pass"
+      touchId.prompts = 0
+      try {
+        // 1. Offered, ticked, on the typed unlock; the accepted passphrase is kept.
+        await lockedAccounts()
+        await dialog.waitFor()
+        if (!(await remember.isChecked()))
+          failures.push("the unlock dialog did not offer Touch ID ticked")
+        if (run.evidence)
+          await run.page
+            .getByRole("dialog", { name: "Unlock Nessa", exact: true })
+            .screenshot({ path: join(run.evidence, `touch-id-offer-${run.engine}.png`) })
+            .catch(() => {})
+        await dialog.getByLabel("Passphrase", { exact: true }).fill(VAULT_PASSPHRASE)
+        await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+        await dialog.waitFor({ state: "hidden" })
+        if (touchId.saved !== VAULT_PASSPHRASE)
+          failures.push("the passphrase was not kept for Touch ID after a ticked unlock")
+        const toggle = run.page
+          .locator(selectorFor.settingRow("vault-touch-id"))
+          .getByRole("switch")
+        await toggle.waitFor()
+        if ((await toggle.getAttribute("aria-checked")) !== "true")
+          failures.push("Settings does not show Touch ID on after it was kept")
+
+        // 2. The next unlock is a fingerprint alone: nothing typed.
+        await lockedAccounts()
+        for (const until = Date.now() + 15_000; Date.now() < until;) {
+          if ((await state()) === "unlocked" && !(await dialog.isVisible())) break
+          await run.page.waitForTimeout(100)
+        }
+        if ((await state()) !== "unlocked")
+          failures.push("a passing fingerprint did not unlock the vault")
+        if (await dialog.isVisible())
+          failures.push("the unlock dialog stayed open after a passing fingerprint")
+        if (touchId.prompts !== 1)
+          failures.push(`the fingerprint was asked ${touchId.prompts} times, not once`)
+
+        // 3. A dismissed prompt leaves the form, and its button asks again.
+        touchId.answer = "cancel"
+        await lockedAccounts()
+        // The button shows, resting, while the prompt is up; it wakes after.
+        await useTouchId.waitFor()
+        await run.page
+          .waitForFunction(
+            (button) => button && !button.disabled,
+            await useTouchId.elementHandle(),
+            { timeout: 10_000 },
+          )
+          .catch(() =>
+            failures.push("after a dismissed prompt, Use Touch ID rests disabled"),
+          )
+        if ((await dialog.getByRole("alert").count()) !== 0)
+          failures.push("a dismissed Touch ID prompt was shown as a failure")
+        if (touchId.prompts !== 2)
+          failures.push("a dismissed prompt was asked again on its own")
+        touchId.answer = "pass"
+        await useTouchId.click()
+        await dialog.waitFor({ state: "hidden" })
+        if ((await state()) !== "unlocked")
+          failures.push("Use Touch ID after a dismissed prompt did not unlock")
+
+        // 4. Changed fingerprints drop the copy and say so; typing keeps it again.
+        touchId.answer = "changed"
+        await lockedAccounts()
+        await dialog
+          .getByRole("alert")
+          .filter({ hasText: "Your fingerprints changed" })
+          .waitFor()
+        if (touchId.saved !== null)
+          failures.push("changed fingerprints left the passphrase kept")
+        await remember.waitFor()
+        await dialog.getByLabel("Passphrase", { exact: true }).fill(VAULT_PASSPHRASE)
+        await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+        await dialog.waitFor({ state: "hidden" })
+        if (touchId.saved !== VAULT_PASSPHRASE)
+          failures.push("unlocking again after changed fingerprints did not keep it")
+
+        // 5. Settings turns it off, and the switch then rests.
+        if ((await toggle.getAttribute("aria-checked")) !== "true")
+          failures.push("Settings did not read Touch ID on again after the dialog")
+        await toggle.click()
+        await run.page
+          .locator(
+            `${selectorFor.settingRow("vault-touch-id")} [role="switch"][aria-checked="false"]`,
+          )
+          .waitFor()
+        if (touchId.saved !== null)
+          failures.push("turning Touch ID off kept the passphrase")
+        if (!(await toggle.isDisabled()))
+          failures.push(
+            "with nothing kept, the Touch ID switch can be turned on from Settings",
+          )
+        if (run.evidence)
+          await run.page
+            .locator(selectorFor.settingRow("vault-touch-id"))
+            .screenshot({
+              path: join(run.evidence, `touch-id-settings-${run.engine}.png`),
+            })
+            .catch(() => {})
+      } finally {
+        touchId.available = false
+        touchId.saved = null
+        touchId.answer = "pass"
+        if ((await state()) !== "unlocked") await run.stack.vault.unlock()
+        // A dialog left open by a failure above is dismissed first.
+        if (await dialog.isVisible()) await run.page.keyboard.press("Escape")
+        await leaveSettings()
+      }
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
   },

@@ -82,6 +82,8 @@ use crate::updater::{self, ReleaseSource};
 pub struct HostDependencies {
     /// One app-lifetime anonymous-pipe vault connection, shared by all windows.
     pub vault: Arc<dyn crate::vault::application::VaultConnection>,
+    /// Where a passphrase kept for fingerprint unlock lives, behind its prompt.
+    pub biometrics: Arc<dyn crate::vault::application::biometrics::BiometricStore>,
     /// Opens provider-owned CLI login flows without reading their credentials.
     pub provider_login: Arc<dyn crate::provider_authentication::ProviderLogin>,
     /// The settings file: the panel's geometry, the quit policy, and whether
@@ -337,8 +339,23 @@ impl HostDependencies {
             stage,
             service_configuration.port(),
         ));
+        #[cfg(target_os = "macos")]
+        let biometrics: Arc<dyn crate::vault::application::biometrics::BiometricStore> =
+            match service_configuration
+                .credential_namespace()
+                .account("vault-touch-id")
+            {
+                Ok(account) => {
+                    Arc::new(crate::vault::infrastructure::TouchIdKeychain::new(account))
+                }
+                Err(_) => Arc::new(crate::vault::application::biometrics::NoBiometrics),
+            };
+        #[cfg(not(target_os = "macos"))]
+        let biometrics: Arc<dyn crate::vault::application::biometrics::BiometricStore> =
+            Arc::new(crate::vault::application::biometrics::NoBiometrics);
         Ok(Self {
             vault,
+            biometrics,
             provider_login: Arc::new(crate::platform::PlatformProviderLogin),
             settings,
             agent_credentials: Arc::new(LocalAgentCredentialStore::new(

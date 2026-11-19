@@ -1486,8 +1486,20 @@ export async function writeClipboardText(text: string): Promise<void> {
 export async function vaultCommand(request: {
   operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase"
   passphrase?: string
+  /** Setup and unlock: keep the accepted passphrase for Touch ID. */
+  remember?: boolean
 }): Promise<unknown> {
   if (!inTauri) return undefined
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke("vault_command", { request })
+}
+
+/** Touch ID unlock of the same vault. `unlock` shows the system prompt and
+ * answers as `vaultCommand` does; the passphrase never reaches the window. */
+export async function vaultBiometrics(request: {
+  operation: "status" | "unlock" | "forget"
+}): Promise<unknown> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("vault_biometrics", { request })
 }

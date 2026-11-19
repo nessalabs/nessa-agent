@@ -1,6 +1,6 @@
 import { Agent37Row } from "./agent37-row"
 import { BoatRow } from "./boat-row"
-import { VaultPassphraseControl } from "../../../vault"
+import { VaultPassphraseControl, useVaultTouchId } from "../../../vault"
 import { useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
@@ -306,9 +306,28 @@ function AccountsTab() {
         <Row id="vault-passphrase">
           <VaultPassphraseControl />
         </Row>
+        <TouchIdRow />
       </Group>
       <SavedLoginsGroup />
     </>
+  )
+}
+
+/** Shown only where this Mac can check a fingerprint. It turns on from the
+ * unlock dialog, which has the passphrase; here it only turns off. */
+function TouchIdRow() {
+  const touchId = useVaultTouchId()
+  if (!touchId?.available) return null
+  return (
+    <Row id="vault-touch-id">
+      <Toggle
+        checked={touchId.saved}
+        disabled={!touchId.saved || touchId.busy}
+        onChange={(on) => {
+          if (!on) void touchId.forget()
+        }}
+      />
+    </Row>
   )
 }
 

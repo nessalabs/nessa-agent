@@ -182,6 +182,16 @@ export function gatewayHost({
         return typeof window.__NESSA_VAULT_COMMAND === "function"
           ? window.__NESSA_VAULT_COMMAND(args.request)
           : new Promise(() => {})
+      if (command === "vault_biometrics")
+        return typeof window.__NESSA_VAULT_BIOMETRICS === "function"
+          ? window
+              .__NESSA_VAULT_BIOMETRICS(args.request)
+              .then((answer) =>
+                answer && typeof answer.refused === "string"
+                  ? Promise.reject(answer.refused)
+                  : answer,
+              )
+          : Promise.resolve({ available: false, saved: false })
       if (notices) {
         const answered = noticeHost(command, args)
         if (answered) return answered
