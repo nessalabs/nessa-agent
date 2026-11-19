@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 import { fakeSource, settle, summary, testStore, opus, astra } from "../../testing"
 import { emptyTranscript } from "../../model/transcript"
 import {
+  chooseAccess,
   changeModel,
   archiveSession,
   approve,
@@ -21,7 +22,7 @@ import {
 } from "./commands"
 import { workspaceActions } from "./slice"
 import { modelChanging, modelRequesting, modelUnsettled } from "./model-commands"
-import { selectNextModel } from "./selectors"
+import { selectNextModel, selectSteppedAccess } from "./selectors"
 import type { ModelReceipt } from "../../model/model-choice"
 import type { ModelRef } from "../../model/workspace-index"
 
@@ -133,6 +134,55 @@ describe("model choices", () => {
     expect(await send(store, "second")).toBe("sent")
     expect(source.setModel).toHaveBeenCalledTimes(1)
     expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: astra })
+  })
+
+  it("says the chat moved to Ask when the new model is not offered at its access", async () => {
+    const { source, store } = await ready()
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
+    )
+    expect(store.getState().workspace.transcripts.a?.access?.mode).toBe("auto")
+    const made = reconciles(source)
+    // The agent steps itself to Ask in the same change, and the conversation
+    // says so before the source answers.
+    source.setModel = vi.fn(async (sessionId: string, model: ModelRef, id: string) => {
+      const transcript = store.getState().workspace.transcripts.a!
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...transcript,
+          access: { mode: "ask", modes: ["ask"] },
+          revision: transcript.revision + 1,
+        },
+      })
+      return made(sessionId, model, id)
+    })
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "on the new model")).toBe("sent")
+    await settle()
+    expect(selectSteppedAccess(store.getState(), "a")).toBe("auto")
+    // Choosing access again settles it: the notice is about a change nobody chose.
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "ask", initiator: "person" }),
+    )
+    expect(selectSteppedAccess(store.getState(), "a")).toBeUndefined()
+  })
+
+  it("says nothing of access when the new model keeps it", async () => {
+    const { source, store } = await ready()
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
+    )
+    const made = reconciles(source)
+    source.setModel = vi.fn(async (sessionId: string, model: ModelRef, id: string) => ({
+      ...(await made(sessionId, model, id)),
+      approvalMode: "auto" as const,
+    }))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "kept")).toBe("sent")
+    await settle()
+    expect(selectSteppedAccess(store.getState(), "a")).toBeUndefined()
+    expect(store.getState().workspace.steppedAccess.a).toBeUndefined()
   })
 
   it("marks the message not sent when the source refuses the change, and drops the pick", async () => {

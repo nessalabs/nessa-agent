@@ -2093,17 +2093,6 @@ async function pickerStep(run, step, failures) {
     failures.push("the established conversation's model chip is disabled")
     return
   }
-  // An earlier step can leave the chat at Auto or Full, which not every model
-  // offers on every platform (only Ask is verified for all of them), and a
-  // model that cannot keep the chat's access refuses the change. A person
-  // would step down to Ask first, so the step does too.
-  if ((await readWithReviews(run.client, run.main.id)).approvalMode !== "ask") {
-    await pickAccess(page, "ask")
-    if (!(await accessIs(run, run.main.id, "ask"))) {
-      failures.push("the chat did not come back to Ask before the model change")
-      return
-    }
-  }
   const before = await readWithReviews(run.client, run.main.id)
   const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
   const bars = (model) =>
@@ -2120,6 +2109,25 @@ async function pickerStep(run, step, failures) {
     throw new CannotRun(
       "no second catalog model with levels in this conversation's provider",
     )
+  // The chat goes to Auto where its model offers it. A target not offered at
+  // Auto on this platform (only Ask is verified for every model) takes the
+  // chat to Ask in the same change, and the composer says so; one offered at
+  // Auto keeps it.
+  const { agents } = await run.client.agents.list()
+  const offered = (modelId) =>
+    agents
+      .flatMap((agent) => agent.models)
+      .find((model) => model.modelId === modelId)
+      ?.approvalModes?.map((choice) => choice.id) ?? ["ask"]
+  const startMode = offered(current.modelId).includes("auto") ? "auto" : "ask"
+  if (before.approvalMode !== startMode) {
+    await pickAccess(page, startMode)
+    if (!(await accessIs(run, run.main.id, startMode))) {
+      failures.push(`the chat did not come to ${startMode} before the model change`)
+      return
+    }
+  }
+  const endMode = offered(target.modelId).includes(startMode) ? startMode : "ask"
   const row = () =>
     page.locator(css.modelOption).filter({
       has: page
@@ -2194,6 +2202,42 @@ async function pickerStep(run, step, failures) {
   if (!confirmed) failures.push(`sending did not run on ${target.displayName}`)
   await settled(run, run.main.id, seen, text, "completed", failures)
   await expectShown(page, `${SAYS.model}${target.modelId}`, failures)
+  const access = (await readWithReviews(run.client, run.main.id)).approvalMode
+  if (access !== endMode)
+    failures.push(
+      `after the change to ${target.displayName} the chat runs at ${access}, not ${endMode}`,
+    )
+  const stepped =
+    endMode !== startMode
+      ? `Access is now Ask for approval. This model doesn’t offer ${startMode === "auto" ? "Auto approval" : "Full access"} here.`
+      : undefined
+  const noticeText = () =>
+    dock(page)
+      .locator(composerControls.notice)
+      .allInnerTexts()
+      .then((texts) => texts.join(" "))
+      .catch(() => "")
+  if (
+    stepped &&
+    !(await waitFor(async () => (await noticeText()).includes(stepped), 10_000))
+  )
+    failures.push(
+      `the composer did not say the chat moved to Ask: "${await noticeText()}"`,
+    )
+  if (!stepped && (await noticeText()).includes("Access is now"))
+    failures.push(
+      `the composer says access moved though it was kept: "${await noticeText()}"`,
+    )
+  if (
+    (await dock(page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")) !== composerControls.accessValue[endMode]
+  )
+    failures.push(`the shield does not show ${endMode} after the model change`)
+  if (run.evidence && stepped)
+    await dock(page)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-stepped.png`) })
+      .catch(() => {})
   if ((await chip.getAttribute("aria-label")) !== named)
     failures.push(
       `after the send the chip says "${await chip.getAttribute("aria-label")}"`,
@@ -2222,6 +2266,7 @@ async function pickerStep(run, step, failures) {
           before: current.modelId,
           after: target.modelId,
           level,
+          access: { before: startMode, after: endMode },
           confirmed: confirmed?.runtime,
         },
         null,

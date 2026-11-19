@@ -208,6 +208,22 @@ export const selectAccessNotice = (
   return choice?.state === "pending" || choice?.state === "refused" ? choice : undefined
 }
 
+/**
+ * The access a model change stepped a session down from, while it still
+ * runs at Ask: the new model is not offered at that access here, so the
+ * agent moved to Ask in the same change (`applyStagedModel`). Undefined once
+ * anything else changes its access or another model is asked for.
+ */
+export const selectSteppedAccess = (
+  state: Root,
+  sessionId: string,
+): AccessMode | undefined => {
+  const from = entry(state.workspace.steppedAccess, sessionId)
+  return from && entry(state.workspace.transcripts, sessionId)?.access?.mode === "ask"
+    ? from
+    : undefined
+}
+
 /** Whether a message the person sent to a session is still on its way. */
 export const selectSending = (state: Root, sessionId: string): boolean =>
   selectOutbox(state, sessionId).some((message) => message.delivery?.state === "sending")

@@ -17,7 +17,7 @@ import {
   sendMessage,
 } from "./commands"
 import { selectAccess, selectAccessNotice } from "./selectors"
-import { accessRefusalCopy } from "../../ui/panes/composer-access"
+import { accessRefusalCopy, steppedAccessCopy } from "../../ui/panes/composer-access"
 
 async function ready(source = fakeSource()) {
   const store = testStore(source)
@@ -115,6 +115,15 @@ describe("a refused change, in words", () => {
     )
     expect(accessRefusalCopy({ reason: "not-supported" })).toBe(
       "Access didn’t change. This isn’t available for this session.",
+    )
+  })
+
+  it("names both modes when a model change moved the chat to Ask", () => {
+    expect(steppedAccessCopy("auto")).toBe(
+      "Access is now Ask for approval. This model doesn’t offer Auto approval here.",
+    )
+    expect(steppedAccessCopy("full")).toBe(
+      "Access is now Ask for approval. This model doesn’t offer Full access here.",
     )
   })
 })

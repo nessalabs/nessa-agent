@@ -37,7 +37,7 @@ import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import type { DraftImage } from "../model/draft-images"
-import { settledBy, type AccessChoice } from "../model/access"
+import { settledBy, type AccessChoice, type AccessMode } from "../model/access"
 import type {
   ShareDraft,
   ShareGrant,
@@ -173,6 +173,12 @@ export interface WorkspaceState {
    * through the same model, from this window or another client, does not.
    */
   readonly stagedModels: Readonly<Record<string, ModelRef>>
+  /**
+   * The access a session left when its last model change stepped it down to
+   * Ask, by session: the agent kept a preset the new model does not offer
+   * here. Said beside the composer until the next model or access choice.
+   */
+  readonly steppedAccess: Readonly<Record<string, AccessMode>>
   /**
    * The access the person chose for a session, by session or new session,
    * until the source's conversation says it (`model/access.ts`). The
@@ -451,6 +457,7 @@ export const initialWorkspace: WorkspaceState = {
   answers: {},
   chosenModels: {},
   stagedModels: {},
+  steppedAccess: {},
   modelChoices: {},
   accessChoices: {},
   composerText: {},
@@ -803,6 +810,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
     stagedModels: without(state.stagedModels, sessionId),
+    steppedAccess: without(state.steppedAccess, sessionId),
     accessChoices: without(state.accessChoices, sessionId),
     modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),

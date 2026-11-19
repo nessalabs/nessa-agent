@@ -276,6 +276,7 @@ const workspaceSlice = createSlice({
     ) => {
       if (!Object.hasOwn(state.sessions, payload.sessionId)) return
       state.modelChoices[payload.sessionId] = payload.choice
+      delete state.steppedAccess[payload.sessionId]
     },
     modelChoiceSettled: (
       state,
@@ -305,6 +306,14 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; model: ModelRef }>,
     ) => sessions.stagedModelSettled(state, payload),
+    /** A model change stepped the session's access down to Ask from `from`. */
+    accessStepped: (
+      state,
+      { payload }: Payload<{ sessionId: string; from: AccessMode }>,
+    ) => {
+      if (Object.hasOwn(state.sessions, payload.sessionId))
+        state.steppedAccess[payload.sessionId] = payload.from
+    },
     accessChosen: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
