@@ -69,7 +69,7 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-just start    # one terminal — server on ws://127.0.0.1:7421, then the panel
+just dev      # one terminal — server on ws://127.0.0.1:7421, then the panel (same as just start)
 ```
 
 **Dev and an installed Nessa run side by side.** A packaged install keeps
@@ -80,7 +80,10 @@ stage → port table is
 [protocol/defaults/gateway-ports.json](protocol/defaults/gateway-ports.json);
 `nessa-server`, the desktop host, the frontend and the Vite proxy all read it,
 and `NESSA_PORT` still overrides it for a single run. If something else is
-holding the dev port, `just start` names the owner instead of killing it.
+holding the dev port — another app, or a launchd service registered under the
+dev stage — `just dev` / `just start` names the owner, leaves it running, and
+moves this run's gateway to the next free port (7422, …). The window follows
+the port the server publishes. A `NESSA_PORT` you set yourself is never moved.
 
 That is the whole setup from a clone. `just start` (and `just server` on its
 own) runs `nessa server --provision-local`, which creates the dev namespace's
@@ -122,7 +125,7 @@ command that fixes it, and the gateway starts without an agent rather than not
 at all. `docs/guides/gateway-chat.md` documents the same file for a server you
 configure by hand.
 
-Use two terminals instead if you prefer (`just server`, then `just dev`). A
+Use two terminals instead if you prefer (`just server`, then `just app`). A
 server you run yourself — `nessa server` without `--provision-local` — provisions
 nothing; use the offline `nessa auth` commands and choose your own token paths.
 See [local authentication](docs/guides/local-auth.md) for that, and
@@ -135,8 +138,9 @@ not the one that started it: run `just server` in that same namespace
 
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is
-`tauri dev` when a display is available, the browser UI (`just web`) when it
-is not. `just release` is the shipping installer for `prod`; pass another
+`just start`: the gateway, then `tauri dev` when a display is available or the
+browser UI when it is not. `just app` is the window alone, for a gateway you
+already run. `just release` is the shipping installer for `prod`; pass another
 named stage as its first argument, such as `just release alpha`. `pnpm app`
 resolves one dev stage for Vite and the host. The window controls no-op in the browser
 (see [src/host/window.ts](src/host/window.ts)).
@@ -174,7 +178,7 @@ A testing-shaped `.deb` is `just release prod fast`. A shipping `.deb` is `just 
 
 ### macOS
 
-`just dev` is `tauri dev`. `just release prod fast` writes a `.app` (no dmg). `just release`
+`just dev` starts the gateway, then `tauri dev`. `just release prod fast` writes a `.app` (no dmg). `just release`
 writes a `.dmg`.
 
 ### Windows
@@ -188,7 +192,8 @@ and `just release` there.
 | --- | --- |
 | `just` | List recipes |
 | `just server` | Local `nessa server` (stage=dev defaults) |
-| `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
+| `just dev` | Gateway, then the desktop app in dev mode (the browser UI with no display); same as `just start` |
+| `just app` | Desktop app alone, for a gateway already running (`just server`) |
 | `just web` | The UI in a browser, no Tauri |
 | `just release prod fast` | Testing-shaped prod release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |

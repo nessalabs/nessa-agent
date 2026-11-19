@@ -116,7 +116,7 @@ test(
     assert.ok(realJust, "just is required to exercise its public start recipe")
     const commands = {
       node: `#!/bin/sh
-printf 'node %s\\n' "$1" >> "$NESSA_TEST_EVENTS"
+printf 'node %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
 case "$1" in
   *gateway-port.mjs) printf '7999' ;;
   *preflight.mjs) exit "\${NESSA_PREFLIGHT_STATUS:-0}" ;;
@@ -129,6 +129,7 @@ for _ in $(seq 1 500); do
 done
 [ -f "$NESSA_TEST_EVENTS.first-health-check" ] || exit 1
 printf 'pnpm %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
+printf 'pnpm port %s\\n' "$NESSA_PORT" >> "$NESSA_TEST_EVENTS"
 touch "$NESSA_TEST_EVENTS.gateway-started"
 while :; do sleep 1; done
 `,
@@ -179,7 +180,7 @@ printf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
     const firstHealthCheck = calls.findIndex((call) => call.startsWith("curl "))
     const gatewayStarted = calls.indexOf("pnpm server:run")
     const gatewayReady = calls.findIndex((call) => call.startsWith("curl ready "))
-    const uiStarted = calls.indexOf("just dev")
+    const uiStarted = calls.indexOf("just app")
     assert.ok(preflight >= 0 && preflight < firstHealthCheck)
     assert.ok(
       calls
@@ -189,6 +190,37 @@ printf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"
     )
     assert.ok(gatewayStarted >= 0 && gatewayStarted < gatewayReady)
     assert.ok(gatewayReady >= 0 && gatewayReady < uiStarted)
+    // The port the mover chose is the one probed, not the stage's own.
+    assert.match(calls[gatewayReady], /127\.0\.0\.1:7999\/health/)
+    assert.ok(calls.some((call) => /free-gateway-port\.mjs --move dev$/.test(call)))
+    assert.ok(calls.includes("pnpm port 7999"), "the server was not told the chosen port")
+  },
+)
+
+test(
+  "just dev starts the gateway too, by running start",
+  { skip: process.platform === "win32" },
+  (context) => {
+    const directory = mkdtempSync(join(tmpdir(), "nessa-dev-start-"))
+    context.after(() => rmSync(directory, { recursive: true, force: true }))
+    const events = join(directory, "events")
+    const realJust = spawnSync("sh", ["-c", "command -v just"], {
+      encoding: "utf8",
+    }).stdout.trim()
+    assert.ok(realJust, "just is required to exercise its public dev recipe")
+    const stub = join(directory, "just")
+    writeFileSync(stub, `#!/bin/sh\nprintf 'just %s\\n' "$*" >> "$NESSA_TEST_EVENTS"\n`)
+    chmodSync(stub, 0o755)
+    const result = spawnSync(realJust, ["dev", "ci"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${directory}:${process.env.PATH}`,
+        NESSA_TEST_EVENTS: events,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(readFileSync(events, "utf8").trim(), "just start ci")
   },
 )
 
