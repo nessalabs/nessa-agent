@@ -2234,7 +2234,13 @@ async function pickerStep(run, step, failures) {
     window.__pickerWheels = seen
     window.addEventListener(
       "wheel",
-      (event) => seen.push([event.deltaX, event.deltaY, event.deltaMode, Math.round(event.timeStamp)]),
+      (event) =>
+        seen.push([
+          event.deltaX,
+          event.deltaY,
+          event.deltaMode,
+          Math.round(event.timeStamp),
+        ]),
       { capture: true, passive: true },
     )
   })
@@ -2250,9 +2256,7 @@ async function pickerStep(run, step, failures) {
   )
   await page.waitForTimeout(400)
   const moves = reach > 0 ? Math.floor(44 / reach) + 1 : 0
-  await Promise.all(
-    Array.from({ length: moves }, () => page.mouse.wheel(sign * 16, 0)),
-  )
+  await Promise.all(Array.from({ length: moves }, () => page.mouse.wheel(sign * 16, 0)))
   const litAfter = litBefore + (up ? 1 : -1)
   if (!(await waitFor(async () => (await lit()) === litAfter, 5_000)))
     failures.push(
