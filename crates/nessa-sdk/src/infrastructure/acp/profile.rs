@@ -113,6 +113,17 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     ) -> Result<Value, AgentError> {
         Err(AgentError::Unsupported("live model change".into()))
     }
+    /// Whether this binding has verified `mode` for the model in
+    /// `capabilities`. A native agent can keep its preset across a live model
+    /// change; one the new model is not verified for is stepped down to Ask
+    /// in the same change ([`ApprovalMode::Ask`] is verified for every model).
+    fn verified_approval_mode(
+        &self,
+        _capabilities: &EffectiveCapabilities,
+        _mode: ApprovalMode,
+    ) -> bool {
+        true
+    }
     /// Retain every setting returned by the native model control.
     fn retain_model_configuration(
         &mut self,

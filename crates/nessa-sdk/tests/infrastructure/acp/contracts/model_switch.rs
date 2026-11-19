@@ -8,6 +8,12 @@ use crate::infrastructure::session_storage::InMemoryStorage;
 use crate::infrastructure::session_storage::RuntimeMessageCommitClock;
 
 async fn switching(claude: bool, adjustment: bool, hosted: bool) {
+    switching_keeping(claude, adjustment, hosted, false).await
+}
+
+/// `keeps_mode`: the agent keeps Auto across the change to a model this
+/// binding has not verified Auto for, so the change itself steps it to Ask.
+async fn switching_keeping(claude: bool, adjustment: bool, hosted: bool, keeps_mode: bool) {
     let _slot = process_test_slot().await;
     let (root, mut config, mut model) = if claude {
         test_acp_configuration("model-switch", 64)
@@ -37,6 +43,9 @@ async fn switching(claude: bool, adjustment: bool, hosted: bool) {
         });
         model = ModelMetadata::try_from(initial).unwrap();
         config.arguments.push("adjust".into());
+    }
+    if keeps_mode {
+        config.arguments.push("keep".into());
     }
     let mut metadata = ModelMetadataDto::from(&model);
     metadata.model_id = if adjustment {
@@ -134,6 +143,13 @@ async fn switching(claude: bool, adjustment: bool, hosted: bool) {
         .await
         .unwrap();
     timeout(Duration::from_secs(3), async { loop { let event = events.next().await.unwrap().unwrap(); if matches!(event.update(), ExecutionUpdate::Message(text) if text.as_str() == "native turn running") { break; } } }).await.unwrap();
+    // Kept presets are stepped down only between turns: let the first finish.
+    let (first, finished) = if keeps_mode {
+        let outcome = timeout(Duration::from_secs(3), first.wait()).await.unwrap();
+        (None, Some(outcome))
+    } else {
+        (Some(first), None)
+    };
     let active = agent.active_execution_id();
     let context = agent
         .session_manager()
@@ -190,7 +206,7 @@ async fn switching(claude: bool, adjustment: bool, hosted: bool) {
             ModelChangeTiming::NextTurn
         }
     );
-    assert!(active.is_some());
+    assert_eq!(active.is_some(), !keeps_mode);
     let controls = audit.configuration.lock().unwrap().clone();
     let controls = &controls[if hosted { 2 } else { 0 }..];
     assert_eq!(
@@ -221,10 +237,25 @@ async fn switching(claude: bool, adjustment: bool, hosted: bool) {
         );
         assert_eq!(agent.effort_level().as_ref(), effect.effort_level());
     }
-    assert_eq!(
-        timeout(Duration::from_secs(3), first.wait()).await.unwrap(),
-        Ok(ExecutionOutcome::Completed)
-    );
+    if keeps_mode {
+        let observed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("model-steering-observed")).unwrap(),
+        )
+        .unwrap();
+        // Auto at startup, then Ask once the model change kept it.
+        let modes = if claude {
+            ["auto", "default"]
+        } else {
+            ["agent", "read-only"]
+        };
+        assert_eq!(observed["modeChanges"], serde_json::json!(modes));
+    }
+    let finished = match (finished, first) {
+        (Some(outcome), _) => outcome,
+        (None, Some(first)) => timeout(Duration::from_secs(3), first.wait()).await.unwrap(),
+        (None, None) => unreachable!("the first turn is waited for once"),
+    };
+    assert_eq!(finished, Ok(ExecutionOutcome::Completed));
     assert_eq!(
         agent
             .session_manager()
@@ -332,6 +363,16 @@ fn claude_model_change_proof_preserves_its_native_launch_output_ceiling() {
 #[tokio::test]
 async fn claude_model_ack_can_drop_auto_and_effort_together() {
     switching(true, true, false).await;
+}
+#[tokio::test]
+async fn claude_model_kept_at_an_unverified_preset_is_stepped_to_ask() {
+    switching_keeping(true, true, false, true).await;
+}
+// Codex's Auto is verified for this model on macOS, where nothing is stepped.
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn codex_model_kept_at_an_unverified_preset_is_stepped_to_ask() {
+    switching_keeping(false, true, false, true).await;
 }
 #[tokio::test]
 async fn codex_model_ack_can_change_effort_without_rewriting_active_trace() {

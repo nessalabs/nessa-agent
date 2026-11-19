@@ -67,6 +67,11 @@ function withChoice(
     accessChoices: choice
       ? { ...state.accessChoices, [sessionId]: choice }
       : without(state.accessChoices, sessionId),
+    // A choice the person makes answers a step a model change made.
+    steppedAccess:
+      choice?.state === "chosen" || choice?.state === "changing"
+        ? without(state.steppedAccess, sessionId)
+        : state.steppedAccess,
   }
 }
 

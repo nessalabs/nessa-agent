@@ -1888,7 +1888,7 @@ impl<P: AcpProfile> Worker<P> {
         self.capabilities = capabilities.clone();
         self.configured = false;
         let deadline = self.config.clock.now() + super::steering::RESPONSE_TIMEOUT;
-        let result = self
+        let confirmed = self
             .rpc(
                 "session/set_config_option",
                 params,
@@ -1902,17 +1902,57 @@ impl<P: AcpProfile> Worker<P> {
                     thought_level::offered(&result, &capabilities, self.profile.effort_option())?;
                 self.operation_capabilities
                     .send_modify(|published| published.effort_levels = levels);
-                self.configured = true;
-                Ok(ModelChangeEffect::new(
-                    change.after().clone(),
-                    capabilities,
-                    Some(mode),
-                    effort,
-                    timing,
-                ))
+                Ok((mode, effort, timing))
             });
+        let result = match confirmed {
+            // The agent kept a preset this binding has not verified for the
+            // new model: step it down to Ask, which every model takes, rather
+            // than leave the change unconfirmable. Only between turns, as any
+            // preset change is; during one the change stays unconfirmed.
+            Ok((mode, effort, timing))
+                if !self.profile.verified_approval_mode(&capabilities, mode)
+                    && self.active.is_none()
+                    && self.permissions.is_empty() =>
+            {
+                self.step_down_to_ask(execution, deadline)
+                    .await
+                    .map(|()| (ApprovalMode::Ask, effort, timing))
+            }
+            other => other,
+        }
+        .map(|(mode, effort, timing)| {
+            self.configured = true;
+            ModelChangeEffect::new(
+                change.after().clone(),
+                capabilities,
+                Some(mode),
+                effort,
+                timing,
+            )
+        });
         let _ = reply.send(result.clone());
         result.map(|_| ()).map_err(WorkerFailure::from)
+    }
+    /// The preset change a model change ends with when the agent kept a preset
+    /// the new model is not verified for.
+    async fn step_down_to_ask(
+        &mut self,
+        execution: &mut ExecutionController,
+        deadline: ClockInstant,
+    ) -> Result<(), AgentError> {
+        let params = self
+            .profile
+            .change_approval_mode(execution.id().as_str(), ApprovalMode::Ask)?;
+        let result = self
+            .rpc(
+                "session/set_config_option",
+                params,
+                deadline,
+                Some(execution),
+            )
+            .await?;
+        self.profile
+            .verify_session(&result, &self.capabilities, true)
     }
     async fn set_approval_mode(
         &mut self,

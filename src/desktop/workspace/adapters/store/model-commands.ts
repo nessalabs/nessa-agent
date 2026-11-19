@@ -125,6 +125,7 @@ export function applyStagedModel(
       entry(state.accessChoices, sessionId)?.state === "changing"
     )
       return { applied: false, reason: "unavailable" }
+    const prior = entry(state.transcripts, sessionId)?.access?.mode
     const requestId = newId()
     const choice = { requestId, model: target }
     dispatch(
@@ -146,6 +147,11 @@ export function applyStagedModel(
         if (!running || !sameModel(running, target))
           return { applied: false, reason: "unavailable" }
         dispatch(workspaceActions.stagedModelSettled({ sessionId, model: target }))
+        // The new model is not offered at the chat's access here, so the
+        // agent stepped it down to Ask in the same change: the composer
+        // says so (`steppedAccess`).
+        if (prior && prior !== "ask" && receipt.approvalMode === "ask")
+          dispatch(workspaceActions.accessStepped({ sessionId, from: prior }))
         return { applied: true, model: target }
       }
       dispatch(

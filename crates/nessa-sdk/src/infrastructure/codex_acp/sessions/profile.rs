@@ -248,6 +248,15 @@ impl AcpProfile for CodexProfile {
             json!({"sessionId": session_id, "configId": "model", "value": capabilities.model().model_id()}),
         )
     }
+    fn verified_approval_mode(
+        &self,
+        capabilities: &EffectiveCapabilities,
+        mode: ApprovalMode,
+    ) -> bool {
+        approval_modes(capabilities.model().model_id())
+            .iter()
+            .any(|choice| choice.id == mode)
+    }
     fn retain_model_configuration(
         &mut self,
         capabilities: &EffectiveCapabilities,
