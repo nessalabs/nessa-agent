@@ -69,11 +69,11 @@ export function useSideSwipe(
     const onWheel = (event: WheelEvent) => {
       const target = event.target instanceof Element ? event.target : null
       const surface = target?.closest(SWIPE_SURFACE)
-      const at = event.timeStamp
+      const sample = { at: event.timeStamp, ...travel(event) }
       // Read only where the gesture begins: a swipe is the chat's or not
       // from its first event, whatever the pointer passes over after.
       const skip =
-        beginsGesture(state, at) &&
+        beginsGesture(state, sample) &&
         (!target ||
           !surface ||
           // A pinch is a wheel with Control held; Shift turns a mouse's wheel sideways.
@@ -81,7 +81,7 @@ export function useSideSwipe(
           event.shiftKey ||
           target.closest("[inert]") !== null ||
           scrollsSideways(target, surface))
-      const next = swipeStep(state, { at, ...travel(event) }, skip)
+      const next = swipeStep(state, sample, skip)
       state = next.state
       if (next.swiped) latest.current(next.swiped)
     }

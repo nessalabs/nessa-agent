@@ -124,6 +124,35 @@ describe("swipeStep", () => {
     expect(play([...first, ...gesture(later, 10, -10)]).swiped).toEqual(["left", "right"])
   })
 
+  it("reads the next swipe once the last one's momentum has settled, with no pause", () => {
+    // A fling whose momentum dies down to nothing, then fresh fingers at once.
+    const fling = gesture(0, 6, 15)
+    const tail = [8, 4, 2, 1, 0.5].map((x, i) => ({ at: 96 + i * 16, x, y: 0 }))
+    const again = gesture(96 + 5 * 16, 6, 15)
+    expect(play([...fling, ...tail, ...again]).swiped).toEqual(["left", "left"])
+  })
+
+  it("keeps momentum that has not settled as the same swipe", () => {
+    const fling = gesture(0, 6, 15)
+    const tail = [12, 10, 9, 7, 6, 5, 4, 3, 2].map((x, i) => ({
+      at: 96 + i * 16,
+      x,
+      y: 0,
+    }))
+    expect(play([...fling, ...tail]).swiped).toEqual(["left"])
+  })
+
+  it("reads a swipe the other way at once, momentum or not", () => {
+    const fling = gesture(0, 6, 15)
+    const back = gesture(96, 6, -15)
+    expect(play([...fling, ...back]).swiped).toEqual(["left", "right"])
+  })
+
+  it("reads a swipe right after a vertical scroll's momentum settles", () => {
+    const scroll = [...gesture(0, 6, 0, 20), { at: 96, x: 0, y: 1 }]
+    expect(play([...scroll, ...gesture(112, 6, -15)]).swiped).toEqual(["right"])
+  })
+
   it("leaves a vertical scroll alone, even when it drifts sideways later", () => {
     const scroll = [...gesture(0, 4, 0, 6), ...gesture(64, 20, 12, 0)]
     expect(play(scroll).swiped).toEqual([])
@@ -138,6 +167,20 @@ describe("swipeStep", () => {
     const result = play(gesture(0, 30, 10), true)
     expect(result.swiped).toEqual([])
     expect(result.state.phase).toBe("skipped")
+  })
+
+  it("keeps a skipped gesture skipped when it begins with a small event", () => {
+    // Fingers that start gently over a table, then speed up over the chat:
+    // a small first event is a start, not momentum that settled.
+    let state: SwipeState = idleSwipe
+    const swiped: (SwipeDirection | null)[] = []
+    ;[{ at: 0, x: 0.5, y: 0 }, ...gesture(16, 5, 15)].forEach((sample, i) => {
+      const next = swipeStep(state, sample, i === 0)
+      state = next.state
+      swiped.push(next.swiped)
+    })
+    expect(swiped.filter(Boolean)).toEqual([])
+    expect(state.phase).toBe("skipped")
   })
 
   it("decides skipping where the gesture began, not on each event", () => {
