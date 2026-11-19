@@ -124,6 +124,35 @@ describe("swipeStep", () => {
     expect(play([...first, ...gesture(later, 10, -10)]).swiped).toEqual(["left", "right"])
   })
 
+  it("reads the next swipe once the last one's momentum has settled, with no pause", () => {
+    // A fling whose momentum dies down to nothing, then fresh fingers at once.
+    const fling = gesture(0, 6, 15)
+    const tail = [8, 4, 2, 1, 0.5].map((x, i) => ({ at: 96 + i * 16, x, y: 0 }))
+    const again = gesture(96 + 5 * 16, 6, 15)
+    expect(play([...fling, ...tail, ...again]).swiped).toEqual(["left", "left"])
+  })
+
+  it("keeps momentum that has not settled as the same swipe", () => {
+    const fling = gesture(0, 6, 15)
+    const tail = [12, 10, 9, 7, 6, 5, 4, 3, 2].map((x, i) => ({
+      at: 96 + i * 16,
+      x,
+      y: 0,
+    }))
+    expect(play([...fling, ...tail]).swiped).toEqual(["left"])
+  })
+
+  it("reads a swipe the other way at once, momentum or not", () => {
+    const fling = gesture(0, 6, 15)
+    const back = gesture(96, 6, -15)
+    expect(play([...fling, ...back]).swiped).toEqual(["left", "right"])
+  })
+
+  it("reads a swipe right after a vertical scroll's momentum settles", () => {
+    const scroll = [...gesture(0, 6, 0, 20), { at: 96, x: 0, y: 1 }]
+    expect(play([...scroll, ...gesture(112, 6, -15)]).swiped).toEqual(["right"])
+  })
+
   it("leaves a vertical scroll alone, even when it drifts sideways later", () => {
     const scroll = [...gesture(0, 4, 0, 6), ...gesture(64, 20, 12, 0)]
     expect(play(scroll).swiped).toEqual([])

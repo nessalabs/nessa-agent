@@ -757,17 +757,20 @@ async function swipeColumns(run, step, message, port, failures) {
     }
     await page.mouse.move(point.x, point.y)
     clock = Math.max(clock + 1, Date.now() / 1000)
-    for (let i = 0; i < events; i += 1) {
+    // `x` is each event's travel, or a list of them for a gesture whose
+    // events differ (a fling's momentum dying down, then the next swipe).
+    const xs = Array.isArray(x) ? x : Array.from({ length: events }, () => x)
+    for (const [i, each] of xs.entries()) {
       if (input)
         await input.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x: point.x,
           y: point.y,
-          deltaX: x,
+          deltaX: each,
           deltaY: y,
           timestamp: clock + i * 0.016,
         })
-      else await page.mouse.wheel(x, y)
+      else await page.mouse.wheel(each, y)
     }
     await page.waitForTimeout(400)
   }
@@ -819,6 +822,21 @@ async function swipeColumns(run, step, message, port, failures) {
   await expect("a third swipe right", all, 1)
   await swipe(words, -15)
   await expect("a swipe right with everything open", all, 0)
+  // Two swipes with no pause between them, the second starting as the
+  // first one's momentum dies down: each folds a column, with its own tick.
+  // The pointer stays where it was, as two fingers on a trackpad leave it.
+  if (input) {
+    const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
+    await swipe(words, [...fling, ...fling])
+    await expect(
+      "two swipes left back to back",
+      { rail: "open", sidebar: "closed", list: "closed" },
+      2,
+    )
+    await swipe(words, -15)
+    await swipe(words, -15)
+    await expect("two swipes right", all, 2)
+  }
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The conversation still takes a message.

@@ -9,14 +9,14 @@ use objc2_app_kit::{
 };
 use tauri::WebviewWindow;
 
-/// One "level change" tick: the pattern AppKit gives a control that moved by
-/// one discrete step, which is what a swipe that folds one column is. AppKit
-/// is asked on the main thread, as a command runs off it.
-pub(super) fn level_change(window: &WebviewWindow) -> Result<(), String> {
+/// One "generic" tick. Not "level change": AppKit ties that pattern to the
+/// pressure levels of a force click, and a swipe presses nothing. AppKit is
+/// asked on the main thread, as a command runs off it.
+pub(super) fn tick(window: &WebviewWindow) -> Result<(), String> {
     window
         .run_on_main_thread(|| {
             NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
-                NSHapticFeedbackPattern::LevelChange,
+                NSHapticFeedbackPattern::Generic,
                 NSHapticFeedbackPerformanceTime::Now,
             );
         })
