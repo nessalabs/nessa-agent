@@ -484,6 +484,15 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'rails') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --rails 1 --evidence "$STRESS_EVIDENCE/rail-webkit" 2>&1 | tee "$STRESS_EVIDENCE/rail-webkit.log"
         timeout-minutes: 10
+      # The model picker ships in WKWebView too: a star, a sideways swipe
+      # over a row that steps its thinking level, and a press of a bar.
+      - name: Run the model picker stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'pickers') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --pickers 1 --evidence "$STRESS_EVIDENCE/picker-webkit" 2>&1 | tee "$STRESS_EVIDENCE/picker-webkit.log"
+        timeout-minutes: 10
       # The composer's row and a call's rim ship in WKWebView too: the short
       # model name, the row's order, and the rim on the composer's edge (the
       # drawn glow where the engine has WebGL, a still ring where it has not),

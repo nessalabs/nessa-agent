@@ -1,7 +1,8 @@
 import { Agent37Row } from "./agent37-row"
 import { BoatRow } from "./boat-row"
+import { DefaultCloudRow } from "../../clouds/ui/default-cloud-row"
 import { VaultPassphraseControl } from "../../../vault"
-import { useState, type ComponentType } from "react"
+import { useCallback, useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
 import { useTintFromPicture } from "../../adapters/header-image"
@@ -296,13 +297,18 @@ function KeyboardTab() {
 /* ——— Connections ——— */
 
 function AccountsTab() {
+  // Each cloud's row says when its connection changes, so the default cloud
+  // shows once two are connected and goes once only one is.
+  const [clouds, setClouds] = useState(0)
+  const changed = useCallback(() => setClouds((n) => n + 1), [])
   return (
     <>
       <Group>
         <GithubRow />
         <VoiceKeyRow />
-        <BoatRow />
-        <Agent37Row />
+        <BoatRow onChange={changed} />
+        <Agent37Row onChange={changed} />
+        <DefaultCloudRow seen={clouds} />
         <Row id="vault-passphrase">
           <VaultPassphraseControl />
         </Row>

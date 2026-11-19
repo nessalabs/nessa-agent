@@ -107,7 +107,8 @@ const levelPickerGroups: ModelLevelPickerGroup[] = composerProviders.map((provid
  * near as that model allows (`offeredLevelIndex`); a bar chooses both. A
  * model the catalogue does not list is not passed on, and without
  * `onModelChange` the model stays as it is while thinking can still change.
- * Stars are the window's (`starred-models-preference.ts`).
+ * A sideways swipe over a model's row steps its level, as ← → do. Stars
+ * are the window's (`starred-models-preference.ts`).
  */
 export function ComposerModelPicker({
   value,
@@ -143,6 +144,8 @@ export function ComposerModelPicker({
   return (
     <ModelLevelPicker
       disabled={disabled}
+      // A sideways trackpad swipe over a model's row moves its thinking level.
+      swipeLevels
       groups={groups}
       value={value ? { providerId: value.provider, modelId: value.modelId } : undefined}
       levelFor={(model, group) => {

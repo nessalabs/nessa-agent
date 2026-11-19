@@ -93,7 +93,8 @@ const PEER = "peer:"
  * read alike.
  */
 export function environmentPlace(name: string): string {
-  if (name === "boat:thread") return "Boat workspace"
+  // A VM of the thread's own, on whichever cloud made it.
+  if (name === "boat:thread") return "Cloud workspace"
   return isPairedEnvironment(name)
     ? `Paired machine ${name.slice(PEER.length, PEER.length + 8)}`
     : name
@@ -114,7 +115,8 @@ export function conversationLeasePlace(
 ): string | undefined {
   switch (lease.environment) {
     case "boat":
-      return "Boat workspace"
+      // Any cloud's VM: the lease does not say which cloud made it.
+      return "Cloud workspace"
     case "here":
       return "This computer"
     case "ssh":

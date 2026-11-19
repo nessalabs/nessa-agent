@@ -3980,7 +3980,7 @@ export interface SavedLogin {
   /** Whether a login is saved in the gateway's vault for it. */
   saved: boolean
 }
-/** Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and Boat workspaces always may be; this gateway's own machine never is. */
+/** Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and cloud workspaces (Boat, Agent37) always may be; this gateway's own machine never is. */
 export interface LoginsStatus {
   /** One entry per agent, in the order claude, codex, opencode. */
   logins: SavedLogin[]
