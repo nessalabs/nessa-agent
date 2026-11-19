@@ -79,7 +79,10 @@ window's edge the columns are rail, sidebar, session list. A swipe left folds
 the open column nearest the chat; a swipe right opens the closed column
 nearest the edge, so they return in the order they left. A column the window
 cannot draw (the rail while off or without room, a list the layout lacks) is
-passed over. Momentum after the fingers lift is the same swipe, and a gesture
+passed over. Momentum after the fingers lift is the same swipe until it
+settles, picks up again after fading (new fingers: momentum only slows), or
+turns the other way; then the next swipe is read at once, with no pause
+needed. A gesture
 is decided where it began: one that began vertical, as a pinch, outside the
 chat, or over something that scrolls sideways itself (a wide table, a code
 block, an input) moves nothing.

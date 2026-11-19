@@ -142,6 +142,40 @@ describe("swipeStep", () => {
     expect(play([...fling, ...tail]).swiped).toEqual(["left"])
   })
 
+  it("reads the next swipe as momentum picks up again, before it settles", () => {
+    // A fling whose momentum is still slowing, never down to SETTLED, then
+    // fresh fingers that speed up from a few pixels.
+    const at = (start: number, xs: number[]) =>
+      xs.map((x, i) => ({ at: start + i * 16, x, y: 0 }))
+    const fling = gesture(0, 6, 15)
+    const tail = at(96, [12, 10, 8, 6, 5, 4, 3])
+    const again = at(96 + 7 * 16, [2, 7, 14, 18, 18, 18])
+    expect(play([...fling, ...tail, ...again]).swiped).toEqual(["left", "left"])
+    // Fingers that pick up slowly, a little more each event.
+    const gently = at(96 + 7 * 16, [4, 5, 7, 10, 14, 18, 18])
+    expect(play([...fling, ...tail, ...gently]).swiped).toEqual(["left", "left"])
+  })
+
+  it("keeps one swipe whose fingers slow down and speed up as they go", () => {
+    const at = (start: number, xs: number[]) =>
+      xs.map((x, i) => ({ at: start + i * 16, x, y: 0 }))
+    const swipe = at(0, [15, 18, 12, 20, 16, 14, 11, 19, 22, 12, 9, 13, 8, 6, 3, 1])
+    expect(play(swipe).swiped).toEqual(["left"])
+  })
+
+  it("reads a swipe after a vertical scroll as its momentum picks up sideways", () => {
+    const scroll = [
+      ...gesture(0, 6, 0, 20),
+      ...[12, 8, 6, 4].map((y, i) => ({ at: 96 + i * 16, x: 0, y })),
+    ]
+    const swipe = [3, 9, 15, 15, 15, 15].map((x, i) => ({
+      at: 160 + i * 16,
+      x: -x,
+      y: 0,
+    }))
+    expect(play([...scroll, ...swipe]).swiped).toEqual(["right"])
+  })
+
   it("reads a swipe the other way at once, momentum or not", () => {
     const fling = gesture(0, 6, 15)
     const back = gesture(96, 6, -15)
