@@ -1606,6 +1606,9 @@ describe("a connection that could not be made says why (#419)", () => {
       reason: "not-ready",
     })
     await expect(
+      failing(new HostRefusalError("still-starting")).source.index(),
+    ).rejects.toMatchObject({ reason: "still-starting" })
+    await expect(
       failing(
         new HostRefusalError("wrong-stage", { bundle: "dev", requested: "prod" }),
       ).source.index(),

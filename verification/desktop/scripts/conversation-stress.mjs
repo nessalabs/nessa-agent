@@ -608,6 +608,8 @@ const FRESH_CLIENTS = 3
  */
 const LAUNCH_STARTING_MS = 3_000
 const LAUNCH_LISTED_MS = 10_000
+/** A slow launch's hold: short, so outlasting it costs the run little. */
+const SLOW_LAUNCH_HOLD_MS = 1_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -3452,6 +3454,68 @@ async function enrollPeer(run, profile, code, invitationId) {
   }
 }
 
+/**
+ * The `launch` step's slow launch: the host's startup outlasts its hold of
+ * the window's read, so the window is refused as still starting. True when
+ * the window stayed uncovered and listed the main conversation once up.
+ */
+async function slowLaunch(run, failures) {
+  const page = run.page
+  const removeKey = () =>
+    page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+  await page.evaluate(
+    ([key, hold]) => sessionStorage.setItem(key, String(hold)),
+    [STARTING.key, SLOW_LAUNCH_HOLD_MS],
+  )
+  let covered
+  let refused
+  try {
+    await page.reload()
+    // Wait until the host has refused at least once as still starting.
+    const passed = await page
+      .waitForFunction(() => window.__fakeHostStillStarting > 0, null, {
+        timeout: SLOW_LAUNCH_HOLD_MS + LAUNCH_STARTING_MS,
+      })
+      .then(() => true)
+      .catch(() => false)
+    refused = passed
+    // And a little after: the refusal has reached the window by now.
+    covered = await page
+      .locator(css.startupScreen)
+      .waitFor({ timeout: LAUNCH_STARTING_MS })
+      .then(() => true)
+      .catch(() => false)
+  } finally {
+    await removeKey().catch(() => removeKey().catch(() => {}))
+  }
+  if (!refused) {
+    failures.push("the slow launch's startup never outlasted the host's hold")
+    return false
+  }
+  if (covered) {
+    failures.push(
+      "the window showed the startup screen for a startup still running past the host's hold",
+    )
+    return false
+  }
+  const listed = await page
+    .locator(selectorFor.sessionListRowFor(run.main.id))
+    .waitFor({ timeout: LAUNCH_LISTED_MS })
+    .then(() => true)
+    .catch(() => false)
+  if (!listed) {
+    failures.push(
+      `after a slow launch the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+    )
+    return false
+  }
+  if ((await page.locator(css.startupScreen).count()) > 0) {
+    failures.push("the startup screen covers the window after a slow launch was up")
+    return false
+  }
+  return true
+}
+
 const steps = {
   /** The cloud for new thread VMs is picked in Settings › Connections ›
    * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
@@ -6154,6 +6218,12 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
+      // A slow launch: startup runs past the host's hold of the window's
+      // read (a busy Mac took 26.7 s against the 15 s hold). The host refuses
+      // the read as still starting, which is no failure: the window must not
+      // cover itself with "couldn't start", and lists the conversation once
+      // the gateway is up. The hold is shortened for this launch only.
+      if (!(await slowLaunch(run, failures))) return
       await unlockRequestedVault(run.client, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })

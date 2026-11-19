@@ -45,7 +45,7 @@
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log. A connection that could not be made
- *   is `signed-out`, `not-started`, `not-ready`, `not-listening`,
+ *   is `signed-out`, `not-started`, `not-ready`, `still-starting`, `not-listening`,
  *   `wrong-stage`, or `unavailable` by why (`connectFailure`, #419). A
  *   subscription that is refused is also traced (`noteReadAsked`,
  *   `noteReadRefused`).
@@ -2387,6 +2387,8 @@ function connectFailure(error: unknown): WorkspaceSourceError {
   if (error instanceof HostRefusalError) {
     if (error.reason === "not-provisioned") return new WorkspaceSourceError("not-started")
     if (error.reason === "not-ready") return new WorkspaceSourceError("not-ready")
+    if (error.reason === "still-starting")
+      return new WorkspaceSourceError("still-starting")
     if (error.reason === "wrong-stage" && error.bundle && error.requested) {
       return new WorkspaceSourceError("wrong-stage", {
         bundle: error.bundle,
