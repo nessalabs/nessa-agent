@@ -3212,6 +3212,52 @@ pub struct ConversationSubscriptionEnded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_delivered: Option<ConversationViewCursor>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantStreamCursor {
+    pub incarnation: String,
+    pub position: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsSubscribeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<GrantStreamCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsPageParams {
+    pub subscription_id: ConversationSubscriptionId,
+    pub snapshot_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<GrantStreamCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsUnsubscribeParams {
+    pub subscription_id: ConversationSubscriptionId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantFrameEntry {
+    pub conversation_id: String,
+    pub absent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsChanged {
+    pub subscription_id: ConversationSubscriptionId,
+    pub cursor: GrantStreamCursor,
+    pub complete: bool,
+    pub replaces: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub grants: Vec<GrantFrameEntry>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ConversationSubscriptionErrorCode {
     #[serde(rename = "subscription_capacity")]
@@ -3222,6 +3268,10 @@ pub enum ConversationSubscriptionErrorCode {
     UnknownSubscription,
     #[serde(rename = "cursor_ahead")]
     CursorAhead,
+    #[serde(rename = "incarnation_changed")]
+    IncarnationChanged,
+    #[serde(rename = "grant_log_floor")]
+    GrantLogFloor,
 }
 impl ConversationSubscriptionErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -3230,6 +3280,8 @@ impl ConversationSubscriptionErrorCode {
             Self::SubscriptionDuplicate => "subscription_duplicate",
             Self::UnknownSubscription => "unknown_subscription",
             Self::CursorAhead => "cursor_ahead",
+            Self::IncarnationChanged => "incarnation_changed",
+            Self::GrantLogFloor => "grant_log_floor",
         }
     }
 }
@@ -4559,6 +4611,7 @@ impl VoiceErrorCode {
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
+pub const MAX_CONNECTION_GRANT_SUBSCRIPTIONS: usize = 1;
 pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
 pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = "^[1-9][0-9]{0,19}$";
 pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;
@@ -4718,6 +4771,9 @@ pub mod product_method {
     pub const PEER_FORGET: &str = "peer.forget";
     pub const PEER_RELAY: &str = "peer.relay";
     pub const PEER_FOLLOW: &str = "peer.follow";
+    pub const GRANTS_SUBSCRIBE: &str = "grants.subscribe";
+    pub const GRANTS_PAGE: &str = "grants.page";
+    pub const GRANTS_UNSUBSCRIBE: &str = "grants.unsubscribe";
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
@@ -4775,6 +4831,8 @@ pub mod product_event {
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
     pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
+    pub const GRANTS_CHANGED: &str = "grants.changed";
+    pub const GRANTS_SUBSCRIPTION_ENDED: &str = "grants.subscriptionEnded";
     pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
     pub const WORKSPACE_COMMAND: &str = "workspace.command";
     pub const CONVERSATION_EVENTS: &str = "conversation.events";
@@ -4958,7 +5016,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 132
+                items.len() <= 135
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5066,6 +5124,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.forget",
     "peer.relay",
     "peer.follow",
+    "grants.subscribe",
+    "grants.page",
+    "grants.unsubscribe",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -5347,6 +5408,12 @@ pub enum ProductMethod {
     PeerRelay,
     /// `peer.follow`
     PeerFollow,
+    /// `grants.subscribe`
+    GrantsSubscribe,
+    /// `grants.page`
+    GrantsPage,
+    /// `grants.unsubscribe`
+    GrantsUnsubscribe,
     /// `conversation.subscribe`
     ConversationSubscribe,
     /// `conversation.subscribeList`
@@ -5534,6 +5601,9 @@ impl ProductMethod {
         ProductMethod::PeerForget,
         ProductMethod::PeerRelay,
         ProductMethod::PeerFollow,
+        ProductMethod::GrantsSubscribe,
+        ProductMethod::GrantsPage,
+        ProductMethod::GrantsUnsubscribe,
         ProductMethod::ConversationSubscribe,
         ProductMethod::ConversationSubscribeList,
         ProductMethod::ConversationUnsubscribe,
@@ -5675,6 +5745,9 @@ impl ProductMethod {
             "peer.forget" => Some(ProductMethod::PeerForget),
             "peer.relay" => Some(ProductMethod::PeerRelay),
             "peer.follow" => Some(ProductMethod::PeerFollow),
+            "grants.subscribe" => Some(ProductMethod::GrantsSubscribe),
+            "grants.page" => Some(ProductMethod::GrantsPage),
+            "grants.unsubscribe" => Some(ProductMethod::GrantsUnsubscribe),
             "conversation.subscribe" => Some(ProductMethod::ConversationSubscribe),
             "conversation.subscribeList" => Some(ProductMethod::ConversationSubscribeList),
             "conversation.unsubscribe" => Some(ProductMethod::ConversationUnsubscribe),
@@ -5819,6 +5892,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => "peer.forget",
             ProductMethod::PeerRelay => "peer.relay",
             ProductMethod::PeerFollow => "peer.follow",
+            ProductMethod::GrantsSubscribe => "grants.subscribe",
+            ProductMethod::GrantsPage => "grants.page",
+            ProductMethod::GrantsUnsubscribe => "grants.unsubscribe",
             ProductMethod::ConversationSubscribe => "conversation.subscribe",
             ProductMethod::ConversationSubscribeList => "conversation.subscribeList",
             ProductMethod::ConversationUnsubscribe => "conversation.unsubscribe",
@@ -5959,6 +6035,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => Some("credential.manage"),
             ProductMethod::PeerRelay => Some("credential.manage"),
             ProductMethod::PeerFollow => Some("credential.manage"),
+            ProductMethod::GrantsSubscribe => Some("conversation.write"),
+            ProductMethod::GrantsPage => Some("conversation.write"),
+            ProductMethod::GrantsUnsubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribeList => Some("conversation.write"),
             ProductMethod::ConversationUnsubscribe => Some("conversation.write"),
@@ -6098,6 +6177,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => ProductLane::Requests,
             ProductMethod::PeerRelay => ProductLane::Requests,
             ProductMethod::PeerFollow => ProductLane::Requests,
+            ProductMethod::GrantsSubscribe => ProductLane::Requests,
+            ProductMethod::GrantsPage => ProductLane::Requests,
+            ProductMethod::GrantsUnsubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribeList => ProductLane::Requests,
             ProductMethod::ConversationUnsubscribe => ProductLane::Requests,
@@ -6433,6 +6515,15 @@ impl ProductMethod {
             ProductMethod::PeerFollow => ProductParams::PeerFollow(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::GrantsSubscribe => ProductParams::GrantsSubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GrantsPage => ProductParams::GrantsPage(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GrantsUnsubscribe => ProductParams::GrantsUnsubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ConversationSubscribe => ProductParams::ConversationSubscribe(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6690,6 +6781,9 @@ pub enum ProductParams {
     PeerForget(PeerForgetParams),
     PeerRelay(PeerRelayParams),
     PeerFollow(PeerFollowParams),
+    GrantsSubscribe(GrantsSubscribeParams),
+    GrantsPage(GrantsPageParams),
+    GrantsUnsubscribe(GrantsUnsubscribeParams),
     ConversationSubscribe(ConversationSubscribeParams),
     ConversationSubscribeList(ConversationSubscribeListParams),
     ConversationUnsubscribe(ConversationUnsubscribeParams),
@@ -6843,6 +6937,9 @@ impl ProductParams {
             ProductParams::PeerForget(_) => ProductMethod::PeerForget,
             ProductParams::PeerRelay(_) => ProductMethod::PeerRelay,
             ProductParams::PeerFollow(_) => ProductMethod::PeerFollow,
+            ProductParams::GrantsSubscribe(_) => ProductMethod::GrantsSubscribe,
+            ProductParams::GrantsPage(_) => ProductMethod::GrantsPage,
+            ProductParams::GrantsUnsubscribe(_) => ProductMethod::GrantsUnsubscribe,
             ProductParams::ConversationSubscribe(_) => ProductMethod::ConversationSubscribe,
             ProductParams::ConversationSubscribeList(_) => ProductMethod::ConversationSubscribeList,
             ProductParams::ConversationUnsubscribe(_) => ProductMethod::ConversationUnsubscribe,

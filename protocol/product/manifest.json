@@ -422,6 +422,21 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "grants.subscribe": {
+      "params": "GrantsSubscribeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "grants.page": {
+      "params": "GrantsPageParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "grants.unsubscribe": {
+      "params": "GrantsUnsubscribeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
       "grant": "conversation.write",
@@ -675,6 +690,8 @@
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
+    "grants.changed": "GrantsChanged",
+    "grants.subscriptionEnded": "ConversationSubscriptionEnded",
     "permission.reviewWaiting": "PermissionReviewWaiting",
     "workspace.command": "WorkspaceCommand",
     "conversation.events": "ConversationEvents"

@@ -16,20 +16,24 @@ use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
     product_method, ConversationSubscribeEventsParams, ConversationSubscribeListParams,
     ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionErrorCode,
-    ConversationUnsubscribeParams, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
-    MAX_CONNECTION_LIST_SUBSCRIPTIONS, MAX_EVENT_SUBSCRIPTION_KINDS, MIN_EVENT_SUBSCRIPTION_KINDS,
+    ConversationUnsubscribeParams, GrantStreamCursor, GrantsPageParams, GrantsSubscribeParams,
+    GrantsUnsubscribeParams, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    MAX_CONNECTION_GRANT_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+    MAX_EVENT_SUBSCRIPTION_KINDS, MIN_EVENT_SUBSCRIPTION_KINDS,
     NON_NULL_EVENT_SUBSCRIPTION_OPTIONS, UNIQUE_EVENT_SUBSCRIPTION_KINDS,
 };
+use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde_json::json;
 use std::sync::Arc;
-use tokio::{sync::OwnedSemaphorePermit, task::AbortHandle, time::Instant};
+use tokio::{sync::mpsc, sync::OwnedSemaphorePermit, task::AbortHandle, time::Instant};
 
 struct Entry {
     id: String,
     target: Target,
     task: AbortHandle,
+    pages: Option<mpsc::Sender<super::grants::GrantPage>>,
 }
 
 pub(in crate::product) struct ConnectionSubscriptions {
@@ -61,6 +65,9 @@ impl ConnectionSubscriptions {
                 | product_method::CONVERSATION_UNSUBSCRIBE
                 | product_method::AGENTS_SUBSCRIBE
                 | product_method::AGENTS_UNSUBSCRIBE
+                | product_method::GRANTS_SUBSCRIBE
+                | product_method::GRANTS_PAGE
+                | product_method::GRANTS_UNSUBSCRIBE
         )
     }
 
@@ -77,7 +84,9 @@ impl ConnectionSubscriptions {
     pub fn stops(method: &str) -> bool {
         matches!(
             method,
-            product_method::CONVERSATION_UNSUBSCRIBE | product_method::AGENTS_UNSUBSCRIBE
+            product_method::CONVERSATION_UNSUBSCRIBE
+                | product_method::AGENTS_UNSUBSCRIBE
+                | product_method::GRANTS_UNSUBSCRIBE
         )
     }
 
@@ -100,16 +109,70 @@ impl ConnectionSubscriptions {
             return Some(invalid());
         }
         self.collect();
-        if Self::stops(&frame.method) {
-            let Ok(params) =
-                serde_json::from_value::<ConversationUnsubscribeParams>(frame.params.clone())
+        if frame.method == product_method::GRANTS_PAGE {
+            let Ok(params) = serde_json::from_value::<GrantsPageParams>(frame.params.clone())
             else {
                 return Some(invalid());
+            };
+            let Some(entry) = self
+                .entries
+                .iter()
+                .find(|entry| entry.id == params.subscription_id.as_str())
+            else {
+                return Some(failure(
+                    &frame.id,
+                    ConversationSubscriptionErrorCode::UnknownSubscription.as_str(),
+                ));
+            };
+            let Some(pages) = &entry.pages else {
+                return Some(failure(
+                    &frame.id,
+                    ConversationSubscriptionErrorCode::UnknownSubscription.as_str(),
+                ));
+            };
+            let after = match params.after.as_ref().map(grant_cursor) {
+                Some(None) => return Some(invalid()),
+                after => after.flatten(),
+            };
+            if pages
+                .try_send(super::grants::GrantPage {
+                    snapshot_id: params.snapshot_id,
+                    after,
+                })
+                .is_err()
+            {
+                return Some(failure(
+                    &frame.id,
+                    ConversationSubscriptionErrorCode::UnknownSubscription.as_str(),
+                ));
+            }
+            return Some(success(
+                &frame.id,
+                &ConversationSubscribeResult {
+                    subscription_id: params.subscription_id,
+                },
+            ));
+        }
+        if Self::stops(&frame.method) {
+            let subscription_id = if frame.method == product_method::GRANTS_UNSUBSCRIBE {
+                let Ok(params) =
+                    serde_json::from_value::<GrantsUnsubscribeParams>(frame.params.clone())
+                else {
+                    return Some(invalid());
+                };
+                params.subscription_id
+            } else {
+                let Ok(params) =
+                    serde_json::from_value::<ConversationUnsubscribeParams>(frame.params.clone())
+                else {
+                    return Some(invalid());
+                };
+                params.subscription_id
             };
             // Each unsubscribe stops only what the subscribe beside it made,
             // whose grant it asks (row AC7).
             let Some(position) = self.entries.iter().position(|entry| {
-                entry.id == params.subscription_id && entry.target.stopped_by() == frame.method
+                entry.id == subscription_id && entry.target.stopped_by() == frame.method
             }) else {
                 return Some(failure(
                     &frame.id,
@@ -128,7 +191,17 @@ impl ConnectionSubscriptions {
                 },
             ));
         }
-        let target = if frame.method == product_method::AGENTS_SUBSCRIBE {
+        let target = if frame.method == product_method::GRANTS_SUBSCRIBE {
+            let Ok(params) = serde_json::from_value::<GrantsSubscribeParams>(frame.params.clone())
+            else {
+                return Some(invalid());
+            };
+            let after = match params.after.as_ref().map(grant_cursor) {
+                Some(None) => return Some(invalid()),
+                after => after.flatten(),
+            };
+            Target::Grants { after }
+        } else if frame.method == product_method::AGENTS_SUBSCRIBE {
             // Asked as `agents.list` is: no parameters.
             if frame.params != json!({}) {
                 return Some(invalid());
@@ -223,6 +296,23 @@ impl ConnectionSubscriptions {
             }
             _ => {}
         }
+        let capacity = || {
+            failure(
+                &frame.id,
+                ConversationSubscriptionErrorCode::SubscriptionCapacity.as_str(),
+            )
+        };
+        if matches!(target, Target::Grants { .. })
+            && self
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry.target, Target::Grants { .. }))
+                .count()
+                >= MAX_CONNECTION_GRANT_SUBSCRIPTIONS
+        {
+            note_limit("socket.grant_subscriptions");
+            return Some(capacity());
+        }
         if self.entries.iter().any(|entry| entry.target.same(&target)) {
             return Some(failure(
                 &frame.id,
@@ -256,7 +346,7 @@ impl ConnectionSubscriptions {
                     .count(),
                 "socket.list_subscriptions",
             )),
-            Target::Agents => None,
+            Target::Agents | Target::Grants { .. } => None,
         };
         if let Some((limit, of_kind, named)) = bound {
             if of_kind >= limit {
@@ -272,6 +362,12 @@ impl ConnectionSubscriptions {
             return Some(capacity());
         }
         self.minted = minted;
+        let (page_sender, pages) = if matches!(target, Target::Grants { .. }) {
+            let (sender, receiver) = mpsc::channel(4);
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
         let task = tokio::spawn(run(Run::new(
             state.clone(),
             service,
@@ -282,14 +378,23 @@ impl ConnectionSubscriptions {
             self.deliveries.clone(),
             slot,
             received_at,
+            pages,
         )));
         self.entries.push(Entry {
             id,
             target,
+            pages: page_sender,
             task: task.abort_handle(),
         });
         None
     }
+}
+
+fn grant_cursor(wire: &GrantStreamCursor) -> Option<Cursor> {
+    Some(Cursor {
+        incarnation: wire.incarnation.clone(),
+        position: decimal_u64(&wire.position).ok()?,
+    })
 }
 
 impl Drop for ConnectionSubscriptions {

@@ -580,7 +580,7 @@ async fn a_read_slot_stays_until_queued_records_leave() {
     let permit = reads.clone().try_acquire_owned().unwrap();
     let (stop, mut stopped) = watch::channel(false);
     let mut held = std::pin::pin!(async {
-        commands.poller_kept(records, &mut stopped).await;
+        commands.poller_kept(records, &mut stopped, None).await;
         drop(permit);
     });
     // The deadline is captured on the first poll, while the clock still
@@ -633,6 +633,80 @@ async fn a_read_slot_stays_until_queued_records_leave() {
     );
 }
 
+/// Past the audit deadline a stalled writer is still holding the queued
+/// records. Stopping this peer's cycle hands those records back at once,
+/// so the turn can be given up while the place stays reserved for them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_peer_stop_hands_the_audit_wait_back() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    nessa_local_storage::create_directory(&directory).unwrap();
+    let stall = Stall::at(1);
+    let release = Release(stall.clone());
+    let clock = Arc::new(Manual(AtomicU64::new(0)));
+    let audit = Arc::new(DurablePeerAudit::with_writer_hook(
+        directory,
+        Arc::new(Ticks(AtomicU64::new(1))),
+        clock.clone(),
+        AUDIT_QUEUE,
+        stall.hook(),
+    ));
+    let commands = slot_commands(&root.path().join("gateway"), clock.clone(), audit);
+    let holding = PeerHolding {
+        record: PeerState::Unknown,
+        cache: CacheState::Unknown,
+    };
+    let mut records = Vec::new();
+    for _ in 0..2 {
+        records.push(commands.poller_changed(
+            DeviceKey::new([7; 32]),
+            PollerCause::Approved,
+            holding.clone(),
+            holding.clone(),
+            Ok(()),
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !stall.reached.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the writer did not stall");
+    let cycle = super::super::commands::CycleStop::new();
+    let (_stop, mut stopped) = watch::channel(false);
+    let pending = {
+        let mut kept =
+            std::pin::pin!(commands.poller_kept(records, &mut stopped, Some(cycle.as_ref())));
+        tokio::select! {
+            biased;
+            _ = &mut kept => panic!("the audit wait finished before the deadline"),
+            () = tokio::time::sleep(WAKE_TICK / 2) => {}
+        }
+        clock
+            .0
+            .fetch_add(AUDIT_DEADLINE.as_millis() as u64, Ordering::SeqCst);
+        cycle.stop();
+        tokio::time::timeout(Duration::from_secs(2), kept)
+            .await
+            .expect("stopping the peer left its turn held for the audit")
+    };
+    assert!(
+        !pending.is_empty(),
+        "the stalled records were not handed back"
+    );
+    drop(release);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            commands.poller_kept(pending, &mut stopped, None)
+        )
+        .await
+        .is_ok(),
+        "the handed-back records did not leave the queue"
+    );
+}
+
 /// The first record is refused before the deadline. The second never
 /// answers. The refusal has already completed its future; waiting on it
 /// again panics and the cycle is rescheduled as a failure. The slot stays
@@ -664,7 +738,7 @@ async fn an_audit_error_before_the_deadline_is_not_waited_on_again() {
     let permit = reads.clone().try_acquire_owned().unwrap();
     let (stop, mut stopped) = watch::channel(false);
     let mut held = std::pin::pin!(async {
-        commands.poller_kept(records, &mut stopped).await;
+        commands.poller_kept(records, &mut stopped, None).await;
         drop(permit);
     });
     tokio::select! {

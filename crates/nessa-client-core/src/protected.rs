@@ -41,6 +41,7 @@ impl Channel {
                 .filled(count)
                 .map_err(|_| GatewayError::ResponseTooLarge)?
             {
+                self.transport.stream_mut().complete_frame();
                 return String::from_utf8(body).map_err(|_| GatewayError::Protocol);
             }
         }

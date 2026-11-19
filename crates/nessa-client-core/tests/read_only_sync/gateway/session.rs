@@ -1633,3 +1633,57 @@ fn canonical_tls_observer_keeps_original_socket_failure_for_retained_caller() {
         );
     }
 }
+
+/// A poll that sees only the start of a frame arms the partial-frame deadline.
+/// The RPC that finishes that frame drops the deadline, so a later operation
+/// is not timed out by it.
+#[test]
+fn a_frame_an_rpc_finishes_drops_the_poll_deadline() {
+    struct Held(AtomicU64);
+    impl Clock for Held {
+        fn elapsed_ms(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    let clock = Arc::new(Held(AtomicU64::new(0)));
+    let (started, saw) = std::sync::mpsc::channel();
+    let (release, rest) = std::sync::mpsc::channel();
+    let (endpoint, gateway) = peer(move |socket| {
+        let event = OutgoingMessage::Event(
+            EventFrame::push(product_event::GRANTS_CHANGED, &json!({"kept": true}), 1, 0).unwrap(),
+        );
+        let bytes = encode_frame(
+            MAX_RECORD_RESPONSE_BYTES,
+            event.to_wire_text().unwrap().as_bytes(),
+        )
+        .unwrap();
+        socket.write_raw(&bytes[..2]);
+        started.send(()).unwrap();
+        rest.recv().unwrap();
+        socket.write_raw(&bytes[2..]);
+        while socket.read_text().is_some() {}
+    });
+    let clock_for_session = clock.clone();
+    let session = Session::connect(
+        endpoint.address,
+        endpoint.evidence("credential"),
+        "example",
+        &LocalConnector,
+        clock_for_session,
+        Arc::new(Never),
+        policy(),
+    )
+    .unwrap();
+    saw.recv_timeout(Duration::from_secs(15)).unwrap();
+    let (mut channel, _) = session.into_product_channel();
+    channel.transport.stream_mut().begin_poll(None, 200, 5_000);
+    assert_eq!(channel.poll().unwrap(), None);
+    release.send(()).unwrap();
+    let finished = channel.receive().unwrap();
+    assert!(finished.contains("grants.changed"));
+    clock.0.store(10_000, Ordering::SeqCst);
+    channel.transport.stream_mut().begin_operation(u64::MAX);
+    channel.transport.stream_mut().remaining().unwrap();
+    drop(channel);
+    gateway.join().unwrap();
+}

@@ -533,7 +533,7 @@ fn a_stop_ends_a_blocked_read_without_shutting_its_socket() {
     let reading = std::thread::spawn({
         let stop = stop.clone();
         move || {
-            let mut socket = Socket::new(stream, stop);
+            let mut socket = Socket::new(stream, stop, Arc::new(()));
             socket.read_timeout(Duration::from_secs(30)).unwrap();
             let started = std::time::Instant::now();
             let read = socket.read(&mut [0; 16]);
@@ -555,7 +555,7 @@ fn a_sliced_wait_lasts_as_long_as_the_caller_set() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_held, _) = listener.accept().unwrap();
-    let mut socket = Socket::new(stream, ReadStop::new());
+    let mut socket = Socket::new(stream, ReadStop::new(), Arc::new(()));
     socket.read_timeout(STOP_SLICE * 5).unwrap();
     let started = std::time::Instant::now();
     let kind = socket.read(&mut [0; 16]).unwrap_err().kind();
@@ -925,4 +925,248 @@ fn scoped_stop_registration_drop_and_late_registration_keep_their_owners() {
     late.register(&late_socket).unwrap();
     assert_eq!(late_peer.read(&mut [0]).unwrap(), 0);
     assert!(stop.lock().is_empty());
+}
+
+struct FixedWall;
+impl WallClock for FixedWall {
+    fn unix_milliseconds(&self) -> u64 {
+        1_000
+    }
+}
+
+fn open_cache(clock: Arc<dyn MonotonicClock>) -> (tempfile::TempDir, RetainedCache) {
+    let root = tempfile::tempdir().unwrap();
+    let private = root.path().join("cache");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let cache =
+        RetainedCache::open(&private.join("cache.sqlite3"), Arc::new(FixedWall), clock).unwrap();
+    (root, cache)
+}
+
+/// A budget that cancels the grant wait, or the transcript copy that follows
+/// a frame, is unreachable. A caller stop stays stopped. Neither moves the
+/// committed cursor.
+#[test]
+fn a_grant_follow_its_budget_cut_short_is_unreachable_and_a_stop_stays_stopped() {
+    use crate::read_only_sync::infrastructure::gateway::tests::session::{peer, send};
+    use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
+    use nessa_protocol::product::generated::{product_event, product_method};
+    use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
+    use serde_json::json;
+    use std::sync::mpsc;
+
+    let stop = ReadStop::new();
+    stop.stop();
+    let device = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let (_root, mut cache) = open_cache(Arc::new(Still));
+    let stopped = cache.follow_grants(
+        ReaderAccess {
+            role: ReaderRole::GrantedPeer,
+            address: SocketAddr::from(([127, 0, 0, 1], 1)),
+            relay: None,
+            identity: &device,
+            pin: [7; 44],
+            credential: "credential",
+            receiver: "receiver",
+            access_epoch: 3,
+            client_id: "example",
+        },
+        &FollowRule::none(),
+        &stop,
+        Duration::from_secs(60),
+        8,
+        &mut Vec::new(),
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(stopped, Err(ReadFailure::Stopped));
+
+    let clock = Arc::new(Moved(std::sync::atomic::AtomicU64::new(0)));
+    let (ready, heard) = mpsc::channel();
+    let (endpoint, gateway) = peer(move |socket| {
+        let opened = request_quiet(socket);
+        assert_eq!(
+            opened.as_ref().map(|frame| frame.method.as_str()),
+            Some(product_method::GRANTS_SUBSCRIBE)
+        );
+        let opened = opened.expect("subscribe");
+        send(
+            socket,
+            OutgoingMessage::Response(
+                nessa_protocol::protocol::ResponseFrame::success(
+                    &opened.id,
+                    &json!({"subscriptionId": "1"}),
+                )
+                .unwrap(),
+            ),
+        );
+        let _ = ready.send(());
+        while socket.read_text().is_some() {}
+    });
+    let ticking = clock.clone();
+    let advancing = std::thread::spawn(move || {
+        let _ = heard.recv_timeout(Duration::from_secs(15));
+        ticking.0.store(60_000, Ordering::SeqCst);
+    });
+    let (_root, mut cache) = open_cache(clock);
+    let unread = cache.follow_grants(
+        endpoint.reader_access(),
+        &FollowRule::none(),
+        &ReadStop::new(),
+        Duration::from_secs(10),
+        8,
+        &mut Vec::new(),
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(unread, Err(ReadFailure::Unreachable));
+    assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
+    drop(cache);
+    advancing.join().unwrap();
+    gateway.join().unwrap();
+
+    let conversation = "8e024fc9-0c9d-4952-8427-bcb2b3b07f8f";
+    let clock = Arc::new(Moved(std::sync::atomic::AtomicU64::new(0)));
+    let (ready, heard) = mpsc::channel();
+    let (endpoint, gateway) = peer(move |socket| {
+        let opened = request_quiet(socket).expect("subscribe");
+        send(
+            socket,
+            OutgoingMessage::Response(
+                nessa_protocol::protocol::ResponseFrame::success(
+                    &opened.id,
+                    &json!({"subscriptionId": "1"}),
+                )
+                .unwrap(),
+            ),
+        );
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::GRANTS_CHANGED,
+                    &json!({
+                        "subscriptionId": "1",
+                        "cursor": {"incarnation": "inc", "position": "1"},
+                        "complete": true,
+                        "replaces": true,
+                        "snapshotId": "4",
+                        "grants": [{
+                            "conversationId": conversation,
+                            "absent": false,
+                            "capabilities": "read",
+                            "policyRevision": "1"
+                        }]
+                    }),
+                    1,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+        let _ = ready.send(());
+        while socket.read_text().is_some() {}
+    });
+    let ticking = clock.clone();
+    let advancing = std::thread::spawn(move || {
+        let _ = heard.recv_timeout(Duration::from_secs(15));
+        ticking.0.store(60_000, Ordering::SeqCst);
+    });
+    let rule = FollowRule::new(vec![conversation.to_owned()], FOLLOW_KEEP_MAX).unwrap();
+    let (_root, mut cache) = open_cache(clock);
+    let copied = cache.follow_grants(
+        endpoint.reader_access(),
+        &rule,
+        &ReadStop::new(),
+        Duration::from_secs(10),
+        8,
+        &mut Vec::new(),
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(copied, Err(ReadFailure::Unreachable));
+    assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
+    drop(cache);
+    advancing.join().unwrap();
+    gateway.join().unwrap();
+}
+
+/// Incomplete pages of one snapshot stop at the staging budget, and the
+/// committed cursor stays where it was.
+#[test]
+fn an_incomplete_grant_snapshot_past_its_budget_leaves_the_cursor() {
+    use crate::read_only_sync::infrastructure::gateway::tests::session::{peer, send};
+    use nessa_protocol::product::generated::{product_event, product_method};
+    use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
+    use serde_json::json;
+
+    let (endpoint, gateway) = peer(move |socket| {
+        let opened = request_quiet(socket).expect("subscribe");
+        assert_eq!(opened.method, product_method::GRANTS_SUBSCRIBE);
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(&opened.id, &json!({"subscriptionId": "1"})).unwrap(),
+            ),
+        );
+        for page in 0..6_u64 {
+            send(
+                socket,
+                OutgoingMessage::Event(
+                    EventFrame::push(
+                        product_event::GRANTS_CHANGED,
+                        &json!({
+                            "subscriptionId": "1",
+                            "cursor": {"incarnation": "inc", "position": "0"},
+                            "complete": false,
+                            "replaces": page == 0,
+                            "snapshotId": "7",
+                            "grants": [{
+                                "conversationId": format!("page-{page}"),
+                                "absent": false,
+                                "capabilities": "x".repeat(100_000),
+                                "policyRevision": "1"
+                            }]
+                        }),
+                        1,
+                        0,
+                    )
+                    .unwrap(),
+                ),
+            );
+            let Some(asking) = request_quiet(socket) else {
+                break;
+            };
+            assert_eq!(asking.method, product_method::GRANTS_PAGE);
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(&asking.id, &json!({"subscriptionId": "1"})).unwrap(),
+                ),
+            );
+        }
+        while socket.read_text().is_some() {}
+    });
+    let (_root, mut cache) = open_cache(Arc::new(Still));
+    let failed = cache.follow_grants(
+        endpoint.reader_access(),
+        &FollowRule::none(),
+        &ReadStop::new(),
+        Duration::from_secs(30),
+        8,
+        &mut Vec::new(),
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(failed, Err(ReadFailure::Protocol));
+    assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
+    drop(cache);
+    gateway.join().unwrap();
+}
+
+fn request_quiet(
+    socket: &mut crate::read_only_sync::infrastructure::gateway::tests::session::PeerSocket,
+) -> Option<nessa_protocol::protocol::RequestFrame> {
+    let text = socket.read_text()?;
+    nessa_protocol::protocol::RequestFrame::decode(&text).ok()
 }
