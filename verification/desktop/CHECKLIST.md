@@ -108,8 +108,8 @@ production build at 4× CPU throttling.
   layouts: split right, split down, move, close, sidebar toggle, session-list
   toggle, send from a new session, typing, streaming into one of four panes, a
   pane dragged across zones (dropped, and cancelled), the Agents overview
-  opened, walked, answered and left, and the composer's thinking control
-  walked from its least level to its most and its knob dragged along the track.
+  opened, walked, answered and left, and the composer's model picker opened,
+  every model hovered and one chosen with a bar.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
@@ -1014,29 +1014,23 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
   _Check:_ `responsive.mjs --only composer-chips`.
-- [ ] **The thinking control changes level without moving anything**
-  (_ADR 238 › The thinking control_): from the keyboard it opens with the keys
-  on the slider; the arrows, Home and End change the level, the chip's name
-  follows, and only Ultra — past Max, where the model has it — is marked
-  apart; dragged, the knob stays on the pointer (± 2 px), the level is the
-  nearest, and let go the knob settles on its level (± 1 px); as ⌘B and ⌥⌘S
-  move its chip, the popover stays on it (its edge on the chip's ± 1 px, 10 px
-  above it ± 1 px); each model the check names offers exactly the levels the
-  SDK catalogue publishes for it (_ADR 302_), Fast only where the catalogue
-  records it (Claude Opus 5 has it, Claude Sonnet 5 not), no levels at all
-  where none is recorded (Claude Haiku 4.5, its chip disabled), and Ultra only
-  past a published Max — which no catalogue model has today; None carried from
-  GPT-5.6 Sol to Claude Sonnet 5 shows as its least level, and that level
-  chosen there is still it back on GPT-5.6 Sol; in every frame of
-  every change, of the drag, and of turning Fast on, the composer, its
-  controls and the popover hold their place (± 0.5 px); a level's change
-  animates transform and opacity only; Escape, and Tab past its end, close it
-  onto its chip; with the system's reduced motion nothing animates and the
-  words that were shown are not drawn.
-  _Check:_ `responsive.mjs --only thinking-control` (`--shots <dir>` saves it
-  opened and at the utmost level); its look by eye in each theme, light and
-  dark, with and without Fast (Claude Opus 5 and Claude Sonnet 5),
-  against the menus and chips beside it.
+- [ ] **The model and its thinking are chosen in one place**
+  (_ADR 238 › The model and thinking picker_): the chip names the model's
+  short name and its level ("Opus 5 Medium"); Return on it opens the picker
+  with the keys in search; hovering its models changes nothing on the page;
+  each model the check names draws one bar per level the SDK catalogue
+  publishes for it, None drawing none (_ADR 302_), and no bars where none is
+  recorded (Claude Haiku 4.5, whose chip then names no level); one press of a
+  bar chooses that model at that level and closes the picker; a model chosen
+  by name keeps the person's level, shown as near as it allows (None carried
+  from GPT-5.6 Sol shows as Claude Sonnet 5's least, and is None again back on
+  GPT-5.6 Sol); Fast beside the chip is offered only where the catalogue
+  records it (Claude Opus 5 has it, Claude Sonnet 5 not); a star lists the
+  model under Starred, where the picker then opens; Escape gives the keys back
+  to the chip; with the system's reduced motion, opening it animates nothing.
+  _Check:_ `responsive.mjs --only model-picker` (`--shots <dir>` saves it
+  opened and on Starred) and the stress `picker` step; its look by eye in each
+  theme, with Claude's colour on its tile and lit bars.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
   wide, or whose room below the title row is under 640px tall, its composer

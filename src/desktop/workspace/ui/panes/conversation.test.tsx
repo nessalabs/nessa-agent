@@ -86,7 +86,8 @@ async function conversation(source: FakeSource = fakeSource()) {
 }
 
 /** The model the composer's picker shows. */
-const shownModel = () => host.querySelector(".desktop-chip-model")?.textContent ?? ""
+const shownModel = () =>
+  host.querySelector(".desktop-chip-model")?.getAttribute("aria-label") ?? ""
 const field = () => host.querySelector('textarea[aria-label="Message"]')
 
 /** The model the source was asked to send the last message with. */

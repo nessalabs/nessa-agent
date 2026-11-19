@@ -470,6 +470,7 @@ import {
   openStressConversation,
   selectedStressConversation,
   selectStressModel,
+  clearStarredModels,
   chatIdentityTexts,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
@@ -2084,27 +2085,154 @@ function otherAgent(agent) {
   return agent === "claude" ? "codex" : "claude"
 }
 
-/** Picks `model` in a composer's picker: its provider's tab, then the model. */
-async function pickModel(page, picker, model) {
-  await picker.click()
-  await page
-    .locator(css.modelProviderTab)
-    .filter({ hasText: providerName(model.provider) })
-    .first()
-    .click()
-  await page
-    .locator(css.modelOption)
-    .filter({ hasText: model.displayName })
-    .first()
-    .click()
+/** The `picker` step's work, with the stars cleared around it by the step. */
+async function pickerStep(run, step, failures) {
+  const page = run.page
+  const chip = dock(page).locator(css.modelChip)
+  if (!(await waitFor(async () => !(await chip.isDisabled()), 10_000))) {
+    failures.push("the established conversation's model chip is disabled")
+    return
+  }
+  // An earlier step can leave the chat at Auto or Full, which not every model
+  // offers on every platform (only Ask is verified for all of them), and a
+  // model that cannot keep the chat's access refuses the change. A person
+  // would step down to Ask first, so the step does too.
+  if ((await readWithReviews(run.client, run.main.id)).approvalMode !== "ask") {
+    await pickAccess(page, "ask")
+    if (!(await accessIs(run, run.main.id, "ask"))) {
+      failures.push("the chat did not come back to Ask before the model change")
+      return
+    }
+  }
+  const before = await readWithReviews(run.client, run.main.id)
+  const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
+  const bars = (model) =>
+    (model.reasoning?.effortLevels ?? []).filter((level) => level !== "none")
+  const target =
+    current &&
+    catalog.models.find(
+      (model) =>
+        model.provider === current.provider &&
+        model.modelId !== current.modelId &&
+        bars(model).length >= 2,
+    )
+  if (!target)
+    throw new CannotRun(
+      "no second catalog model with levels in this conversation's provider",
+    )
+  const row = () =>
+    page.locator(css.modelOption).filter({
+      has: page
+        .locator(css.modelOptionLabel)
+        .getByText(target.displayName, { exact: true }),
+    })
+  const opened = () => page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  const closed = () =>
+    page
+      .locator(css.modelPicker)
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false)
+  const star = async () => {
+    const button = row().locator(css.modelStar)
+    await row().hover()
+    await button.click()
+    if ((await button.getAttribute("aria-pressed")) !== "true")
+      failures.push(`${target.displayName}'s star is not on once pressed`)
+  }
+
+  // A star, then the picker opens on Starred with the model listed once.
+  await chip.click()
+  await opened()
+  await page.locator(css.modelSearch).fill(target.displayName)
+  await star()
+  await page.locator(css.modelSearch).fill("")
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  await chip.click()
+  await opened()
+  const onStarred = await page
+    .locator(`${css.modelRail}[data-filter="starred"]`)
+    .getAttribute("aria-current")
+  if (onStarred !== "true")
+    failures.push("with a star, the picker did not open on Starred")
+  if ((await row().count()) !== 1)
+    failures.push(`Starred does not list ${target.displayName} once`)
+  if (run.evidence)
+    await page
+      .locator(css.modelPicker)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-starred.png`) })
+      .catch(() => {})
+
+  if ((await row().getAttribute("aria-disabled")) === "true")
+    throw new CannotRun(`${target.displayName} cannot be chosen in this conversation`)
+  // One press of a bar: that model at that level, and the picker closes.
+  const bar = row().locator(css.modelBar).nth(1)
+  const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
+  await bar.click()
+  if (!(await closed())) failures.push("a bar left the model picker open")
+  const named = `Change model, currently ${target.displayName}, ${level}`
+  if (
+    !(await waitFor(async () => (await chip.getAttribute("aria-label")) === named, 5_000))
+  )
+    failures.push(
+      `a bar left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
+    )
+  const fast = dock(page).locator(css.composerFast)
+  if ((await fast.isDisabled()) === target.fastMode)
+    failures.push(
+      `Fast is${target.fastMode ? " not" : ""} offered for ${target.displayName}`,
+    )
+
+  // The next message runs on it, and the chip still names that level.
+  const text = prompt(run, STRESS.model, step)
+  const seen = await send(run, run.main.id, text, failures)
+  const confirmed = await waitFor(async () => {
+    const view = await readWithReviews(run.client, run.main.id)
+    return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+  }, 15_000)
+  if (!confirmed) failures.push(`sending did not run on ${target.displayName}`)
+  await settled(run, run.main.id, seen, text, "completed", failures)
+  await expectShown(page, `${SAYS.model}${target.modelId}`, failures)
+  if ((await chip.getAttribute("aria-label")) !== named)
+    failures.push(
+      `after the send the chip says "${await chip.getAttribute("aria-label")}"`,
+    )
+
+  // The star off again, so later runs open where the model is.
+  await chip.click()
+  await opened()
+  // On Starred, the model leaves the list as its star comes off.
+  await row().hover()
+  await row().locator(css.modelStar).click()
+  if (
+    !(await row()
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false))
+  )
+    failures.push(`unstarred, ${target.displayName} stayed under Starred`)
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  if (run.evidence)
+    writeFileSync(
+      join(run.evidence, `picker-${run.engine ?? "window"}-${step.index}.json`),
+      JSON.stringify(
+        {
+          before: current.modelId,
+          after: target.modelId,
+          level,
+          confirmed: confirmed?.runtime,
+        },
+        null,
+        2,
+      ),
+    )
 }
 
-/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
-function providerName(provider) {
-  return (
-    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
-    provider
-  )
+/** Picks `model` in a composer's or a new channel's picker, by its exact name. */
+async function pickModel(page, picker, model) {
+  await selectStressModel(page, picker, model.displayName)
 }
 
 /**
@@ -3718,8 +3846,16 @@ const steps = {
         path: join(run.evidence, `model-${run.engine}-picker.png`),
         scale: "css",
       })
-    const options = run.page.locator(css.modelOption)
-    await options.filter({ hasText: target.displayName }).first().click()
+    await run.page.locator(css.modelSearch).fill(target.displayName)
+    await run.page
+      .locator(css.modelOption)
+      .filter({
+        has: run.page
+          .locator(css.modelOptionLabel)
+          .getByText(target.displayName, { exact: true }),
+      })
+      .locator(css.modelOptionLabel)
+      .click()
     // Picking only stages the model: the picker shows it, and the gateway is
     // asked for nothing until the next message is sent.
     if (
@@ -3793,6 +3929,22 @@ const steps = {
         ),
       )
   },
+  /**
+   * The model and thinking picker: a star lists a model under Starred, where
+   * the picker then opens; one press of a bar stages that model at that
+   * level, which the chip names, and closes the picker; Fast beside the chip
+   * is offered only for a model that has it; and the next message runs on
+   * the model chosen. The star is taken off again.
+   */
+  async picker(run, step, failures) {
+    await clearStarredModels(run.page)
+    try {
+      await pickerStep(run, step, failures)
+    } finally {
+      await clearStarredModels(run.page).catch(() => {})
+    }
+  },
+
   async reply(run, step, failures, sendBy) {
     const text = prompt(run, STRESS.reply, step, step.extra ?? "")
     const seen = await send(
@@ -9478,9 +9630,10 @@ const steps = {
   },
 
   /**
-   * The composer's row: attach and the model's short name at its start; at
-   * its end the access and thinking choices, a hairline, then what acts. No
-   * project is offered there, and nothing stands under the card.
+   * The composer's row: attach, the model's short name with its thinking
+   * level, and Fast at its start; at its end the access choice, a hairline,
+   * then what acts. No project is offered there, and nothing stands under
+   * the card.
    */
   async composer(run, step, failures) {
     await run.exclusive(async () => {
@@ -9490,7 +9643,9 @@ const steps = {
       await row.waitFor({ timeout: 10_000 })
       // The chip draws the model's short name; its whole name stays its label.
       const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
-        drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
+        drawn:
+          chip.querySelector('[data-slot="model-level-picker-trigger-label"]')
+            ?.textContent ?? "",
         label: chip.getAttribute("aria-label") ?? "",
       }))
       if (model.drawn === "" || /^(Claude|OpenAI)\s/.test(model.drawn))
@@ -9501,25 +9656,26 @@ const steps = {
         )
       if ((await dock.locator('[aria-label^="Project"]').count()) > 0)
         failures.push("the composer still offers a project")
-      // Left to right at the row's end: thinking, the hairline, Send.
+      // Left to right: the model, Fast beside it, then at the row's end
+      // access, the hairline, Send.
       const edges = await row.evaluate((element) => {
         const left = (selector) =>
           element.querySelector(selector)?.getBoundingClientRect().left ?? null
         return {
-          thinking: left(".desktop-chip-thinking"),
+          model: left(".desktop-chip-model"),
+          fast: left(".desktop-composer-fast"),
+          access: left('[data-slot="composer-access-mode"]'),
           divider: left(".desktop-composer-divider"),
           send: left(".desktop-send"),
         }
       })
-      if (!(
-        edges.thinking !== null &&
-        edges.divider !== null &&
-        edges.send !== null &&
-        edges.thinking < edges.divider &&
-        edges.divider < edges.send
-      ))
+      const order = ["model", "fast", "access", "divider", "send"]
+      if (
+        order.some((part) => edges[part] === null) ||
+        order.some((part, at) => at > 0 && edges[order[at - 1]] >= edges[part])
+      )
         failures.push(
-          `the row's end is not thinking, hairline, Send: ${JSON.stringify(edges)}`,
+          `the row is not model, Fast, access, hairline, Send: ${JSON.stringify(edges)}`,
         )
       // Nothing under the card: the dock ends with the composer.
       const under = await dock.evaluate((element) => {
@@ -10476,18 +10632,24 @@ const MENU_ROW = 30
 async function modelTilesSquare(run, row, failures) {
   const page = run.page
   await row.locator(".desktop-chip-model").click({ timeout: 10_000 })
-  const tiles = page.locator(
-    '[data-slot="searchable-listbox-option"] .desktop-provider-mark',
-  )
+  await page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  // Every model, not only the provider the picker opens on.
+  await page.locator(`${css.modelRail}[data-filter="all"]`).click()
+  const tiles = page.locator(`${css.modelOption} [data-slot="model-level-picker-mark"]`)
   await tiles.first().waitFor({ timeout: 5_000 })
   const boxes = await tiles.evaluateAll((all) =>
     all.map((tile) => {
       const box = tile.getBoundingClientRect()
-      const slot = tile.parentElement?.getBoundingClientRect()
+      const row = tile.closest('[role="option"]')?.getBoundingClientRect()
       return {
         width: Math.round(box.width * 10) / 10,
         height: Math.round(box.height * 10) / 10,
-        fits: !!slot && box.left >= slot.left - 0.5 && box.right <= slot.right + 0.5,
+        fits:
+          !!row &&
+          box.top >= row.top - 0.5 &&
+          box.bottom <= row.bottom + 0.5 &&
+          box.left >= row.left - 0.5 &&
+          box.right <= row.right + 0.5,
       }
     }),
   )
@@ -10496,22 +10658,19 @@ async function modelTilesSquare(run, row, failures) {
       failures.push(
         `a model row's provider tile is ${box.width}x${box.height}px, not a square of 12px or more`,
       )
-    else if (!box.fits)
-      failures.push("a model row's provider tile spills out of its icon slot")
+    else if (!box.fits) failures.push("a model row's provider tile spills out of its row")
   if (run.evidence)
     await page
-      .locator('[data-slot="searchable-listbox-option"]')
-      .first()
-      .locator("xpath=ancestor::*[@role='listbox'][1]")
+      .locator(css.modelPicker)
       .screenshot({ path: join(run.evidence, `composer-${run.engine}-models.png`) })
       .catch(() => {})
   await page.keyboard.press(keys.escape)
-  const closed = await tiles
-    .first()
+  const closed = await page
+    .locator(css.modelPicker)
     .waitFor({ state: "detached", timeout: 5_000 })
     .then(() => true)
     .catch(() => false)
-  if (!closed) failures.push("Escape did not close the model menu")
+  if (!closed) failures.push("Escape did not close the model picker")
   return closed
 }
 

@@ -3,8 +3,9 @@
  * The performance budget (ADR 238, Context — "Calm means no dropped
  * frames"): no frame over 50 ms on split, move, close, sidebar and list
  * toggles, send, typing, streaming, a pane dragged across zones, opening
- * and answering in the Agents overview, or walking and dragging the
- * composer's thinking control, in a production build at 4× CPU throttling.
+ * and answering in the Agents overview, or opening the composer's model
+ * picker, running the pointer down its rows and choosing a model and level
+ * with one of a row's bars, in a production build at 4× CPU throttling.
  *
  * Every interaction runs in a fresh page, N times per layout. Each run also
  * checks that the interaction did what it is named for (a split adds a pane,
@@ -47,9 +48,9 @@ const typingText = "the quick brown fox jumps over"
 const streamPrompt = "go"
 
 const snapshot = async (page) => ({
-  thinking: await page.evaluate(
-    (sel) => document.querySelector(sel)?.getAttribute("aria-valuenow") ?? null,
-    css.thinkingSlider,
+  model: await page.evaluate(
+    (sel) => document.querySelector(sel)?.getAttribute("aria-label") ?? null,
+    `${css.focusedPane} ${css.modelChip}`,
   ),
   sidebar: await page.locator(css.workspace).getAttribute("data-sidebar"),
   list: await page.locator(css.workspace).getAttribute("data-list"),
@@ -71,6 +72,7 @@ const snapshot = async (page) => ({
   order: (await order(page)).join(","),
   ...(await state(page)),
   requests: await page.locator(css.overviewRequest).count(),
+  open: (await page.locator(css.modelPicker).count()) > 0,
   ghost: await page.locator(css.dragGhost).count(),
 })
 
@@ -99,28 +101,33 @@ async function dragAcross(page, { cancel }) {
   await page.mouse.up()
 }
 
-/** A new session's thinking popover, open at its least level. */
-async function openThinking(page) {
+/** A new session's composer, its model chip enabled. */
+async function newSessionChip(page) {
   await page.keyboard.press(keys.newSession)
   await settled(page)
-  const chip = page.locator(`${css.focusedPane} ${css.thinkingChip}`)
+  const chip = page.locator(`${css.focusedPane} ${css.modelChip}`)
   if ((await chip.count()) === 0 || (await chip.isDisabled()))
-    throw new CannotRun("no thinking chip with levels in the new session's composer")
-  await chip.click()
-  await need(page, css.thinkingSlider, "the thinking slider")
-  await page.keyboard.press(keys.home)
-  await settled(page)
+    throw new CannotRun("no model chip in the new session's composer")
 }
 
-/** Drags the thinking knob from the track's start to its end, as a person would. */
-async function dragThinking(page) {
-  const track = await page.locator(css.thinkingTrack).boundingBox()
-  if (!track) throw new CannotRun(`no thinking track (${css.thinkingTrack})`)
-  const y = track.y + track.height / 2
-  await page.mouse.move(track.x + 2, y)
-  await page.mouse.down()
-  await page.mouse.move(track.x + track.width - 2, y, { steps: 40 })
-  await page.mouse.up()
+/**
+ * Opens the model picker, runs the pointer down every row as a person
+ * looking would, and chooses the last row with levels at its highest bar.
+ */
+async function pickWithBar(page) {
+  await page.locator(`${css.focusedPane} ${css.modelChip}`).click()
+  await need(page, css.modelPicker, "the model picker")
+  await page.locator(css.modelRail, { hasText: "All models" }).click()
+  const rows = page.locator(css.modelOption)
+  const count = await rows.count()
+  for (let row = 0; row < count; row++) {
+    await rows.nth(row).hover()
+    // A person's pace down a list: pacing the measured act, not a wait for state.
+    await page.waitForTimeout(60)
+  }
+  const bars = page.locator(css.modelBar)
+  if ((await bars.count()) === 0) throw new CannotRun("no model in the picker has levels")
+  await bars.last().click()
 }
 
 async function openOverview(page) {
@@ -226,31 +233,15 @@ const scenarios = {
         ? null
         : `cancel changed the layout (${b.order} → ${a.order}) or left the copy`,
   },
-  // The thinking control: every level of the new session's model from the
-  // least to the most, and the knob dragged along the whole track. Ultra's
-  // moment is walked only on a model that publishes a level past Max; none in
-  // the catalogue does today (ADR 302).
-  "thinking-walk": {
-    setup: openThinking,
-    act: async (p) => {
-      for (let i = 0; i < 4; i++) {
-        await p.keyboard.press(keys.right)
-        // A person's pace between steps: pacing the measured act, not a wait for state.
-        await p.waitForTimeout(200)
-      }
-    },
+  // The model picker: open, the pointer down every row, a bar chosen. Hovering
+  // a row must not redraw the list (that drew as flicker in the prototype).
+  "model-picker": {
+    setup: newSessionChip,
+    act: pickWithBar,
     expect: (b, a) =>
-      Number(a.thinking) > Number(b.thinking)
+      a.model !== b.model && !a.open
         ? null
-        : `the level went ${b.thinking} → ${a.thinking}, expected higher`,
-  },
-  "thinking-drag": {
-    setup: openThinking,
-    act: dragThinking,
-    expect: (b, a) =>
-      Number(a.thinking) > Number(b.thinking)
-        ? null
-        : `the drag left the level ${b.thinking} → ${a.thinking}, expected higher`,
+        : `the chip still says ${a.model}, or the picker stayed open`,
   },
   "overview-open": {
     setup: (p) => focusComposer(p),

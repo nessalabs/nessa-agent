@@ -433,8 +433,8 @@
  * line of its own above them rather than lie under them.
  */
 @container (max-width: 200px) {
-  .workspace-pane .desktop-chip-model::after {
-    content: none;
+  .workspace-pane .desktop-chip-model > span:not([aria-hidden]) {
+    display: none;
   }
 }
 

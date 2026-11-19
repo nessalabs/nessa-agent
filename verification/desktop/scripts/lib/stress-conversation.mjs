@@ -1,4 +1,4 @@
-import { css, names, selectorFor } from "./selectors.mjs"
+import { css, names, preferenceEvents, selectorFor, storage } from "./selectors.mjs"
 
 /** Read semantic chat identities even after the renderer replaces UUIDs with titles. */
 export function chatIdentityTexts(nodes) {
@@ -10,17 +10,42 @@ export function chatIdentityTexts(nodes) {
   })
 }
 
-/** Home shows one provider tab at a time; choose only the named fixture model. */
+/**
+ * Chooses the model named exactly `displayName` in the model picker that
+ * `trigger` opens, by searching for it: whatever the picker opens on (Starred,
+ * the provider in use), only that one model is chosen, and a name it does not
+ * list once is refused rather than another taken.
+ */
 export async function selectStressModel(page, trigger, displayName) {
   await trigger.click()
-  await page.locator(css.modelOption).first().waitFor({ timeout: 10_000 })
-  const choice = page.locator(css.modelOption).filter({ hasText: displayName })
-  const tabs = page.locator(css.modelProviderTab)
-  for (let tab = 0; !(await choice.count()) && tab < (await tabs.count()); tab++)
-    await tabs.nth(tab).click()
+  const search = page.locator(css.modelSearch)
+  await search.waitFor({ timeout: 10_000 })
+  await search.fill(displayName)
+  const choice = page.locator(css.modelOption).filter({
+    has: page.locator(css.modelOptionLabel).getByText(displayName, { exact: true }),
+  })
   if ((await choice.count()) !== 1)
     throw new Error("the exact fixture model is not uniquely offered in Home")
-  await choice.click()
+  await choice.locator(css.modelOptionLabel).click()
+}
+
+/**
+ * Takes every star off the model picker, in storage and in the open window,
+ * so a check that stars a model starts and ends with none, even after a run
+ * that stopped halfway.
+ */
+export async function clearStarredModels(page) {
+  await page.evaluate(
+    ([key, event]) => {
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        // Nothing kept to take off.
+      }
+      window.dispatchEvent(new CustomEvent(event, { detail: null }))
+    },
+    [storage.starredModels, preferenceEvents.starredModels],
+  )
 }
 
 /** Reads the focused window conversation's identity, once its row is published. */
