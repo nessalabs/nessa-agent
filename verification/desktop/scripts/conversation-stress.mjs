@@ -3542,17 +3542,60 @@ const steps = {
     // A channel names its own cloud: its threads go to Agent37 while Boat is
     // the cloud chosen for new thread VMs, and the channel says so back.
     const name = `stress-cloud-r${step.index}-s${run.knobs.seed}`
+    // Made here as setup; the person moves its threads to Agent37 in the
+    // channel's settings, from the menu that lists every cloud.
     const channel = await run.client.channels.create({
       requestId: name,
       name,
       agent: run.stack.agent,
       model: run.stack.profile.model,
-      threadPlacement: "agent37",
     })
-    if (channel.threadPlacement !== "agent37")
-      failures.push(`a channel placed on Agent37 reads back ${channel.threadPlacement}`)
     const inChannel = randomUUID()
     try {
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      const named = run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+      await named.hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+        )
+        .click()
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator(`[data-channel-placement="${channel.channelId}"]`)
+      try {
+        await pickChoice(
+          run.page,
+          control.locator('[data-placement-row="threads"]'),
+          "agent37",
+        )
+        if (
+          !(await waitFor(
+            async () =>
+              (await control.getAttribute("data-thread-placement")) === "agent37",
+            10_000,
+          ))
+        )
+          failures.push("the channel settings do not show new threads on Agent37")
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `cloud-${run.engine}-channel-agent37.png`),
+          })
+      } finally {
+        const dialog = run.page.locator(css.channelSettingsDialog)
+        for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+          await run.page.keyboard.press(keys.escape)
+          await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+        }
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (listed?.threadPlacement !== "agent37")
+        failures.push(`a channel moved to Agent37 reads back ${listed?.threadPlacement}`)
       await run.client.conversation.create({
         conversationId: inChannel,
         agent: run.stack.agent,

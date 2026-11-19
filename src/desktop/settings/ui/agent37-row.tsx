@@ -42,7 +42,12 @@ function failure(cause: unknown): string {
  * button. The key is pasted in a dialog that Connect… opens. Below it, which
  * cloud new thread VMs are made on.
  */
-export function Agent37Row() {
+export function Agent37Row({
+  onChange,
+}: {
+  /** Hears each state the row comes to read, so a page around it can follow. */
+  onChange?: (state: Agent37Status["state"]) => void
+} = {}) {
   const gateway = useContext(Agent37Context)
   const ensure = useVaultUnlock()
   const found = useContext(FoundSetting) === "agent37"
@@ -101,6 +106,9 @@ export function Agent37Row() {
     }
   }
   const state = status?.state
+  useEffect(() => {
+    if (state !== undefined) onChange?.(state)
+  }, [state, onChange])
   return (
     <>
       <ItemRow

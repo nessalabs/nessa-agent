@@ -875,8 +875,11 @@ function AddCloud({
 
 /** Agent37's own page: its key, and which cloud new thread VMs go to. */
 function Agent37Page({ onBack }: { onBack: () => void }) {
+  // The row below reads, connects, unlocks and disconnects; the header
+  // follows what it last read.
+  const [read, setRead] = useState<CloudState | undefined>()
   const states = useCloudStates()
-  const state = states.agent37
+  const state = read ?? states.agent37
   const word = state === undefined ? "Reading…" : cloudWord(state)
   return (
     <div
@@ -904,7 +907,7 @@ function Agent37Page({ onBack }: { onBack: () => void }) {
         </div>
       </header>
       <div className="devices-settings settings-surface">
-        <Agent37Row />
+        <Agent37Row onChange={setRead} />
       </div>
     </div>
   )

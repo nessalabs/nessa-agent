@@ -490,6 +490,26 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
         .unwrap();
     assert_ne!(back.coordinator_id(), moved.coordinator_id());
     assert_ne!(back.coordinator_id(), first);
+    // A main chat made on one cloud moves when the channel names another:
+    // its VM stays on the cloud it was made on, so the move needs a fresh one.
+    let on_boat = ChannelExecution::parse("boat", "local").unwrap();
+    let boat_main = reopened
+        .set_execution(original.id(), on_boat)
+        .await
+        .unwrap()
+        .unwrap();
+    reopened
+        .place(&boat_main.coordinator_id(), original.id())
+        .await
+        .unwrap();
+    let on_agent37 = ChannelExecution::parse("agent37", "local").unwrap();
+    let agent37_main = reopened
+        .set_execution(original.id(), on_agent37.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(agent37_main.coordinator_id(), boat_main.coordinator_id());
+    assert_eq!(*agent37_main.execution(), on_agent37);
     // A main chat never made keeps its id when the main agent moves.
     let fresh = made("unused", "quiet", 1);
     reopened.create(fresh.clone()).await.unwrap();

@@ -73,7 +73,7 @@ fn a_channel_holds_any_place_and_spells_each_one_way() {
 
 #[test]
 fn a_channel_names_the_cloud_its_vms_are_made_on() {
-    use crate::workspaces::domain::Cloud;
+    use crate::domain::Cloud;
     // Each cloud's own name is a channel place on its VMs, kept apart for
     // the main agent and for threads.
     let execution = ChannelExecution::parse("agent37", "boat").unwrap();
