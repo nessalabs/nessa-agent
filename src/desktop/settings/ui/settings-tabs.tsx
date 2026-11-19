@@ -1,3 +1,4 @@
+import { Agent37Row } from "./agent37-row"
 import { BoatRow } from "./boat-row"
 import { VaultPassphraseControl } from "../../../vault"
 import { useState, type ComponentType } from "react"
@@ -301,6 +302,7 @@ function AccountsTab() {
         <GithubRow />
         <VoiceKeyRow />
         <BoatRow />
+        <Agent37Row />
         <Row id="vault-passphrase">
           <VaultPassphraseControl />
         </Row>

@@ -16,9 +16,11 @@ use crate::{
     },
     workspaces::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
-        domain::Failure as WorkspaceFailure,
+        domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
-            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
+            agent37_template, worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
+            FileAssignments, FileCloudChoice, RuntimeSettingsAudit, SdkAgent37Enrollment,
+            VaultSettings,
         },
     },
 };
@@ -332,7 +334,24 @@ pub(super) async fn product_state(
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
         )
-        .with_image(worker_image()),
+        .with_image(worker_image())
+        .with_cloud(
+            Cloud::Agent37,
+            Arc::new(Agent37VaultSettings(vault.vault.clone())),
+            Arc::new(Agent37Provider {
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+                endpoints: None,
+            }),
+            Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
+            Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
+        )
+        .with_agent37_enrollment(Arc::new(SdkAgent37Enrollment {
+            template: agent37_template(),
+        })),
     );
     #[cfg(all(test, unix))]
     let workspace_service = super::vm_background_gateway::service(workspace_service);
@@ -2257,13 +2276,41 @@ mod tests;
 #[cfg(unix)]
 struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
 #[cfg(unix)]
+use nessa_conversation::workspaces::domain::Admitted;
+#[cfg(unix)]
 impl RecoveryAudit for WorkspaceRecoveryAudit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
         let record = match event {
+            RecoveryEvent::CloudChosen {
+                before,
+                after,
+                cause,
+                by,
+            } => EnvironmentEvent::WorkspaceCloudChosen {
+                before: before.as_str().into(),
+                after: after.as_str().into(),
+                cause: cause.as_str().into(),
+                principal: by.clone(),
+            },
             RecoveryEvent::AdmissionRefused {
                 thread,
                 vm,
-                admission,
+                admission: Admitted::Agent37(release),
+                rejection,
+                disposition,
+            } => EnvironmentEvent::Agent37AdmissionRefused {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                template: release.template().into(),
+                template_revision: release.revision(),
+                image_digest: release.digest().map(str::to_owned),
+                cause: rejection.cause().as_str().into(),
+                disposition: disposition.as_str().into(),
+            },
+            RecoveryEvent::AdmissionRefused {
+                thread,
+                vm,
+                admission: Admitted::Boat(admission),
                 rejection,
                 disposition,
             } => EnvironmentEvent::WorkspaceAdmissionRefused {

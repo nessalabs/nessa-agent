@@ -238,6 +238,13 @@ export const settingsEntries = [
     keywords: "cloud vm compute workspace token chatgpt claude",
   },
   {
+    id: "agent37",
+    tab: "accounts",
+    label: "Agent37",
+    detail: "Cloud workspaces on your own Agent37 account.",
+    keywords: "cloud vm compute workspace key agent37 instance",
+  },
+  {
     id: "vault-passphrase",
     tab: "accounts",
     label: "Vault passphrase",

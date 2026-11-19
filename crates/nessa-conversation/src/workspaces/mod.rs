@@ -22,3 +22,7 @@ mod provider_contract_tests;
 #[cfg(test)]
 #[path = "../../tests/workspaces/boat_admission.rs"]
 mod boat_admission_tests;
+
+#[cfg(test)]
+#[path = "../../tests/workspaces/agent37_provider.rs"]
+mod agent37_provider_tests;

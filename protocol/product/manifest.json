@@ -572,6 +572,31 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "agent37.status": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "agent37.save": {
+      "params": "Agent37SaveParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "agent37.disconnect": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.read": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.choose": {
+      "params": "CloudChooseParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "devices.pool": {
       "params": "DevicesPoolParams",
       "grant": "credential.manage",

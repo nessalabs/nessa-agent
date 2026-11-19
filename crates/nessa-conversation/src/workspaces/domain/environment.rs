@@ -47,6 +47,33 @@ impl EnvironmentIdentity {
     }
 }
 
+/// What a VM was admitted under, on whichever cloud it runs: the identity
+/// its cloud proved, held to on every later opening.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Admitted {
+    /// A Boat VM: the environment and version Boat reported.
+    Boat(EnvironmentIdentity),
+    /// An Agent37 VM: the template release and image digest it runs.
+    Agent37(super::TemplateRelease),
+}
+impl Admitted {
+    /// The environment an existing VM's spec names: Boat's environment,
+    /// or Agent37's pinned template.
+    pub fn environment(&self) -> &str {
+        match self {
+            Self::Boat(identity) => identity.name(),
+            Self::Agent37(release) => release.template(),
+        }
+    }
+    /// The cloud it runs on.
+    pub fn cloud(&self) -> super::Cloud {
+        match self {
+            Self::Boat(_) => super::Cloud::Boat,
+            Self::Agent37(_) => super::Cloud::Agent37,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservedEnvironment {
     pub name: Option<String>,

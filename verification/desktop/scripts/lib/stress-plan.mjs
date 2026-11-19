@@ -16,6 +16,10 @@ export const KNOBS = {
     default: 1,
     what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward",
   },
+  cloudChoices: {
+    default: 1,
+    what: "the cloud for new thread VMs picked in Settings: Agent37 then Boat, each thread staying on the cloud its VM was made on",
+  },
   backgroundTasks: {
     default: 1,
     what: "background commands outliving their calling turn and settling the original tool row",
@@ -318,6 +322,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.vmBackgroundTasks, () => ({ kind: "vmBackground" }))
+  add(knobs.cloudChoices, () => ({ kind: "cloud" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))

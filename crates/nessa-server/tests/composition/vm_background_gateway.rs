@@ -11,7 +11,11 @@ use crate::conversation::{
         ssh_environment::{Build, BuildSource, HostInstaller},
     },
 };
-use crate::workspaces::{application::*, domain::*, infrastructure::FileAssignments};
+use crate::workspaces::{
+    application::*,
+    domain::*,
+    infrastructure::{FileAssignments, FileCloudChoice},
+};
 use crate::{cli::entrypoint::LocalProvisioning, composition::CompositionRoot, core::Launch};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
@@ -87,13 +91,25 @@ pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {
     let Some(fixture) = FIXTURE.get() else {
         return default;
     };
-    Arc::new(Workspaces::new(
-        Arc::new(Config),
-        Arc::new(FakeProvider),
-        Arc::new(FileAssignments(fixture.root.join("assignments"))),
-        Arc::new(Audit),
-        default.runtime_settings.clone(),
-    ))
+    Arc::new(
+        Workspaces::new(
+            Arc::new(Config),
+            Arc::new(FakeProvider(Cloud::Boat)),
+            Arc::new(FileAssignments(fixture.root.join("assignments"))),
+            Arc::new(Audit),
+            default.runtime_settings.clone(),
+        )
+        // A connected Agent37 beside Boat: the driver picks the cloud for
+        // new VMs in Settings, and reads which one made each VM from the
+        // events.
+        .with_cloud(
+            Cloud::Agent37,
+            Arc::new(Agent37Config),
+            Arc::new(FakeProvider(Cloud::Agent37)),
+            Arc::new(FileAssignments(fixture.root.join("agent37-assignments"))),
+            Arc::new(FileCloudChoice(fixture.root.join("cloud"))),
+        ),
+    )
 }
 pub(super) fn environments(
     default: Arc<dyn ThreadEnvironments>,
@@ -133,17 +149,40 @@ impl BuildSource for CliBuild {
 struct Config;
 #[async_trait::async_trait]
 impl Settings for Config {
-    async fn read(&self) -> Result<BoatConnection, Failure> {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
         BoatConnection::new(
             "fixture-token".into(),
             "nessa".into(),
             "fixture-image".into(),
         )
+        .map(CloudConnection::Boat)
     }
     fn generation(&self) -> Result<u64, Failure> {
         Ok(1)
     }
-    async fn save(&self, _: u64, _: BoatConnection) -> Result<(), Failure> {
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
+        unreachable!()
+    }
+    async fn clear(&self) -> Result<(), Failure> {
+        unreachable!()
+    }
+}
+struct Agent37Config;
+#[async_trait::async_trait]
+impl Settings for Agent37Config {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
+        Agent37Connection::new(
+            "sk_live_fixture".into(),
+            b"fixture-private".to_vec(),
+            "ssh-ed25519 AAAAfixture".into(),
+            "nessa-runtime@1".into(),
+        )
+        .map(CloudConnection::Agent37)
+    }
+    fn generation(&self) -> Result<u64, Failure> {
+        Ok(1)
+    }
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
         unreachable!()
     }
     async fn clear(&self) -> Result<(), Failure> {
@@ -171,27 +210,33 @@ impl RecoveryAudit for Audit {
         Ok(())
     }
 }
-struct FakeProvider;
+/// One cloud's VMs, which are folders beside each other: each says which
+/// cloud made it in the events.
+struct FakeProvider(Cloud);
 #[async_trait::async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, _: &CloudAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
     async fn create(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
         // Like Boat, a creation is keyed by its thread: asking again for a
         // VM that already exists answers with that VM and makes nothing new.
-        let made = folder(thread).join(".boat-created");
+        // Each cloud keeps its own marker, so a thread asked of the wrong
+        // cloud is made there anew and the events show it.
+        let made = folder(thread).join(format!(".{}-created", self.0.as_str()));
         if made.exists() {
-            event("create_replayed", thread);
+            record(
+                serde_json::json!({"kind":"create_replayed","thread":thread,"cloud":self.0.as_str()}),
+            );
         } else {
             std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
             std::fs::write(&made, b"").map_err(|_| Failure::Storage)?;
-            event("created", thread);
+            record(serde_json::json!({"kind":"created","thread":thread,"cloud":self.0.as_str()}));
         }
         // The driver makes Boat's answer get lost after the VM was made by
         // leaving this file beside the threads' folders.
@@ -202,42 +247,50 @@ impl Provider for FakeProvider {
         }
         Ok(WorkspaceReceipt {
             vm: thread.into(),
-            admission: EnvironmentIdentity::new(
-                "11111111-1111-4111-8111-111111111111".into(),
-                "nessa".into(),
-                "22222222-2222-4222-8222-222222222222".into(),
-                2,
-            )
-            .unwrap(),
+            admission: match self.0 {
+                Cloud::Boat => Admitted::Boat(
+                    EnvironmentIdentity::new(
+                        "11111111-1111-4111-8111-111111111111".into(),
+                        "nessa".into(),
+                        "22222222-2222-4222-8222-222222222222".into(),
+                        2,
+                    )
+                    .unwrap(),
+                ),
+                Cloud::Agent37 => Admitted::Agent37(
+                    TemplateRelease::new(
+                        "nessa-runtime@1".into(),
+                        Some(1),
+                        Some(format!("sha256:{}", "a".repeat(64))),
+                    )
+                    .unwrap(),
+                ),
+            },
             refusal: None,
             disposition: RefusalDisposition::RetainTarget,
         })
     }
     async fn connect(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
         _: &str,
-        _: &EnvironmentIdentity,
+        _: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         // The driver makes Boat fail a thread's next opening by leaving
         // this file in its folder.
         if std::fs::remove_file(folder(thread).join("fail-next-open")).is_ok() {
             return Err(Failure::Provider);
         }
+        record(serde_json::json!({"kind":"connected","thread":thread,"cloud":self.0.as_str()}));
         Ok(Arc::new(FakeVm(thread.into())))
     }
-    async fn remove(
-        &self,
-        _: &BoatAccount,
-        _: &str,
-        _: &EnvironmentIdentity,
-    ) -> Result<(), Failure> {
+    async fn remove(&self, _: &CloudAccount, _: &str, _: &Admitted) -> Result<(), Failure> {
         unreachable!()
     }
-    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
-        event("rested", vm);
+    async fn stop(&self, _: &CloudAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
+        record(serde_json::json!({"kind":"rested","thread":vm,"cloud":self.0.as_str()}));
         Ok(())
     }
 }
