@@ -89,6 +89,56 @@ it("slides a carried element by its own difference, wherever the browser draws a
   await act(async () => root.unmount())
 })
 
+it("holds a pane's pinned name where it stands while its pane moves under it", async () => {
+  const durations = new Map<string, number | undefined>()
+  const animate = Element.prototype.animate
+  Element.prototype.animate = function (this: Element, keyframes, options) {
+    const id = (this as HTMLElement).dataset.flipId
+    if (id) durations.set(id, (options as KeyframeAnimationOptions).duration as number)
+    return animate.call(this, keyframes, options)
+  }
+  // A flight shorter than a column's slide, so the name can only match its pane's.
+  const style = globalThis.getComputedStyle
+  globalThis.getComputedStyle = () =>
+    ({
+      getPropertyValue: (name: string) =>
+        name === "--desktop-flight" ? "200ms" : name === "--desktop-slow" ? "300ms" : "",
+    }) as CSSStyleDeclaration
+  let open = () => {}
+  function Pane() {
+    const root = useRef<HTMLDivElement>(null)
+    const [railOpen, setRailOpen] = useState(false)
+    open = () => setRailOpen(true)
+    return (
+      <FlipScope shape={String(railOpen)} root={root}>
+        <div ref={root}>
+          {/* The rail opens: the pane moves 64px right, its name, past the
+              window's controls, stays where it is. */}
+          <article data-flip="pane" data-flip-id="a" data-left={railOpen ? 64 : 0}>
+            <header>
+              <div data-flip="slide" data-flip-id="name:a" data-left={230} />
+            </header>
+          </article>
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Pane />))
+    await act(async () => open())
+    // Its pane flies in from 64px left; the name answers it with 64px right: still.
+    expect(begun.find(({ id }) => id === "name:a")).toEqual({ id: "name:a", shift: 64 })
+    // On the pane's clock, so the two cancel frame for frame.
+    expect(durations.get("name:a")).toBe(200)
+    expect(durations.get("a")).toBe(200)
+  } finally {
+    Element.prototype.animate = animate
+    globalThis.getComputedStyle = style
+    await act(async () => root.unmount())
+  }
+})
+
 it("reads where every pane landed before any flight starts, so the page lays out once", async () => {
   const log: ("read" | "write")[] = []
   const animate = Element.prototype.animate

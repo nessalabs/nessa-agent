@@ -40,6 +40,11 @@ export function PaneHeaderFrame({
     <header ref={ref} className="workspace-pane-header" {...bar.bar} {...props}>
       <div
         className="workspace-pane-name"
+        // A pane's name slides on its own in a flight (`FlipScope`): where
+        // its pane is in the window's corner it stands past the window's
+        // controls, and stays there while the pane moves under it.
+        data-flip={pane !== null ? "slide" : undefined}
+        data-flip-id={pane !== null ? `name:${pane}` : undefined}
         data-shown={nameShown || undefined}
         aria-hidden={nameShown ? undefined : true}
       >

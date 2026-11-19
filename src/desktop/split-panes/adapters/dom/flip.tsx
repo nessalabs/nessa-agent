@@ -15,7 +15,10 @@
  * - `data-flip="pane"` with `data-flip-id`: travels and resizes, its contents
  *   counter-scaled so text keeps its size (see `flyPane`);
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
- *   another slide moves only by its own difference.
+ *   another slide, or inside a flown pane, moves only by its own difference:
+ *   it goes straight from where it was to where it landed, whatever carries
+ *   it. A pane's title pinned past the window's controls therefore stays put
+ *   while its pane moves under it (`pane-header-frame.tsx`).
  *
  * The scope marks an active flight and each pane it moves. Styles pause the
  * moving panes' blur and shadows; stationary panes stay live.
@@ -183,20 +186,31 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
       },
     })
   }
-  const slides: { element: HTMLElement; own: number }[] = []
+  // A flown pane carries everything in it sideways by its centre's shift:
+  // its contents counter-scale, so they only travel (`flyPane`).
+  panes.forEach(({ landed, before }) => {
+    const { to } = landed
+    shifted.set(landed.pane, before.left + before.width / 2 - (to.left + to.width / 2))
+  })
+  const slides: { element: HTMLElement; own: number; inPane: boolean }[] = []
   landed.forEach(({ element, after }) => {
     const before = from.slides.get(element.dataset.flipId ?? "")
+    if (!before) return
+    const outer = element.parentElement?.closest<HTMLElement>(
+      '[data-flip="slide"], [data-flip="pane"]',
+    )
+    const inPane = outer?.dataset.flip === "pane"
     // Only what is on screen slides; a column folding away has its own
     // transition. A host marks it hidden from assistive tech as it folds,
-    // and may make it inert only once it has slid away.
-    if (!before || element.closest('[inert], [aria-hidden="true"]')) return
-    const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
+    // and may make it inert only once it has slid away. What a pane holds
+    // is on screen with its pane, said aloud or not (a pane's unshown name).
+    if (!inPane && element.closest('[inert], [aria-hidden="true"]')) return
     const carried = (outer && shifted.get(outer)) ?? 0
     const dx = before.left - after.left
     shifted.set(element, dx)
     const own = dx - carried
     if (Math.abs(own) < 0.5) return
-    slides.push({ element, own })
+    slides.push({ element, own, inPane })
   })
   // A settled preview can leave nothing to animate. Resolving root styles
   // then does work for no flight (flip.test.tsx holds this no-flight path).
@@ -214,12 +228,15 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
       ? durationOf(root, "drawer")
       : durationToken(root, "--desktop-slow")
   const flight = durationOf(root, motion)
-  slides.forEach(({ element, own }) => {
+  slides.forEach(({ element, own, inPane }) => {
     flying.push(
       element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
-        duration,
+        // In a pane, on the pane's clock, so the two cancel frame for frame.
+        duration: inPane ? flight : duration,
         easing: ease,
         id: slideAnimation,
+        // Over whatever transform it keeps of its own (a pane's hidden name sits lower).
+        composite: inPane ? "add" : "replace",
       }),
     )
   })

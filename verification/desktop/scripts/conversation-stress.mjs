@@ -132,7 +132,8 @@ import {
  *               keeps its controls clear of them in every rail state; a message
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
- *               starting where the lights end
+ *               starting where the lights end; the chat's title in the pane's
+ *               bar goes only between where it stood and where it lands
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
  *               is asked once; in the setup window that ask opens, over a
  *               locked vault, no passphrase is asked for, nothing
@@ -1501,12 +1502,18 @@ function railLayout(page) {
  * stands in the corner beside the toggle, 8px past the toggle's mark with the
  * rail closed and 20px with it open (clear of the pill), moving only
  * between the two. Settled, the toggle (with the rail closed) stands on
- * Agents' icon column. Returns what it found wrong.
+ * Agents' icon column. The first pane's name, in the chat's titlebar, goes
+ * only between where it stood and where it lands, never past either: in the
+ * window's corner it stands still while its pane moves under it, rather than
+ * ride the pane's flight from under the window's controls and back.
+ * Returns what it found wrong.
  */
 function footerThroughToggle(page) {
   return page.evaluate(async (toggleSelector) => {
     const words = () =>
       document.querySelector(".side-rail-studio .desktop-identity-words")
+    const name = () => document.querySelector(".split-panes-grid .workspace-pane-name")
+    const names = []
     const toggle = document.querySelector(toggleSelector)
     const mark = () => toggle.querySelector("svg").getBoundingClientRect()
     const middle = (e) => {
@@ -1516,11 +1523,15 @@ function footerThroughToggle(page) {
     const failures = []
     if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
     const seen = []
+    // Where the name stood before the toggle: a flight's first frame already
+    // draws the change.
+    const from = name()?.getBoundingClientRect().left
     const started = performance.now()
     toggle.click()
     await new Promise((done) => {
       const frame = () => {
         if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+        if (name()) names.push(name().getBoundingClientRect().left)
         if (performance.now() - started < 900) requestAnimationFrame(frame)
         else done()
       }
@@ -1537,7 +1548,20 @@ function footerThroughToggle(page) {
       failures.push(
         `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
       )
-    const icon = document.querySelector(".agents-overview-entry svg")
+    if (from === undefined || !name())
+      failures.push("no pane name in the chat's titlebar")
+    const to = names.at(-1)
+    const strayed = names.find(
+      (left) => left < Math.min(from, to) - 0.5 || left > Math.max(from, to) + 0.5,
+    )
+    if (strayed !== undefined)
+      failures.push(
+        `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled`,
+      )
+    // Agents' icon is on screen only with the sidebar open.
+    const icon = document.querySelector(
+      '.workspace-window[data-sidebar="open"] .agents-overview-entry svg',
+    )
     if (toggle.getAttribute("aria-expanded") === "false" && icon) {
       const apart = middle(toggle) - middle(icon)
       if (Math.abs(apart) > 0.5)
@@ -1547,6 +1571,71 @@ function footerThroughToggle(page) {
     }
     return failures
   }, css.sideRailToggle)
+}
+
+/**
+ * With the sidebar and the session list folded, the chat's pane stands alone
+ * in the window's corner and its title stands past the window's controls.
+ * Closing and opening the rail moves the pane under it; the title stays
+ * where it is, every frame (`footerThroughToggle`), and the columns go back
+ * as they were.
+ */
+async function titleWithThePanesAlone(page, failures) {
+  const columns = () =>
+    page.evaluate((workspace) => {
+      const at = document.querySelector(workspace)
+      return { sidebar: at?.dataset.sidebar, list: at?.dataset.list }
+    }, css.workspace)
+  const before = await columns()
+  if (before.sidebar === "open") await page.keyboard.press(keys.toggleSidebar)
+  if (before.list === "open") await page.keyboard.press(keys.toggleSessionList)
+  const alone = await waitFor(
+    () =>
+      page.evaluate(
+        (workspace) =>
+          document.querySelector(workspace)?.hasAttribute("data-panes-alone"),
+        css.workspace,
+      ),
+    5_000,
+  )
+  if (!alone) {
+    failures.push(
+      `folding the side columns left the panes not alone: ${JSON.stringify(await columns())}`,
+    )
+    return
+  }
+  // Let the folds land before the rail moves the pane again.
+  await page.waitForTimeout(900)
+  const name = (left) => `${left?.toFixed(1)}px`
+  const where = () =>
+    page.evaluate(
+      () =>
+        document
+          .querySelector(".split-panes-grid .workspace-pane-name")
+          ?.getBoundingClientRect().left,
+    )
+  const start = await where()
+  for (const open of [false, true]) {
+    failures.push(
+      ...(await footerThroughToggle(page)).map((failure) => `panes alone: ${failure}`),
+    )
+    const now = await where()
+    if (start === undefined || now === undefined || Math.abs(now - start) > 0.5)
+      failures.push(
+        `with the panes alone and the rail ${open ? "open" : "closed"}, the chat's title stands at ${name(now)}, not ${name(start)}`,
+      )
+  }
+  if (before.sidebar === "open") await page.keyboard.press(keys.toggleSidebar)
+  if (before.list === "open") await page.keyboard.press(keys.toggleSessionList)
+  if (
+    !(await waitFor(async () => {
+      const now = await columns()
+      return now.sidebar === before.sidebar && now.list === before.list
+    }, 5_000))
+  )
+    failures.push(
+      `the side columns did not open back: ${JSON.stringify(await columns())}`,
+    )
 }
 
 /** The row of the conversation `conversationId` in the window's list. */
@@ -6644,6 +6733,7 @@ const steps = {
         }
       }
       await studioWithTheCorner(run.page, failures)
+      await titleWithThePanesAlone(run.page, failures)
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
