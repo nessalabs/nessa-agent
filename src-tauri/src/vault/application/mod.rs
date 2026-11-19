@@ -1,7 +1,8 @@
 //! Typed commands consumed by the host; secret input has no Debug implementation.
+pub(crate) mod biometrics;
 pub(crate) mod contract;
 use serde::Deserialize;
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Operation {
     Status,
@@ -15,6 +16,10 @@ pub enum Operation {
 pub struct Command {
     pub operation: Operation,
     pub passphrase: Option<zeroize::Zeroizing<String>>,
+    /// Unlock and setup only: once the gateway accepts this passphrase, keep
+    /// it for fingerprint unlock (`biometrics`). Never sent to the gateway.
+    #[serde(default)]
+    pub remember: bool,
 }
 impl Command {
     pub fn operation(&self) -> &'static str {

@@ -13,6 +13,10 @@ portal container, so a Settings prompt renders above Settings. Leaving that
 requesting surface cancels an unsubmitted dialog. Policy and cryptographic admission remain in the gateway. Canceling the UI
 does not unlock data. Setup strength consumes the published vault contract.
 
+`VaultSource.biometrics` is Touch ID, offered only by the native adapter where the
+host says it is available. The host keeps the passphrase (see the lifecycle page);
+the window only asks it to unlock, and passes `remember` with a typed unlock.
+
 Unit tests cover stale results, overlap and redacted refusals. The real gateway,
 native pipe and browser flow is `verification/desktop/scripts/vault.mjs`; GitHub
 consumer coverage is `github-live-events.mjs` and the conversation stress GitHub

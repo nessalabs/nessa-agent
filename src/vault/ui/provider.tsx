@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react"
 import { VaultController } from "../application/controller"
-import type { VaultSource } from "../application/ports"
+import type { BiometricStatus, VaultSource } from "../application/ports"
 import { VaultDialog } from "./dialog"
 import { usePortalContainer } from "@nessa-ui/react/lib/portal-container"
 const VaultContext = createContext({
@@ -19,6 +19,8 @@ const VaultContext = createContext({
   release: (_owner: symbol) => {},
   beginChange: (_owner: symbol): boolean => false,
   endChange: (_owner: symbol) => {},
+  /** Counts closed dialogs, so a reader of Touch ID's status reads it again. */
+  settled: 0,
 })
 /** UI gate only: a missing provider adds no UI behavior; the gateway still owns
  * cryptographic admission. Native composition supplies its app-owned source. */
@@ -53,6 +55,11 @@ function MountedVault({
   const [container, setContainer] = useState<HTMLElement | null>(null)
   const placement = useRef<{ owner: symbol; request: Promise<boolean> } | null>(null)
   const foregroundChange = useRef<symbol | null>(null)
+  const [settled, setSettled] = useState(0)
+  const closed = view.kind === "closed"
+  useEffect(() => {
+    if (closed) setSettled((count) => count + 1)
+  }, [closed])
   const requestUnlock = useCallback(
     (showLoading = false) => {
       if (foregroundChange.current !== null) return Promise.resolve(false)
@@ -105,8 +112,8 @@ function MountedVault({
     [controller],
   )
   const context = useMemo(
-    () => ({ ensure, release, source, beginChange, endChange }),
-    [ensure, release, source, beginChange, endChange],
+    () => ({ ensure, release, source, beginChange, endChange, settled }),
+    [ensure, release, source, beginChange, endChange, settled],
   )
   useEffect(() => {
     controller.activate()
@@ -125,6 +132,7 @@ function MountedVault({
           view={view}
           container={container}
           onSubmit={controller.submit}
+          onBiometric={controller.useBiometric}
           onCancel={controller.cancel}
           onRetry={controller.retry}
         />
@@ -142,6 +150,35 @@ export function useVaultUnlock() {
 /** The explicit settings control shares this provider's owning connection. */
 export function useVaultSource() {
   return useContext(VaultContext).source
+}
+/** Touch ID in Settings: whether it is offered here and on, read again each
+ * time a vault dialog closes, and turning it off. Undefined until read, and
+ * where the source has no Touch ID at all. */
+export function useVaultTouchId() {
+  const { source, settled } = useContext(VaultContext)
+  const biometrics = source?.biometrics
+  const [status, setStatus] = useState<BiometricStatus | undefined>()
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!biometrics) return
+    let live = true
+    void biometrics.status().then((next) => {
+      if (live) setStatus(next)
+    })
+    return () => {
+      live = false
+    }
+  }, [biometrics, settled])
+  const forget = useCallback(async () => {
+    if (!biometrics) return
+    setBusy(true)
+    try {
+      setStatus(await biometrics.forget())
+    } finally {
+      setBusy(false)
+    }
+  }, [biometrics])
+  return status ? { ...status, busy, forget } : undefined
 }
 /** One explicit change dialog owns foreground presentation through recovery. */
 export function useVaultChangeOwnership() {

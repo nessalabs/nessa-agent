@@ -257,6 +257,10 @@ export const KNOBS = {
     default: 1,
     what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session; the first then moves its new threads and main agent to Boat and back from its settings",
   },
+  touchIds: {
+    default: 1,
+    what: "times the vault is unlocked with a fake Touch ID: the unlock dialog offers it ticked, the typed passphrase is kept, the next unlock is a fingerprint alone, a dismissed prompt leaves the form and its Use Touch ID button, changed fingerprints drop the copy and say so, and Settings turns it off, followed by a conversation reply",
+  },
   swipes: {
     default: 1,
     what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a vertical scroll toggles nothing",
@@ -390,6 +394,7 @@ export function plan(knobs, accessScenario = "full") {
   // After the shuffle, with restores: a new default must not reshuffle a seed.
   for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
   add(knobs.swipes, () => ({ kind: "swipe" }))
+  add(knobs.touchIds, () => ({ kind: "touchId" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
