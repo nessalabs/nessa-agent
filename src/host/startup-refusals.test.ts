@@ -15,7 +15,8 @@ import {
 describe("startup refusals", () => {
   it("names a repair without taking a message from the payload", () => {
     expect(startupRefusalSentence("not-provisioned")).toContain("just start")
-    expect(startupRefusalSentence("not-ready")).toContain("did not start")
+    expect(startupRefusalSentence("not-ready")).toContain("startup failed")
+    expect(startupRefusalSentence("still-starting")).toContain("still starting")
     expect(startupRefusalSentence("not-listening")).toContain("not answering")
     const mismatch = hostRefusalFromInvoke({
       reason: "wrong-stage",
@@ -29,6 +30,13 @@ describe("startup refusals", () => {
     )
     expect(mismatch?.message).not.toContain("ignore this prose")
     expect(mismatch?.message).not.toContain("{bundle}")
+  })
+
+  it("reads a startup still running as its own refusal, not a failure", () => {
+    const starting = hostRefusalFromInvoke({ reason: "still-starting" })
+    expect(starting).toBeInstanceOf(HostRefusalError)
+    expect(starting?.reason).toBe("still-starting")
+    expect(hostRefusalFromInvoke({ reason: "not-ready" })?.reason).toBe("not-ready")
   })
 
   it("does not treat an untyped payload as a refusal", () => {

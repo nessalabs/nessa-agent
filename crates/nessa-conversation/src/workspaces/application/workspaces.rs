@@ -500,11 +500,15 @@ impl Workspaces {
             .await?;
         parts.settings.save(generation, connection).await
     }
+    /// Open `thread`'s VM. A thread with no VM yet gets one on `cloud`, or,
+    /// when it names none, on the cloud new thread VMs go to
+    /// ([`Self::cloud`]); a thread whose VM exists stays on its cloud.
     pub async fn open(
         &self,
         thread: ConversationId,
         provision: bool,
         channel: Option<ChannelId>,
+        cloud: Option<Cloud>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let this = self.clone();
         // The admitted task owns allocation through receipt persistence, and
@@ -512,7 +516,7 @@ impl Workspaces {
         // conversation/open waiter disappears.
         tokio::spawn(async move {
             let id = thread.to_string();
-            let opened = AssertUnwindSafe(this.allocate(thread, provision, channel))
+            let opened = AssertUnwindSafe(this.allocate(thread, provision, channel, cloud))
                 .catch_unwind()
                 .await
                 .unwrap_or(Err(Failure::ProvisioningUncertain));
@@ -658,28 +662,31 @@ impl Workspaces {
         thread: ConversationId,
         provision: bool,
         channel: Option<ChannelId>,
+        cloud: Option<Cloud>,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = thread.to_string();
         let turn = self.uses.turn(&id).await;
         // Held from before the VM is reached until the runtime is gone: a
         // rest waiting for the turn sees it.
         let opening = turn.hold("opening");
-        let runtime = self.allocate_held(&id, channel, provision).await?;
+        let runtime = self.allocate_held(&id, channel, cloud, provision).await?;
         Ok(Arc::new(HeldRuntime { runtime, opening }))
     }
     async fn allocate_held(
         &self,
         id: &str,
         channel: Option<ChannelId>,
+        cloud: Option<Cloud>,
         provision: bool,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         let id = id.to_owned();
         let recorded = self.recorded(&id).await?;
         // A recorded thread stays on its cloud; a new one goes to the cloud
-        // chosen now.
-        let parts = match &recorded {
-            Some((parts, _)) => parts.clone(),
-            None => self.parts(self.cloud().await?)?.clone(),
+        // its channel names, else to the cloud chosen now.
+        let parts = match (&recorded, cloud) {
+            (Some((parts, _)), _) => parts.clone(),
+            (None, Some(cloud)) => self.parts(cloud)?.clone(),
+            (None, None) => self.parts(self.cloud().await?)?.clone(),
         };
         let parts = &parts;
         let connection = read_connection(parts).await?;

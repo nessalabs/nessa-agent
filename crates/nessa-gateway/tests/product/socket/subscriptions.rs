@@ -3355,6 +3355,9 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
         "conversation.subscribe",
         "conversation.subscribeList",
         "conversation.unsubscribe",
+        "grants.subscribe",
+        "grants.page",
+        "grants.unsubscribe",
     ];
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;

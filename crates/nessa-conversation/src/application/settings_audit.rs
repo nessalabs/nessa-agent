@@ -20,8 +20,8 @@ pub enum SettingsChange {
     /// `coordinator` was its main conversation.
     ChannelPlacement {
         channel: ChannelId,
-        before: ChannelExecution,
-        after: ChannelExecution,
+        before: Box<ChannelExecution>,
+        after: Box<ChannelExecution>,
         coordinator: ConversationId,
     },
 }

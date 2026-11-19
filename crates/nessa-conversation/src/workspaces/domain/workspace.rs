@@ -75,20 +75,7 @@ impl VmSpec {
     }
 }
 
-/// The clouds a thread's VM can run on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Cloud {
-    Boat,
-    Agent37,
-}
-impl Cloud {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Boat => "boat",
-            Self::Agent37 => "agent37",
-        }
-    }
-}
+pub use crate::domain::Cloud;
 
 /// Who Nessa is on the cloud a connection names.
 #[derive(Clone)]

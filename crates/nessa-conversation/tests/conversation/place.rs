@@ -70,3 +70,27 @@ fn a_channel_holds_any_place_and_spells_each_one_way() {
         );
     }
 }
+
+#[test]
+fn a_channel_names_the_cloud_its_vms_are_made_on() {
+    use crate::domain::Cloud;
+    // Each cloud's own name is a channel place on its VMs, kept apart for
+    // the main agent and for threads.
+    let execution = ChannelExecution::parse("agent37", "boat").unwrap();
+    assert_eq!(*execution.coordinator(), Place::CloudVm);
+    assert_eq!(*execution.threads(), Place::CloudVm);
+    assert_eq!(execution.coordinator_cloud(), Some(Cloud::Agent37));
+    assert_eq!(execution.threads_cloud(), Some(Cloud::Boat));
+    assert_eq!(execution.coordinator_word(), "agent37");
+    assert_eq!(execution.threads_word(), "boat");
+    assert_ne!(execution, ChannelExecution::parse("boat", "boat").unwrap());
+    // A place that is not a cloud VM names no cloud: a pool's overflow goes
+    // to the cloud chosen for new thread VMs.
+    let elsewhere = ChannelExecution::parse("local", "pool").unwrap();
+    assert_eq!(elsewhere.coordinator_cloud(), None);
+    assert_eq!(elsewhere.threads_cloud(), None);
+    for cloud in Cloud::ALL {
+        assert_eq!(Cloud::parse(cloud.as_str()), Some(cloud));
+    }
+    assert_eq!(Cloud::parse("boat:thread"), None);
+}

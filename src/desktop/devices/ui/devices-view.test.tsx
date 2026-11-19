@@ -354,7 +354,31 @@ it("adds a phone or the cloud from Add device too", async () => {
   await act(async () =>
     (host.querySelector('[data-devices-add="cloud"]') as HTMLElement).click(),
   )
+  // Every cloud in the registry is offered, each leading to its own page.
+  expect(
+    [...host.querySelectorAll("[data-devices-add-cloud]")].map((each) =>
+      each.getAttribute("data-devices-add-cloud"),
+    ),
+  ).toEqual(["boat", "agent37"])
+  await act(async () =>
+    (host.querySelector('[data-devices-add-cloud="agent37"]') as HTMLElement).click(),
+  )
+  expect(host.querySelector('[data-devices-cloud-page="agent37"]')).not.toBeNull()
+  expect(host.querySelector('[data-setting="agent37"]')).not.toBeNull()
+  await act(async () =>
+    (host.querySelector('[data-devices-action="back"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-action="add"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-add="cloud"]') as HTMLElement).click(),
+  )
+  await act(async () =>
+    (host.querySelector('[data-devices-add-cloud="boat"]') as HTMLElement).click(),
+  )
   expect(host.querySelector('[data-devices-page="cloud"]')).not.toBeNull()
+  expect(host.querySelector('[data-devices-cloud-page="agent37"]')).toBeNull()
   await act(async () => root.unmount())
 })
 

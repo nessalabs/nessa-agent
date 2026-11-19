@@ -2400,7 +2400,10 @@ async fn dispatch_authorized(
         ProductMethod::SessionAuthenticate
         | ProductMethod::AuthSession
         | ProductMethod::AgentsSubscribe
-        | ProductMethod::AgentsUnsubscribe => failure(&frame.id, "unknown_method"),
+        | ProductMethod::AgentsUnsubscribe
+        | ProductMethod::GrantsSubscribe
+        | ProductMethod::GrantsPage
+        | ProductMethod::GrantsUnsubscribe => failure(&frame.id, "unknown_method"),
     }
 }
 

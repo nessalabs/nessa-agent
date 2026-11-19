@@ -39,9 +39,11 @@ import {
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
  *   cloud       Agent37 is picked as the cloud for new thread VMs in
- *               Settings › Connections › Accounts: a thread's VM is made on
- *               Agent37 (the fixture's fake one) and stays there after Boat
- *               is picked again, while the next thread's goes to Boat
+ *               Settings › Accounts: a thread's VM is made on Agent37 (the
+ *               fixture's fake one) and stays there after Boat is picked
+ *               again, while the next thread's goes to Boat; a thread in a
+ *               channel placed on Agent37 goes to Agent37 while Boat is
+ *               chosen
  *   restore     a restored conversation is opened and shows its saved record;
  *               another, whose source file is moved aside, refuses Send and
  *               keeps the draft
@@ -608,6 +610,8 @@ const FRESH_CLIENTS = 3
  */
 const LAUNCH_STARTING_MS = 3_000
 const LAUNCH_LISTED_MS = 10_000
+/** A slow launch's hold: short, so outlasting it costs the run little. */
+const SLOW_LAUNCH_HOLD_MS = 1_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -757,18 +761,46 @@ async function swipeColumns(run, step, message, port, failures) {
     }
     await page.mouse.move(point.x, point.y)
     clock = Math.max(clock + 1, Date.now() / 1000)
-    for (let i = 0; i < events; i += 1) {
-      if (input)
-        await input.send("Input.dispatchMouseEvent", {
-          type: "mouseWheel",
-          x: point.x,
-          y: point.y,
-          deltaX: x,
-          deltaY: y,
-          timestamp: clock + i * 0.016,
-        })
-      else await page.mouse.wheel(x, y)
-    }
+    // `x` is each event's travel, or a list of them for a gesture whose
+    // events differ (a fling's momentum dying down, then the next swipe).
+    const xs = Array.isArray(x) ? x : Array.from({ length: events }, () => x)
+    if (!input && Array.isArray(x))
+      // Elsewhere a gesture with no pause in it goes in from the page, one
+      // wheel event a frame, as a trackpad sends them: a slow round trip
+      // from the script cannot open a pause, and the window draws between
+      // events as it would.
+      await page.evaluate(
+        async ({ point, xs, y }) => {
+          const target = document.elementFromPoint(point.x, point.y)
+          for (const deltaX of xs) {
+            await new Promise((done) => requestAnimationFrame(done))
+            target?.dispatchEvent(
+              new WheelEvent("wheel", {
+                bubbles: true,
+                cancelable: true,
+                clientX: point.x,
+                clientY: point.y,
+                deltaX,
+                deltaY: y,
+              }),
+            )
+          }
+        },
+        { point, xs, y },
+      )
+    else
+      for (const [i, each] of xs.entries()) {
+        if (input)
+          await input.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: each,
+            deltaY: y,
+            timestamp: clock + i * 0.016,
+          })
+        else await page.mouse.wheel(each, y)
+      }
     await page.waitForTimeout(400)
   }
   let ticks = (await columns()).haptics
@@ -819,6 +851,20 @@ async function swipeColumns(run, step, message, port, failures) {
   await expect("a third swipe right", all, 1)
   await swipe(words, -15)
   await expect("a swipe right with everything open", all, 0)
+  // Two swipes with no pause between them, the second starting as the
+  // first one's momentum dies down: each folds a column, with its own tick.
+  // The pointer stays where it was, as two fingers on a trackpad leave it.
+  // Every engine: this is what the shipping WKWebView is read for.
+  const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
+  await swipe(words, [...fling, ...fling])
+  await expect(
+    "two swipes left back to back",
+    { rail: "open", sidebar: "closed", list: "closed" },
+    2,
+  )
+  const back = fling.map((each) => -each)
+  await swipe(words, [...back, ...back])
+  await expect("two swipes right back to back", all, 2)
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The conversation still takes a message.
@@ -3516,6 +3562,68 @@ async function enrollPeer(run, profile, code, invitationId) {
   }
 }
 
+/**
+ * The `launch` step's slow launch: the host's startup outlasts its hold of
+ * the window's read, so the window is refused as still starting. True when
+ * the window stayed uncovered and listed the main conversation once up.
+ */
+async function slowLaunch(run, failures) {
+  const page = run.page
+  const removeKey = () =>
+    page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+  await page.evaluate(
+    ([key, hold]) => sessionStorage.setItem(key, String(hold)),
+    [STARTING.key, SLOW_LAUNCH_HOLD_MS],
+  )
+  let covered
+  let refused
+  try {
+    await page.reload()
+    // Wait until the host has refused at least once as still starting.
+    const passed = await page
+      .waitForFunction(() => window.__fakeHostStillStarting > 0, null, {
+        timeout: SLOW_LAUNCH_HOLD_MS + LAUNCH_STARTING_MS,
+      })
+      .then(() => true)
+      .catch(() => false)
+    refused = passed
+    // And a little after: the refusal has reached the window by now.
+    covered = await page
+      .locator(css.startupScreen)
+      .waitFor({ timeout: LAUNCH_STARTING_MS })
+      .then(() => true)
+      .catch(() => false)
+  } finally {
+    await removeKey().catch(() => removeKey().catch(() => {}))
+  }
+  if (!refused) {
+    failures.push("the slow launch's startup never outlasted the host's hold")
+    return false
+  }
+  if (covered) {
+    failures.push(
+      "the window showed the startup screen for a startup still running past the host's hold",
+    )
+    return false
+  }
+  const listed = await page
+    .locator(selectorFor.sessionListRowFor(run.main.id))
+    .waitFor({ timeout: LAUNCH_LISTED_MS })
+    .then(() => true)
+    .catch(() => false)
+  if (!listed) {
+    failures.push(
+      `after a slow launch the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+    )
+    return false
+  }
+  if ((await page.locator(css.startupScreen).count()) > 0) {
+    failures.push("the startup screen covers the window after a slow launch was up")
+    return false
+  }
+  return true
+}
+
 const steps = {
   /** The cloud for new thread VMs is picked in Settings › Connections ›
    * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
@@ -3601,6 +3709,86 @@ const steps = {
     await talk(onBoat, `${STRESS.reply} cloud boat ${step.index}`)
     if (made(onBoat).join() !== "boat")
       failures.push(`a VM made with Boat chosen was made on: ${made(onBoat).join()}`)
+    // A channel names its own cloud: its threads go to Agent37 while Boat is
+    // the cloud chosen for new thread VMs, and the channel says so back.
+    const name = `stress-cloud-r${step.index}-s${run.knobs.seed}`
+    // Made here as setup; the person moves its threads to Agent37 in the
+    // channel's settings, from the menu that lists every cloud.
+    const channel = await run.client.channels.create({
+      requestId: name,
+      name,
+      agent: run.stack.agent,
+      model: run.stack.profile.model,
+    })
+    const inChannel = randomUUID()
+    try {
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      const named = run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+      await named.hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+        )
+        .click()
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator(`[data-channel-placement="${channel.channelId}"]`)
+      try {
+        await pickChoice(
+          run.page,
+          control.locator('[data-placement-row="threads"]'),
+          "agent37",
+        )
+        if (
+          !(await waitFor(
+            async () =>
+              (await control.getAttribute("data-thread-placement")) === "agent37",
+            10_000,
+          ))
+        )
+          failures.push("the channel settings do not show new threads on Agent37")
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `cloud-${run.engine}-channel-agent37.png`),
+          })
+      } finally {
+        const dialog = run.page.locator(css.channelSettingsDialog)
+        for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+          await run.page.keyboard.press(keys.escape)
+          await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+        }
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (listed?.threadPlacement !== "agent37")
+        failures.push(`a channel moved to Agent37 reads back ${listed?.threadPlacement}`)
+      await run.client.conversation.create({
+        conversationId: inChannel,
+        agent: run.stack.agent,
+        channelId: channel.channelId,
+      })
+      await talk(inChannel, `${STRESS.reply} cloud channel ${step.index}`)
+      if (made(inChannel).join() !== "agent37")
+        failures.push(
+          `a thread in a channel on Agent37 was made on: ${made(inChannel).join()}`,
+        )
+      run.checked.push(inChannel)
+    } finally {
+      await run.client.channels
+        .setPlacement({
+          requestId: `${name}-back`,
+          channelId: channel.channelId,
+          coordinatorPlacement: "local",
+          threadPlacement: "local",
+        })
+        .catch((error) =>
+          failures.push(`${name} did not go back here: ${explain(error)}`),
+        )
+    }
     run.checked.push(onAgent37, onBoat)
     run.main = original
     await openStressConversation(run.page, original.id, original.title)
@@ -6218,6 +6406,12 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
+      // A slow launch: startup runs past the host's hold of the window's
+      // read (a busy Mac took 26.7 s against the 15 s hold). The host refuses
+      // the read as still starting, which is no failure: the window must not
+      // cover itself with "couldn't start", and lists the conversation once
+      // the gateway is up. The hold is shortened for this launch only.
+      if (!(await slowLaunch(run, failures))) return
       await unlockRequestedVault(run.client, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })
@@ -7235,12 +7429,12 @@ const steps = {
         await list.waitFor({ timeout: 5_000 })
         if (
           (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
-          (await list.locator("[data-devices-cloud]").count()) !== 1
+          (await list.locator('[data-devices-cloud-id="boat"]').count()) !== 1
         )
           failures.push("the worker and the cloud are not in one list")
         if (
           (await list
-            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .locator('[data-devices-cloud-id="boat"] [data-slot=device-figure]')
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
@@ -7263,7 +7457,7 @@ const steps = {
           failures.push("the Devices title still has a line under it")
         if ((await page.locator('[data-devices-action^="add"]').count()) !== 1)
           failures.push("Devices offers Add device more than once")
-        const boatSays = await list.locator("[data-devices-cloud]").innerText()
+        const boatSays = await list.locator('[data-devices-cloud-id="boat"]').innerText()
         if (/Offline/.test(boatSays) && /Not connected/.test(boatSays))
           failures.push(`Boat's tile says its state twice: ${boatSays}`)
         // The `ssh` step's suggestions are a section of their own, under it.
@@ -7280,7 +7474,7 @@ const steps = {
           )
         )
           failures.push("Devices still sends Boat to Settings")
-        await list.locator("[data-devices-cloud]").click()
+        await list.locator('[data-devices-cloud-id="boat"]').click()
         const cloud = page.locator('[data-devices-page="cloud"]')
         await cloud.waitFor({ timeout: 5_000 })
         // It says where Boat stands, and offers the one thing to do about it:
@@ -7331,6 +7525,29 @@ const steps = {
           )
         if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // Add device › Cloud offers every cloud, each opening its own page.
+        await page.locator('[data-devices-add="cloud"]').click()
+        const offered = await page
+          .locator("[data-devices-add-cloud]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add-cloud")),
+          )
+        if (JSON.stringify(offered) !== JSON.stringify(["boat", "agent37"]))
+          failures.push(`Add device › Cloud offers ${JSON.stringify(offered)}`)
+        await page.locator('[data-devices-add-cloud="agent37"]').click()
+        if (
+          !(await page
+            .locator('[data-devices-cloud-page="agent37"] [data-setting="agent37"]')
+            .waitFor({ timeout: 5_000 })
+            .then(
+              () => true,
+              () => false,
+            ))
+        )
+          failures.push("Add device › Cloud › Agent37 does not open Agent37's page")
+        await photograph("cloud-agent37")
+        await page.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
         // A phone pairs right here: Settings' rows, drawn as cards on Devices,
         // and the code's modal on top of the page, giving focus back on Escape.
         await page.locator('[data-devices-add="phone"]').click()

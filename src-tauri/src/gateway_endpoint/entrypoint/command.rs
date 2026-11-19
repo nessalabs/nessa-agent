@@ -124,7 +124,7 @@ mod tests {
             "ci",
             Duration::ZERO,
         ));
-        assert_eq!(refused, Err(SurfaceCommandError::not_ready()));
+        assert_eq!(refused, Err(SurfaceCommandError::still_starting()));
         assert_eq!(discovery.calls.load(Ordering::SeqCst), 0);
         assert_eq!(*host.registrations.lock().unwrap(), 0);
 

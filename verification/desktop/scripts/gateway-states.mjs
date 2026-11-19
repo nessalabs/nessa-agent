@@ -167,11 +167,11 @@ const scenarios = [
   },
   {
     // The refusal a window meets when the host's startup of the gateway
-    // failed, or ran past the host's hold of the window's read
-    // (`GatewayReader`, `DESKTOP_STARTUP_WAIT`, H2′/H4′): the endpoint is
-    // refused and the credential is never asked for. A launch that goes well
-    // never shows it: the host holds the read until the gateway is up (the
-    // conversation stress check's `launch` step).
+    // failed (`GatewayReader`, H2′/H4′): the endpoint is refused and the
+    // credential is never asked for. A launch that goes well never shows it,
+    // nor does one that runs past the host's hold of the window's read
+    // (`DESKTOP_STARTUP_WAIT`): that is refused as still starting, which is
+    // no failure (the conversation stress check's `launch` step).
     name: "the gateway is not ready yet",
     endpoint: null,
     credential: "fixture-only",

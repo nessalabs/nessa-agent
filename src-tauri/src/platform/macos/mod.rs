@@ -81,7 +81,7 @@ impl Host for Macos {
     }
 
     fn perform_haptic(&self, window: &WebviewWindow) -> Result<(), String> {
-        haptics::level_change(window)
+        haptics::tick(window)
     }
 
     fn float_beside_fullscreen(&self, window: &WebviewWindow) {

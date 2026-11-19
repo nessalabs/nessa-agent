@@ -13,6 +13,8 @@ import type { Agent37Gateway } from "../adapters/agent37-gateway"
 import { useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
 import { Choice, FoundSetting, ItemRow, RowAction } from "./settings-controls"
+import { cloudChoices } from "../../clouds/model/clouds"
+import { useBoatConnection } from "./boat-row"
 
 const Agent37Context = createContext<Agent37Gateway | undefined>(undefined)
 export function Agent37Provider({
@@ -23,6 +25,9 @@ export function Agent37Provider({
   children: ReactNode
 }) {
   return <Agent37Context.Provider value={gateway}>{children}</Agent37Context.Provider>
+}
+export function useAgent37Gateway() {
+  return useContext(Agent37Context)
 }
 
 function failure(cause: unknown): string {
@@ -37,11 +42,19 @@ function failure(cause: unknown): string {
  * button. The key is pasted in a dialog that Connect… opens. Below it, which
  * cloud new thread VMs are made on.
  */
-export function Agent37Row() {
+export function Agent37Row({
+  onChange,
+}: {
+  /** Hears each state the row comes to read, so a page around it can follow. */
+  onChange?: (state: Agent37Status["state"]) => void
+} = {}) {
   const gateway = useContext(Agent37Context)
   const ensure = useVaultUnlock()
   const found = useContext(FoundSetting) === "agent37"
+  const choiceFound = useContext(FoundSetting) === "cloud-choice"
   const entry = setting("agent37")
+  const choiceEntry = setting("cloud-choice")
+  const boatState = useBoatConnection().status?.state
   const reads = useRef(0)
   const keyId = useId()
   const [status, setStatus] = useState<Agent37Status>()
@@ -93,6 +106,9 @@ export function Agent37Row() {
     }
   }
   const state = status?.state
+  useEffect(() => {
+    if (state !== undefined) onChange?.(state)
+  }, [state, onChange])
   return (
     <>
       <ItemRow
@@ -157,7 +173,9 @@ export function Agent37Row() {
         }
       />
       <ItemRow
-        label="Cloud for new thread VMs"
+        setting="cloud-choice"
+        found={choiceFound}
+        label={choiceEntry.label}
         detail={
           cloud === "agent37" && state !== "connected"
             ? "Agent37 is chosen; unlock to see its connection. A thread whose VM exists stays on the cloud it was made on."
@@ -167,12 +185,11 @@ export function Agent37Row() {
         data-cloud-choice={cloud ?? "reading"}
         control={
           <Choice
-            label="Cloud for new thread VMs"
+            label={choiceEntry.label}
             value={cloud}
-            options={[
-              { id: "boat", label: "Boat" },
-              { id: "agent37", label: "Agent37", disabled: state !== "connected" },
-            ]}
+            options={cloudChoices((id) =>
+              id === "agent37" ? state === "connected" : boatState !== "disconnected",
+            ).map(({ id, label, disabled }) => ({ id, label, disabled }))}
             onChange={(next: Cloud) =>
               void act(
                 async (gateway) => setCloud((await gateway.chooseCloud(next)).cloud),

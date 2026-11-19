@@ -76,6 +76,8 @@ import {
 import type { ModelRef } from "../../model/workspace-index"
 import { channelPlaceWords } from "../channel-place-words"
 import { useComputers } from "../channel-settings/computers"
+import { cloudChoices } from "../../../clouds/model/clouds"
+import { useCloudStates } from "../../../clouds/ui/cloud-states"
 import "./new-channel.css"
 
 /** The question each step asks. */
@@ -640,10 +642,13 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
 function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
   const dispatch = useWorkspaceDispatch()
   const onKeyDown = useReturnAnswers()
-  // Boat is offered only once it is connected: a channel placed there before
-  // would refuse every message. Connecting it is offered right here.
+  // A cloud is offered only once it is connected: a channel placed there
+  // before would refuse every message. Connecting Boat is offered right
+  // here; another cloud is connected in Settings.
   const boat = useBoatConnection()
   const boatReady = boat.status?.state === "connected"
+  const states = useCloudStates(boat.status?.state)
+  const offered = cloudChoices((id) => states[id] === "connected", "with-state")
   const computers = useComputers()
   return (
     <div
@@ -668,7 +673,7 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
               const value = event.target.value
               if (
                 value === "local" ||
-                value === "boat" ||
+                offered.some((cloud) => cloud.id === value && !cloud.disabled) ||
                 value === "pool" ||
                 computers.some((computer) => computer.environment === value)
               )
@@ -676,9 +681,11 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             }}
           >
             <option value="local">Local</option>
-            <option value="boat" disabled={!boatReady}>
-              {boatReady ? "Boat" : "Boat (not connected)"}
-            </option>
+            {offered.map((cloud) => (
+              <option key={cloud.id} value={cloud.id} disabled={cloud.disabled}>
+                {cloud.label}
+              </option>
+            ))}
             <option value="pool">Any computer</option>
             {computers.map((computer) => (
               <option key={computer.environment} value={computer.environment}>
@@ -689,10 +696,11 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
         </label>
       ))}
       <p>
-        Boat runs Claude or Codex in a cloud workspace using your connected subscriptions.
-        Keep your Nessa gateway online; local folders need an approved connection. New
-        channels use your default Boat VM lifetime; change it in channel settings to
-        override.
+        A cloud runs Claude or Codex in a workspace VM of each thread’s own: Boat on your
+        connected subscriptions, Agent37 on your own Agent37 account (connect it in
+        Settings › Accounts). Keep your Nessa gateway online; local folders need an
+        approved connection. New channels use your default VM lifetime; change it in
+        channel settings to override.
       </p>
       {boatReady || boat.unread ? null : (
         <div className="settings-boat" data-boat-connect>

@@ -1468,6 +1468,7 @@ async fn conversations(
     let workspace_environments = super::vm_background_gateway::environments(
         workspace_environments,
         thread_workspaces.service.clone(),
+        channel_store.clone(),
     );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = nessa_agent_install::infrastructure::host_platform();

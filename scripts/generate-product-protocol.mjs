@@ -484,7 +484,12 @@ rs += `pub const MAX_PEERS: usize = ${maxPeers};\n`
 // Subscription capacity and delivery deadline are product policy too: the
 // server reads these constants, and the desktop keeps within the same limit.
 const subscriptionLimits = schema["x-subscriptionLimits"]
-const subscriptionLimitNames = ["conversationTargets", "listTargets", "deliveryTimeoutMs"]
+const subscriptionLimitNames = [
+  "conversationTargets",
+  "listTargets",
+  "grantTargets",
+  "deliveryTimeoutMs",
+]
 for (const name of subscriptionLimitNames) {
   if (
     !subscriptionLimits ||
@@ -498,6 +503,7 @@ if (Object.keys(subscriptionLimits).length !== subscriptionLimitNames.length)
   throw new Error("Invalid subscription limit: unknown policy key")
 rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscriptionLimits.conversationTargets};\n`
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
+rs += `pub const MAX_CONNECTION_GRANT_SUBSCRIPTIONS: usize = ${subscriptionLimits.grantTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
 const backgroundId = schema.$defs.ConversationTool.properties.backgroundTaskId

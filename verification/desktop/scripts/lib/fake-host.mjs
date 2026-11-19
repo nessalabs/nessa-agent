@@ -34,9 +34,13 @@ export const STARTING = {
  * Given `starting` (`STARTING`), while its key is set in session storage the
  * host is still starting the gateway: the endpoint is answered once the key
  * is removed, as the real host holds the desktop window's read through a
- * startup still running (`GatewayReader`), and refused as not ready if it is
- * still set after `waitMs`. A scenario sets it before a reload and removes it
- * once the gateway is "up": a launch.
+ * startup still running (`GatewayReader`), and refused as still starting if
+ * it is still set after `waitMs` — no failure, so the window keeps trying
+ * (each such refusal is counted in `window.__fakeHostStillStarting`). A key
+ * whose value is a number of milliseconds holds that launch's read for that
+ * long instead, so a scenario can outlast the hold without waiting out the
+ * real one. A scenario sets it before a reload and removes it once the
+ * gateway is "up": a launch.
  *
  * A new channel's pickers answer from `window.__fakeHostPicks`: the next
  * folder chosen (`folders`, null for a cancel) and the next files or folders
@@ -101,6 +105,7 @@ export function gatewayHost({
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
+  const stillStartingRefusal = { reason: "still-starting" }
   const notProvisioned = { reason: "not-provisioned" }
   let callbacks = 0
   const handlers = new Map()
@@ -108,6 +113,7 @@ export function gatewayHost({
   window.__fakeHostAsked = asked
   // When each endpoint ask came, in the page's `performance.now()`.
   window.__fakeHostAskTimes = []
+  window.__fakeHostStillStarting = 0
   window.__fakeHostReplays = 0
   window.__fakeHostHaptics = 0
   window.__fakeHostSetupFinishes = []
@@ -270,7 +276,7 @@ export function gatewayHost({
         window.__fakeHostAskTimes.push(performance.now())
         if (endpoint === null) return Promise.reject(notReady)
         if (!starting) return Promise.resolve(endpoint)
-        return startedBy(performance.now() + starting.waitMs).then(() => endpoint)
+        return startedBy(performance.now() + holdMs()).then(() => endpoint)
       }
       if (command === "load_surface_credential") {
         asked[command]++
@@ -281,6 +287,16 @@ export function gatewayHost({
       return new Promise(() => {})
     },
   }
+  // This launch's hold: the key's value when it is a number, else the host's.
+  function holdMs() {
+    try {
+      const held = Number(sessionStorage.getItem(starting.key))
+      return Number.isFinite(held) && held > 1 ? held : starting.waitMs
+    } catch {
+      return starting.waitMs
+    }
+  }
+
   function stillStarting() {
     try {
       return sessionStorage.getItem(starting.key) !== null
@@ -289,13 +305,15 @@ export function gatewayHost({
     }
   }
 
-  // Answers once startup is over, or refuses as not ready at `deadline`.
+  // Answers once startup is over, or refuses as still starting at `deadline`.
   function startedBy(deadline) {
     return new Promise((resolve, reject) => {
       const check = () => {
         if (!stillStarting()) resolve()
-        else if (performance.now() >= deadline) reject(notReady)
-        else setTimeout(check, 50)
+        else if (performance.now() >= deadline) {
+          window.__fakeHostStillStarting++
+          reject(stillStartingRefusal)
+        } else setTimeout(check, 50)
       }
       check()
     })

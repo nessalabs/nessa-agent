@@ -209,11 +209,17 @@ it("says a refusal is not the person's to make, and any other failure is passing
 it("shows a channel on one computer by that computer, and offers none it cannot reach", async () => {
   await shown(async () => channel)
   // No computer is connected, so none is listed to choose.
-  expect(await listed("threads")).toEqual(["This Mac", "Boat", "Any computer"])
+  expect(await listed("threads")).toEqual(["This Mac", "Boat", "Agent37", "Any computer"])
   await closeMenus()
   await shown(async () => channel, "connected", { threadPlacement: "devbox" })
   // Saved on a computer not connected now: the menu still says where it runs.
   expect(trigger("threads").dataset.choice).toBe("devbox")
   expect(trigger("threads").textContent).toBe("devbox")
-  expect(await listed("threads")).toEqual(["This Mac", "Boat", "Any computer", "devbox"])
+  expect(await listed("threads")).toEqual([
+    "This Mac",
+    "Boat",
+    "Agent37",
+    "Any computer",
+    "devbox",
+  ])
 })

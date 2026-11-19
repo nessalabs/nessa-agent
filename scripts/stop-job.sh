@@ -2,7 +2,7 @@
 #
 # Sourced, not run: `just start` and `scripts/run-dev-app.sh` both need this and
 # both had their own copy, with the same explanation written out twice. They run
-# in the same process tree — `just start` calls `just dev`, which runs the other
+# in the same process tree — `just start` calls `just app`, which runs the other
 # — so a change to one and not the other is a teardown that half works.
 #
 # The group, not the pid. `set -m` puts each job in a process group of its own,

@@ -422,7 +422,8 @@ impl ChannelStore for LocalChannelStore {
                 .optional()
                 .map_err(failed)?
                 .is_some();
-            if current.execution().coordinator() != execution.coordinator() && main_made {
+            // Its word names the cloud too: Boat to Agent37 is a move.
+            if current.execution().coordinator_word() != execution.coordinator_word() && main_made {
                 // The main conversation already made (or begun: a creation
                 // places it in its channel before it exists) stays where it
                 // runs; a fresh one is named for the new place. One never

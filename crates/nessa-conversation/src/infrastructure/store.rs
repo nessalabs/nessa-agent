@@ -198,6 +198,8 @@ pub struct LocalConversationStore {
     /// steer drops it after the save and before the provider injection
     /// wait, then compares the revision again.
     grant_gates: Arc<share_grants::GrantGates>,
+    /// Wakes grant subscriptions after a grant-log append commits.
+    grant_log: std::sync::Arc<tokio::sync::Notify>,
     /// When set, the next grant write blocks inside its blocking task,
     /// still holding the permit, until [`GrantWritePause::release`].
     #[cfg(any(test, feature = "test-support"))]
@@ -255,6 +257,7 @@ impl LocalConversationStore {
             grant_path,
             person_links: std::sync::RwLock::new(None),
             grant_gates: share_grants::GrantGates::new(),
+            grant_log: std::sync::Arc::new(tokio::sync::Notify::new()),
             #[cfg(any(test, feature = "test-support"))]
             grant_write_pause: Mutex::new(None),
             #[cfg(any(test, feature = "test-support"))]

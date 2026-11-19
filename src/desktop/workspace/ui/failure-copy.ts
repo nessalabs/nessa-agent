@@ -19,6 +19,7 @@ const copy: Record<WorkspaceFailureReason, string> = {
   "signed-out": "This window isn’t signed in to the local server.",
   "not-started": startupRefusalSentence("not-provisioned"),
   "not-ready": startupRefusalSentence("not-ready"),
+  "still-starting": startupRefusalSentence("still-starting"),
   "not-listening": startupRefusalSentence("not-listening"),
   "wrong-stage": wrongStageSentence(null),
   "source-gone":
