@@ -11,6 +11,7 @@ import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { CodeBlockProvider } from "@nessa-ui/react/code-block"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import {
   askReviewNoticeAccess,
   chooseChannelFolder,
@@ -280,6 +281,10 @@ const hapticTick = () => void performHaptic().catch(() => {})
 
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
+
+// Agent replies are drawn by Words, which compiles its WebAssembly as it
+// loads; loading it now means the first reply never shows as plain text.
+void preloadReplyMarkdown()
 
 createRoot(container).render(
   <React.StrictMode>

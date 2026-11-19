@@ -24,7 +24,12 @@ test("packaged desktop content policy permits required local capabilities", () =
   )
   assert.deepEqual(directives, {
     "default-src": ["'self'"],
-    "script-src": ["'self'"],
+    // Agent replies are parsed by Words (@pierre/words, through the kit's
+    // ReplyMarkdown), which compiles WebAssembly when the window loads. A
+    // policy without 'wasm-unsafe-eval' refuses that compile, and the
+    // window's scripts fail to load at all. It allows compiling WebAssembly
+    // only, not eval.
+    "script-src": ["'self'", "'wasm-unsafe-eval'"],
     "style-src": ["'self'", "'unsafe-inline'"],
     "font-src": ["'self'", "data:"],
     "media-src": ["'self'", "data:"],

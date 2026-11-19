@@ -24,7 +24,7 @@ import { MessageContentView } from "./message-content"
 import { PublishedFiles } from "./published-files"
 import { TranscriptNotes } from "./transcript-note"
 import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
-import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { ReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import {
   signInAction,
@@ -370,7 +370,7 @@ const TurnRow = React.memo(function TurnRow({
             />
           </>
         ) : (
-          <MessageMarkdown streaming={streaming}>{turn.text}</MessageMarkdown>
+          <ReplyMarkdown streaming={streaming}>{turn.text}</ReplyMarkdown>
         )}
       </ChatBubble>
       {turn.from === "user" ? (

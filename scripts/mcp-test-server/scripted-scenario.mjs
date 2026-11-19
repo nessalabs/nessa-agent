@@ -114,7 +114,10 @@ const FIELDS = {
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save", "times", "title", "keepErrors"] }
+const OPTIONAL = {
+  text: ["continues"],
+  tool: ["server", "save", "times", "title", "keepErrors"],
+}
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
@@ -204,7 +207,13 @@ function parseStep(step, branch) {
         step.chunks.some((chunk) => typeof chunk !== "string" || chunk === "")
       )
         throw new Error("text chunks are a non-empty list of non-empty strings")
-      return { do: "text", chunks: [...step.chunks] }
+      if (Object.hasOwn(step, "continues") && step.continues !== true)
+        throw new Error("a text step's continues is true or left out")
+      return {
+        do: "text",
+        chunks: [...step.chunks],
+        ...(step.continues ? { continues: true } : {}),
+      }
     case "tool":
       return {
         do: "tool",
@@ -556,7 +565,11 @@ export class ScriptedUsageLimitError extends Error {
 async function runStep(step, ctx) {
   switch (step.do) {
     case "text": {
-      const messageId = ctx.messageId()
+      // A step that continues adds to the message the text before it began,
+      // across a pause, as an agent that stops mid-reply does.
+      const messageId =
+        step.continues && ctx.lastMessageId ? ctx.lastMessageId : ctx.messageId()
+      ctx.lastMessageId = messageId
       for (const chunk of step.chunks) {
         // A chunk that is one whole reference is still text: a saved list
         // or object is written as JSON, never sent as an ACP text block.
