@@ -13,7 +13,10 @@
 //! so a stale copy costs at most one refused attempt.
 use super::{execute, Command, Failure, Operation, VaultConnection};
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use zeroize::Zeroizing;
 
 /// Why the fingerprint path did not produce a passphrase. Every one of them
@@ -73,6 +76,50 @@ impl BiometricStore for NoBiometrics {
     fn forget(&self) {}
 }
 
+/// The kept copy, with one ordering boundary for every write to it. A change
+/// replacing the copy checks "is one kept?" and saves under the same lock a
+/// Settings "turn off" takes, so a forget that lands between them cannot be
+/// undone by the save that follows.
+pub struct KeptPassphrase {
+    store: Arc<dyn BiometricStore>,
+    writes: Mutex<()>,
+}
+impl KeptPassphrase {
+    pub fn new(store: Arc<dyn BiometricStore>) -> Self {
+        Self {
+            store,
+            writes: Mutex::new(()),
+        }
+    }
+    fn available(&self) -> bool {
+        self.store.available()
+    }
+    fn release(&self) -> Result<Zeroizing<String>, BiometricFailure> {
+        self.store.release()
+    }
+    fn forget(&self) {
+        let _order = self
+            .writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.store.forget();
+    }
+    /// Save where a reader can guard it; `only_if_kept` replaces and never creates.
+    fn save(&self, passphrase: &str, only_if_kept: bool) {
+        let _order = self
+            .writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.store.available() && (!only_if_kept || self.store.saved()) {
+            let _ = self.store.save(passphrase);
+        }
+    }
+    fn status(&self) -> serde_json::Value {
+        let available = self.store.available();
+        serde_json::json!({ "available": available, "saved": available && self.store.saved() })
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BiometricOperation {
@@ -98,18 +145,18 @@ pub enum BiometricRefusal {
 /// vault's own reply, exactly as `vault_command` would for a typed passphrase.
 pub async fn execute_biometric(
     vault: Arc<dyn VaultConnection>,
-    store: Arc<dyn BiometricStore>,
+    store: Arc<KeptPassphrase>,
     command: BiometricCommand,
     deadline: Duration,
 ) -> Result<serde_json::Value, BiometricRefusal> {
     match command.operation {
-        BiometricOperation::Status => Ok(status(store.as_ref())),
+        BiometricOperation::Status => Ok(store.status()),
         BiometricOperation::Forget => {
             let pending = store.clone();
             tokio::task::spawn_blocking(move || pending.forget())
                 .await
                 .map_err(|_| BiometricRefusal::Vault(Failure::VaultUnavailable))?;
-            Ok(status(store.as_ref()))
+            Ok(store.status())
         }
         BiometricOperation::Unlock => {
             if !store.available() {
@@ -149,7 +196,7 @@ pub async fn execute_biometric(
 /// failure never turns the vault's answer into a failure; the next status
 /// read simply says nothing is saved.
 pub async fn settle_biometric(
-    store: Arc<dyn BiometricStore>,
+    store: Arc<KeptPassphrase>,
     operation: &Operation,
     remember: bool,
     passphrase: Option<Zeroizing<String>>,
@@ -168,17 +215,7 @@ pub async fn settle_biometric(
         return;
     }
     let replace_only = matches!(operation, Operation::ChangePassphrase);
-    let _ = tokio::task::spawn_blocking(move || {
-        if store.available() && (!replace_only || store.saved()) {
-            let _ = store.save(&passphrase);
-        }
-    })
-    .await;
-}
-
-fn status(store: &dyn BiometricStore) -> serde_json::Value {
-    let available = store.available();
-    serde_json::json!({ "available": available, "saved": available && store.saved() })
+    let _ = tokio::task::spawn_blocking(move || store.save(&passphrase, replace_only)).await;
 }
 
 fn refusal_code(reply: &serde_json::Value) -> Option<&str> {

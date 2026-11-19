@@ -83,7 +83,7 @@ pub struct HostDependencies {
     /// One app-lifetime anonymous-pipe vault connection, shared by all windows.
     pub vault: Arc<dyn crate::vault::application::VaultConnection>,
     /// Where a passphrase kept for fingerprint unlock lives, behind its prompt.
-    pub biometrics: Arc<dyn crate::vault::application::biometrics::BiometricStore>,
+    pub biometrics: Arc<crate::vault::application::biometrics::KeptPassphrase>,
     /// Opens provider-owned CLI login flows without reading their credentials.
     pub provider_login: Arc<dyn crate::provider_authentication::ProviderLogin>,
     /// The settings file: the panel's geometry, the quit policy, and whether
@@ -353,6 +353,9 @@ impl HostDependencies {
         #[cfg(not(target_os = "macos"))]
         let biometrics: Arc<dyn crate::vault::application::biometrics::BiometricStore> =
             Arc::new(crate::vault::application::biometrics::NoBiometrics);
+        let biometrics = Arc::new(crate::vault::application::biometrics::KeptPassphrase::new(
+            biometrics,
+        ));
         Ok(Self {
             vault,
             biometrics,

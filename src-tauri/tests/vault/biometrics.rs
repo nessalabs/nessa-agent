@@ -99,6 +99,9 @@ fn run<T>(future: impl std::future::Future<Output = T>) -> T {
         .unwrap()
         .block_on(future)
 }
+fn kept(store: &Arc<Store>) -> Arc<KeptPassphrase> {
+    Arc::new(KeptPassphrase::new(store.clone()))
+}
 fn command(operation: &str) -> BiometricCommand {
     serde_json::from_value(json!({ "operation": operation })).unwrap()
 }
@@ -111,7 +114,7 @@ fn a_fingerprint_hands_the_saved_passphrase_to_the_vault_as_an_unlock() {
     let store = Store::new(true, Ok(()), Some(WORDS));
     let reply = run(execute_biometric(
         vault.clone(),
-        store.clone(),
+        kept(&store),
         command("unlock"),
         DEADLINE,
     ));
@@ -132,7 +135,7 @@ fn a_dismissed_prompt_sends_nothing_and_keeps_the_copy() {
     let store = Store::new(true, Err(BiometricFailure::Cancelled), Some(WORDS));
     let reply = run(execute_biometric(
         vault.clone(),
-        store.clone(),
+        kept(&store),
         command("unlock"),
         DEADLINE,
     ));
@@ -154,7 +157,7 @@ fn a_device_without_a_reader_never_prompts() {
     let store = Store::new(false, Ok(()), Some(WORDS));
     let reply = run(execute_biometric(
         vault.clone(),
-        store.clone(),
+        kept(&store),
         command("unlock"),
         DEADLINE,
     ));
@@ -164,7 +167,13 @@ fn a_device_without_a_reader_never_prompts() {
     );
     assert_eq!(*store.prompts.lock().unwrap(), 0);
     assert_eq!(
-        run(execute_biometric(vault, store, command("status"), DEADLINE)).unwrap(),
+        run(execute_biometric(
+            vault,
+            kept(&store),
+            command("status"),
+            DEADLINE
+        ))
+        .unwrap(),
         json!({"available": false, "saved": false})
     );
 }
@@ -175,7 +184,7 @@ fn a_copy_the_vault_refuses_is_dropped() {
     let store = Store::new(true, Ok(()), Some(WORDS));
     let reply = run(execute_biometric(
         vault,
-        store.clone(),
+        kept(&store),
         command("unlock"),
         DEADLINE,
     ));
@@ -193,7 +202,7 @@ fn forget_drops_the_copy_and_reports_it() {
     assert_eq!(
         run(execute_biometric(
             vault.clone(),
-            store.clone(),
+            kept(&store),
             command("status"),
             DEADLINE
         ))
@@ -203,7 +212,7 @@ fn forget_drops_the_copy_and_reports_it() {
     assert_eq!(
         run(execute_biometric(
             vault,
-            store.clone(),
+            kept(&store),
             command("forget"),
             DEADLINE
         ))
@@ -220,7 +229,7 @@ fn only_an_accepted_unlock_that_asked_to_remember_saves_the_passphrase() {
     let store = Store::new(true, Ok(()), None);
     let words = || Some(Zeroizing::new(WORDS.to_string()));
     run(settle_biometric(
-        store.clone(),
+        kept(&store),
         &Operation::Unlock,
         false,
         words(),
@@ -228,7 +237,7 @@ fn only_an_accepted_unlock_that_asked_to_remember_saves_the_passphrase() {
     ));
     assert_eq!(store.saved_copy(), None, "not asked to remember");
     run(settle_biometric(
-        store.clone(),
+        kept(&store),
         &Operation::Unlock,
         true,
         words(),
@@ -236,7 +245,7 @@ fn only_an_accepted_unlock_that_asked_to_remember_saves_the_passphrase() {
     ));
     assert_eq!(store.saved_copy(), None, "refused by the vault");
     run(settle_biometric(
-        store.clone(),
+        kept(&store),
         &Operation::Unlock,
         true,
         words(),
@@ -246,7 +255,7 @@ fn only_an_accepted_unlock_that_asked_to_remember_saves_the_passphrase() {
 
     let unavailable = Store::new(false, Ok(()), None);
     run(settle_biometric(
-        unavailable.clone(),
+        kept(&unavailable),
         &Operation::Setup,
         true,
         words(),
@@ -263,7 +272,7 @@ fn a_change_replaces_a_saved_copy_and_never_creates_one() {
 
     let empty = Store::new(true, Ok(()), None);
     run(settle_biometric(
-        empty.clone(),
+        kept(&empty),
         &Operation::ChangePassphrase,
         false,
         next(),
@@ -271,24 +280,24 @@ fn a_change_replaces_a_saved_copy_and_never_creates_one() {
     ));
     assert_eq!(empty.saved_copy(), None);
 
-    let kept = Store::new(true, Ok(()), Some(WORDS));
+    let held = Store::new(true, Ok(()), Some(WORDS));
     run(settle_biometric(
-        kept.clone(),
+        kept(&held),
         &Operation::ChangePassphrase,
         false,
         next(),
         &unchanged,
     ));
-    assert_eq!(kept.saved_copy().as_deref(), Some(WORDS));
+    assert_eq!(held.saved_copy().as_deref(), Some(WORDS));
     run(settle_biometric(
-        kept.clone(),
+        kept(&held),
         &Operation::ChangePassphrase,
         false,
         next(),
         &json!({"ok": false, "code": "vault_changed_audit_unavailable"}),
     ));
     assert_eq!(
-        kept.saved_copy().as_deref(),
+        held.saved_copy().as_deref(),
         Some("the next disposable passphrase")
     );
 }
@@ -303,4 +312,85 @@ fn remember_is_accepted_on_the_wire_and_defaults_off() {
     )
     .unwrap();
     assert!(asked.remember);
+}
+
+/// A store whose "is one kept?" check stops until the test lets it go, so a
+/// forget can be started between that check and the save that follows it.
+struct HeldCheck {
+    inner: Arc<Store>,
+    checking: std::sync::mpsc::SyncSender<()>,
+    go: Mutex<std::sync::mpsc::Receiver<()>>,
+    held: std::sync::atomic::AtomicBool,
+}
+impl BiometricStore for HeldCheck {
+    fn available(&self) -> bool {
+        self.inner.available()
+    }
+    fn saved(&self) -> bool {
+        let kept = self.inner.saved();
+        // Only the first check (the change's) is held; later reads pass.
+        if !self.held.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = self.checking.send(());
+            let _ = self.go.lock().unwrap().recv();
+        }
+        kept
+    }
+    fn save(&self, passphrase: &str) -> Result<(), BiometricFailure> {
+        self.inner.save(passphrase)
+    }
+    fn release(&self) -> Result<Zeroizing<String>, BiometricFailure> {
+        self.inner.release()
+    }
+    fn forget(&self) {
+        self.inner.forget()
+    }
+}
+
+#[test]
+fn turning_off_during_a_change_is_never_undone_by_its_replacement() {
+    let inner = Store::new(true, Ok(()), Some(WORDS));
+    let (checking, checked) = std::sync::mpsc::sync_channel(1);
+    let (go, held) = std::sync::mpsc::sync_channel(1);
+    let kept = Arc::new(KeptPassphrase::new(Arc::new(HeldCheck {
+        inner: inner.clone(),
+        checking,
+        go: Mutex::new(held),
+        held: std::sync::atomic::AtomicBool::new(false),
+    })));
+    let changing = {
+        let kept = kept.clone();
+        std::thread::spawn(move || {
+            run(settle_biometric(
+                kept,
+                &Operation::ChangePassphrase,
+                false,
+                Some(Zeroizing::new("the next disposable passphrase".to_string())),
+                &json!({"ok": true, "status": {"state": "locked"}}),
+            ))
+        })
+    };
+    // The change has seen a copy kept and has not saved yet.
+    checked.recv().unwrap();
+    let (forgot, forgotten) = std::sync::mpsc::channel();
+    let forgetting = {
+        let kept = kept.clone();
+        std::thread::spawn(move || {
+            run(execute_biometric(
+                Vault::new(WORDS),
+                kept,
+                command("forget"),
+                DEADLINE,
+            ))
+            .unwrap();
+            forgot.send(()).unwrap();
+        })
+    };
+    assert!(
+        forgotten.recv_timeout(Duration::from_millis(100)).is_err(),
+        "turning off finished inside the change's check-and-save"
+    );
+    go.send(()).unwrap();
+    changing.join().unwrap();
+    forgetting.join().unwrap();
+    assert_eq!(inner.saved_copy(), None, "the person's turn-off was undone");
 }
