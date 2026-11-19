@@ -250,7 +250,7 @@ await main(
             }
             await page.evaluate(() => window.__providerSignIn.release())
             await page
-              .getByText("Signed in for Boat workspaces. Send your message again.", {
+              .getByText("Signed in for cloud workspaces. Send your message again.", {
                 exact: true,
               })
               .waitFor()

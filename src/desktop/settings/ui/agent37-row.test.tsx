@@ -55,7 +55,7 @@ it("connects with a key pasted in its dialog, keeps nothing of it, and disconnec
     ),
   )
   expect(row()?.dataset.agent37State).toBe("disconnected")
-  expect(choice()?.dataset.cloudChoice).toBe("boat")
+  expect(choice()).toBeNull()
   expect(host.querySelector("input")).toBeNull()
   await act(async () => button("Connect…")?.click())
   const field = document.querySelector<HTMLInputElement>("[data-agent37-dialog] input")
@@ -84,7 +84,8 @@ it("connects with a key pasted in its dialog, keeps nothing of it, and disconnec
   )
   expect(calls).toEqual(["save sk_live_fixture", "disconnect"])
   expect(row()?.dataset.agent37State).toBe("disconnected")
-  expect(choice()?.dataset.cloudChoice).toBe("boat")
+  // Which cloud a thread uses is not chosen on Agent37's own row.
+  expect(choice()).toBeNull()
 })
 
 it("offers to read again, never to connect, when its status could not be read", async () => {
