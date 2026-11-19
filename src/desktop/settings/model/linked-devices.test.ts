@@ -419,6 +419,18 @@ describe("linked devices", () => {
     })
     expect(after.devices).toEqual([])
     expect(after.notice?.kind).toBe("revoked")
+    // The next quiet poll has read the list without it: the line is spent,
+    // instead of staying under the page while the tab is open.
+    const polled = reduce(
+      after,
+      { type: "poll" },
+      {
+        type: "answered",
+        seq: after.seq + 1,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      },
+    )
+    expect(polled.notice).toBeNull()
   })
 
   it("L16: a revoke that was not answered says it may or may not have happened", () => {
@@ -540,6 +552,31 @@ describe("linked devices", () => {
       },
     )
     expect(polled.notice?.kind).toBe("tryAgain")
+  })
+
+  it("a quiet poll in flight leaves Pair a device, Approve and the switch offered", () => {
+    const polling = reduce(on(), { type: "poll" })
+    expect(polling.pending).toMatchObject({ kind: "read", poll: true })
+    expect(canPair(polling)).toBe(true)
+    expect(canToggle(polling)).toBe(true)
+    // Pairing during the poll replaces it; the poll's late answer is dropped.
+    const paired = reduce(polling, { type: "pair" })
+    expect(paired.pending?.kind).toBe("create")
+    const late = reduce(paired, {
+      type: "answered",
+      seq: polling.seq,
+      outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+    })
+    expect(late).toBe(paired)
+    // A read the person is waiting on still holds the controls.
+    const reading = reduce(paired, {
+      type: "answered",
+      seq: paired.seq,
+      outcome: { ok: false, failure: { kind: "busy" } },
+    })
+    expect(reading.pending).toMatchObject({ kind: "read" })
+    expect(reading.pending).not.toHaveProperty("poll")
+    expect(canPair(reading)).toBe(false)
   })
 
   it("a later poll clears a read error, and drops codeHidden once nothing is open", () => {
