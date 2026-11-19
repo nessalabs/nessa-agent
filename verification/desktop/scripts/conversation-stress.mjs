@@ -38,8 +38,8 @@ import {
  *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
- *   cloud       Agent37 is picked as the cloud for new thread VMs in
- *               Settings › Accounts: a thread's VM is made on Agent37 (the
+ *   cloud       Agent37 is picked as the default cloud in Settings ›
+ *               Accounts (offered once Boat and Agent37 are both connected): a thread's VM is made on Agent37 (the
  *               fixture's fake one) and stays there after Boat is picked
  *               again, while the next thread's goes to Boat; a thread in a
  *               channel placed on Agent37 goes to Agent37 while Boat is
@@ -7526,6 +7526,14 @@ const steps = {
             ))
         )
           failures.push("Add device › Cloud › Agent37 does not open Agent37's page")
+        // A cloud's own page never offers another cloud: the default cloud
+        // is chosen once, in Settings › Accounts.
+        if (
+          (await page
+            .locator('[data-devices-cloud-page="agent37"] [data-cloud-choice]')
+            .count()) > 0
+        )
+          failures.push("Agent37's page offers a choice of cloud")
         await photograph("cloud-agent37")
         await page.locator('[data-devices-action="back"]').click()
         await page.locator('[data-devices-action="add"]').click()

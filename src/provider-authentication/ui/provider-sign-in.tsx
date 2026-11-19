@@ -84,7 +84,7 @@ export function ProviderSignInCard({
       }
     >
       {signedIn ? (
-        <p role="status">Signed in for Boat workspaces. Send your message again.</p>
+        <p role="status">Signed in for cloud workspaces. Send your message again.</p>
       ) : pending && action === "boat" ? (
         <p role="status">Finish signing in in your browser.</p>
       ) : failed ? (

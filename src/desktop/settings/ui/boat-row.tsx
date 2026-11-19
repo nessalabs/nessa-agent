@@ -248,7 +248,12 @@ export function BoatConnected({ connection }: { connection: BoatConnection }) {
  * one button. The token is pasted in a dialog that Connect… opens; how long
  * VMs live is its own row, beside it (`BoatRuntimeControl`).
  */
-export function BoatRow() {
+export function BoatRow({
+  onChange,
+}: {
+  /** Hears each state the row comes to read, so the tab around it can follow. */
+  onChange?: (state: BoatStatus["state"]) => void
+} = {}) {
   const connection = useBoatConnection()
   const entry = setting("boat")
   const found = useContext(FoundSetting) === "boat"
@@ -257,7 +262,8 @@ export function BoatRow() {
   // A token the dialog saved closes it: the row says Connected.
   useEffect(() => {
     if (state === "connected") setAsking(false)
-  }, [state])
+    if (state !== undefined) onChange?.(state)
+  }, [state, onChange])
   return (
     <>
       <ItemRow
