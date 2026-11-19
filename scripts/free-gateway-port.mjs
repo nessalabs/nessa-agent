@@ -277,12 +277,17 @@ async function clear(port) {
     }
 
     if (isOurDevServer(row)) {
-      console.error(`→ stopping the dev gateway this checkout left on :${port} (pid ${row.pid})`)
+      console.error(
+        `→ stopping the dev gateway this checkout left on :${port} (pid ${row.pid})`,
+      )
       killPid(row.pid, "SIGTERM")
       if (!(await waitUntilGone(port, row.pid))) {
         killPid(row.pid, "SIGKILL")
         if (!(await waitUntilGone(port, row.pid)))
-          held.push({ text: `→ could not free :${port} (pid ${row.pid})`, movable: false })
+          held.push({
+            text: `→ could not free :${port} (pid ${row.pid})`,
+            movable: false,
+          })
       }
       continue
     }
@@ -297,13 +302,18 @@ async function clear(port) {
         `→ :${port} is already in use by pid ${row.pid}, which is not ours:`,
         `  ${label(row.command)}`,
         ...(gateway
-          ? ["  It is a Nessa gateway, probably sharing this namespace's credentials and stores."]
+          ? [
+              "  It is a Nessa gateway, probably sharing this namespace's credentials and stores.",
+            ]
           : []),
       ].join("\n"),
     })
   }
   if (held.length === 0 && !(await bindable(port)))
-    held.push({ text: `→ :${port} is in use by a process this user cannot see`, movable: true })
+    held.push({
+      text: `→ :${port} is in use by a process this user cannot see`,
+      movable: true,
+    })
   return held
 }
 
@@ -325,7 +335,15 @@ async function clear(port) {
  * }} input
  * @returns {Promise<number | null>}
  */
-export async function choosePort({ wanted, explicit, move, reserved, clear, say, stage }) {
+export async function choosePort({
+  wanted,
+  explicit,
+  move,
+  reserved,
+  clear,
+  say,
+  stage,
+}) {
   const spares = []
   for (let port = wanted + 1; port <= wanted + MOVE_RANGE && port <= 65535; port += 1)
     if (!reserved.has(port)) spares.push(port)
