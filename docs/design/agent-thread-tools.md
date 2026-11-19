@@ -26,7 +26,10 @@ execution identity. A stop does not delete or close the conversation.
 `close_thread` with no argument closes the calling thread once its turn ends.
 With `threadId` it closes a thread the caller created with `create_thread`:
 the SDK's ownership record of that spawn (its `parent_session`) is the one
-place that says so, and any other thread is refused with `not_your_thread`.
+place that says who created it. That creator is a fact on the thread, and
+Cedar's `owner.close_created` (`conversation.close_created`) decides whether
+the asking turn's thread is it; any other thread is refused with
+`not_your_thread`.
 The close is the same mark either way: a child open now stops once its turn
 ends, and one not open stays parked until a new message opens it.
 

@@ -84,40 +84,33 @@ impl ConversationService {
         Ok(())
     }
 
-    /// Whether `child` is a thread `parent`'s agent created with
-    /// `create_thread`. The SDK's ownership record of the spawn is the one
-    /// place that says so; it keeps closed history, so a child that already
-    /// ended is still its parent's.
-    pub fn created_thread(&self, parent: &ConversationId, child: &ConversationId) -> bool {
-        let Some(ownership) = self.inner.ownership.get() else {
-            return false;
-        };
-        let Ok(session) = SessionId::new(child.to_string()) else {
-            return false;
-        };
+    /// The thread whose agent created `child` with `create_thread`, if one
+    /// did. The SDK's ownership record of the spawn is the one place that
+    /// says so; it keeps closed history, so a child that already ended still
+    /// names it. A fact for the access policy, which decides who may close
+    /// `child` (`conversation.close_created`).
+    pub fn thread_creator(&self, child: &ConversationId) -> Option<String> {
+        let ownership = self.inner.ownership.get()?;
+        let session = SessionId::new(child.to_string()).ok()?;
         ownership
             .coordinator
             .child_lifetime_for_session(&session)
             .and_then(|lifetime| ownership.coordinator.spawn_binding_for_lifetime(&lifetime))
-            .is_some_and(|binding| binding.parent_session.as_str() == parent.to_string())
+            .map(|binding| binding.parent_session.as_str().to_owned())
     }
 
-    /// `parent` closes `child`, a thread it created (`close_thread` with a
-    /// `threadId`). The same close as the child's own: open now, it stops
-    /// once its turn ends; not open now, the mark alone keeps whatever opens
-    /// it before a new message parked.
+    /// `parent` closes `child`, a thread the access policy admitted it to
+    /// close (`close_thread` with a `threadId`). The same close as the
+    /// child's own: open now, it stops once its turn ends; not open now, the
+    /// mark alone keeps whatever opens it before a new message parked.
     ///
     /// # Errors
-    /// [`ConversationError::NotFound`] when `child` is not a thread `parent`
-    /// created, and [`Self::close_after_turn`]'s errors when it is open.
+    /// [`Self::close_after_turn`]'s errors when it is open.
     pub async fn close_created_thread(
         &self,
         parent: &ConversationId,
         child: &ConversationId,
     ) -> Result<(), ConversationError> {
-        if !self.created_thread(parent, child) {
-            return Err(ConversationError::NotFound);
-        }
         let open = self.inner.conversations.lock().await.contains_key(child);
         if open {
             return self.close_after_turn(child).await;

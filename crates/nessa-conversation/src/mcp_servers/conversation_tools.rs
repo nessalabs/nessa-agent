@@ -995,15 +995,17 @@ async fn run(
                     stop,
                 )
                 .await
-                .map_err(code)?;
+                // Given another thread, a refusal is the policy's answer that
+                // it is not this thread's to close.
+                .map_err(|error| match error {
+                    ConversationError::NotFound if target.is_some() => NOT_YOUR_THREAD.to_owned(),
+                    error => code(error),
+                })?;
             if let Some(target) = target {
                 service
                     .close_created_thread(source.conversation(), &target)
                     .await
-                    .map_err(|error| match error {
-                        ConversationError::NotFound => NOT_YOUR_THREAD.to_owned(),
-                        error => code(error),
-                    })?;
+                    .map_err(code)?;
                 return Ok(json!({"threadId": target.to_string(), "closing": true}));
             }
             service

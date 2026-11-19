@@ -273,14 +273,18 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                     owner: &owner,
                 }
             }
+            AccessAction::CloseCreated => AccessResource::created(&live, Some("creator")),
             _ => on(&live),
         };
         let subject = match action {
-            AccessAction::AgentTools | AccessAction::ReadTurns => AccessSubject::AgentTurn {
-                organization: &org,
-                principal: &owner,
-                owner_initiated: true,
-            },
+            AccessAction::AgentTools | AccessAction::ReadTurns | AccessAction::CloseCreated => {
+                AccessSubject::AgentTurn {
+                    organization: &org,
+                    principal: &owner,
+                    owner_initiated: true,
+                    conversation: "creator",
+                }
+            }
             AccessAction::ReviewNotice => AccessSubject::ReviewRecipient {
                 organization: &org,
                 principal: &owner,
@@ -1586,6 +1590,7 @@ fn agent_tools_require_an_owner_origin_and_matching_live_source_owner() {
                             organization: &org,
                             principal: &owner,
                             owner_initiated,
+                            conversation: "source",
                         },
                         action: AccessAction::AgentTools,
                         resource: AccessResource::of(&source),
@@ -1616,6 +1621,7 @@ fn an_agent_started_turn_reads_turns_but_holds_no_other_agent_tool() {
                 organization: &org,
                 principal: &owner,
                 owner_initiated,
+                conversation: "source",
             },
             action,
             resource: on(conversation),
@@ -1647,4 +1653,46 @@ fn an_agent_started_turn_reads_turns_but_holds_no_other_agent_tool() {
         ask(AccessAction::ReadTurns, &deleted, false),
         AccessDecision::Deny(_)
     ));
+}
+
+/// A turn the owner started closes only a thread its own thread created, as
+/// the spawn's record says: not one another thread created, not one no agent
+/// created, and not from a turn another agent started.
+#[test]
+fn a_turn_closes_only_a_thread_its_own_thread_created() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let child = conversation("org", "owner", false);
+    let ask = |conversation: &Conversation, created_by, owner_initiated| {
+        allowed(&policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "parent",
+            },
+            action: AccessAction::CloseCreated,
+            resource: AccessResource::created(conversation, created_by),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        }))
+    };
+    assert!(ask(&child, Some("parent"), true));
+    assert!(
+        !ask(&child, Some("another"), true),
+        "another thread's child"
+    );
+    assert!(!ask(&child, None, true), "a thread no agent created");
+    assert!(
+        !ask(&child, Some("parent"), false),
+        "a turn an agent started"
+    );
+    let others = conversation("org", "someone-else", false);
+    assert!(
+        !ask(&others, Some("parent"), true),
+        "another owner's thread"
+    );
+    let deleted = conversation("org", "owner", true);
+    assert!(!ask(&deleted, Some("parent"), true), "a deleted thread");
 }

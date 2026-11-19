@@ -1693,6 +1693,9 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
     for (execution, text) in [("first-turn", "first ask"), ("second-turn", "second ask")] {
         settled_send(&service, &source, execution, text).await;
     }
+    // Those turns' starts left the provider's start signal set; take it, so
+    // the held turn below is waited for, not one of theirs.
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
     let release = hold_turn(&service, &provider, &source, "source-turn").await;
     let tools = ConversationTools::new();
     tools.attach(service.clone());

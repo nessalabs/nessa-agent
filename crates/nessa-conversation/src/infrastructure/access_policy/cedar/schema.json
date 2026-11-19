@@ -186,6 +186,10 @@
             "deleted": {
               "type": "Boolean",
               "required": true
+            },
+            "createdBy": {
+              "type": "String",
+              "required": false
             }
           },
           "additionalAttributes": false
@@ -221,6 +225,10 @@
             },
             "ownerInitiated": {
               "type": "Boolean",
+              "required": true
+            },
+            "conversation": {
+              "type": "String",
               "required": true
             }
           },
@@ -420,7 +428,17 @@
             "type": "Ask"
           }
         }
-      },      "conversation.read_turns": {
+      },
+      "conversation.read_turns": {
+        "appliesTo": {
+          "principalTypes": ["AgentTurn", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.close_created": {
         "appliesTo": {
           "principalTypes": ["AgentTurn", "WebhookReader"],
           "resourceTypes": ["Conversation"],

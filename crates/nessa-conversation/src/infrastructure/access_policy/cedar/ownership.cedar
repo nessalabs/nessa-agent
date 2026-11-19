@@ -141,6 +141,25 @@ when {
     !resource.deleted
 };
 
+// A turn the owner started closes a thread its own thread's agent created
+// (`close_thread` with a `threadId`). The SDK's record of the spawn names
+// that creator; a thread no agent created, or another one created, is not
+// this turn's to close.
+@id("owner.close_created")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.close_created",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    resource has createdBy &&
+    resource.createdBy == principal.conversation &&
+    !resource.deleted
+};
+
 // The owner's agent reads what the owner's desktop windows show: which
 // panes are open, where, and what each holds. An agent tool acts as the
 // person whose turn admitted it (`conversation.agent_tools`), so the reader
