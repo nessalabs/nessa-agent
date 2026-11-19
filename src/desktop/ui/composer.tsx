@@ -1,26 +1,22 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
+import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
 import { StatusLabel } from "@nessa-ui/react/status-label"
 import { pastedFiles } from "../adapters/pasted-files"
 import type { DraftImage } from "../workspace/model/draft-images"
-import {
-  defaultThinkingLevel,
-  shortModelName,
-  thinkingLevelsFor,
-} from "../model/composer-options"
+import { defaultThinkingLevel } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
 import {
-  CatalogueModelPicker,
+  ComposerModelPicker,
   findComposerModel,
   ModelMark,
 } from "./catalogue-model-picker"
 import { DesktopIcon } from "./icons"
 import { IconButton } from "./icon-button"
-import { ThinkingControl } from "./thinking-control"
 import { tooltip } from "./tooltip"
 
 const noImages: readonly DraftImage[] = []
@@ -280,28 +276,35 @@ export function Composer({
           {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
           <span
             className="desktop-tip-anchor"
-            // The chip shows this in place of the whole name ("Opus 5"):
-            // the mark beside it already says whose model it is.
-            style={
-              {
-                "--desktop-model-short": JSON.stringify(
-                  model ? shortModelName(model) : "",
-                ),
-              } as CSSProperties
-            }
             {...tooltip(
               onModelChange
-                ? "Model"
-                : "Start a new conversation to choose another model",
+                ? "Model and thinking"
+                : "Thinking. Start a new conversation to choose another model",
               { side: "above" },
             )}
           >
-            <CatalogueModelPicker
+            <ComposerModelPicker
               disabled={modelDisabled}
               value={shown}
-              onChange={onModelChange}
-              side="top"
+              onModelChange={onModelChange}
+              thinking={thinking}
+              onThinkingChange={setThinking}
+              fast={{ pressed: fast, onPressedChange: setFast }}
               className="desktop-chip desktop-chip-model"
+            />
+          </span>
+          <span
+            className="desktop-tip-anchor"
+            {...tooltip(model?.fastMode ? "Fast mode" : "This model has no Fast mode", {
+              side: "above",
+            })}
+          >
+            {/* Fast is remembered while switching models, but only on for one that has it. */}
+            <ModelFastMode
+              pressed={fast && model?.fastMode === true}
+              onPressedChange={setFast}
+              disabled={!model?.fastMode}
+              className="desktop-chip desktop-composer-fast"
             />
           </span>
         </div>
@@ -320,22 +323,6 @@ export function Composer({
               side: "above",
             })}
           />
-          <span
-            className="desktop-tip-anchor"
-            {...tooltip("Thinking", { side: "above" })}
-          >
-            <ThinkingControl
-              levels={thinkingLevelsFor(model)}
-              value={thinking}
-              onValueChange={setThinking}
-              // Fast is remembered while switching models, but only offered on one that has it.
-              fastMode={
-                model && model.fastMode
-                  ? { pressed: fast, onPressedChange: setFast }
-                  : undefined
-              }
-            />
-          </span>
           {/* Settings to its left, what acts to its right. */}
           <span className="desktop-composer-divider" aria-hidden="true" />
           {voice ? <VoiceControls voice={voice} /> : null}

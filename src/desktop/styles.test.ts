@@ -661,9 +661,7 @@ it("defines every token the menus and the pickers read on :root, because they si
   const menu = readFileSync(new URL("./ui/menu/menu.css", import.meta.url), "utf8")
   const portalled = [
     ...rules(menu),
-    ...rules(styles).filter(({ selector }) =>
-      /\.desktop-popover|\.desktop-model-picker/.test(selector),
-    ),
+    ...rules(styles).filter(({ selector }) => /\.desktop-popover/.test(selector)),
   ]
   // What the portalled rules define themselves (the popover material) is theirs.
   const own = new Set(portalled.flatMap(({ body }) => [...defined(body)]))

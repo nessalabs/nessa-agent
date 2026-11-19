@@ -38,6 +38,10 @@ import {
  *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   cloud       Agent37 is picked as the cloud for new thread VMs in
+ *               Settings › Connections › Accounts: a thread's VM is made on
+ *               Agent37 (the fixture's fake one) and stays there after Boat
+ *               is picked again, while the next thread's goes to Boat
  *   restore     a restored conversation is opened and shows its saved record;
  *               another, whose source file is moved aside, refuses Send and
  *               keeps the draft
@@ -113,6 +117,13 @@ import {
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   swipe       with the rail on and every side column open, two-finger
+ *               swipes over the chat fold the session list, the sidebar and
+ *               the rail, one per swipe, a fling's momentum included, then
+ *               open them back rail, sidebar, list; each move gives one
+ *               haptic tick and a swipe with nothing left to move gives
+ *               none; over a wide table the swipe scrolls the table and a
+ *               vertical scroll that drifts sideways folds nothing
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
  *               where the host puts them above a compact rail; the top bar
@@ -121,7 +132,8 @@ import {
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
- *               is asked once; in the setup window that ask opens, nothing
+ *               is asked once; in the setup window that ask opens, over a
+ *               locked vault, no passphrase is asked for, nothing
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
@@ -281,6 +293,8 @@ import {
  *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
+ *               A channel row that is not selected keeps its hover fill
+ *               while the pointer moves onto its settings beside it.
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own. When the
@@ -388,8 +402,10 @@ import {
   STREAM_HOLD_MS,
   STREAM_WORDS,
   STRESS,
+  TABLE_HOLD_MS,
   TABLE_LINES,
   CODE_LINES,
+  MATH_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
@@ -454,6 +470,7 @@ import {
   openStressConversation,
   selectedStressConversation,
   selectStressModel,
+  clearStarredModels,
   chatIdentityTexts,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
@@ -674,6 +691,139 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/**
+ * The `swipe` step's swipes, with the rail on and the wide table drawn in
+ * `message` (its scroller `port`): every column open, folded one per swipe
+ * left, nothing more to fold, the table scrolled and a vertical scroll left
+ * alone, then opened one per swipe right, a haptic tick for each move.
+ */
+async function swipeColumns(run, step, message, port, failures) {
+  const page = run.page
+  const columns = () =>
+    page.evaluate(
+      ({ frame, workspace }) => ({
+        rail: document.querySelector(frame)?.dataset.rail,
+        sidebar: document.querySelector(workspace)?.dataset.sidebar,
+        list: document.querySelector(workspace)?.dataset.list,
+        haptics: window.__fakeHostHaptics,
+      }),
+      { frame: css.workspaceWindow, workspace: css.workspace },
+    )
+  // Every column open to start: the sidebar and the list by their keys.
+  const start = await columns()
+  if (start.sidebar !== "open") await page.keyboard.press(keys.toggleSidebar)
+  if (start.list !== "open") await page.keyboard.press(keys.toggleSessionList)
+  const all = { rail: "open", sidebar: "open", list: "open" }
+  const at = async (want) => {
+    const now = await columns()
+    return ["rail", "sidebar", "list"].every((each) => now[each] === want[each])
+  }
+  if (!(await waitFor(() => at(all), 5_000))) {
+    failures.push(`the side columns did not all open: ${JSON.stringify(await columns())}`)
+    return
+  }
+  // Two fingers over the reply's words: `x` positive is the fingers
+  // moving left (the Mac's natural scrolling, which Chromium assumes).
+  // On Chromium the events go in through the browser's input with their
+  // own times 16 ms apart, as a trackpad sends them, so a slow machine
+  // cannot split one gesture in two; elsewhere they are sent as they
+  // come. The pause after outlasts the gesture's end, so each is its own
+  // swipe.
+  const words = message.locator("p").first()
+  const input =
+    run.engine === "chromium" || run.engine === undefined
+      ? await page.context().newCDPSession(page)
+      : null
+  let clock = Date.now() / 1000
+  const swipe = async (over, x, y = 0, events = 8) => {
+    await over.scrollIntoViewIfNeeded()
+    const box = await over.boundingBox()
+    const point = box && {
+      x: Math.round(box.x + Math.min(box.width / 2, 120)),
+      y: Math.round(box.y + Math.min(box.height / 2, 12)),
+    }
+    const onIt =
+      point &&
+      (await over.evaluate(
+        (element, { x, y }) =>
+          element.contains(document.elementFromPoint(x, y)) &&
+          document.elementFromPoint(x, y)?.closest(".workspace-chat") !== null,
+        point,
+      ))
+    if (!onIt) {
+      failures.push(`nothing to swipe over in the chat at ${JSON.stringify(point)}`)
+      return
+    }
+    await page.mouse.move(point.x, point.y)
+    clock = Math.max(clock + 1, Date.now() / 1000)
+    for (let i = 0; i < events; i += 1) {
+      if (input)
+        await input.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: point.x,
+          y: point.y,
+          deltaX: x,
+          deltaY: y,
+          timestamp: clock + i * 0.016,
+        })
+      else await page.mouse.wheel(x, y)
+    }
+    await page.waitForTimeout(400)
+  }
+  let ticks = (await columns()).haptics
+  const expect = async (label, want, ticked) => {
+    const landed = await waitFor(() => at(want), 5_000)
+    const now = await columns()
+    if (!landed)
+      failures.push(
+        `${label}: the columns are ${JSON.stringify(now)}, not ${JSON.stringify(want)}`,
+      )
+    if (now.haptics !== ticks + ticked)
+      failures.push(`${label}: ${now.haptics - ticks} haptic ticks, not ${ticked}`)
+    ticks = now.haptics
+  }
+  // Over the wide table the swipe is the table's: it scrolls, nothing folds.
+  // First, with every column open, where the reply is narrowest.
+  const hidden = await port.evaluate((each) => each.scrollWidth - each.clientWidth)
+  if (hidden <= 1) failures.push(`the wide table does not scroll (${hidden} px hidden)`)
+  const scrolled = await port.evaluate((each) => each.scrollLeft)
+  await swipe(port, 15)
+  await expect("a swipe over the wide table", all, 0)
+  if ((await port.evaluate((each) => each.scrollLeft)) <= scrolled)
+    failures.push("a swipe over the wide table did not scroll it")
+  // Left: the column nearest the chat goes first, one per swipe; a
+  // fling's momentum is the same swipe.
+  await swipe(words, 15, 0, 30)
+  await expect("a fling left", { ...all, list: "closed" }, 1)
+  await swipe(words, 15)
+  await expect(
+    "a second swipe left",
+    { rail: "open", sidebar: "closed", list: "closed" },
+    1,
+  )
+  await swipe(words, 15)
+  const none = { rail: "closed", sidebar: "closed", list: "closed" }
+  await expect("a third swipe left", none, 1)
+  await swipe(words, 15)
+  await expect("a swipe left with nothing open", none, 0)
+  // Right: back in the order they went, the rail first.
+  await swipe(words, -15)
+  await expect("a swipe right", { ...none, rail: "open" }, 1)
+  // A vertical scroll that drifts sideways is a scroll.
+  await swipe(words, 4, 30)
+  await expect("a vertical scroll", { ...none, rail: "open" }, 0)
+  await swipe(words, -15)
+  await expect("a second swipe right", { ...all, list: "closed" }, 1)
+  await swipe(words, -15)
+  await expect("a third swipe right", all, 1)
+  await swipe(words, -15)
+  await expect("a swipe right with everything open", all, 0)
+  if (run.evidence)
+    await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
+  // The conversation still takes a message.
+  await steps.reply(run, { ...step, extra: " after swiping" }, failures)
+}
 
 /**
  * Turns the side rail preview on or off where a person does: Settings ›
@@ -998,6 +1148,75 @@ async function channelRunning(page, name, running, failures) {
       `channel ${name} pointed at ${running ? "stops" : "starts"} shimmering: ${JSON.stringify(pointed)}`,
     )
   await page.mouse.move(600, 400)
+}
+
+/**
+ * The pointer on a row's settings, beside its control, leaves the row its
+ * hover fill: the frame owns hover, so moving onto the action does not drop
+ * it. The fill at rest is read first; the hover fill is the one the control
+ * moves to under the pointer. Each is read once it stops changing. Answers
+ * whether there was a hover fill to compare.
+ */
+async function rowFillBesideItsSettings(page, row, name, failures) {
+  const control = row.locator(":scope > [data-size]")
+  const fill = () => control.evaluate((it) => getComputedStyle(it).backgroundColor)
+  const settled = async () => {
+    let last = null
+    return (
+      (await waitFor(async () => {
+        const now = await fill()
+        const same = now === last
+        last = now
+        return same ? now : null
+      }, 5_000)) ?? last
+    )
+  }
+  await page.mouse.move(600, 400)
+  const atRest = await settled()
+  await control.hover({ timeout: 10_000 })
+  // Waits past any transition delay for the fill to leave its rest.
+  if (!(await waitFor(async () => (await fill()) !== atRest, 2_000))) {
+    // A selected row keeps one fill under the pointer and away from it, so
+    // there is nothing to tell apart.
+    log(
+      `channel ${name} has the same fill at rest and pointed at, so its hover was not compared`,
+    )
+    return false
+  }
+  const onControl = await settled()
+  await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
+  const beside = await settled()
+  if (beside !== onControl)
+    failures.push(
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside}, not ${onControl}`,
+    )
+  return true
+}
+
+/**
+ * With two channels in the sidebar one is not selected, so its hover fill
+ * differs from its rest and can be weighed beside its settings. The columns
+ * layout's check: the tree draws channels as branches without these rows.
+ */
+async function channelRowsKeepHover(page, failures) {
+  const rows = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.locator("[data-channel-settings-open]") })
+  const count = await rows.count()
+  if (count < 2) {
+    if (!(await page.locator(`${css.sidebar} [data-row="channel"]`).count()))
+      failures.push(`the sidebar shows ${count} channel rows with settings, not 2`)
+    return
+  }
+  let compared = false
+  for (let index = 0; index < count && !compared; index++) {
+    const row = rows.nth(index)
+    const name = (await row.locator(":scope > [data-size]").textContent())?.trim() ?? ""
+    compared = await rowFillBesideItsSettings(page, row, name, failures)
+  }
+  await page.mouse.move(600, 400)
+  if (!compared)
+    failures.push(`no channel row of ${count} has a hover fill apart from its rest fill`)
 }
 
 /**
@@ -1866,27 +2085,154 @@ function otherAgent(agent) {
   return agent === "claude" ? "codex" : "claude"
 }
 
-/** Picks `model` in a composer's picker: its provider's tab, then the model. */
-async function pickModel(page, picker, model) {
-  await picker.click()
-  await page
-    .locator(css.modelProviderTab)
-    .filter({ hasText: providerName(model.provider) })
-    .first()
-    .click()
-  await page
-    .locator(css.modelOption)
-    .filter({ hasText: model.displayName })
-    .first()
-    .click()
+/** The `picker` step's work, with the stars cleared around it by the step. */
+async function pickerStep(run, step, failures) {
+  const page = run.page
+  const chip = dock(page).locator(css.modelChip)
+  if (!(await waitFor(async () => !(await chip.isDisabled()), 10_000))) {
+    failures.push("the established conversation's model chip is disabled")
+    return
+  }
+  // An earlier step can leave the chat at Auto or Full, which not every model
+  // offers on every platform (only Ask is verified for all of them), and a
+  // model that cannot keep the chat's access refuses the change. A person
+  // would step down to Ask first, so the step does too.
+  if ((await readWithReviews(run.client, run.main.id)).approvalMode !== "ask") {
+    await pickAccess(page, "ask")
+    if (!(await accessIs(run, run.main.id, "ask"))) {
+      failures.push("the chat did not come back to Ask before the model change")
+      return
+    }
+  }
+  const before = await readWithReviews(run.client, run.main.id)
+  const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
+  const bars = (model) =>
+    (model.reasoning?.effortLevels ?? []).filter((level) => level !== "none")
+  const target =
+    current &&
+    catalog.models.find(
+      (model) =>
+        model.provider === current.provider &&
+        model.modelId !== current.modelId &&
+        bars(model).length >= 2,
+    )
+  if (!target)
+    throw new CannotRun(
+      "no second catalog model with levels in this conversation's provider",
+    )
+  const row = () =>
+    page.locator(css.modelOption).filter({
+      has: page
+        .locator(css.modelOptionLabel)
+        .getByText(target.displayName, { exact: true }),
+    })
+  const opened = () => page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  const closed = () =>
+    page
+      .locator(css.modelPicker)
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false)
+  const star = async () => {
+    const button = row().locator(css.modelStar)
+    await row().hover()
+    await button.click()
+    if ((await button.getAttribute("aria-pressed")) !== "true")
+      failures.push(`${target.displayName}'s star is not on once pressed`)
+  }
+
+  // A star, then the picker opens on Starred with the model listed once.
+  await chip.click()
+  await opened()
+  await page.locator(css.modelSearch).fill(target.displayName)
+  await star()
+  await page.locator(css.modelSearch).fill("")
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  await chip.click()
+  await opened()
+  const onStarred = await page
+    .locator(`${css.modelRail}[data-filter="starred"]`)
+    .getAttribute("aria-current")
+  if (onStarred !== "true")
+    failures.push("with a star, the picker did not open on Starred")
+  if ((await row().count()) !== 1)
+    failures.push(`Starred does not list ${target.displayName} once`)
+  if (run.evidence)
+    await page
+      .locator(css.modelPicker)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-starred.png`) })
+      .catch(() => {})
+
+  if ((await row().getAttribute("aria-disabled")) === "true")
+    throw new CannotRun(`${target.displayName} cannot be chosen in this conversation`)
+  // One press of a bar: that model at that level, and the picker closes.
+  const bar = row().locator(css.modelBar).nth(1)
+  const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
+  await bar.click()
+  if (!(await closed())) failures.push("a bar left the model picker open")
+  const named = `Change model, currently ${target.displayName}, ${level}`
+  if (
+    !(await waitFor(async () => (await chip.getAttribute("aria-label")) === named, 5_000))
+  )
+    failures.push(
+      `a bar left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
+    )
+  const fast = dock(page).locator(css.composerFast)
+  if ((await fast.isDisabled()) === target.fastMode)
+    failures.push(
+      `Fast is${target.fastMode ? " not" : ""} offered for ${target.displayName}`,
+    )
+
+  // The next message runs on it, and the chip still names that level.
+  const text = prompt(run, STRESS.model, step)
+  const seen = await send(run, run.main.id, text, failures)
+  const confirmed = await waitFor(async () => {
+    const view = await readWithReviews(run.client, run.main.id)
+    return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+  }, 15_000)
+  if (!confirmed) failures.push(`sending did not run on ${target.displayName}`)
+  await settled(run, run.main.id, seen, text, "completed", failures)
+  await expectShown(page, `${SAYS.model}${target.modelId}`, failures)
+  if ((await chip.getAttribute("aria-label")) !== named)
+    failures.push(
+      `after the send the chip says "${await chip.getAttribute("aria-label")}"`,
+    )
+
+  // The star off again, so later runs open where the model is.
+  await chip.click()
+  await opened()
+  // On Starred, the model leaves the list as its star comes off.
+  await row().hover()
+  await row().locator(css.modelStar).click()
+  if (
+    !(await row()
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false))
+  )
+    failures.push(`unstarred, ${target.displayName} stayed under Starred`)
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  if (run.evidence)
+    writeFileSync(
+      join(run.evidence, `picker-${run.engine ?? "window"}-${step.index}.json`),
+      JSON.stringify(
+        {
+          before: current.modelId,
+          after: target.modelId,
+          level,
+          confirmed: confirmed?.runtime,
+        },
+        null,
+        2,
+      ),
+    )
 }
 
-/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
-function providerName(provider) {
-  return (
-    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
-    provider
-  )
+/** Picks `model` in a composer's or a new channel's picker, by its exact name. */
+async function pickModel(page, picker, model) {
+  await selectStressModel(page, picker, model.displayName)
 }
 
 /**
@@ -3107,6 +3453,94 @@ async function enrollPeer(run, profile, code, invitationId) {
 }
 
 const steps = {
+  /** The cloud for new thread VMs is picked in Settings › Connections ›
+   * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
+   * fixture's fake one), and its thread stays there after Boat is chosen
+   * again, while a new thread goes to Boat. */
+  async cloud(run, step, failures) {
+    const original = run.main
+    const fixture = run.stack.vmFixture
+    const choose = async (cloud) => {
+      await openAccounts(run.page)
+      await unlockRequestedVault(run.client, run.page)
+      const connected = await run.page
+        .locator('[data-agent37-state="connected"]')
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!connected) failures.push("Settings does not show Agent37 connected")
+      const row = run.page.locator("[data-cloud-choice]")
+      await pickChoice(run.page, row, cloud)
+      const shown = await waitFor(
+        async () => (await row.getAttribute("data-cloud-choice")) === cloud,
+        5_000,
+      )
+      if (!shown) failures.push(`the cloud choice does not show ${cloud} once picked`)
+      const saved = (await run.client.cloud.read()).cloud
+      if (saved !== cloud)
+        failures.push(`the gateway kept ${saved} after ${cloud} was picked`)
+      await closeSettings(run.page)
+    }
+    const made = (id) =>
+      fixture
+        .events()
+        .filter((event) => event.thread === id && event.kind === "created")
+        .map((event) => event.cloud)
+    const talk = async (id, said) => {
+      await run.client.conversation.submit(run.client.conversation.prepare(id, said))
+      await settled(run, id, new Set(), said, "completed", failures)
+    }
+    const open = async (id) => {
+      await run.client.conversation.create({
+        conversationId: id,
+        agent: run.stack.agent,
+        environment: "boat:thread",
+      })
+    }
+    await choose("agent37")
+    const onAgent37 = randomUUID()
+    await open(onAgent37)
+    await talk(onAgent37, `${STRESS.reply} cloud agent37 ${step.index}`)
+    if (made(onAgent37).join() !== "agent37")
+      failures.push(
+        `a VM made with Agent37 chosen was made on: ${made(onAgent37).join()}`,
+      )
+    await choose("boat")
+    // Rested once idle, the thread's next turn opens its VM again: on the
+    // cloud it was made on, whatever is chosen now.
+    const events = () => fixture.events().filter((event) => event.thread === onAgent37)
+    let rested = -1
+    if (
+      !(await waitFor(
+        () =>
+          (rested = events().findIndex(
+            (event) => event.kind === "rested" && event.cloud === "agent37",
+          )) >= 0,
+        (PARK_IDLE_SECONDS + 30) * 1000,
+      ))
+    )
+      failures.push("the thread on Agent37 was not rested on Agent37 once idle")
+    await talk(onAgent37, `${STRESS.reply} cloud stays ${step.index}`)
+    const after = events().slice(rested + 1)
+    if (!after.some((event) => event.kind === "connected" && event.cloud === "agent37"))
+      failures.push(
+        "the thread on Agent37 was not opened again on Agent37 after its rest",
+      )
+    if (made(onAgent37).join() !== "agent37" || events().some((e) => e.cloud === "boat"))
+      failures.push(
+        `a thread on Agent37 reached Boat after Boat was chosen: ${JSON.stringify(events())}`,
+      )
+    const onBoat = randomUUID()
+    await open(onBoat)
+    await talk(onBoat, `${STRESS.reply} cloud boat ${step.index}`)
+    if (made(onBoat).join() !== "boat")
+      failures.push(`a VM made with Boat chosen was made on: ${made(onBoat).join()}`)
+    run.checked.push(onAgent37, onBoat)
+    run.main = original
+    await openStressConversation(run.page, original.id, original.title)
+  },
   async vmBackground(run, step, failures) {
     const original = run.main
     const id = randomUUID()
@@ -3412,8 +3846,16 @@ const steps = {
         path: join(run.evidence, `model-${run.engine}-picker.png`),
         scale: "css",
       })
-    const options = run.page.locator(css.modelOption)
-    await options.filter({ hasText: target.displayName }).first().click()
+    await run.page.locator(css.modelSearch).fill(target.displayName)
+    await run.page
+      .locator(css.modelOption)
+      .filter({
+        has: run.page
+          .locator(css.modelOptionLabel)
+          .getByText(target.displayName, { exact: true }),
+      })
+      .locator(css.modelOptionLabel)
+      .click()
     // Picking only stages the model: the picker shows it, and the gateway is
     // asked for nothing until the next message is sent.
     if (
@@ -3487,6 +3929,22 @@ const steps = {
         ),
       )
   },
+  /**
+   * The model and thinking picker: a star lists a model under Starred, where
+   * the picker then opens; one press of a bar stages that model at that
+   * level, which the chip names, and closes the picker; Fast beside the chip
+   * is offered only for a model that has it; and the next message runs on
+   * the model chosen. The star is taken off again.
+   */
+  async picker(run, step, failures) {
+    await clearStarredModels(run.page)
+    try {
+      await pickerStep(run, step, failures)
+    } finally {
+      await clearStarredModels(run.page).catch(() => {})
+    }
+  },
+
   async reply(run, step, failures, sendBy) {
     const text = prompt(run, STRESS.reply, step, step.extra ?? "")
     const seen = await send(
@@ -3575,6 +4033,18 @@ const steps = {
 
   async stream(run, step, failures) {
     const text = prompt(run, STRESS.stream, step)
+    // Every task the window runs for 50 ms or more while the reply streams.
+    await run.page.evaluate(() => {
+      window.__stressLongTasks = []
+      window.__stressLongObserver?.disconnect()
+      window.__stressLongObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries())
+          window.__stressLongTasks.push(entry.duration)
+      })
+      if (PerformanceObserver.supportedEntryTypes?.includes("longtask"))
+        window.__stressLongObserver.observe({ type: "longtask" })
+      else window.__stressLongTasks = null
+    })
     const seen = await send(run, run.main.id, text, failures)
     const last = streamWord(STREAM_WORDS - 1).trim()
     // Live: the reply's newest words are drawn while the turn still runs,
@@ -3583,6 +4053,15 @@ const steps = {
       failures.push(`while streaming, the window never showed the newest words (${last})`)
     else if ((await pageText(run.page)).includes(fold(SAYS.streamEnd)))
       failures.push("the newest words were drawn only after the turn ended")
+    const long = await run.page.evaluate(() => {
+      window.__stressLongObserver?.disconnect()
+      return window.__stressLongTasks
+    })
+    if (!long) console.log(`stream: long tasks are not measured in ${run.engine}`)
+    else
+      console.log(
+        `stream: ${long.length} tasks of 50 ms or more while ${STREAM_WORDS} words streamed, longest ${Math.round(Math.max(0, ...long))} ms, ${Math.round(long.reduce((sum, each) => sum + each, 0))} ms in all`,
+      )
     // The sidebar closed and opened again draws the same reply, not an
     // emptied one.
     await run.page.keyboard.press(keys.toggleSidebar)
@@ -6010,10 +6489,26 @@ const steps = {
       }
       // The host opens the setup window for that ask; this page is that
       // window, over the same gateway, as the real host builds it. Both
-      // agents are ready, so a click on either is a choice.
-      const page = await setupWindow(run, (page) =>
-        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
-      )
+      // agents are ready, so a click on either is a choice. The vault is
+      // locked first, as after a restart: onboarding still asks for no
+      // passphrase (`setupWindow` refuses a vault dialog).
+      // Through the native vault session that owns it, as the app would.
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      let page
+      try {
+        page = await setupWindow(run, (page) =>
+          agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+        )
+      } finally {
+        // An unlock that fails is its own failure, never in place of what
+        // the window did.
+        await run.stack.vault
+          .unlock()
+          .catch((error) =>
+            failures.push(`the vault did not unlock again: ${error.message}`),
+          )
+      }
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -6513,6 +7008,9 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+      // Switching linking off restarted the gateway, which sealed its vault:
+      // unlocked again, so the steps after this one find it as it was.
+      await run.stack.vault.unlock()
       // Back to the main conversation, in the default channel: the chat
       // above left the session list showing the step's channel.
       await run.page
@@ -7907,6 +8405,7 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        await run.exclusive(() => channelRowsKeepHover(run.page, failures))
         // A thread its agent makes naming where it runs stays in the
         // channel.
         const thread =
@@ -9131,9 +9630,10 @@ const steps = {
   },
 
   /**
-   * The composer's row: attach and the model's short name at its start; at
-   * its end the access and thinking choices, a hairline, then what acts. No
-   * project is offered there, and nothing stands under the card.
+   * The composer's row: attach, the model's short name with its thinking
+   * level, and Fast at its start; at its end the access choice, a hairline,
+   * then what acts. No project is offered there, and nothing stands under
+   * the card.
    */
   async composer(run, step, failures) {
     await run.exclusive(async () => {
@@ -9143,7 +9643,9 @@ const steps = {
       await row.waitFor({ timeout: 10_000 })
       // The chip draws the model's short name; its whole name stays its label.
       const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
-        drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
+        drawn:
+          chip.querySelector('[data-slot="model-level-picker-trigger-label"]')
+            ?.textContent ?? "",
         label: chip.getAttribute("aria-label") ?? "",
       }))
       if (model.drawn === "" || /^(Claude|OpenAI)\s/.test(model.drawn))
@@ -9154,25 +9656,26 @@ const steps = {
         )
       if ((await dock.locator('[aria-label^="Project"]').count()) > 0)
         failures.push("the composer still offers a project")
-      // Left to right at the row's end: thinking, the hairline, Send.
+      // Left to right: the model, Fast beside it, then at the row's end
+      // access, the hairline, Send.
       const edges = await row.evaluate((element) => {
         const left = (selector) =>
           element.querySelector(selector)?.getBoundingClientRect().left ?? null
         return {
-          thinking: left(".desktop-chip-thinking"),
+          model: left(".desktop-chip-model"),
+          fast: left(".desktop-composer-fast"),
+          access: left('[data-slot="composer-access-mode"]'),
           divider: left(".desktop-composer-divider"),
           send: left(".desktop-send"),
         }
       })
-      if (!(
-        edges.thinking !== null &&
-        edges.divider !== null &&
-        edges.send !== null &&
-        edges.thinking < edges.divider &&
-        edges.divider < edges.send
-      ))
+      const order = ["model", "fast", "access", "divider", "send"]
+      if (
+        order.some((part) => edges[part] === null) ||
+        order.some((part, at) => at > 0 && edges[order[at - 1]] >= edges[part])
+      )
         failures.push(
-          `the row's end is not thinking, hairline, Send: ${JSON.stringify(edges)}`,
+          `the row is not model, Fast, access, hairline, Send: ${JSON.stringify(edges)}`,
         )
       // Nothing under the card: the dock ends with the composer.
       const under = await dock.evaluate((element) => {
@@ -9515,24 +10018,58 @@ const steps = {
       })
   },
   async table(run, step, failures) {
-    const text = prompt(run, STRESS.table, step)
+    // The answer repeats the question, so it names this chat by its id: the
+    // window draws that id as the chat's pill.
+    const asked = prompt(run, STRESS.table, step)
+    const text = `${asked} for ${run.main.id}`
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${asked}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
     const seen = await send(run, run.main.id, text, failures)
+    // Words (the kit's ReplyMarkdown) parses each finished block once, so a
+    // block that has finished is never drawn again while the rest streams.
+    // The turn holds after its tables; while it holds, every cell of the
+    // first table is marked, and each must be the same element once the
+    // code, the diagram and the maths have arrived. (Only the fade-in spans
+    // inside a cell go when the reply stops streaming.)
+    const midStream = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await message.locator('[data-slot="mermaid-diagram"]').count()) === 0,
+      TABLE_HOLD_MS + 15_000,
+    )
+    if (!midStream)
+      failures.push("the window never drew the two tables before the rest of the answer")
+    else
+      await tables.first().evaluate((table) => {
+        for (const cell of table.querySelectorAll("th, td")) cell.dataset.stressSeen = "1"
+      })
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES]
+    const expected = `${SAYS.table}${text}\n\n${[
+      ...TABLE_LINES,
+      "",
+      ...CODE_LINES,
+      "",
+      ...MATH_LINES,
+    ]
       .map((line) => `${line}\n`)
       .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
-    // The list previews the answer as prose: a table's pipes and dashes are
-    // left out (UI audit #3).
+    // The list previews the answer as prose: a table's pipes and dashes and
+    // the code are left out (UI audit #3); the maths line is prose and stays.
     let listed
     const previewed = await waitFor(async () => {
       const { conversations } = await run.client.conversation.list({})
       listed = conversations.find((each) => each.conversationId === run.main.id)
-      return listed?.preview === `${SAYS.table}${text}`.trim()
+      return (
+        listed?.preview ===
+        [`${SAYS.table}${text}`.trim(), ...MATH_LINES.filter(Boolean)].join(" ")
+      )
     }, 10_000)
     if (!previewed)
       failures.push(
@@ -9541,10 +10078,6 @@ const steps = {
     // The window draws both tables in the agent's message, and draws them
     // whole: no word split across lines, the narrow table inside the reply,
     // the wide one scrolling in its own panel with its hidden side faded.
-    const message = run.page
-      .locator('.workspace-message[data-role="agent"]')
-      .filter({ hasText: `${SAYS.table}${text}` })
-    const tables = message.locator('[data-slot="markdown-table"]')
     // Both tables whole: the last cell streamed is drawn, and the window has
     // finished revealing the answer (no word still in its fade-in span), so
     // every column has its final width.
@@ -9562,8 +10095,55 @@ const steps = {
       )
       return
     }
+    // The reply is drawn by Words, not react-markdown; the first table was
+    // kept as it streamed; and the maths streamed last is drawn with KaTeX
+    // from the TeX Words read, inline and as one display block, with no
+    // dollar sign left in the reply's prose.
+    const read = () =>
+      message.evaluate(
+        (element, id) => ({
+          reply: element.querySelectorAll('[data-slot="reply-markdown"]').length,
+          reactMarkdown: element.querySelectorAll('[data-slot="message-markdown"]')
+            .length,
+          redrawn:
+            element
+              .querySelector('[data-slot="markdown-table"]')
+              ?.querySelectorAll(":is(th, td):not([data-stress-seen])").length ?? -1,
+          inline: element.querySelectorAll(".katex:not(.katex-display .katex)").length,
+          display: element.querySelectorAll(".katex-display").length,
+          dollars: [...element.querySelectorAll('[data-slot="reply-markdown"] > p')]
+            .map((paragraph) => paragraph.textContent)
+            .filter((line) => line.includes("$")),
+          pill: element.querySelectorAll(`[data-chat-pill="${id}"]`).length,
+        }),
+        run.main.id,
+      )
+    // KaTeX loads lazily, so the formulas may show as TeX for a moment.
+    let words = await read()
+    await waitFor(async () => {
+      words = await read()
+      return words.inline === 2 && words.display === 1
+    }, 10_000)
+    if (words.reply !== 1 || words.reactMarkdown !== 0)
+      failures.push(
+        `the answer is drawn by ${words.reply} ReplyMarkdown and ${words.reactMarkdown} MessageMarkdown, not Words alone`,
+      )
+    if (midStream && words.redrawn)
+      failures.push(
+        `${words.redrawn} cells of the first table were drawn again while the rest of the answer streamed`,
+      )
+    if (words.pill !== 1)
+      failures.push(`the answer drew ${words.pill} pills for this chat's id, not 1`)
+    if (words.inline !== 2 || words.display !== 1 || words.dollars.length)
+      failures.push(
+        `the answer's maths drew ${words.inline} inline and ${words.display} display formulas, with ${JSON.stringify(words.dollars)} left as text`,
+      )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `table-reply-${run.engine}-${step.index}.png`),
+      })
     // Short runs each table holds, which a squeezed column used to split.
-    const words = [
+    const cut = [
       ["Price", "$16.99", "CAD", "$150"],
       ["Runtime", "Format", "Projectionist"],
     ]
@@ -9595,7 +10175,7 @@ const steps = {
           }
         },
       )
-    }, words)
+    }, cut)
     // Each table shows its data rows once, as streamed: a table's lines less
     // its heading and delimiter.
     const rows = TABLE_LINES.join("\n")
@@ -9625,7 +10205,7 @@ const steps = {
         const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
         return rgba ? Number(rgba[1]) : 1
       }
-      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const prose = element.querySelector('[data-slot="reply-markdown"] > p')
       const table = element.querySelector('[data-slot="markdown-table"]')
       const before = table.previousElementSibling
       const cells = table.querySelectorAll("tbody td")
@@ -9764,6 +10344,37 @@ const steps = {
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
     await codeStaysDark(run.page, message, failures)
+  },
+
+  async swipe(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      // An answer with a table wider than the reply: its panel scrolls
+      // sideways, which a swipe begun over it must leave to it.
+      const text = prompt(run, STRESS.table, step)
+      const seen = await send(run, run.main.id, text, failures)
+      const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+      if (!turn) return
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.table}${text}` })
+      const port = message
+        .locator('[data-slot="markdown-table"]')
+        .nth(1)
+        .locator('[data-slot="table-container"]')
+      if (!(await waitFor(async () => (await port.count()) === 1, 15_000))) {
+        failures.push("the wide table to swipe over was not drawn")
+        return
+      }
+      await setSideRail(page, true, failures)
+      if (failures.length) return
+      try {
+        await swipeColumns(run, step, message, port, failures)
+      } finally {
+        // Back as the other steps expect it, whatever failed: the rail off.
+        await setSideRail(page, false, failures)
+      }
+    })
   },
 
   async long(run, step, failures) {
@@ -10021,18 +10632,24 @@ const MENU_ROW = 30
 async function modelTilesSquare(run, row, failures) {
   const page = run.page
   await row.locator(".desktop-chip-model").click({ timeout: 10_000 })
-  const tiles = page.locator(
-    '[data-slot="searchable-listbox-option"] .desktop-provider-mark',
-  )
+  await page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  // Every model, not only the provider the picker opens on.
+  await page.locator(`${css.modelRail}[data-filter="all"]`).click()
+  const tiles = page.locator(`${css.modelOption} [data-slot="model-level-picker-mark"]`)
   await tiles.first().waitFor({ timeout: 5_000 })
   const boxes = await tiles.evaluateAll((all) =>
     all.map((tile) => {
       const box = tile.getBoundingClientRect()
-      const slot = tile.parentElement?.getBoundingClientRect()
+      const row = tile.closest('[role="option"]')?.getBoundingClientRect()
       return {
         width: Math.round(box.width * 10) / 10,
         height: Math.round(box.height * 10) / 10,
-        fits: !!slot && box.left >= slot.left - 0.5 && box.right <= slot.right + 0.5,
+        fits:
+          !!row &&
+          box.top >= row.top - 0.5 &&
+          box.bottom <= row.bottom + 0.5 &&
+          box.left >= row.left - 0.5 &&
+          box.right <= row.right + 0.5,
       }
     }),
   )
@@ -10041,22 +10658,19 @@ async function modelTilesSquare(run, row, failures) {
       failures.push(
         `a model row's provider tile is ${box.width}x${box.height}px, not a square of 12px or more`,
       )
-    else if (!box.fits)
-      failures.push("a model row's provider tile spills out of its icon slot")
+    else if (!box.fits) failures.push("a model row's provider tile spills out of its row")
   if (run.evidence)
     await page
-      .locator('[data-slot="searchable-listbox-option"]')
-      .first()
-      .locator("xpath=ancestor::*[@role='listbox'][1]")
+      .locator(css.modelPicker)
       .screenshot({ path: join(run.evidence, `composer-${run.engine}-models.png`) })
       .catch(() => {})
   await page.keyboard.press(keys.escape)
-  const closed = await tiles
-    .first()
+  const closed = await page
+    .locator(css.modelPicker)
     .waitFor({ state: "detached", timeout: 5_000 })
     .then(() => true)
     .catch(() => false)
-  if (!closed) failures.push("Escape did not close the model menu")
+  if (!closed) failures.push("Escape did not close the model picker")
   return closed
 }
 
@@ -10778,8 +11392,10 @@ async function setupWindow(run, prepare) {
   // Onboarding does not ask for the vault on its own (#1340), locked or not:
   // nothing in it needs protected data, so no unlock dialog is drawn.
   await page.waitForTimeout(1500)
-  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0) {
+    await page.close()
     throw new Error("the setup window opened a vault dialog on its own")
+  }
   return page
 }
 
@@ -12469,7 +13085,9 @@ async function startStack(options) {
   }
   let stack
   try {
-    const vmFixture = selected.some((step) => step.kind === "vmBackground")
+    const vmFixture = selected.some((step) =>
+      ["vmBackground", "cloud"].includes(step.kind),
+    )
       ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
       : null
     Object.assign(environment, vmFixture?.environment)

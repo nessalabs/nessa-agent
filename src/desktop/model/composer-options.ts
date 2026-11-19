@@ -75,12 +75,6 @@ export function defaultComposerModel(
   )
 }
 
-/** "1M context", "200K context": the window rounded to what a person would say. */
-export function contextLabel(tokens: number): string {
-  if (tokens >= 1_000_000) return `${Math.round(tokens / 1_000_000)}M context`
-  return `${Math.round(tokens / 1_000)}K context`
-}
-
 /** A thinking level a reasoning model accepts, as the composer offers it. */
 export interface ThinkingLevel {
   /** The provider's own name for the level, as the catalogue records it. */
@@ -89,14 +83,14 @@ export interface ThinkingLevel {
   readonly description: string
   /**
    * Past Max: a level the model's provider publishes beyond its `max`, the
-   * most it will think. The thinking control sets it apart as Ultra. Only a
+   * most it will think. It is named Ultra. Only a
    * model whose catalogue entry lists one has it.
    */
   readonly utmost?: true
 }
 
 /**
- * How the thinking control words the level names providers publish, least
+ * How the model picker words the level names providers publish, least
  * first. This is the control's look, not the SDK's: the catalogue keeps each
  * provider's names and order (ADR 302), and nothing here adds a level to a
  * model — a model is offered exactly the levels its entry lists. The order

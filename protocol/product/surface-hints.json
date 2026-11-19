@@ -415,6 +415,26 @@
     "readOnly": false,
     "destructive": true
   },
+  "agent37.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "agent37.save": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "agent37.disconnect": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "cloud.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "cloud.choose": {
+    "readOnly": false,
+    "destructive": false
+  },
   "devices.pool": {
     "readOnly": true,
     "destructive": false

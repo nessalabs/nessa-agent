@@ -320,14 +320,15 @@ it("shows the model it is given, and only that", async () => {
         />,
       ),
     )
-  const shown = () => host.querySelector(".desktop-chip-model")?.textContent ?? ""
+  const shown = () =>
+    host.querySelector(".desktop-chip-model")?.getAttribute("aria-label") ?? ""
   await render({ provider: "anthropic", modelId: "claude-opus-5" })
   expect(shown()).toContain("Claude Opus 5")
   await render({ provider: "openai", modelId: "gpt-6-astra" })
   expect(shown()).toContain("GPT-6 Astra")
   // A model the catalogue does not have is shown as none chosen, never as another.
   await render({ provider: "openai", modelId: "not-in-the-catalogue" })
-  expect(shown()).toContain("Choose model")
+  expect(host.querySelector(".desktop-chip-model")?.textContent).toContain("Choose model")
   await act(async () => root.unmount())
 })
 
@@ -346,21 +347,107 @@ it("offers Fast and the levels only where the catalogue records them for the mod
         />,
       ),
     )
-  const chip = () => host.querySelector<HTMLButtonElement>(".desktop-chip-thinking")
+  const fast = () => host.querySelector<HTMLButtonElement>(".desktop-composer-fast")
+  const level = () =>
+    host.querySelector(
+      '.desktop-chip-model [data-slot="model-level-picker-trigger-level"]',
+    )?.textContent ?? null
   // Claude Opus 5 publishes Fast; Claude Sonnet 5 does not; Claude Haiku 4.5
   // reasons with no level recorded (crates/nessa-sdk/data/models.json).
   await render("claude-opus-5")
-  expect(chip()?.dataset.fast).toBe("off")
-  expect(chip()?.disabled).toBe(false)
+  expect(fast()?.disabled).toBe(false)
+  expect(level()).toBe("Medium")
+  await act(async () => fast()?.click())
+  expect(fast()?.getAttribute("aria-pressed")).toBe("true")
   await render("claude-sonnet-5")
-  expect(chip()?.dataset.fast).toBeUndefined()
-  expect(chip()?.disabled).toBe(false)
+  expect(fast()?.disabled).toBe(true)
+  expect(fast()?.getAttribute("aria-pressed")).toBe("false")
+  expect(level()).toBe("Medium")
   await render("claude-haiku-4-5-20251001")
-  expect(chip()?.disabled).toBe(true)
+  expect(level()).toBeNull()
+  // Fast is remembered for the next model that has it.
+  await render("claude-opus-5")
+  expect(fast()?.getAttribute("aria-pressed")).toBe("true")
   await act(async () => root.unmount())
 })
 
-it("keeps Thinking in its row, and offers no project there", async () => {
+it("chooses a model and its level with one press of a bar, and a name keeps the level", async () => {
+  const root = createRoot(host)
+  const picks: { provider: string; modelId: string }[] = []
+  let model = { provider: "anthropic", modelId: "claude-opus-5" }
+  const render = () =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={false}
+          onPageChange={() => {}}
+          text=""
+          onTextChange={() => {}}
+          model={model}
+          onModelChange={(next) => {
+            picks.push(next)
+            model = next
+          }}
+        />,
+      ),
+    )
+  await render()
+  const chip = () => host.querySelector<HTMLButtonElement>(".desktop-chip-model")
+  const dialog = () => document.querySelector('[data-slot="model-level-picker"]')
+  try {
+    await act(async () => chip()?.click())
+    expect(dialog()).not.toBeNull()
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
+    )
+    await act(async () =>
+      document
+        .querySelector<HTMLButtonElement>('[aria-label="Claude Sonnet 5, High"]')
+        ?.click(),
+    )
+    await render()
+    expect(picks).toEqual([{ provider: "anthropic", modelId: "claude-sonnet-5" }])
+    expect(dialog()).toBeNull()
+    expect(chip()?.getAttribute("aria-label")).toBe(
+      "Change model, currently Claude Sonnet 5, High",
+    )
+    // GPT-5.6 Sol lists the same High, so choosing it by name keeps it.
+    await act(async () => chip()?.click())
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
+    )
+    await act(async () =>
+      document
+        .querySelector<HTMLElement>(
+          '[data-slot="model-level-picker-row"][data-model="gpt-5.6-sol"]',
+        )
+        ?.click(),
+    )
+    await render()
+    expect(chip()?.getAttribute("aria-label")).toBe(
+      "Change model, currently GPT-5.6 Sol, High",
+    )
+    // Choosing the model shown is passed on too: it keeps that model while
+    // another client's change is still arriving.
+    await act(async () => chip()?.click())
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
+    )
+    await act(async () =>
+      document
+        .querySelector<HTMLElement>(
+          '[data-slot="model-level-picker-row"][data-model="gpt-5.6-sol"]',
+        )
+        ?.click(),
+    )
+    expect(picks.at(-1)).toEqual({ provider: "openai", modelId: "gpt-5.6-sol" })
+    expect(picks).toHaveLength(3)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+it("keeps the model and Fast in its row, and offers no project there", async () => {
   const root = createRoot(host)
   await act(async () =>
     root.render(
@@ -377,7 +464,8 @@ it("keeps Thinking in its row, and offers no project there", async () => {
   )
   try {
     const row = host.querySelector(".desktop-composer-row")
-    expect(row?.querySelector(".desktop-chip-thinking")).not.toBeNull()
+    expect(row?.querySelector(".desktop-chip-model")).not.toBeNull()
+    expect(row?.querySelector(".desktop-composer-fast")).not.toBeNull()
     expect(host.querySelector('[aria-label^="Project"]')).toBeNull()
   } finally {
     await act(async () => root.unmount())

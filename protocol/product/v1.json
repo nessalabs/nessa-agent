@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 130,
+          "maxItems": 135,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -9408,6 +9408,78 @@
       },
       "required": ["state"],
       "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
+    },
+    "Agent37SaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Agent37 workspace API key (sk_live_...). Never returned or logged."
+        }
+      },
+      "required": ["key"],
+      "description": "Connect a user-owned Agent37 workspace. The gateway makes this install's SSH key, registers it with the workspace, checks the release's pinned runtime template, then encrypts the key, the SSH key and the template in the unlocked vault."
+    },
+    "Agent37ErrorCode": {
+      "description": "Typed Agent37 connection refusals. Not configured: no workspace is saved. Unavailable: the key was refused, the wallet or instance limit does not allow it, or the release's runtime template is not published there. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "agent37_not_configured",
+        "invalid_request",
+        "agent37_storage_unavailable",
+        "agent37_resource_missing",
+        "agent37_unreachable",
+        "agent37_unavailable",
+        "agent37_provisioning_uncertain",
+        "agent37_cleanup_uncertain"
+      ]
+    },
+    "Agent37Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["locked", "disconnected", "connected"],
+          "description": "Locked when the vault cannot be read, disconnected when no workspace is saved, or connected after validation and encrypted persistence."
+        },
+        "template": {
+          "type": "string",
+          "description": "The pinned runtime template release new VMs are made from; present only while connected."
+        }
+      },
+      "required": ["state"],
+      "description": "Secret-free saved Agent37 connection state. Connected means validation succeeded when saved."
+    },
+    "Cloud": {
+      "type": "string",
+      "enum": ["boat", "agent37"],
+      "description": "A cloud that makes thread VMs."
+    },
+    "CloudChooseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "cloud": { "$ref": "#/$defs/Cloud" } },
+      "required": ["cloud"],
+      "description": "Make new thread VMs on this cloud, which must be connected. A thread whose VM exists stays on the cloud it was made on."
+    },
+    "CloudErrorCode": {
+      "description": "Typed refusals of the cloud choice. Not configured: the cloud chosen has no saved connection. Storage unavailable: the choice, or its record, could not be read or kept; nothing changed.",
+      "type": "string",
+      "enum": ["vault_locked", "cloud_not_configured", "invalid_request", "cloud_storage_unavailable"]
+    },
+    "CloudChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloud": { "$ref": "#/$defs/Cloud", "description": "The cloud chosen for new thread VMs." }
+      },
+      "required": ["cloud"],
+      "description": "The cloud new thread VMs are made on."
     },
     "VmLifetimeMode": {
       "type": "string",

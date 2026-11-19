@@ -16,6 +16,10 @@ export const KNOBS = {
     default: 1,
     what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward",
   },
+  cloudChoices: {
+    default: 1,
+    what: "the cloud for new thread VMs picked in Settings: Agent37 then Boat, each thread staying on the cloud its VM was made on",
+  },
   backgroundTasks: {
     default: 1,
     what: "background commands outliving their calling turn and settling the original tool row",
@@ -159,7 +163,7 @@ export const KNOBS = {
   },
   tables: {
     default: 1,
-    what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply, then code that stays dark with the OS in light mode",
+    what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply, then code that stays dark with the OS in light mode, then maths; Words draws it, keeping each finished block as the rest streams",
   },
   traces: {
     default: 1,
@@ -205,9 +209,13 @@ export const KNOBS = {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
+  pickers: {
+    default: 1,
+    what: "times a model is starred and then chosen with its thinking level by one press of a bar in the model picker, opened on Starred, and the next message runs on it",
+  },
   composers: {
     default: 1,
-    what: "times the composer's row is read: the model is named without its family, thinking stands before the hairline and Send, no project is offered, nothing stands under the card, the model menu's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
+    what: "times the composer's row is read: the model is named without its family, Fast stands beside it, access before the hairline and Send, no project is offered, nothing stands under the card, the model picker's provider tiles are square, and in three short stacked panes an empty composer you are not in folds to a circle that opens it",
   },
   menuPanels: {
     default: 1,
@@ -248,6 +256,10 @@ export const KNOBS = {
   channels: {
     default: 1,
     what: "times channels are made from the sidebar's + (a refused folder, then one made for it; then a chosen folder), each talked to in a new session; the first then moves its new threads and main agent to Boat and back from its settings",
+  },
+  swipes: {
+    default: 1,
+    what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a vertical scroll toggles nothing",
   },
   restores: {
     default: 1,
@@ -314,12 +326,14 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.backgroundTasks, () => ({ kind: "background" }))
   add(knobs.vmBackgroundTasks, () => ({ kind: "vmBackground" }))
+  add(knobs.cloudChoices, () => ({ kind: "cloud" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.inputFiles, () => ({ kind: "inputFiles" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
+  add(knobs.pickers, () => ({ kind: "picker" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
@@ -365,8 +379,8 @@ export function plan(knobs, accessScenario = "full") {
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
     steps.push({ kind: next() < 0.5 ? "reply" : "permission" })
-  // Fisher–Yates, seeded. Restored conversations are added after it so a
-  // new count does not reshuffle the steps a seed already fixed.
+  // Fisher–Yates, seeded. Restored conversations and swipes are added after
+  // it so a new count does not reshuffle the steps a seed already fixed.
   for (let i = steps.length - 1; i > 0; i -= 1) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
@@ -375,13 +389,16 @@ export function plan(knobs, accessScenario = "full") {
     steps.push({ kind: "restore", slot })
   // After the shuffle, with restores: a new default must not reshuffle a seed.
   for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
+  add(knobs.swipes, () => ({ kind: "swipe" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
-  // Preset checks keep their original model. Positive model changes follow
-  // that work, using Ask before their review; chaos keeps concurrent coverage.
+  // Preset checks keep their original model. Positive model changes (a
+  // `model` step, and a `picker` step's bar) follow that work, using Ask
+  // before their review; chaos keeps concurrent coverage.
   // Handoffs come last of all: a switch stays in the metadata, and no older
   // build's file holds one, so the `upgrade` step runs before it.
-  const last = (step) => (step.kind === "handoff" ? 2 : step.kind === "model" ? 1 : 0)
+  const last = (step) =>
+    step.kind === "handoff" ? 2 : step.kind === "model" || step.kind === "picker" ? 1 : 0
   const sequence = [0, 1, 2].flatMap((rank) =>
     steps.filter((step) => last(step) === rank),
   )

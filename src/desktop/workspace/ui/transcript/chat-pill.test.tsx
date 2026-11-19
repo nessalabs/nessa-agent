@@ -2,7 +2,8 @@
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeAll, beforeEach, expect, it } from "vitest"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import { loadWorkspace } from "../../adapters/store/commands"
 import { paneIds } from "../../application/workspace-state"
 import type { Message as MessageValue } from "../../model/transcript"
@@ -13,6 +14,9 @@ import { ToolSteps } from "./tool-steps"
 
 let root: Root
 let host: HTMLDivElement
+
+// Agent replies are drawn by Words, which the kit loads on first draw.
+beforeAll(() => preloadReplyMarkdown())
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

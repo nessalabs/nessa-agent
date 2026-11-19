@@ -65,6 +65,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("passphrase"), knobs.passphrases)
   assert.equal(count("channel"), knobs.channels)
   assert.equal(count("restore"), knobs.restores)
+  assert.equal(count("swipe"), knobs.swipes)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("peer"), knobs.peers)
@@ -142,7 +143,9 @@ test("positive model steps retain default and raised counts, run last but for ha
       const first = steps.findIndex((step) => step.kind === "model")
       assert.equal(steps.filter((step) => step.kind === "model").length, count)
       assert.ok(
-        steps.slice(first).every((step) => ["model", "handoff"].includes(step.kind)),
+        steps
+          .slice(first)
+          .every((step) => ["model", "picker", "handoff"].includes(step.kind)),
       )
       let mode = "ask"
       for (const step of steps) {
@@ -168,6 +171,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         inputFiles: "0",
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
+        cloudChoices: "0",
         windows: "0",
         controls: "0",
         linkings: "0",
@@ -192,6 +196,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         composers: "0",
+        pickers: "0",
         githubs: "0",
         voices: "0",
         logins: "0",
@@ -202,6 +207,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         peers: "0",
         pastes: "0",
         attaches: "0",
+        swipes: "0",
         awaits: "0",
         closes: "0",
         fresh: "0",

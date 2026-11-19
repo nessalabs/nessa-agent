@@ -792,6 +792,41 @@
       "destructive": true
     },
     {
+      "name": "agent37.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "agent37.save",
+      "params": "Agent37SaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "agent37.disconnect",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "cloud.read",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "cloud.choose",
+      "params": "CloudChooseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "devices.pool",
       "params": "DevicesPoolParams",
       "grant": "credential.manage",

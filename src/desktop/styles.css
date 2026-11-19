@@ -1491,49 +1491,50 @@ html:not(.dark) [data-surface] {
 }
 
 /*
- * The model's chip shows its short name ("Opus 5", `--desktop-model-short`
- * from `composer.tsx`): the mark beside it says whose model it is, and the
- * whole name stays the chip's accessible name and its menu's. The name gives
- * way before anything beside it: squeezed, it ends in an ellipsis inside its
- * own chip, never running under the access control. Narrowest, a pane's
- * composer shows the mark alone (`conversation.css`).
+ * The model's chip names the model short ("Opus 5") and its thinking level
+ * ("Low"), quieter, after it (`ModelLevelPicker`): the mark before it says
+ * whose model it is, and the whole name stays the chip's accessible name.
+ * The name gives way before anything beside it: squeezed, it ends in an
+ * ellipsis inside its own chip, never running under the access control.
+ * Narrowest, a pane's composer shows the mark alone (`conversation.css`).
  */
 .desktop-chip-model {
   overflow: hidden;
 }
 
-.desktop-composer .desktop-chip-model > span:not([aria-hidden]):not(:first-child) {
-  display: none;
-}
-
-.desktop-composer .desktop-chip-model::after {
-  content: var(--desktop-model-short);
-}
-
-/* The short name is drawn last in the chip's markup; its chevron still ends the chip. */
-.desktop-composer .desktop-chip-model > svg:last-child {
-  order: 1;
-}
-
-.desktop-chip-model > span:not([aria-hidden]):not(:first-child),
-.desktop-chip-model::after {
+.desktop-chip-model > span:not([aria-hidden]):not(:first-child) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.desktop-chip-model[data-state="open"] > svg:last-child {
-  transform: rotate(180deg);
+.desktop-chip-model [data-slot="model-level-picker-trigger-level"] {
+  flex: none;
+  color: var(--muted-foreground);
 }
 
-/* A small bolt beside the brain says Fast is on without opening the control. */
-.desktop-chip .desktop-fast-mark {
+/* The mark keeps its own 16px tile; the chip's icon size is for its glyphs. */
+.desktop-chip [data-slot="model-level-picker-mark"] svg {
   width: 11px;
   height: 11px;
-  margin-left: -3px;
+}
+
+/* Fast beside the model: an icon-only chip, as square as the chip is tall. */
+.desktop-composer .desktop-composer-fast {
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+}
+
+/* On, the bolt is filled and full strength: Fast reads at a glance. */
+.desktop-composer .desktop-composer-fast[aria-pressed="true"] {
   color: var(--foreground);
-  fill: currentColor;
+}
+
+.desktop-chip-model[data-state="open"] > svg:last-child {
+  transform: rotate(180deg);
 }
 
 /*
@@ -1718,79 +1719,6 @@ html:not(.dark) .desktop-tooltip {
 }
 
 /*
- * The design system's model picker, dressed for the glass: a hairline under
- * the search field, soft rows, and provider tabs that sit in the frost rather
- * than on a grey tray.
- */
-.desktop-model-picker {
-  width: min(22rem, calc(100vw - 1.5rem));
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-search"] {
-  height: 44px;
-  margin: 0 6px;
-  padding: 0 8px;
-  border-bottom: 0.5px solid color-mix(in oklab, var(--foreground) 10%, transparent);
-  background: transparent;
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-search"] input {
-  font-size: 14px;
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-search"] input::placeholder {
-  color: color-mix(in oklab, var(--foreground) 35%, transparent);
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-list"] {
-  max-height: 300px;
-  padding: 6px;
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-option"] {
-  padding: 7px 8px;
-  border-radius: 10px;
-  transition: background-color var(--desktop-fast) ease;
-}
-
-/* Highlighted as a menu's rows are: the material's soft fill, no ring. */
-.desktop-model-picker [data-slot="searchable-listbox-option"][data-highlighted="true"],
-.desktop-model-picker [data-slot="searchable-listbox-option"]:focus-visible {
-  background: var(--desktop-material-highlight);
-  outline: none;
-}
-
-.desktop-model-picker [data-slot="searchable-listbox-option"][data-selected="true"] {
-  background: var(--desktop-hover);
-}
-
-/* The row's icon well steps back so the provider tile carries the colour. */
-.desktop-model-picker
-  [data-slot="searchable-listbox-option"]
-  [aria-hidden="true"]:first-child {
-  background: transparent;
-  box-shadow: none;
-}
-
-.desktop-model-picker [data-slot="model-picker-provider-tabs"] {
-  gap: 2px;
-  padding: 6px;
-  border-top: 0.5px solid color-mix(in oklab, var(--foreground) 10%, transparent);
-  background: color-mix(in oklab, var(--foreground) 3%, transparent);
-}
-
-.desktop-model-picker [data-slot="model-picker-provider-tabs"] [role="tab"] {
-  height: 30px;
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.desktop-model-picker [data-slot="model-picker-provider-tabs"] [aria-selected="true"] {
-  background: color-mix(in oklab, var(--foreground) 10%, transparent);
-  box-shadow: none;
-}
-
-/*
  * Provider marks sit on a neutral glass tile, so each brand keeps its own
  * colour and no two tiles compete.
  */
@@ -1811,18 +1739,6 @@ html:not(.dark) .desktop-tooltip {
   font-size: 0.8em;
   font-weight: 650;
   line-height: 1;
-}
-
-/* In the model chip the mark stands alone, without its tile. */
-[data-slot="model-picker-trigger"] .desktop-provider-mark {
-  background: none;
-  box-shadow: none;
-  font-size: 11px;
-}
-
-[data-slot="model-picker-trigger"] .desktop-provider-mark svg {
-  width: 100%;
-  height: 100%;
 }
 
 /* A monogram mark takes the tile's size, not the one it brings from onboarding. */

@@ -545,10 +545,19 @@ export type {
   DevicesPool,
   PoolPreference,
 } from "./generated/product.js"
+export type { Agent37Api } from "./presentation/agent37-api.js"
+export { NessaAgent37Error } from "./presentation/agent37-api.js"
+export type { CloudApi } from "./presentation/cloud-api.js"
+export { NessaCloudError } from "./presentation/cloud-api.js"
 export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,
   type BoatStatus,
+  type Agent37Status,
+  type Agent37SaveParams,
+  type Cloud,
+  type CloudChoice,
+  CloudErrorCode,
   type BoatRuntimeReadParams,
   type BoatRuntimeSetParams,
   type BoatRuntimeSettings,

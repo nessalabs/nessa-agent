@@ -1,14 +1,17 @@
 //! Pure allocation history validation; serialization and files have separate tests.
 use super::super::{AdmissionRefusal, AdmissionRejection, ObservedEnvironment, RefusalDisposition};
-use super::{Assignment, EnvironmentIdentity};
-fn admission() -> EnvironmentIdentity {
-    EnvironmentIdentity::new(
-        "11111111-1111-4111-8111-111111111111".into(),
-        "nessa".into(),
-        "22222222-2222-4222-8222-222222222222".into(),
-        2,
+use super::super::{Admitted, EnvironmentIdentity};
+use super::Assignment;
+fn admission() -> Admitted {
+    Admitted::Boat(
+        EnvironmentIdentity::new(
+            "11111111-1111-4111-8111-111111111111".into(),
+            "nessa".into(),
+            "22222222-2222-4222-8222-222222222222".into(),
+            2,
+        )
+        .unwrap(),
     )
-    .unwrap()
 }
 fn intent() -> Assignment {
     Assignment::Provisioning {
@@ -26,7 +29,7 @@ fn assigned() -> Assignment {
 fn refused(vm: &str) -> Assignment {
     refused_with(vm, "image", admission())
 }
-fn refused_with(vm: &str, image: &str, admission: EnvironmentIdentity) -> Assignment {
+fn refused_with(vm: &str, image: &str, admission: Admitted) -> Assignment {
     Assignment::Refused {
         thread: "thread".into(),
         vm: vm.into(),
@@ -69,13 +72,15 @@ fn receipt_histories_preserve_targets_and_cannot_reactivate_terminal_refusals() 
             refused_with(
                 "bx_fixture",
                 "image",
-                EnvironmentIdentity::new(
-                    "11111111-1111-4111-8111-111111111111".into(),
-                    "nessa".into(),
-                    "33333333-3333-4333-8333-333333333333".into(),
-                    3,
-                )
-                .unwrap(),
+                Admitted::Boat(
+                    EnvironmentIdentity::new(
+                        "11111111-1111-4111-8111-111111111111".into(),
+                        "nessa".into(),
+                        "33333333-3333-4333-8333-333333333333".into(),
+                        3,
+                    )
+                    .unwrap(),
+                ),
             ),
         ],
         vec![

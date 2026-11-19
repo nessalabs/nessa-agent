@@ -26,7 +26,7 @@ fn receipt() -> Assignment {
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
     }
 }
 
@@ -41,7 +41,7 @@ async fn lifetime_refusal_keeps_the_actual_vm_target_after_reopen() {
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
         rejection: AdmissionRejection::new(AdmissionRefusal::LifetimeNotEnforced, None),
         disposition: RefusalDisposition::RollbackNewVm,
     };
@@ -198,7 +198,7 @@ async fn refusal_is_terminal_and_a_restored_history_cannot_switch_vm_or_admissio
         thread: THREAD.into(),
         vm: "bx_fixture".into(),
         image: "fixture-image".into(),
-        admission: admission(),
+        admission: crate::workspaces::domain::Admitted::Boat(admission()),
         disposition: RefusalDisposition::RollbackNewVm,
         rejection: crate::workspaces::domain::AdmissionRejection::new(
             AdmissionRefusal::WrongVersion,
@@ -225,4 +225,64 @@ async fn refusal_is_terminal_and_a_restored_history_cannot_switch_vm_or_admissio
         std::fs::write(&path, serde_json::to_vec(&history).unwrap()).unwrap();
         assert_eq!(reopened.read(THREAD).await, Err(Failure::Storage));
     }
+}
+
+/// An Agent37 receipt reads back whole, a refused one without a digest
+/// included, and is written with its own fields, never Boat's.
+#[tokio::test]
+async fn agent37_receipts_read_back_whole_in_their_own_shape() {
+    use crate::workspaces::domain::{
+        AdmissionRefusal, AdmissionRejection, Admitted, RefusalDisposition, TemplateRelease,
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("receipts");
+    let store = FileAssignments(root.clone());
+    store.save(intent()).await.unwrap();
+    let assigned = Assignment::Assigned {
+        thread: THREAD.into(),
+        vm: "ab12cd34ef".into(),
+        image: "nessa-runtime@1".into(),
+        admission: Admitted::Agent37(
+            TemplateRelease::new(
+                "nessa-runtime@1".into(),
+                Some(1),
+                Some(format!("sha256:{}", "b".repeat(64))),
+            )
+            .unwrap(),
+        ),
+    };
+    store.save(assigned.clone()).await.unwrap();
+    assert_eq!(
+        FileAssignments(root.clone()).read(THREAD).await.unwrap(),
+        Some(assigned)
+    );
+    let history: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(format!("{THREAD}.json"))).unwrap())
+            .unwrap();
+    let admission = &history["transitions"][1]["admission"];
+    assert_eq!(admission["template"], "nessa-runtime@1");
+    assert!(admission.get("version_id").is_none());
+
+    let other = "e49640a4-fd71-40a4-b3e9-a35e8753db78";
+    store
+        .save(Assignment::Provisioning {
+            thread: other.into(),
+        })
+        .await
+        .unwrap();
+    let refused = Assignment::Refused {
+        thread: other.into(),
+        vm: "cd34ef56ab".into(),
+        image: "nessa-runtime@1".into(),
+        admission: Admitted::Agent37(
+            TemplateRelease::new("agent37-base".into(), None, None).unwrap(),
+        ),
+        rejection: AdmissionRejection::new(AdmissionRefusal::MissingVersion, None),
+        disposition: RefusalDisposition::RollbackNewVm,
+    };
+    store.save(refused.clone()).await.unwrap();
+    assert_eq!(
+        FileAssignments(root).read(other).await.unwrap(),
+        Some(refused)
+    );
 }
