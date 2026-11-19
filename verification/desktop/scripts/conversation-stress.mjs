@@ -2174,6 +2174,25 @@ async function pickerStep(run, step, failures) {
 
   if ((await row().getAttribute("aria-disabled")) === "true")
     throw new CannotRun(`${target.displayName} cannot be chosen in this conversation`)
+  // A sideways swipe over the row moves its level one step, and the picker
+  // stays open. Fingers moving right (a negative deltaX) light one bar more.
+  const lit = () => row().locator(`${css.modelBar}[data-lit]`).count()
+  const total = await row().locator(css.modelBar).count()
+  const litBefore = await lit()
+  const up = litBefore < total
+  await row().hover()
+  // One swipe in small moves, as a trackpad sends it, until the level moves.
+  // The page may scale wheel deltas, so the count of moves is not fixed.
+  for (let move = 0; move < 12 && (await lit()) === litBefore; move += 1)
+    await page.mouse.wheel(up ? -16 : 16, 0)
+  const litAfter = litBefore + (up ? 1 : -1)
+  if (!(await waitFor(async () => (await lit()) === litAfter, 5_000)))
+    failures.push(
+      `a sideways swipe left ${await lit()} of ${target.displayName}'s bars lit, not ${litAfter}`,
+    )
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a sideways swipe closed the model picker")
+
   // One press of a bar: that model at that level, and the picker closes.
   const bar = row().locator(css.modelBar).nth(1)
   const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
