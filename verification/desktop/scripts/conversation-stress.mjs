@@ -2220,6 +2220,51 @@ async function pickerStep(run, step, failures) {
 
   if ((await row().getAttribute("aria-disabled")) === "true")
     throw new CannotRun(`${target.displayName} cannot be chosen in this conversation`)
+  // A sideways swipe over the row moves its level one step, and the picker
+  // stays open. Fingers moving right (a negative deltaX) light one bar more.
+  const lit = () => row().locator(`${css.modelBar}[data-lit]`).count()
+  const total = await row().locator(css.modelBar).count()
+  const litBefore = await lit()
+  const up = litBefore < total
+  await row().hover()
+  // What the page received, for the failure message: each wheel's sideways
+  // distance, unit, and time.
+  await page.evaluate(() => {
+    const seen = []
+    window.__pickerWheels = seen
+    window.addEventListener(
+      "wheel",
+      (event) =>
+        seen.push([
+          event.deltaX,
+          event.deltaY,
+          event.deltaMode,
+          Math.round(event.timeStamp),
+        ]),
+      { capture: true, passive: true },
+    )
+  })
+  // A swipe is a run of small moves less than 160 ms apart (the kit's
+  // gesture gap); a pause longer than that starts a new swipe. Checking the
+  // bars between moves takes longer than that, so one probe move learns how
+  // far a move reaches in this engine, and after a pause that ends it, one
+  // burst carries just past one step (44 px).
+  const sign = up ? -1 : 1
+  await page.mouse.wheel(sign * 16, 0)
+  const reach = Math.abs(
+    await page.evaluate(() => window.__pickerWheels.at(-1)?.[0] ?? 0),
+  )
+  await page.waitForTimeout(400)
+  const moves = reach > 0 ? Math.floor(44 / reach) + 1 : 0
+  await Promise.all(Array.from({ length: moves }, () => page.mouse.wheel(sign * 16, 0)))
+  const litAfter = litBefore + (up ? 1 : -1)
+  if (!(await waitFor(async () => (await lit()) === litAfter, 5_000)))
+    failures.push(
+      `a sideways swipe left ${await lit()} of ${target.displayName}'s bars lit, not ${litAfter} (wheels seen [dx, dy, mode, ms]: ${await page.evaluate(() => JSON.stringify(window.__pickerWheels))})`,
+    )
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a sideways swipe closed the model picker")
+
   // One press of a bar: that model at that level, and the picker closes.
   const bar = row().locator(css.modelBar).nth(1)
   const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
