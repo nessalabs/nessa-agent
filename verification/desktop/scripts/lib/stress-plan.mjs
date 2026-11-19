@@ -263,7 +263,7 @@ export const KNOBS = {
   },
   swipes: {
     default: 1,
-    what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a vertical scroll toggles nothing",
+    what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a wide code block, or a vertical scroll, toggles nothing",
   },
   restores: {
     default: 1,

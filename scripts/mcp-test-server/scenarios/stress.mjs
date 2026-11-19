@@ -148,11 +148,17 @@ export const TABLE_HOLD_MS = 3000
  * The code and the diagram a `table` turn streams after its tables, so the
  * window draws a highlighted code block and a Mermaid diagram in the same
  * answer: the window is dark only, and they must be too whatever the OS
- * appearance is (UI audit #29).
+ * appearance is (UI audit #29). The second block's line is wider than a
+ * reply, so it scrolls sideways inside the highlighter's shadow root, which
+ * a swipe begun over it must leave to it.
  */
 export const CODE_LINES = [
   "```ts",
   "const seatsLeft = 42",
+  "```",
+  "",
+  "```text",
+  "/home/node/.claude/projects/-home-node--nessa-workspaces-ab660baf/ebaaed71-0b9e-4c3e-9d25-2c8f3a3b1e77.jsonl  185 lines  292 KB  07:42:29Z to 23:16:48Z",
   "```",
   "",
   "```mermaid",

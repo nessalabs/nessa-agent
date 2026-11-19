@@ -124,8 +124,9 @@ import {
  *               the rail, one per swipe, a fling's momentum included, then
  *               open them back rail, sidebar, list; each move gives one
  *               haptic tick and a swipe with nothing left to move gives
- *               none; over a wide table the swipe scrolls the table and a
- *               vertical scroll that drifts sideways folds nothing
+ *               none; over a wide table or a wide code block (its lines
+ *               in a shadow root) the swipe scrolls it, and a vertical
+ *               scroll that drifts sideways folds nothing
  *   touchId     the vault is sealed and Settings › Accounts asks for it,
  *               with a fake Touch ID on: the dialog offers Touch ID ticked
  *               and keeps the typed passphrase; the next unlock is the
@@ -712,11 +713,12 @@ const ended = (turn) => turnEnded(turn.status)
 
 /**
  * The `swipe` step's swipes, with the rail on and the wide table drawn in
- * `message` (its scroller `port`): every column open, folded one per swipe
- * left, nothing more to fold, the table scrolled and a vertical scroll left
- * alone, then opened one per swipe right, a haptic tick for each move.
+ * `message` (its scroller `port`) beside the wide code block `code`: every
+ * column open, folded one per swipe left, nothing more to fold, the table and
+ * the code scrolled and a vertical scroll left alone, then opened one per
+ * swipe right, a haptic tick for each move.
  */
-async function swipeColumns(run, step, message, port, failures) {
+async function swipeColumns(run, step, message, port, code, failures) {
   const page = run.page
   const columns = () =>
     page.evaluate(
@@ -838,6 +840,35 @@ async function swipeColumns(run, step, message, port, failures) {
   await expect("a swipe over the wide table", all, 0)
   if ((await port.evaluate((each) => each.scrollLeft)) <= scrolled)
     failures.push("a swipe over the wide table did not scroll it")
+  // Over a wide code block the same. The highlighter draws its lines in a
+  // shadow root, where the wheel's target is only the root's host and its
+  // scroller is out of reach of the target's own parents.
+  const codeScroll = () =>
+    code.evaluate((block) => {
+      const walk = (root) => {
+        for (const each of root.querySelectorAll("*")) {
+          const overflow = getComputedStyle(each).overflowX
+          if (
+            each.scrollWidth > each.clientWidth + 1 &&
+            (overflow === "auto" || overflow === "scroll")
+          )
+            return each.scrollLeft
+          const inner = each.shadowRoot && walk(each.shadowRoot)
+          if (inner !== null && inner !== undefined) return inner
+        }
+        return null
+      }
+      return walk(block)
+    })
+  if (!(await waitFor(async () => (await codeScroll()) !== null, 15_000)))
+    failures.push("the wide code block does not scroll")
+  else {
+    const before = await codeScroll()
+    await swipe(code, 15)
+    await expect("a swipe over the wide code block", all, 0)
+    if ((await codeScroll()) <= before)
+      failures.push("a swipe over the wide code block did not scroll it")
+  }
   // Left: the column nearest the chat goes first, one per swipe; a
   // fling's momentum is the same swipe.
   await swipe(words, 15, 0, 30)
@@ -10946,7 +10977,8 @@ const steps = {
       await setSideRail(page, true, failures)
       if (failures.length) return
       try {
-        await swipeColumns(run, step, message, port, failures)
+        const code = message.locator('[data-slot="code-block"]').nth(1)
+        await swipeColumns(run, step, message, port, code, failures)
       } finally {
         // Back as the other steps expect it, whatever failed: the rail off.
         await setSideRail(page, false, failures)
@@ -12023,10 +12055,12 @@ async function welcomedAtOnce(page, failures) {
  * check found.
  */
 async function codeStaysDark(page, message, failures) {
-  const block = message.locator('[data-slot="code-block"]')
+  // The first block, with its one short line; the second is the wide one.
+  const blocks = message.locator('[data-slot="code-block"]')
+  const block = blocks.first()
   const diagram = message.locator('[data-slot="mermaid-diagram"] svg')
   const drawn = await waitFor(
-    async () => (await block.count()) === 1 && (await diagram.count()) >= 1,
+    async () => (await blocks.count()) === 2 && (await diagram.count()) >= 1,
     20_000,
   )
   if (!drawn) {
