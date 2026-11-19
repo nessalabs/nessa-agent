@@ -6,6 +6,8 @@
 //! [`WorkspaceWindow`]. A named place conversations live in, with the folder
 //! their agents work in, is a [`Channel`].
 mod channel;
+mod cloud;
+pub use cloud::Cloud;
 mod conversation_deletion;
 mod place;
 mod pool_preference;

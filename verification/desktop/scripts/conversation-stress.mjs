@@ -39,9 +39,11 @@ import {
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
  *   cloud       Agent37 is picked as the cloud for new thread VMs in
- *               Settings › Connections › Accounts: a thread's VM is made on
- *               Agent37 (the fixture's fake one) and stays there after Boat
- *               is picked again, while the next thread's goes to Boat
+ *               Settings › Accounts: a thread's VM is made on Agent37 (the
+ *               fixture's fake one) and stays there after Boat is picked
+ *               again, while the next thread's goes to Boat; a thread in a
+ *               channel placed on Agent37 goes to Agent37 while Boat is
+ *               chosen
  *   restore     a restored conversation is opened and shows its saved record;
  *               another, whose source file is moved aside, refuses Send and
  *               keeps the draft
@@ -3688,6 +3690,86 @@ const steps = {
     await talk(onBoat, `${STRESS.reply} cloud boat ${step.index}`)
     if (made(onBoat).join() !== "boat")
       failures.push(`a VM made with Boat chosen was made on: ${made(onBoat).join()}`)
+    // A channel names its own cloud: its threads go to Agent37 while Boat is
+    // the cloud chosen for new thread VMs, and the channel says so back.
+    const name = `stress-cloud-r${step.index}-s${run.knobs.seed}`
+    // Made here as setup; the person moves its threads to Agent37 in the
+    // channel's settings, from the menu that lists every cloud.
+    const channel = await run.client.channels.create({
+      requestId: name,
+      name,
+      agent: run.stack.agent,
+      model: run.stack.profile.model,
+    })
+    const inChannel = randomUUID()
+    try {
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      const named = run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+      await named.hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+        )
+        .click()
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator(`[data-channel-placement="${channel.channelId}"]`)
+      try {
+        await pickChoice(
+          run.page,
+          control.locator('[data-placement-row="threads"]'),
+          "agent37",
+        )
+        if (
+          !(await waitFor(
+            async () =>
+              (await control.getAttribute("data-thread-placement")) === "agent37",
+            10_000,
+          ))
+        )
+          failures.push("the channel settings do not show new threads on Agent37")
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `cloud-${run.engine}-channel-agent37.png`),
+          })
+      } finally {
+        const dialog = run.page.locator(css.channelSettingsDialog)
+        for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+          await run.page.keyboard.press(keys.escape)
+          await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+        }
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (listed?.threadPlacement !== "agent37")
+        failures.push(`a channel moved to Agent37 reads back ${listed?.threadPlacement}`)
+      await run.client.conversation.create({
+        conversationId: inChannel,
+        agent: run.stack.agent,
+        channelId: channel.channelId,
+      })
+      await talk(inChannel, `${STRESS.reply} cloud channel ${step.index}`)
+      if (made(inChannel).join() !== "agent37")
+        failures.push(
+          `a thread in a channel on Agent37 was made on: ${made(inChannel).join()}`,
+        )
+      run.checked.push(inChannel)
+    } finally {
+      await run.client.channels
+        .setPlacement({
+          requestId: `${name}-back`,
+          channelId: channel.channelId,
+          coordinatorPlacement: "local",
+          threadPlacement: "local",
+        })
+        .catch((error) =>
+          failures.push(`${name} did not go back here: ${explain(error)}`),
+        )
+    }
     run.checked.push(onAgent37, onBoat)
     run.main = original
     await openStressConversation(run.page, original.id, original.title)
@@ -7328,12 +7410,12 @@ const steps = {
         await list.waitFor({ timeout: 5_000 })
         if (
           (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
-          (await list.locator("[data-devices-cloud]").count()) !== 1
+          (await list.locator('[data-devices-cloud-id="boat"]').count()) !== 1
         )
           failures.push("the worker and the cloud are not in one list")
         if (
           (await list
-            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .locator('[data-devices-cloud-id="boat"] [data-slot=device-figure]')
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
@@ -7356,7 +7438,7 @@ const steps = {
           failures.push("the Devices title still has a line under it")
         if ((await page.locator('[data-devices-action^="add"]').count()) !== 1)
           failures.push("Devices offers Add device more than once")
-        const boatSays = await list.locator("[data-devices-cloud]").innerText()
+        const boatSays = await list.locator('[data-devices-cloud-id="boat"]').innerText()
         if (/Offline/.test(boatSays) && /Not connected/.test(boatSays))
           failures.push(`Boat's tile says its state twice: ${boatSays}`)
         // The `ssh` step's suggestions are a section of their own, under it.
@@ -7373,7 +7455,7 @@ const steps = {
           )
         )
           failures.push("Devices still sends Boat to Settings")
-        await list.locator("[data-devices-cloud]").click()
+        await list.locator('[data-devices-cloud-id="boat"]').click()
         const cloud = page.locator('[data-devices-page="cloud"]')
         await cloud.waitFor({ timeout: 5_000 })
         // It says where Boat stands, and offers the one thing to do about it:
@@ -7424,6 +7506,29 @@ const steps = {
           )
         if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // Add device › Cloud offers every cloud, each opening its own page.
+        await page.locator('[data-devices-add="cloud"]').click()
+        const offered = await page
+          .locator("[data-devices-add-cloud]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add-cloud")),
+          )
+        if (JSON.stringify(offered) !== JSON.stringify(["boat", "agent37"]))
+          failures.push(`Add device › Cloud offers ${JSON.stringify(offered)}`)
+        await page.locator('[data-devices-add-cloud="agent37"]').click()
+        if (
+          !(await page
+            .locator('[data-devices-cloud-page="agent37"] [data-setting="agent37"]')
+            .waitFor({ timeout: 5_000 })
+            .then(
+              () => true,
+              () => false,
+            ))
+        )
+          failures.push("Add device › Cloud › Agent37 does not open Agent37's page")
+        await photograph("cloud-agent37")
+        await page.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
         // A phone pairs right here: Settings' rows, drawn as cards on Devices,
         // and the code's modal on top of the page, giving focus back on Escape.
         await page.locator('[data-devices-add="phone"]').click()

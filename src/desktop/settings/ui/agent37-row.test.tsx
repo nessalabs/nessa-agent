@@ -113,3 +113,27 @@ it("offers to read again, never to connect, when its status could not be read", 
   await act(async () => button("Try again")?.click())
   expect(row()?.dataset.agent37State).toBe("connected")
 })
+
+it("tells the page around it each state it comes to read", async () => {
+  let status: Agent37Status = { state: "connected", template: "nessa-runtime@1" }
+  const gateway: Agent37Gateway = {
+    read: async () => status,
+    save: async () => status,
+    disconnect: async () => {
+      status = { state: "disconnected" }
+      return status
+    },
+    cloud: async () => ({ cloud: "boat" }),
+    chooseCloud: async (cloud) => ({ cloud }),
+  }
+  const seen: string[] = []
+  await act(async () =>
+    root.render(
+      <Agent37Provider gateway={gateway}>
+        <Agent37Row onChange={(state) => seen.push(state)} />
+      </Agent37Provider>,
+    ),
+  )
+  await act(async () => button("Disconnect")?.click())
+  expect(seen).toEqual(["connected", "disconnected"])
+})

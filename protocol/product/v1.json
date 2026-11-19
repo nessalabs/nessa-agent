@@ -8783,14 +8783,14 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "coordinatorConversationId": {
           "type": ["string", "null"],
@@ -8877,14 +8877,14 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8920,14 +8920,14 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel's main agent runs from now on. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel's main agent runs from now on. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         }
       },
       "required": ["requestId", "channelId", "coordinatorPlacement", "threadPlacement"]
@@ -9470,13 +9470,21 @@
     "CloudErrorCode": {
       "description": "Typed refusals of the cloud choice. Not configured: the cloud chosen has no saved connection. Storage unavailable: the choice, or its record, could not be read or kept; nothing changed.",
       "type": "string",
-      "enum": ["vault_locked", "cloud_not_configured", "invalid_request", "cloud_storage_unavailable"]
+      "enum": [
+        "vault_locked",
+        "cloud_not_configured",
+        "invalid_request",
+        "cloud_storage_unavailable"
+      ]
     },
     "CloudChoice": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "cloud": { "$ref": "#/$defs/Cloud", "description": "The cloud chosen for new thread VMs." }
+        "cloud": {
+          "$ref": "#/$defs/Cloud",
+          "description": "The cloud chosen for new thread VMs."
+        }
       },
       "required": ["cloud"],
       "description": "The cloud new thread VMs are made on."

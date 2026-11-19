@@ -3,11 +3,11 @@
 //! the fake provider; released binaries cannot select it.
 use crate::conversation::{
     application::{
-        ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
+        ChannelStore, ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
         EnvironmentFuture, EnvironmentLease, ThreadEnvironments,
     },
     infrastructure::{
-        in_process_environment,
+        channel_cloud, in_process_environment,
         ssh_environment::{Build, BuildSource, HostInstaller},
     },
 };
@@ -114,11 +114,12 @@ pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {
 pub(super) fn environments(
     default: Arc<dyn ThreadEnvironments>,
     service: Arc<Workspaces>,
+    channels: Arc<dyn ChannelStore>,
 ) -> Arc<dyn ThreadEnvironments> {
     if FIXTURE.get().is_none() {
         return default;
     }
-    Arc::new(FakeEnvironments(service))
+    Arc::new(FakeEnvironments(service, channels))
 }
 pub(super) fn limits(default: ConversationLimits) -> ConversationLimits {
     FIXTURE.get().map_or(default, |fixture| ConversationLimits {
@@ -339,10 +340,14 @@ impl WorkspaceRuntime for FakeVm {
         })
     }
 }
-struct FakeEnvironments(Arc<Workspaces>);
+struct FakeEnvironments(Arc<Workspaces>, Arc<dyn ChannelStore>);
 impl ThreadEnvironments for FakeEnvironments {
     fn environment(&self, id: &ConversationId) -> Result<Arc<dyn Environment>, ConversationError> {
-        Ok(Arc::new(FakeLease(self.0.clone(), id.clone())))
+        Ok(Arc::new(FakeLease(
+            self.0.clone(),
+            id.clone(),
+            self.1.clone(),
+        )))
     }
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async { true })
@@ -357,7 +362,7 @@ impl ThreadEnvironments for FakeEnvironments {
         })
     }
 }
-struct FakeLease(Arc<Workspaces>, ConversationId);
+struct FakeLease(Arc<Workspaces>, ConversationId, Arc<dyn ChannelStore>);
 impl Environment for FakeLease {
     fn declaration(&self) -> EnvironmentDeclaration {
         let mut d = in_process_environment().declaration();
@@ -371,8 +376,10 @@ impl Environment for FakeLease {
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
+            // The channel's cloud, read as the real gateway reads it.
+            let (channel, cloud) = channel_cloud(self.2.as_ref(), &self.1).await?;
             self.0
-                .open(self.1.clone(), true, None)
+                .open(self.1.clone(), true, channel, cloud)
                 .await
                 .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
             let mut opened = in_process_environment().open(lease, grant, binding).await?;

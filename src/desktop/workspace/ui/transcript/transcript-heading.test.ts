@@ -23,6 +23,7 @@ describe("the heading's word on the agent's lease", () => {
 describe("the heading's word on where the agent runs", () => {
   it("is the channel's placement before any lease", () => {
     expect(placeNote(undefined, "boat")).toBe("Boat workspace")
+    expect(placeNote(undefined, "agent37")).toBe("Agent37 workspace")
     expect(placeNote(undefined, "local")).toBe("This computer")
     expect(placeNote(undefined, undefined)).toBeUndefined()
   })

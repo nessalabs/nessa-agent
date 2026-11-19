@@ -1,0 +1,16 @@
+/* A cloud's mark: its logo as a mask, filled in the text colour. */
+.cloud-mark {
+  display: block;
+  flex: none;
+  aspect-ratio: 1;
+  background-color: var(--foreground);
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+.cloud-mark[data-dimmed] {
+  opacity: 0.4;
+}
+.cloud-mark-agent37 {
+  mask-image: url("./agent37-mark.png");
+}
