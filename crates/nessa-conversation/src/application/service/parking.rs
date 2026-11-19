@@ -117,13 +117,15 @@ impl ConversationService {
         }
         self.inner.metadata.close_thread(child).await?;
         // An opening that began after the look above may have read the store
-        // before this write. Its read and `closing` are one change under
-        // `closing_changes`, so marking the slot under that lock lands after
-        // it; an opening that reads later sees the store closed.
+        // before this write, and a new message may have opened the thread
+        // again since. Each changes the store and `closing` together under
+        // `closing_changes`, so the slot takes the store's mark as it stands
+        // under that lock; an opening that reads later sees it itself.
         let opened = self.inner.conversations.lock().await.get(child).cloned();
         if let Some(slot) = opened {
             let _change = slot.closing_changes.lock().await;
-            slot.closing.store(true, Ordering::SeqCst);
+            let closed = self.inner.metadata.thread_closed(child).await?;
+            slot.closing.store(closed, Ordering::SeqCst);
         }
         tracing::info!(conversation_id = %child, parent = %parent, "a thread was closed by the thread that created it");
         Ok(())
