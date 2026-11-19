@@ -1551,12 +1551,16 @@ function footerThroughToggle(page) {
     if (from === undefined || !name())
       failures.push("no pane name in the chat's titlebar")
     const to = names.at(-1)
-    // Within 2px: the pane, its counter-scaled bar and the name each move on
-    // their own transform, and WebKit lands their sum a little off (0.7px and
-    // 1.3px seen in CI; Chromium stays within 0.5px). Riding the pane's
-    // flight, as before, moves the name 32px or more.
+    // Chromium holds the name within half a pixel. WebKit leaves a few
+    // (0.7, 1.3 and 2.5px seen in CI, never the same frame twice): the pane,
+    // its counter-scaled bar and the name each move on their own transform,
+    // and WebKit lands their sum a little off. Riding the pane's flight, as
+    // before this check, moves the name 32px or more.
+    const webkit =
+      /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
+    const slack = webkit ? 4 : 1
     const strayed = names.find(
-      (left) => left < Math.min(from, to) - 2 || left > Math.max(from, to) + 2,
+      (left) => left < Math.min(from, to) - slack || left > Math.max(from, to) + slack,
     )
     if (strayed !== undefined)
       failures.push(
