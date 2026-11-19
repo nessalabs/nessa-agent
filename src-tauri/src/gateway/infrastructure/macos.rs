@@ -1562,6 +1562,37 @@ impl StagePause {
     }
 }
 
+/// How long each step of a registration took, in the host's log: a launch
+/// that is slow to reach Ready says which step was slow (a 26.7 s launch on a
+/// busy Mac left no record of where its time went). Log only; nothing
+/// branches on it.
+struct StartupCheckClock {
+    started: std::time::Instant,
+    last: std::time::Instant,
+}
+
+impl StartupCheckClock {
+    fn start() -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            started: now,
+            last: now,
+        }
+    }
+
+    fn step(&mut self, step: &'static str) {
+        let now = std::time::Instant::now();
+        tracing::info!(
+            target: "nessa.launch",
+            step,
+            step_ms = now.duration_since(self.last).as_millis() as u64,
+            since_start_ms = now.duration_since(self.started).as_millis() as u64,
+            "gateway registration step"
+        );
+        self.last = now;
+    }
+}
+
 fn register(
     host: &Launchd,
     runtime: &Path,
@@ -1595,11 +1626,14 @@ fn register(
     // Held through registration. An unpublished generation moves the lock into
     // the deferred launch, which keeps it until the accepted plan starts the
     // copy or the launch is dropped.
+    let mut clock = StartupCheckClock::start();
     let mut label_lock = HeldRegistration::lock(&lock_directory)?;
+    clock.step("label_lock");
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
     let service = format!("{domain}/{label}");
     let status = launchctl.status(&service)?;
+    clock.step("service_status");
     let loaded = status.loaded;
     let loaded_pid = status.pid;
     let process_identity_known = status.process_identity_known;
@@ -1644,7 +1678,9 @@ fn register(
         Some(data) => read_retirement_evidence(data)?,
         None => None,
     };
+    clock.step("definition");
     let running = if loaded { launchctl.health(port) } else { None };
+    clock.step("health");
     let pending = match (&running, installed_data.as_deref()) {
         (Some(Health::Managed(runtime)), Some(data)) => read_pending_retirement(data, runtime)?,
         _ => None,
@@ -1698,9 +1734,11 @@ fn register(
             .map_err(|error| error.to_string())?;
     let intent = GatewayReconciliationIntent::new(attempt.clone(), target.clone(), before.clone())
         .map_err(|error| error.to_string())?;
+    clock.step("classify");
     progress
         .intent_admitted(intent)
         .map_err(RegisterFailure::Audit)?;
+    clock.step("journal");
     if published {
         // The exact runtime is already published: this plan reuses it, and
         // its name says so in the journal. The full-tree check stays here, in
@@ -1771,6 +1809,7 @@ fn register(
                 running.pid,
                 port,
             );
+            clock.step("runtime_check");
             prune_planned(
                 progress,
                 &artifacts,
@@ -1782,6 +1821,7 @@ fn register(
                 ),
                 &gateway.audit_identity().map_err(RegisterFailure::Audit)?,
             )?;
+            clock.step("prune");
             return Ok(gateway);
         }
         ServiceState::ManagedStale(running) => {
