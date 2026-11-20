@@ -1715,6 +1715,16 @@ fn record_decisions(
             )
             .map_err(failed)?;
     }
+    if let (true, Some(ask)) = (summary.reopened(), summary.ask()) {
+        // Auto-pick's answer that never reached the agent is taken back.
+        transaction
+            .cached_execute(
+                "UPDATE owner_decisions SET outcome = NULL, auto_pick_paused_at_ms = NULL
+                 WHERE conversation_id = ?1 AND ask_id = ?2",
+                params![id.to_string(), ask.ask_id],
+            )
+            .map_err(failed)?;
+    }
     if let Some(ask) = summary.ask() {
         transaction
             .cached_execute(

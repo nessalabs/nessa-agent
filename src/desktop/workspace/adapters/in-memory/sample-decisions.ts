@@ -37,7 +37,7 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
         askedAtMs: at(12),
         outcome: {
           state: "decided",
-          text: "⌘D. Picked for you: no answer in 5 minutes.",
+          text: "⌘D. Picked for you on “Which key should split a pane?”: no answer in 5 minutes.",
           choice: 0,
           auto: true,
           atMs: at(7),

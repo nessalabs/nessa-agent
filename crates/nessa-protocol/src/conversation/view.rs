@@ -1222,8 +1222,9 @@ impl OwnerAsk {
     pub fn auto_pick_text(&self, after_seconds: u32) -> Option<String> {
         let choice = self.choices.get(usize::from(self.recommended))?;
         Some(format!(
-            "{}. Picked for you: no answer in {}.",
+            "{}. Picked for you on “{}”: no answer in {}.",
             choice.label.trim(),
+            self.question.trim(),
             wait_words(after_seconds)
         ))
     }

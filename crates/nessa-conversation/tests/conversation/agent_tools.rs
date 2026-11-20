@@ -2118,22 +2118,17 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .await
         .unwrap());
 
-    // A pick for an ask that is not the one waiting is not sent at all: the
-    // agent would read it as this ask's answer.
-    let sent = provider.executions.lock().unwrap().len();
-    assert!(matches!(
-        service
-            .submit(
-                source.clone(),
-                caller_on("auto-pick-other", AUTO_PICK_SURFACE),
-                "auto-pick-other".into(),
-                message("Rename. Picked for you: no answer in 5 minutes."),
-                SubmissionMode::Queue,
-            )
-            .await,
-        Err(ConversationError::InvalidInput)
-    ));
-    assert_eq!(provider.executions.lock().unwrap().len(), sent);
+    // A pick sent for another ask is a message, not this ask's answer.
+    service
+        .submit(
+            source.clone(),
+            caller_on("auto-pick-other", AUTO_PICK_SURFACE),
+            "auto-pick-other".into(),
+            message("Rename. Picked for you: no answer in 5 minutes."),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
     assert_eq!(decision(service.clone()).await.outcome, None);
 
     service.pick_due().await;
@@ -2143,7 +2138,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         matches!(
             &picked.outcome,
             Some(OwnerDecisionOutcome::Decided { text, choice: Some(0), auto: true, .. })
-                if text == "Rename. Picked for you: no answer in 5 minutes."
+                if text == "Rename. Picked for you on “Rename the branch?”: no answer in 5 minutes."
         ),
         "{:?}",
         picked.outcome
@@ -2194,12 +2189,11 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         answered.outcome
     );
 
-    // While a pick is being sent, a pause does not apply and the owner's
-    // own message waits for it; while the owner's message is on its way, a
-    // pick is not sent.
-    let third = OwnerAsk {
-        ask_id: "00112233445566778899aabbccddeeff".into(),
-        asked_at_ms: 3_000,
+    // A pick is recorded before it is sent; one that never reached the agent
+    // is taken back, and its ask waits again.
+    let fifth = OwnerAsk {
+        ask_id: "abababababababababababababababab".into(),
+        asked_at_ms: 5_000,
         ..ask.clone()
     };
     let kept = ConversationSummaries::load(metadata.as_ref(), &source)
@@ -2208,7 +2202,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
     ConversationSummaries::record(
         metadata.as_ref(),
         &source,
-        ConversationSummary::after_asking(kept.as_ref(), third.clone()),
+        ConversationSummary::after_asking(kept.as_ref(), fifth.clone()),
     )
     .await
     .unwrap();
@@ -2216,50 +2210,44 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .await
         .unwrap()
         .into_iter()
-        .find(|waiting| waiting.ask.ask_id == third.ask_id)
-        .expect("the third ask is due");
-    let held = service.sending_for_test(&source, &third.ask_id);
+        .find(|waiting| waiting.ask.ask_id == fifth.ask_id)
+        .expect("the fifth ask is due");
+    assert!(service.record_pick(&due).await.unwrap().is_some());
+    assert!(matches!(
+        decision(service.clone()).await.outcome,
+        Some(OwnerDecisionOutcome::Decided {
+            choice: Some(0),
+            auto: true,
+            ..
+        })
+    ));
+    // Recorded, a pause no longer applies.
     assert!(!service
-        .pause_auto_pick(source.clone(), caller("pause-sending"), &third.ask_id, true)
+        .pause_auto_pick(source.clone(), caller("pause-picked"), &fifth.ask_id, true)
         .await
         .unwrap());
-    let owner = tokio::spawn({
-        let service = service.clone();
-        let source = source.clone();
-        async move { settled_send(&service, &source, "owner-after-pick", "Keep").await }
-    });
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(
-        !owner.is_finished(),
-        "the owner's message waits for the pick"
-    );
-    assert_eq!(decision(service.clone()).await.outcome, None);
-    drop(held);
-    owner.await.unwrap();
-    let sent = provider.executions.lock().unwrap().len();
-    // Answered by the owner now, so the pick read as due sends nothing.
-    service.auto_pick(&due).await.unwrap();
-    assert_eq!(provider.executions.lock().unwrap().len(), sent);
-    let on_its_way = service.owner_sending(&source).await;
-    let fourth = OwnerAsk {
-        ask_id: "ffeeddccbbaa99887766554433221100".into(),
-        asked_at_ms: 4_000,
-        ..ask.clone()
-    };
-    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
-        .await
-        .unwrap();
-    ConversationSummaries::record(
-        metadata.as_ref(),
-        &source,
-        ConversationSummary::after_asking(kept.as_ref(), fourth.clone()),
-    )
-    .await
-    .unwrap();
+    service.take_back_pick(&due).await;
+    let back = decision(service.clone()).await;
+    assert_eq!(back.ask.ask_id, fifth.ask_id);
+    assert_eq!(back.outcome, None);
+    assert_eq!(back.auto_pick_due_at_ms, Some(305_000));
+    // Picked and sent, the owner's next message is a message after it, not
+    // a second answer.
     service.pick_due().await;
-    assert_eq!(provider.executions.lock().unwrap().len(), sent);
-    assert_eq!(decision(service.clone()).await.outcome, None);
-    drop(on_its_way);
+    settled_send(&service, &source, "after-the-pick", "Keep").await;
+    let after = decision(service.clone()).await;
+    assert!(
+        matches!(
+            &after.outcome,
+            Some(OwnerDecisionOutcome::Decided {
+                choice: Some(0),
+                auto: true,
+                ..
+            })
+        ),
+        "{:?}",
+        after.outcome
+    );
     retire(service, storage, metadata).await;
 }
 

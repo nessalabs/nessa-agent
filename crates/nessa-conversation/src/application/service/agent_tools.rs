@@ -142,18 +142,15 @@ impl ConversationService {
             .await?
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, &caller)?;
-        // Read and written under the summary lock auto-pick claims an ask
-        // under: a pause either lands first and holds the pick, or finds it
-        // being sent and says it did not apply.
+        // Read and written under the summary lock auto-pick records its
+        // answer under: a pause either lands first and holds the pick, or
+        // finds the ask answered and says it did not apply.
         let _writes = self
             .inner
             .records
             .summary_writes()
             .lock(&conversation)
             .await;
-        if self.auto_pick_sending(ask_id) {
-            return Ok(false);
-        }
         let waiting = self
             .inner
             .summaries

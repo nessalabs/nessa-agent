@@ -1213,6 +1213,12 @@ impl ConversationSummaries for MemorySummaries {
                 use nessa_protocol::conversation::view::OwnerDecision;
                 let mut decisions = self.decisions.lock().unwrap();
                 let kept = decisions.entry(id.clone()).or_default();
+                if let (true, Some(ask)) = (summary.reopened(), summary.ask()) {
+                    if let Some(kept) = kept.iter_mut().find(|kept| kept.ask.ask_id == ask.ask_id) {
+                        kept.outcome = None;
+                        kept.auto_pick_paused = false;
+                    }
+                }
                 if let Some(ask) = summary.ask() {
                     if !kept.iter().any(|kept| kept.ask.ask_id == ask.ask_id) {
                         kept.push(OwnerDecision {

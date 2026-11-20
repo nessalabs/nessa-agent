@@ -4,19 +4,21 @@
 //!
 //! The gateway owns the deadline, not a window: the wait counts from when the
 //! agent asked, so it fires with every window closed and, after a restart, at
-//! once for one that came due while the gateway was down. The answer is the
-//! owner's own message, sent from [`AUTO_PICK_SURFACE`] under the ask's own
-//! action id ([`auto_pick_action`]), so it settles that ask and no other, and
-//! the decision it settles says it was auto-picked.
+//! once for one that came due while the gateway was down. The answer is
+//! recorded first, under the summary lock every answer is recorded under, so
+//! exactly one of the owner and auto-pick answers an ask; then it is sent as
+//! the owner's own message, from [`AUTO_PICK_SURFACE`] under the ask's own
+//! action id ([`auto_pick_action`]), naming the question it answers, since a
+//! newer ask may be waiting by the time the agent reads it. One that does not
+//! reach the agent is taken back.
 use super::{
-    ConversationCaller, ConversationError, ConversationService, SubmissionMode, SubmittedMessage,
+    ConversationCaller, ConversationError, ConversationService, Initiation, SubmissionMode,
+    SubmitFailure, SubmittedMessage, Writer,
 };
 use crate::application::WaitingAutoPick;
 use crate::timer::clock;
-use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::view::DecisionSettings;
+use nessa_protocol::conversation::domain::ConversationSummary;
 use nessa_protocol::conversation::view::AUTO_PICK_SURFACE;
-use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// The longest auto-pick sleeps before it looks again, even with nothing
@@ -105,20 +107,18 @@ impl ConversationService {
         next
     }
 
-    /// Whether `waiting` is still to be picked now: still the ask waiting in
-    /// its conversation, not paused, and due under its owner's settings as
-    /// they are now. What `pick_due` read may be stale by the time a slow
-    /// send before it is done, so this is asked again under the summary lock
-    /// an answer, a newer ask and a pause are each written under. On yes the
-    /// ask is marked sending until [`Sending`] drops: a pause in that time is
-    /// refused, since the answer goes anyway, and the owner's own message
-    /// waits for it ([`Self::owner_sending`]), so the agent has the pick
-    /// first and the owner's word last. The settings it read come with it,
-    /// for the pick to say the wait it kept.
-    async fn claim(
+    /// Record `waiting`'s recommended choice as its answer, if it is still
+    /// to be picked: still the ask waiting in its conversation, not paused,
+    /// and due under its owner's settings as they are now. Asked and written
+    /// under the summary lock the owner's answer, a newer ask and a pause
+    /// are each written under, so from here an owner's message finds nothing
+    /// waiting and is a message after the pick, a pause says it did not
+    /// apply, and a newer ask does not replace this one. The text it answers
+    /// with, naming the question, comes back to be sent.
+    pub(super) async fn record_pick(
         &self,
         waiting: &WaitingAutoPick,
-    ) -> Result<Option<(Sending<'_>, DecisionSettings)>, ConversationError> {
+    ) -> Result<Option<String>, ConversationError> {
         let ask_id = &waiting.ask.ask_id;
         let _writes = self
             .inner
@@ -126,18 +126,23 @@ impl ConversationService {
             .summary_writes()
             .lock(&waiting.conversation)
             .await;
-        let still = self
+        let previous = self.inner.summaries.load(&waiting.conversation).await?;
+        if previous
+            .as_ref()
+            .and_then(|summary| summary.ask())
+            .map(|ask| &ask.ask_id)
+            != Some(ask_id)
+        {
+            return Ok(None);
+        }
+        let paused = self
             .inner
             .summaries
             .decisions(&waiting.conversation)
             .await?
             .into_iter()
-            .any(|decision| {
-                &decision.ask.ask_id == ask_id
-                    && decision.outcome.is_none()
-                    && !decision.auto_pick_paused
-            });
-        if !still {
+            .any(|decision| &decision.ask.ask_id == ask_id && decision.auto_pick_paused);
+        if paused {
             return Ok(None);
         }
         let settings = self
@@ -145,104 +150,78 @@ impl ConversationService {
             .summaries
             .decision_settings(&waiting.organization, &waiting.owner)
             .await?;
+        let now = self.inner.clock.unix_milliseconds();
         let due = waiting
             .ask
             .asked_at_ms
             .saturating_add(u64::from(settings.auto_pick_after_seconds).saturating_mul(1000));
-        if !settings.auto_pick || due > self.inner.clock.unix_milliseconds() {
+        if !settings.auto_pick || due > now {
             return Ok(None);
         }
-        let Ok(mut gates) = self.inner.auto_picks_sending.lock() else {
-            return Ok(None);
-        };
-        // An owner's message on its way answers it, or fails and wakes this
-        // to look again.
-        if gates.owners.contains_key(&waiting.conversation) {
-            gates.refused.insert(waiting.conversation.clone());
-            return Ok(None);
-        }
-        gates
-            .sending
-            .insert(ask_id.clone(), waiting.conversation.clone());
-        Ok(Some((
-            Sending {
-                service: self,
-                ask_id: ask_id.clone(),
-            },
-            settings,
-        )))
-    }
-
-    /// An owner's message on its way into `conversation`, until dropped:
-    /// waits first while auto-pick sends an answer there, so the agent has
-    /// the pick first and the owner's word after it, and holds off a claim
-    /// meanwhile, so a pick never lands after the owner's answer. A person
-    /// it is shared with counts too: any person's message answers the ask.
-    pub(super) async fn owner_sending(&self, conversation: &ConversationId) -> OwnerSending<'_> {
-        loop {
-            let sent = self.inner.auto_pick_sent.notified();
-            tokio::pin!(sent);
-            sent.as_mut().enable();
-            {
-                let Ok(mut gates) = self.inner.auto_picks_sending.lock() else {
-                    break;
-                };
-                if !gates.sending.values().any(|of| of == conversation) {
-                    *gates.owners.entry(conversation.clone()).or_default() += 1;
-                    break;
-                }
-            }
-            // Retiring, a pick may never finish: the message goes on.
-            tokio::select! {
-                () = &mut sent => {}
-                () = self.retired() => break,
-            }
-        }
-        OwnerSending {
-            service: self,
-            conversation: conversation.clone(),
-        }
-    }
-
-    /// Mark `ask_id` as being sent, as a claim does, until dropped.
-    #[cfg(test)]
-    pub(crate) fn sending_for_test(
-        &self,
-        conversation: &ConversationId,
-        ask_id: &str,
-    ) -> Sending<'_> {
-        if let Ok(mut gates) = self.inner.auto_picks_sending.lock() {
-            gates
-                .sending
-                .insert(ask_id.to_owned(), conversation.clone());
-        }
-        Sending {
-            service: self,
-            ask_id: ask_id.to_owned(),
-        }
-    }
-
-    /// Whether auto-pick is sending the answer to `ask_id` now.
-    pub(super) fn auto_pick_sending(&self, ask_id: &str) -> bool {
-        self.inner
-            .auto_picks_sending
-            .lock()
-            .map_or(true, |gates| gates.sending.contains_key(ask_id))
-    }
-
-    /// Send `waiting`'s recommended choice as its owner's answer, if it is
-    /// still to be picked ([`Self::claim`]); nothing to send is done.
-    pub(crate) async fn auto_pick(
-        &self,
-        waiting: &WaitingAutoPick,
-    ) -> Result<(), ConversationError> {
-        let Some((_sending, settings)) = self.claim(waiting).await? else {
-            return Ok(());
-        };
         let text = waiting
             .ask
             .auto_pick_text(settings.auto_pick_after_seconds)
             .ok_or(ConversationError::InvalidInput)?;
+        let next = ConversationSummary::after_message(previous.as_ref(), &text, None, now)
+            .answering(Some(ask_id), &text, true);
+        let settled = next.settled().cloned();
+        self.inner
+            .summaries
+            .record(&waiting.conversation, next)
+            .await?;
+        if let Some(settled) = settled {
+            self.inner
+                .decision_traces
+                .settled(&waiting.conversation, &settled);
+        }
+        self.inner.live_changes.publish(&waiting.conversation);
+        Ok(Some(text))
+    }
+
+    /// The pick recorded for `waiting` never reached the agent: its ask
+    /// waits again, unless something was asked since.
+    pub(super) async fn take_back_pick(&self, waiting: &WaitingAutoPick) {
+        let _writes = self
+            .inner
+            .records
+            .summary_writes()
+            .lock(&waiting.conversation)
+            .await;
+        let previous = match self.inner.summaries.load(&waiting.conversation).await {
+            Ok(previous) => previous,
+            Err(error) => {
+                tracing::warn!(conversation = %waiting.conversation, ?error, "an unsent auto-pick could not be taken back");
+                return;
+            }
+        };
+        let Some(next) = ConversationSummary::reopening(previous.as_ref(), waiting.ask.clone())
+        else {
+            return;
+        };
+        match self
+            .inner
+            .summaries
+            .record(&waiting.conversation, next)
+            .await
+        {
+            Ok(()) => self.inner.live_changes.publish(&waiting.conversation),
+            Err(error) => {
+                tracing::warn!(conversation = %waiting.conversation, ?error, "an unsent auto-pick could not be taken back");
+            }
+        }
+    }
+
+    /// Answer `waiting` with its recommended choice, if it is still to be
+    /// picked ([`Self::record_pick`]), and send that answer to the agent as
+    /// its owner's message. Should the agent not get it, the answer is taken
+    /// back and the ask waits again, to be tried later.
+    pub(crate) async fn auto_pick(
+        &self,
+        waiting: &WaitingAutoPick,
+    ) -> Result<(), ConversationError> {
+        let Some(text) = self.record_pick(waiting).await? else {
+            return Ok(());
+        };
         let action = auto_pick_action(&waiting.ask.ask_id);
         let caller = ConversationCaller {
             organization_id: waiting.organization.clone(),
@@ -250,24 +229,28 @@ impl ConversationService {
             surface_id: AUTO_PICK_SURFACE.to_owned(),
             action_id: action.clone(),
         };
-        self.submit(
-            waiting.conversation.clone(),
-            caller,
-            action,
-            SubmittedMessage {
-                text,
-                ..Default::default()
-            },
-            SubmissionMode::Queue,
-        )
-        .await
-        .map(|_| ())
-        .or_else(|error| match error {
-            // Refused because a newer ask took its place as it was sent
-            // (`submit`): nothing is left to pick.
-            ConversationError::InvalidInput => Ok(()),
-            error => Err(error),
-        })
+        let sent = self
+            .submit_as(
+                waiting.conversation.clone(),
+                caller,
+                action,
+                SubmittedMessage {
+                    text,
+                    ..Default::default()
+                },
+                SubmissionMode::Queue,
+                Writer::Person(Initiation::owner(), true),
+            )
+            .await;
+        match sent {
+            Ok(_) => Ok(()),
+            // The agent may have it: the answer stands.
+            Err(SubmitFailure::Asked(_) | SubmitFailure::TaskFailed { asked: true }) => Ok(()),
+            Err(failure) => {
+                self.take_back_pick(waiting).await;
+                Err(failure.into_error())
+            }
+        }
     }
 
     fn auto_pick_retry_at(&self, ask_id: &str) -> Option<u64> {
@@ -295,56 +278,6 @@ impl ConversationService {
     fn auto_pick_settled(&self, ask_id: &str) {
         if let Ok(mut failures) = self.inner.auto_pick_failures.lock() {
             failures.remove(ask_id);
-        }
-    }
-}
-
-/// Who is sending into which conversation: the asks auto-pick claimed, and
-/// how many owner messages are on their way, by conversation. One lock over
-/// both, so a claim and an owner's message are ordered.
-#[derive(Default)]
-pub(crate) struct Gates {
-    sending: HashMap<String, ConversationId>,
-    owners: HashMap<ConversationId, usize>,
-    /// Conversations a claim was refused in for an owner's message: auto-pick
-    /// looks again once it is through.
-    refused: HashSet<ConversationId>,
-}
-
-/// An ask auto-pick is sending the answer to, until dropped.
-pub(crate) struct Sending<'a> {
-    service: &'a ConversationService,
-    ask_id: String,
-}
-
-impl Drop for Sending<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut gates) = self.service.inner.auto_picks_sending.lock() {
-            gates.sending.remove(&self.ask_id);
-        }
-        self.service.inner.auto_pick_sent.notify_waiters();
-    }
-}
-
-/// An owner's message on its way, until dropped ([`ConversationService::owner_sending`]).
-pub(super) struct OwnerSending<'a> {
-    service: &'a ConversationService,
-    conversation: ConversationId,
-}
-
-impl Drop for OwnerSending<'_> {
-    fn drop(&mut self) {
-        let Ok(mut gates) = self.service.inner.auto_picks_sending.lock() else {
-            return;
-        };
-        if let Some(count) = gates.owners.get_mut(&self.conversation) {
-            *count -= 1;
-            if *count == 0 {
-                gates.owners.remove(&self.conversation);
-                if gates.refused.remove(&self.conversation) {
-                    self.service.inner.auto_pick_wakeup.notify_one();
-                }
-            }
         }
     }
 }

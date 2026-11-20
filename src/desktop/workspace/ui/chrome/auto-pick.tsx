@@ -21,7 +21,7 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
   const read = useDecisions(sessionId)
   const source = useDecisionSource()
   const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState<"failed" | "late" | null>(null)
+  const [failed, setFailed] = useState(false)
   if (read.state === "none" || !source) return null
   const decision = read.decisions?.find((each) => each.ask.askId === askId)
   const pick = decision?.autoPick
@@ -29,18 +29,16 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
   const label = decision.ask.choices[decision.ask.recommended]?.label ?? ""
   const hold = (paused: boolean) => {
     setBusy(true)
-    setFailed(null)
+    setFailed(false)
     source.pauseAutoPick(sessionId, askId, paused).then(
-      (applied) => {
+      () => {
         setBusy(false)
-        // Not applied while due: the pick was already on its way.
-        if (!applied && paused) setFailed("late")
         read.retry()
       },
       (error: unknown) => {
         console.error("Pausing auto-pick failed", error)
         setBusy(false)
-        setFailed("failed")
+        setFailed(true)
       },
     )
   }
@@ -74,7 +72,7 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
       </Button>
       {failed ? (
         <span role="status" className="auto-pick-failed">
-          {failed === "late" ? "Already picked." : "Didn’t go through. Try again."}
+          Didn’t go through. Try again.
         </span>
       ) : null}
     </p>

@@ -1,7 +1,6 @@
 mod agent_tools;
 mod auto_picks;
 mod decision_traces;
-use auto_picks::auto_pick_action;
 pub use decision_traces::DECISION_TARGET;
 mod background_tasks;
 mod channels;
@@ -1015,11 +1014,6 @@ struct Inner {
     /// Asks auto-pick could not send, with when to try again and how many
     /// tries failed: kept here only, so a restart tries each at once.
     auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
-    /// Asks auto-pick claimed and is sending the answer to: a pause from the
-    /// claim on is refused, since the answer goes anyway (`auto_picks.rs`).
-    auto_picks_sending: std::sync::Mutex<auto_picks::Gates>,
-    /// Told each time auto-pick is done sending one.
-    auto_pick_sent: Notify,
     /// One open `decision` span per waiting ask (`decision_traces.rs`).
     decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
@@ -1569,8 +1563,6 @@ impl ConversationService {
                 schedule_wakeup: Arc::new(Notify::new()),
                 auto_pick_wakeup: Notify::new(),
                 auto_pick_failures: std::sync::Mutex::default(),
-                auto_picks_sending: std::sync::Mutex::default(),
-                auto_pick_sent: Notify::new(),
                 decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
@@ -4089,13 +4081,6 @@ impl ConversationService {
         // again with the message, not reported dropped and then missing
         // from it; should no offer be taken, it is reported dropped unsent
         // as this goes (row C11).
-        // A person's message and an auto-pick in this conversation go one
-        // after the other, never interleaved (`auto_picks.rs`).
-        let _person = if writer.is_person() && caller.surface_id != AUTO_PICK_SURFACE {
-            Some(self.owner_sending(&id).await)
-        } else {
-            None
-        };
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
         let (asked, outcome) = loop {
@@ -4612,20 +4597,6 @@ impl ConversationService {
                 revision_hold = Some(grants.hold_revision(&id, &receiver, revision).await?);
                 saved_grant = Some((grants, receiver, revision));
             }
-            // An auto-pick whose ask a newer one replaced since it was
-            // claimed is not sent: the agent would read it as the newer
-            // one's answer.
-            if caller.surface_id == AUTO_PICK_SURFACE && !known {
-                let current = service
-                    .inner
-                    .summaries
-                    .load(&id)
-                    .await?
-                    .and_then(|summary| summary.ask().map(|ask| auto_pick_action(&ask.ask_id)));
-                if current.as_deref() != Some(caller.action_id.as_str()) {
-                    return Err(ConversationError::InvalidInput.into());
-                }
-            }
             // Marked before the agent is asked, so a restart from here on
             // finds this conversation and resumes the turn (`resumption`).
             service.mark_unfinished(&id).await?;
@@ -4667,10 +4638,11 @@ impl ConversationService {
             // owner does not answer it. Read before the agent has the
             // message, so a question it asks after it is not taken for the
             // one answered; taken down with the message's summary below.
+            // Auto-pick answers nothing here: it recorded its answer before
+            // it sent it (`auto_picks.rs`), so whatever is waiting now is
+            // newer, and the owner's.
             let auto = caller.surface_id == AUTO_PICK_SURFACE;
-            // A retried auto-pick the agent already had still settles its
-            // ask, should the first try not have written that down.
-            let answered = if (!known || auto) && writer.is_person() {
+            let answered = if !known && !auto && writer.is_person() {
                 service
                     .waiting_ask_answered(
                         &id,
@@ -4682,11 +4654,6 @@ impl ConversationService {
             } else {
                 None
             };
-            // Auto-pick answers only the ask it was sent for: one that a newer
-            // ask replaced as it was sent stays as it is, and the newer one
-            // waits for the owner.
-            let answered =
-                answered.filter(|answered| !auto || auto_pick_action(answered) == caller.action_id);
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -4770,14 +4737,6 @@ impl ConversationService {
             if !known && !matches!(writer, Writer::Internal) {
                 service
                     .summarize_message(&id, &message, answered.as_deref(), auto)
-                    .await;
-            } else if let (true, Some(ask)) = (known && auto, answered.as_deref()) {
-                service
-                    .change_summary(&id, |previous| {
-                        previous
-                            .cloned()
-                            .map(|summary| summary.answering(Some(ask), message.text_str(), true))
-                    })
                     .await;
             }
             match delivery {

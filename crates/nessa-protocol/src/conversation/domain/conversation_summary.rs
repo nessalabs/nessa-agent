@@ -124,6 +124,9 @@ pub struct ConversationSummary {
     /// the summary: the write that records this change keeps it in the
     /// conversation's decisions, in the same transaction.
     settled: Option<SettledAsk>,
+    /// This change puts its ask back to waiting: the answer auto-pick
+    /// recorded for it could not be sent ([`Self::reopening`]). Not stored.
+    reopened: bool,
 }
 
 /// An ask that stopped waiting, and how.
@@ -161,6 +164,7 @@ impl ConversationSummary {
             archived,
             ask: None,
             settled: None,
+            reopened: false,
         })
     }
     /// This summary with `ask` waiting on it, as read back from storage.
@@ -169,6 +173,7 @@ impl ConversationSummary {
         Self {
             ask,
             settled: None,
+            reopened: false,
             ..self
         }
     }
@@ -202,6 +207,7 @@ impl ConversationSummary {
             archived: false,
             ask: previous.and_then(|summary| summary.ask.clone()),
             settled: None,
+            reopened: false,
         }
     }
     /// The same summary once a message saying `text` that answers ask
@@ -256,6 +262,7 @@ impl ConversationSummary {
             archived: false,
             ask: Some(ask),
             settled,
+            reopened: false,
         }
     }
     /// After the agent replied, or `None` when the reply said nothing a
@@ -271,6 +278,7 @@ impl ConversationSummary {
             archived: previous.is_some_and(|summary| summary.archived),
             ask: previous.and_then(|summary| summary.ask.clone()),
             settled: None,
+            reopened: false,
         })
     }
     /// After somebody archived the conversation, or unarchived it. Nothing
@@ -284,6 +292,7 @@ impl ConversationSummary {
         Self {
             archived,
             settled: None,
+            reopened: false,
             ..self.clone()
         }
     }
@@ -297,6 +306,7 @@ impl ConversationSummary {
         Self {
             title: Some(title),
             settled: None,
+            reopened: false,
             ..self.clone()
         }
     }
@@ -312,6 +322,7 @@ impl ConversationSummary {
             // Asked of the source's owner, in the source.
             ask: None,
             settled: None,
+            reopened: false,
         }
     }
     pub fn title(&self) -> Option<&ConversationTitle> {
@@ -331,6 +342,25 @@ impl ConversationSummary {
     /// What an agent asked the owner and is still waiting on.
     pub fn ask(&self) -> Option<&OwnerAsk> {
         self.ask.as_ref()
+    }
+    /// After auto-pick recorded its answer to `ask` and could not send it:
+    /// `ask` waits again, as it did, and its decision with it. `None` when
+    /// something was asked since, which then waits instead.
+    pub fn reopening(previous: Option<&Self>, ask: OwnerAsk) -> Option<Self> {
+        let previous = previous?;
+        if previous.ask.is_some() {
+            return None;
+        }
+        Some(Self {
+            ask: Some(ask),
+            settled: None,
+            reopened: true,
+            ..previous.clone()
+        })
+    }
+    /// Whether this change puts its ask back to waiting ([`Self::reopening`]).
+    pub fn reopened(&self) -> bool {
+        self.reopened
     }
     /// The ask this change settled, for the conversation's decisions.
     pub fn settled(&self) -> Option<&SettledAsk> {
