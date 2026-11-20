@@ -55,6 +55,7 @@ import { VoiceKeyRow } from "./voice-key-row"
 import { SavedLoginsGroup } from "./saved-logins"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
+import { DecisionSettingsRows } from "./decision-settings-rows"
 import { NativeHooksRows } from "./native-hooks-rows"
 import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
@@ -79,6 +80,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   layout: LayoutTab,
   sessions: SessionsTab,
   keyboard: KeyboardTab,
+  decisions: DecisionSettingsRows,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,

@@ -67,6 +67,13 @@ export interface ModelRef {
 export interface OwnerAskChoice {
   readonly label: string
   readonly consequence: string
+  /** How hard it is to take back, when the agent said. */
+  readonly undo?: "easy" | "costly" | "no"
+  /** How much work it is, when the agent said. */
+  readonly effort?: "small" | "medium" | "large"
+  /** Up to two lines for it, and against it. */
+  readonly pros?: readonly string[]
+  readonly cons?: readonly string[]
 }
 
 /**
@@ -82,6 +89,10 @@ export interface OwnerAsk {
   /** Index into `choices` of the one the agent recommends. */
   readonly recommended: number
   readonly reason: string
+  /** One line under the question with what it is about. */
+  readonly summary?: string
+  /** Whether the agent let the recommended choice be picked for the person. */
+  readonly autoPick?: "allowed" | "never"
 }
 
 export interface SessionSummary {

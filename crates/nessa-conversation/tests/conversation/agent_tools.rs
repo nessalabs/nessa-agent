@@ -2037,6 +2037,121 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     retire(service, storage, metadata).await;
 }
 
+/// An ask the agent allowed auto-pick on is answered with its recommended
+/// choice once its owner's wait has passed: the answer is the owner's own
+/// message, says it was picked for them, and settles that ask only. A pause
+/// holds it, and a pick sent for another ask settles nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::domain::ConversationSummary;
+    use nessa_protocol::conversation::view::{
+        AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome, AUTO_PICK_SURFACE,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "first ask").await;
+    let choice = |label: &str, undo: AskUndo| OwnerAskChoice {
+        label: label.into(),
+        consequence: format!("{label} it."),
+        undo: Some(undo),
+        effort: None,
+        pros: Vec::new(),
+        cons: Vec::new(),
+    };
+    // Asked long ago, so the default five minutes have passed.
+    let ask = OwnerAsk {
+        ask_id: "0123456789abcdef0123456789abcdef".into(),
+        question: "Rename the branch?".into(),
+        choices: vec![
+            choice("Rename", AskUndo::Easy),
+            choice("Keep", AskUndo::Easy),
+        ],
+        recommended: 0,
+        reason: "It matches the issue.".into(),
+        asked_at_ms: 1_000,
+        summary: None,
+        auto_pick: Some(AutoPick::Allowed),
+    };
+    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap();
+    ConversationSummaries::record(
+        metadata.as_ref(),
+        &source,
+        ConversationSummary::after_asking(kept.as_ref(), ask.clone()),
+    )
+    .await
+    .unwrap();
+    let decision = |service: ConversationService| {
+        let source = source.clone();
+        async move {
+            service
+                .decisions(source, caller("decisions"))
+                .await
+                .unwrap()
+                .remove(0)
+        }
+    };
+    assert_eq!(
+        decision(service.clone()).await.auto_pick_due_at_ms,
+        Some(301_000)
+    );
+
+    // Paused, it is neither due nor picked.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("pause"), &ask.ask_id, true)
+        .await
+        .unwrap());
+    let paused = decision(service.clone()).await;
+    assert!(paused.auto_pick_paused);
+    assert_eq!(paused.auto_pick_due_at_ms, None);
+    service.pick_due().await;
+    assert_eq!(decision(service.clone()).await.outcome, None);
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume"), &ask.ask_id, false)
+        .await
+        .unwrap());
+
+    // A pick sent for another ask is a message, not this ask's answer.
+    service
+        .submit(
+            source.clone(),
+            caller_on("auto-pick-other", AUTO_PICK_SURFACE),
+            "auto-pick-other".into(),
+            message("Rename. Picked for you: no answer in 5 minutes."),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert_eq!(decision(service.clone()).await.outcome, None);
+
+    service.pick_due().await;
+    let picked = decision(service.clone()).await;
+    assert_eq!(picked.ask.ask_id, ask.ask_id);
+    assert!(
+        matches!(
+            &picked.outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(0), auto: true, .. })
+                if text == "Rename. Picked for you: no answer in 5 minutes."
+        ),
+        "{:?}",
+        picked.outcome
+    );
+    assert_eq!(picked.auto_pick_due_at_ms, None);
+    // Settled, it is not paused or picked again.
+    assert!(!service
+        .pause_auto_pick(source.clone(), caller("late-pause"), &ask.ask_id, true)
+        .await
+        .unwrap());
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store

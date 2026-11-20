@@ -26,6 +26,7 @@ import type {
   ConversationMessageReceipt,
   ConversationMessageStatusResult,
   ConversationDecisionsResult,
+  DecisionSettings,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
@@ -68,6 +69,8 @@ import {
   conversationMessageReceipt,
   conversationMessageStatus,
   conversationDecisions,
+  decisionSettings,
+  pauseAutoPickApplied,
   conversationObserve,
   conversationView,
   conversationEarlier,
@@ -428,6 +431,16 @@ export type ConversationApi = {
   ) => Promise<ConversationMutationResult>
   /** What `conversationId`'s agents asked its owner with `ask_owner`, and what became of each — waiting, decided by the owner's next message, or replaced by a newer ask — newest first, at most 100. The owner's alone: anyone else is refused `conversation_not_found`. */
   decisions: (conversationId: string) => Promise<ConversationDecisionsResult>
+  /** How the caller's decisions behave: whether an ask its agent allowed it on, whose recommended choice is easy to undo, is answered with that choice after `autoPickAfterSeconds` with no answer. Until set: on, after 300 seconds. */
+  decisionSettings: () => Promise<DecisionSettings>
+  /** Keep how the caller's decisions behave; answers with what was kept. A wait outside 60 to 86,400 seconds is refused here, before it is sent. */
+  setDecisionSettings: (settings: DecisionSettings) => Promise<DecisionSettings>
+  /** Hold, or let go, auto-pick on one decision still waiting in `conversationId`. `applied` is false when that ask is not waiting any more. The owner's alone, as for `decisions`. */
+  pauseAutoPick: (
+    conversationId: string,
+    askId: string,
+    paused: boolean,
+  ) => Promise<boolean>
   /**
    * The owner's remembered permission rules, in the order they were stored.
    * A shared user is refused. A rule is one tool in one workspace.
@@ -1273,6 +1286,26 @@ export function createConversationApi(
           conversationId: validConversationId(id),
         }),
       ),
+    decisionSettings: async () =>
+      decisionSettings(
+        await session.request(ProductMethod.ConversationDecisionSettings, {}),
+      ),
+    setDecisionSettings: async (settings) =>
+      decisionSettings(
+        await session.request(
+          ProductMethod.ConversationSetDecisionSettings,
+          decisionSettings(settings),
+        ),
+      ),
+    pauseAutoPick: async (id, askId, paused) => {
+      if (!/^[0-9a-f]{32}$/.test(askId)) throw new Error("Invalid ask ID")
+      const answer = await session.request(ProductMethod.ConversationPauseAutoPick, {
+        conversationId: validConversationId(id),
+        askId,
+        paused,
+      })
+      return pauseAutoPickApplied(answer)
+    },
     delete: (id, options) =>
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,

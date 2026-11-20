@@ -6,10 +6,10 @@
  */
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
-  useState,
+  useMemo,
+  useSyncExternalStore,
   type ReactNode,
 } from "react"
 import type { DecisionSource } from "../../application/ports"
@@ -17,7 +17,85 @@ import type { Decision } from "../../model/decisions"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 
-const DecisionsContext = createContext<DecisionSource | null>(null)
+type Held = {
+  readonly state: "reading" | "read" | "failed"
+  readonly decisions?: readonly Decision[]
+}
+
+/**
+ * One read of a chat's decisions shared by everything that shows them
+ * (Chat context, the dialog, the transcript card's auto-pick line), so a
+ * chat is asked once per change, not once per place it is drawn. A chat is
+ * read when the first of them appears, when its ask changes, and on retry;
+ * only the newest read for a chat may show what it got.
+ */
+class DecisionReads {
+  private readonly held = new Map<string, Held>()
+  private readonly asked = new Map<string, string | undefined>()
+  private readonly watching = new Map<string, number>()
+  private readonly latest = new Map<string, number>()
+  private readonly listeners = new Set<() => void>()
+  private reads = 0
+
+  constructor(readonly source: DecisionSource) {}
+
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  get(sessionId: string): Held | undefined {
+    return this.held.get(sessionId)
+  }
+
+  /** Something shows `sessionId`'s decisions while its ask is `askId`; the returned function says it stopped. */
+  watch(sessionId: string, askId: string | undefined): () => void {
+    const count = this.watching.get(sessionId) ?? 0
+    this.watching.set(sessionId, count + 1)
+    if (count === 0 || this.asked.get(sessionId) !== askId) this.read(sessionId, askId)
+    return () => {
+      const left = (this.watching.get(sessionId) ?? 1) - 1
+      if (left > 0) this.watching.set(sessionId, left)
+      else this.watching.delete(sessionId)
+    }
+  }
+
+  retry(sessionId: string) {
+    this.read(sessionId, this.asked.get(sessionId))
+  }
+
+  private read(sessionId: string, askId: string | undefined) {
+    const current = ++this.reads
+    this.latest.set(sessionId, current)
+    this.asked.set(sessionId, askId)
+    const last = this.held.get(sessionId)
+    this.set(sessionId, {
+      state: "reading",
+      ...(last?.decisions ? { decisions: last.decisions } : {}),
+    })
+    this.source.decisions(sessionId).then(
+      (decisions) => {
+        if (this.latest.get(sessionId) === current)
+          this.set(sessionId, { state: "read", decisions })
+      },
+      (error: unknown) => {
+        console.error("Reading a chat's decisions failed", error)
+        if (this.latest.get(sessionId) !== current) return
+        const kept = this.held.get(sessionId)?.decisions
+        this.set(sessionId, { state: "failed", ...(kept ? { decisions: kept } : {}) })
+      },
+    )
+  }
+
+  private set(sessionId: string, held: Held) {
+    this.held.set(sessionId, held)
+    this.listeners.forEach((listener) => listener())
+  }
+}
+
+const DecisionsContext = createContext<DecisionReads | null>(null)
 
 export function DecisionsProvider({
   source,
@@ -26,11 +104,13 @@ export function DecisionsProvider({
   source: DecisionSource | undefined
   children: ReactNode
 }) {
-  return (
-    <DecisionsContext.Provider value={source ?? null}>
-      {children}
-    </DecisionsContext.Provider>
-  )
+  const reads = useMemo(() => (source ? new DecisionReads(source) : null), [source])
+  return <DecisionsContext.Provider value={reads}>{children}</DecisionsContext.Provider>
+}
+
+/** The window's decisions source, for what a decision's controls change. */
+export function useDecisionSource(): DecisionSource | null {
+  return useContext(DecisionsContext)?.source ?? null
 }
 
 /**
@@ -46,11 +126,7 @@ export type DecisionsRead =
       readonly retry: () => void
     }
 
-type Held = {
-  readonly sessionId: string
-  readonly state: "reading" | "read" | "failed"
-  readonly decisions?: readonly Decision[]
-}
+const unsubscribed = () => () => {}
 
 /**
  * A chat's decisions, read again whenever its list row's ask changes (a new
@@ -58,43 +134,17 @@ type Held = {
  * asked to retry. A read for another chat is never shown for this one.
  */
 export function useDecisions(sessionId: string): DecisionsRead {
-  const source = useContext(DecisionsContext)
+  const reads = useContext(DecisionsContext)
   const askId = useWorkspaceSelector(
     (state) => selectSession(state, sessionId)?.ask?.askId,
   )
-  const [attempt, setAttempt] = useState(0)
-  const [held, setHeld] = useState<Held | null>(null)
-  useEffect(() => {
-    if (!source) return
-    let current = true
-    setHeld((last) =>
-      last?.sessionId === sessionId
-        ? { ...last, state: "reading" }
-        : { sessionId, state: "reading" },
-    )
-    source.decisions(sessionId).then(
-      (decisions) => {
-        if (current) setHeld({ sessionId, state: "read", decisions })
-      },
-      (error: unknown) => {
-        console.error("Reading a chat's decisions failed", error)
-        if (current)
-          setHeld((last) => ({
-            sessionId,
-            state: "failed",
-            ...(last?.sessionId === sessionId && last.decisions
-              ? { decisions: last.decisions }
-              : {}),
-          }))
-      },
-    )
-    return () => {
-      current = false
-    }
-  }, [source, sessionId, askId, attempt])
-  const retry = useCallback(() => setAttempt((count) => count + 1), [])
-  if (!source) return { state: "none" }
-  if (held?.sessionId !== sessionId) return { state: "reading", retry }
+  const held = useSyncExternalStore(reads?.subscribe ?? unsubscribed, () =>
+    reads?.get(sessionId),
+  )
+  useEffect(() => reads?.watch(sessionId, askId), [reads, sessionId, askId])
+  const retry = useMemo(() => () => reads?.retry(sessionId), [reads, sessionId])
+  if (!reads) return { state: "none" }
+  if (!held) return { state: "reading", retry }
   return {
     state: held.state,
     ...(held.decisions ? { decisions: held.decisions } : {}),

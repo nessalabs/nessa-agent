@@ -27,10 +27,11 @@ use nessa_protocol::product::generated::{
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDecisionsParams, ConversationDecisionsResult, ConversationDeleteParams,
-    ConversationForkParams, ConversationListParams, ConversationListResult,
-    ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
-    ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationDecisionSettingsParams, ConversationDecisionsParams, ConversationDecisionsResult,
+    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
+    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
+    ConversationObserveParams, ConversationObserveResult, ConversationPauseAutoPickParams,
+    ConversationPauseAutoPickResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
@@ -42,9 +43,9 @@ use nessa_protocol::product::generated::{
     ConversationSetModelParams, ConversationSetModelResult,
     ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
     ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
-    ConversationView as WireConversationView, ModelChangeEffect, OwnerAsk, OwnerAskChoice,
-    OwnerDecision, OwnerDecisionOutcome, OwnerDecisionState, PermissionRule, PermissionRuleEffect,
-    MAX_REVIEW_RANGE_BYTES,
+    ConversationView as WireConversationView, DecisionSettings, ModelChangeEffect, OwnerAsk,
+    OwnerAskChoice, OwnerDecision, OwnerDecisionOutcome, OwnerDecisionState, PermissionRule,
+    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -927,6 +928,45 @@ async fn answer(
                     },
                 ))
             }
+            "conversation.pauseAutoPick" => {
+                let params = target_params!(ConversationPauseAutoPickParams);
+                let applied = service
+                    .pause_auto_pick(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                        &params.ask_id,
+                        params.paused,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationPauseAutoPickResult { applied },
+                ))
+            }
+            "conversation.decisionSettings" => {
+                let ConversationDecisionSettingsParams {} =
+                    params!(ConversationDecisionSettingsParams);
+                let settings = service.decision_settings(caller(frame.id.clone())).await?;
+                Ok(success(&frame.id, &wire_decision_settings(settings)))
+            }
+            "conversation.setDecisionSettings" => {
+                let DecisionSettings {
+                    auto_pick,
+                    auto_pick_after_seconds,
+                } = params!(DecisionSettings);
+                let auto_pick_after_seconds = u32::try_from(auto_pick_after_seconds)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let settings = service
+                    .set_decision_settings(
+                        caller(frame.id.clone()),
+                        nessa_protocol::conversation::view::DecisionSettings {
+                            auto_pick,
+                            auto_pick_after_seconds,
+                        },
+                    )
+                    .await?;
+                Ok(success(&frame.id, &wire_decision_settings(settings)))
+            }
             "conversation.delete" => {
                 let params = target_params!(
                     ConversationDeleteParams,
@@ -1717,11 +1757,27 @@ fn wire_ask(ask: nessa_protocol::conversation::view::OwnerAsk) -> OwnerAsk {
             .map(|choice| OwnerAskChoice {
                 label: choice.label,
                 consequence: choice.consequence,
+                undo: choice.undo.map(|word| word.as_str().to_owned()),
+                effort: choice.effort.map(|word| word.as_str().to_owned()),
+                pros: (!choice.pros.is_empty()).then_some(choice.pros),
+                cons: (!choice.cons.is_empty()).then_some(choice.cons),
             })
             .collect(),
         recommended: u64::from(ask.recommended),
         reason: ask.reason,
         asked_at_ms: ask.asked_at_ms,
+        summary: ask.summary,
+        auto_pick: ask.auto_pick.map(|word| word.as_str().to_owned()),
+    }
+}
+
+/// An owner's decision settings as the wire carries them.
+fn wire_decision_settings(
+    settings: nessa_protocol::conversation::view::DecisionSettings,
+) -> DecisionSettings {
+    DecisionSettings {
+        auto_pick: settings.auto_pick,
+        auto_pick_after_seconds: u64::from(settings.auto_pick_after_seconds),
     }
 }
 
@@ -1735,11 +1791,13 @@ fn wire_decision(decision: nessa_protocol::conversation::view::OwnerDecision) ->
                 text,
                 choice,
                 at_ms,
+                auto,
             } => OwnerDecisionOutcome {
                 state: OwnerDecisionState::Decided,
                 text: Some(text),
                 choice: choice.map(u64::from),
                 by: None,
+                auto: auto.then_some(true),
                 at_ms,
             },
             Outcome::Replaced { by, at_ms } => OwnerDecisionOutcome {
@@ -1747,9 +1805,12 @@ fn wire_decision(decision: nessa_protocol::conversation::view::OwnerDecision) ->
                 text: None,
                 choice: None,
                 by: Some(by),
+                auto: None,
                 at_ms,
             },
         }),
+        auto_pick_paused: decision.auto_pick_paused.then_some(true),
+        auto_pick_due_at_ms: decision.auto_pick_due_at_ms,
     }
 }
 

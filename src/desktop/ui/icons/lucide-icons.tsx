@@ -1,4 +1,7 @@
 import {
+  Clock3,
+  Pause,
+  Play,
   AudioLines,
   Mic,
   MicOff,
@@ -44,6 +47,7 @@ import {
   Laptop,
   List,
   ListCollapse,
+  MessageSquareText,
   ListTree,
   Lock,
   Maximize2,
@@ -131,6 +135,9 @@ export const lucideIcons: DesktopIconFamily = {
 
   send: lucide(ArrowUp),
   stop: lucide(Square),
+  timer: lucide(Clock3),
+  pause: lucide(Pause),
+  resume: lucide(Play),
   attach: lucide(Plus),
   folder: lucide(Folder),
   folderAdd: lucide(FolderPlus),
@@ -159,6 +166,7 @@ export const lucideIcons: DesktopIconFamily = {
   workspace: lucide(LayoutPanelLeft),
   model: lucide(Cpu),
   connections: lucide(Plug),
+  chatSettings: lucide(MessageSquareText),
   privacy: lucide(ShieldCheck),
   advanced: lucide(FlaskConical),
   about: lucide(Info),

@@ -115,6 +115,18 @@
     "readOnly": true,
     "destructive": false
   },
+  "conversation.decisionSettings": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.pauseAutoPick": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.setDecisionSettings": {
+    "readOnly": false,
+    "destructive": false
+  },
   "conversation.delete": {
     "readOnly": false,
     "destructive": true

@@ -73,6 +73,7 @@ import {
   type VoiceKeyGateway,
 } from "./voice"
 import {
+  decisionSettingsGateway,
   githubGateway,
   savedLoginsGateway,
   type SavedLoginsClient,
@@ -81,6 +82,8 @@ import {
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  type DecisionSettingsClient,
+  type DecisionSettingsGateway,
   type GithubClient,
   type GithubGateway,
   type LinkedDevicesClient,
@@ -158,6 +161,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly devices: DevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
+  /** Auto-pick, for Settings › Chat settings › Decisions; absent without a gateway. Provided by `main.tsx`. */
+  readonly decisionSettings: DecisionSettingsGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -317,6 +322,9 @@ export function createDesktopDependencies(
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
+    decisionSettings: source
+      ? decisionSettingsGateway({ connected: () => source.connected() })
+      : undefined,
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
@@ -388,6 +396,7 @@ type WindowGatewayClient = GatewayClient &
   } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
+  DecisionSettingsClient &
   PermissionRulesClient &
   SharingClient &
   DecisionsClient &

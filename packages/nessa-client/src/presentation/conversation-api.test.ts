@@ -1637,6 +1637,68 @@ it("keeps an agent's ask on its row, and refuses one past the schema's bounds", 
     ["an unknown field", { ...ask, extra: true }],
   ] as const)
     await expect(listing({ ...summary, ask: bad }).list(), name).rejects.toThrow()
+
+  const detailed = {
+    ...ask,
+    summary: "The Safari export fix.",
+    autoPick: "allowed",
+    choices: [
+      {
+        ...ask.choices[0],
+        undo: "easy",
+        effort: "small",
+        pros: ["Fixed today"],
+        cons: [],
+      },
+      { ...ask.choices[1], undo: "no", cons: ["A weekend broken", "Users wait"] },
+    ],
+  }
+  expect((await listing({ ...summary, ask: detailed }).list()).conversations).toEqual([
+    { ...summary, ask: detailed },
+  ])
+  const choice = (extra: object) => ({
+    ...detailed,
+    choices: [{ ...ask.choices[0], ...extra }, ask.choices[1]],
+  })
+  for (const [name, bad] of [
+    ["an empty summary", { ...detailed, summary: "" }],
+    ["a long summary", { ...detailed, summary: "x".repeat(201) }],
+    ["an unknown auto-pick", { ...detailed, autoPick: "sometimes" }],
+    ["an unknown undo", choice({ undo: "maybe" })],
+    ["an unknown effort", choice({ effort: "huge" })],
+    ["three pros", choice({ pros: ["a", "b", "c"] })],
+    ["a long con", choice({ cons: ["x".repeat(121)] })],
+    ["an empty pro", choice({ pros: [""] })],
+    ["a pro that is not text", choice({ pros: [1] })],
+  ] as const)
+    await expect(listing({ ...summary, ask: bad }).list(), name).rejects.toThrow()
+})
+
+it("reads and keeps the caller's decision settings, and refuses a wait out of bounds", async () => {
+  const hour = { autoPick: false, autoPickAfterSeconds: 3600 }
+  const request = vi.fn().mockResolvedValue(hour)
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.decisionSettings()).resolves.toEqual(hour)
+  await expect(api.setDecisionSettings(hour)).resolves.toEqual(hour)
+  expect(request.mock.calls).toEqual([
+    ["conversation.decisionSettings", {}],
+    ["conversation.setDecisionSettings", hour],
+  ])
+  for (const bad of [
+    { autoPick: true, autoPickAfterSeconds: 59 },
+    { autoPick: true, autoPickAfterSeconds: 86_401 },
+    { autoPick: true, autoPickAfterSeconds: 90.5 },
+    { autoPick: "yes", autoPickAfterSeconds: 300 },
+    { autoPick: true, autoPickAfterSeconds: 300, extra: 1 },
+  ]) {
+    await expect(
+      api.setDecisionSettings(bad as never),
+      JSON.stringify(bad),
+    ).rejects.toThrow()
+    request.mockResolvedValueOnce(bad)
+    await expect(api.decisionSettings(), JSON.stringify(bad)).rejects.toThrow()
+  }
+  expect(request).toHaveBeenCalledTimes(2 + 5)
 })
 
 it("reads a chat's decisions newest first, and refuses an outcome the ask could not have", async () => {
@@ -1714,6 +1776,72 @@ it("reads a chat's decisions newest first, and refuses an outcome the ask could 
     createConversationApi({ request: unasked }, () => "unused").decisions("not-a-chat"),
   ).rejects.toThrow()
   expect(unasked).not.toHaveBeenCalled()
+})
+
+it("reads auto-pick on a decision, refuses it where it could not be, and pauses it", async () => {
+  const first = "0123456789abcdef0123456789abcdef"
+  const ask = {
+    askId: first,
+    question: "Rename the branch?",
+    choices: [
+      { label: "Rename", consequence: "It matches.", undo: "easy" },
+      { label: "Keep", consequence: "It stays." },
+    ],
+    recommended: 0,
+    reason: "It matches the issue.",
+    askedAtMs: 5,
+    autoPick: "allowed",
+  }
+  const reading = (decisions: unknown[]) =>
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ decisions }) },
+      () => "unused",
+    ).decisions(conversationId)
+  const picked = {
+    state: "decided",
+    text: "Rename. Picked for you: no answer in 5 minutes.",
+    choice: 0,
+    auto: true,
+    atMs: 9,
+  }
+  for (const decisions of [
+    [{ ask, autoPickDueAtMs: 300_005 }],
+    [{ ask, autoPickPaused: true }],
+    [{ ask, outcome: picked }],
+  ])
+    await expect(reading(decisions)).resolves.toEqual({ decisions })
+  const { autoPick: _, ...unallowed } = ask
+  for (const [name, bad] of [
+    ["due while paused", [{ ask, autoPickPaused: true, autoPickDueAtMs: 1 }]],
+    ["due where not allowed", [{ ask: unallowed, autoPickDueAtMs: 1 }]],
+    ["paused when not", [{ ask, autoPickPaused: false }]],
+    ["due once decided", [{ ask, outcome: picked, autoPickDueAtMs: 1 }]],
+    ["picked not the recommended", [{ ask, outcome: { ...picked, choice: 1 } }]],
+    ["picked where not allowed", [{ ask: unallowed, outcome: picked }]],
+    ["auto false", [{ ask, outcome: { ...picked, auto: false } }]],
+    [
+      "a replacement picked",
+      [
+        {
+          ask,
+          outcome: { state: "replaced", by: "f".repeat(32), auto: true, atMs: 1 },
+        },
+      ],
+    ],
+  ] as const)
+    await expect(reading([...bad]), name).rejects.toThrow()
+
+  const request = vi.fn().mockResolvedValue({ applied: true })
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.pauseAutoPick(conversationId, first, true)).resolves.toBe(true)
+  expect(request.mock.calls).toEqual([
+    ["conversation.pauseAutoPick", { conversationId, askId: first, paused: true }],
+  ])
+  request.mockResolvedValueOnce({ applied: "yes" })
+  await expect(api.pauseAutoPick(conversationId, first, false)).rejects.toThrow()
+  await expect(api.pauseAutoPick(conversationId, "ask", false)).rejects.toThrow()
+  await expect(api.pauseAutoPick("not-a-chat", first, false)).rejects.toThrow()
+  expect(request).toHaveBeenCalledTimes(2)
 })
 
 const observeCursor = {

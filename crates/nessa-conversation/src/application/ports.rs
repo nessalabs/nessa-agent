@@ -8,9 +8,9 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationSummary,
 };
-use nessa_protocol::conversation::view::OwnerDecision;
 #[cfg(doc)]
 use nessa_protocol::conversation::view::MAX_DECISIONS_KEPT;
+use nessa_protocol::conversation::view::{DecisionSettings, OwnerDecision};
 use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::PublishedFile;
@@ -591,6 +591,42 @@ pub trait ConversationSummaries: Send + Sync {
     /// each, newest first: the ones each [`Self::record`] asked and settled,
     /// at most [`MAX_DECISIONS_KEPT`]. Gone with the summary.
     fn decisions(&self, id: &ConversationId) -> ConversationFuture<'_, Vec<OwnerDecision>>;
+    /// Every decision still waiting whose auto-pick nobody paused, with its
+    /// conversation's owner and their settings: what auto-pick looks at.
+    fn auto_picks_waiting(&self) -> ConversationFuture<'_, Vec<WaitingAutoPick>>;
+    /// Pause auto-pick on ask `ask_id`, at `paused_at_ms`, or resume it with
+    /// `None`. False when it is not waiting there.
+    fn pause_auto_pick(
+        &self,
+        id: &ConversationId,
+        ask_id: &str,
+        paused_at_ms: Option<u64>,
+    ) -> ConversationFuture<'_, bool>;
+    /// How `owner`'s decisions behave: what [`Self::save_decision_settings`]
+    /// last kept for them, or the default.
+    fn decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, DecisionSettings>;
+    /// Keep `settings` for `owner`, durable before it returns.
+    fn save_decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        settings: DecisionSettings,
+    ) -> ConversationFuture<'_, ()>;
+}
+
+/// A decision auto-pick may answer: still waiting, not paused, with who owns
+/// its conversation and how their decisions behave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaitingAutoPick {
+    pub conversation: ConversationId,
+    pub organization: OrganizationId,
+    pub owner: PrincipalId,
+    pub ask: nessa_protocol::conversation::view::OwnerAsk,
+    pub settings: DecisionSettings,
 }
 
 /// An image as a caller submitted it, before any of it has been checked.

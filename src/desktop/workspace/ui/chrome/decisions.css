@@ -63,9 +63,10 @@
   background: var(--accent);
 }
 
+/* The kit's own focus ring (a shadow of --ring), as the dialog's buttons wear it. */
 .decisions-dialog-item:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
 }
 
 .decisions-dialog-item[data-state="waiting"] .decisions-dialog-question {
@@ -123,4 +124,42 @@
   align-items: center;
   gap: calc(var(--spacing) * 2);
   font-weight: 500;
+}
+
+/* Auto-pick (`auto-pick.tsx`): the countdown line under a waiting ask's
+ * choices, and "Change my answer" under one it picked. */
+.auto-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+
+.auto-pick-clock {
+  color: var(--foreground);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.auto-pick-failed {
+  color: var(--destructive);
+}
+
+.auto-pick-change {
+  align-self: flex-start;
+}
+
+.auto-pick-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
+.auto-pick-changed {
+  margin: 0;
+  color: var(--muted-foreground);
 }

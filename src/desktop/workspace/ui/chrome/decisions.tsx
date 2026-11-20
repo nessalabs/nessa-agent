@@ -29,6 +29,7 @@ import {
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 import { OwnerAsk } from "../transcript/owner-ask"
+import { ChangeAnswer } from "./auto-pick"
 import type { DecisionsRead } from "./decisions-source"
 import "./decisions.css"
 
@@ -228,10 +229,19 @@ function DecisionDetail({
   const chosen = outcome.state === "decided" ? outcome.choice : undefined
   return (
     <div className="decisions-dialog-detail" data-decision-detail={decision.ask.askId}>
-      <p className="decisions-dialog-state" data-state={outcome.state}>
-        {stateLabel(outcome.state)}
+      <p
+        className="decisions-dialog-state"
+        data-state={outcome.state}
+        data-auto={(outcome.state === "decided" && outcome.auto) || undefined}
+      >
+        {stateLabel(outcome)}
         {outcome.state === "decided" ? `: ${answerLabel(decision)}` : null}
       </p>
+      {outcome.state === "decided" && outcome.auto ? (
+        <p className="decisions-dialog-line" data-auto-picked="">
+          No answer in time, so the recommended choice was sent.
+        </p>
+      ) : null}
       <ul className="decisions-dialog-choices">
         {decision.ask.choices.map((choice, index) => (
           <li
@@ -252,12 +262,14 @@ function DecisionDetail({
       {decision.ask.reason ? (
         <p className="decisions-dialog-why">Why: {decision.ask.reason}</p>
       ) : null}
-      {/* What was said, unless it was only the choice's label. */}
+      {/* What was said, unless it was only the choice's label or the pick's own words. */}
       {outcome.state === "decided" &&
+      !outcome.auto &&
       outcome.text &&
       outcome.text !== answerLabel(decision) ? (
         <blockquote className="decisions-dialog-said">{outcome.text}</blockquote>
       ) : null}
+      <ChangeAnswer sessionId={sessionId} decision={decision} />
     </div>
   )
 }

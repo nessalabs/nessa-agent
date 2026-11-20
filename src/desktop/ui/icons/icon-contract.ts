@@ -65,6 +65,10 @@ const desktopRoles = [
   // Composer
   "send",
   "stop",
+  // Auto-pick: when it picks, and holding or letting it go.
+  "timer",
+  "pause",
+  "resume",
   "attach",
   "folder",
   "folderAdd",
@@ -94,6 +98,7 @@ const desktopRoles = [
   "preferences",
   "appearance",
   "workspace",
+  "chatSettings",
   "model",
   "connections",
   "privacy",

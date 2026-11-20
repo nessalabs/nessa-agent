@@ -19,8 +19,9 @@ use crate::timer::clock;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::view::{
-    OwnerAsk, OwnerAskChoice, MAX_ASK_CHOICES, MAX_ASK_LABEL_BYTES, MAX_ASK_LINE_BYTES,
-    MAX_ASK_QUESTION_BYTES, MAX_ASK_QUESTION_WORDS, MIN_ASK_CHOICES,
+    AskEffort, AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, MAX_ASK_CHOICES, MAX_ASK_DETAILS,
+    MAX_ASK_DETAIL_BYTES, MAX_ASK_LABEL_BYTES, MAX_ASK_LINE_BYTES, MAX_ASK_QUESTION_BYTES,
+    MAX_ASK_QUESTION_WORDS, MIN_ASK_CHOICES,
 };
 use nessa_sdk::application::agent_execution::{
     commands::{
@@ -243,7 +244,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": ASK_OWNER_TOOL,
-                "description": format!("Ask the person who owns this conversation to make one decision you cannot make for them. Give one short question (at most {MAX_ASK_QUESTION_WORDS} words; about twelve reads best), {MIN_ASK_CHOICES} to {MAX_ASK_CHOICES} choices, each a short label and one line on what happens if they pick it, the index of the choice you recommend, and one line on why. Every part is one line, and anything longer is refused (ask_question_too_long, ask_line_too_long, ask_choices, ask_recommended, ask_not_one_line): say it shorter and ask again. The person gets a notice, and the question shows as a card in this conversation wherever they look. Their answer arrives as their next message here, a tapped choice or anything else they type, so end your turn after asking. Asking again replaces the earlier question. Use it only for a choice that is theirs to make, never to report progress."),
+                "description": format!("Ask the person who owns this conversation to make one decision you cannot make for them. Give one short question (at most {MAX_ASK_QUESTION_WORDS} words; about twelve reads best), {MIN_ASK_CHOICES} to {MAX_ASK_CHOICES} choices, each a short label and one line on what happens if they pick it, the index of the choice you recommend, and one line on why. You may add a one-line summary, and for each choice how hard it is to undo, how much work it is, and up to {MAX_ASK_DETAILS} pros and cons. Every part is one line, and anything longer is refused (ask_question_too_long, ask_line_too_long, ask_choices, ask_recommended, ask_not_one_line, ask_details, ask_auto_pick): say it shorter and ask again. The person gets a notice, and the question shows as a card in this conversation wherever they look. Their answer arrives as their next message here, a tapped choice or anything else they type, so end your turn after asking. Asking again replaces the earlier question. Use it only for a choice that is theirs to make, never to report progress."),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -257,6 +258,10 @@ impl BuiltInServer for ConversationTools {
                                 "properties": {
                                     "label": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LABEL_BYTES},
                                     "consequence": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "What happens if the person picks it, in one line."},
+                                    "undo": {"type": "string", "enum": ["easy", "costly", "no"], "description": "How hard it is to take back."},
+                                    "effort": {"type": "string", "enum": ["small", "medium", "large"], "description": "How much work it is."},
+                                    "pros": {"type": "array", "maxItems": MAX_ASK_DETAILS, "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_DETAIL_BYTES}, "description": "One line each for it."},
+                                    "cons": {"type": "array", "maxItems": MAX_ASK_DETAILS, "items": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_DETAIL_BYTES}, "description": "One line each against it."},
                                 },
                                 "required": ["label", "consequence"],
                                 "additionalProperties": false,
@@ -264,6 +269,8 @@ impl BuiltInServer for ConversationTools {
                         },
                         "recommended": {"type": "integer", "minimum": 0, "maximum": MAX_ASK_CHOICES - 1, "description": "Index into choices of the one you recommend."},
                         "reason": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "Why you recommend it, in one line."},
+                        "summary": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "One line under the question: what it is about, readable without the chat above."},
+                        "autoPick": {"type": "string", "enum": ["allowed", "never"], "description": "allowed lets the person's settings pick your recommended choice when they do not answer in time; only when that choice's undo is easy. Leave it out, or never, for anything destructive, paid, or that leaves the machine."},
                     },
                     "required": ["question", "choices", "recommended", "reason"],
                     "additionalProperties": false,
@@ -503,12 +510,24 @@ struct Ask {
     choices: Vec<AskChoice>,
     recommended: u8,
     reason: String,
+    #[serde(default, deserialize_with = "supplied")]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "supplied_word")]
+    auto_pick: Option<AutoPick>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AskChoice {
     label: String,
     consequence: String,
+    #[serde(default, deserialize_with = "supplied_word")]
+    undo: Option<AskUndo>,
+    #[serde(default, deserialize_with = "supplied_word")]
+    effort: Option<AskEffort>,
+    #[serde(default, deserialize_with = "supplied")]
+    pros: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "supplied")]
+    cons: Option<Vec<String>>,
 }
 impl Ask {
     /// The ask as it is kept, under a key new to it. Its time is the
@@ -523,15 +542,29 @@ impl Ask {
                 .map(|choice| OwnerAskChoice {
                     label: choice.label.trim().to_owned(),
                     consequence: choice.consequence.trim().to_owned(),
+                    undo: choice.undo,
+                    effort: choice.effort,
+                    pros: trimmed(choice.pros),
+                    cons: trimmed(choice.cons),
                 })
                 .collect(),
             recommended: self.recommended,
             reason: self.reason.trim().to_owned(),
             asked_at_ms: 0,
+            summary: self.summary.map(|summary| summary.trim().to_owned()),
+            auto_pick: self.auto_pick,
         };
         ask.check().map_err(|refusal| refusal.code().to_owned())?;
         Ok(ask)
     }
+}
+/// Each line trimmed; none given is none.
+fn trimmed(lines: Option<Vec<String>>) -> Vec<String> {
+    lines
+        .unwrap_or_default()
+        .into_iter()
+        .map(|line| line.trim().to_owned())
+        .collect()
 }
 /// `close_thread`: the calling agent's own thread, or one it created.
 #[derive(Deserialize)]
@@ -569,6 +602,18 @@ fn supplied_agent<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<A
     AgentId::parse(&name)
         .map(Some)
         .ok_or_else(|| serde::de::Error::custom("unknown agent"))
+}
+/// A published word enum takes only the word: serde would also decode a unit
+/// variant from its map form, `{"allowed": null}`.
+fn supplied_word<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let word = String::deserialize(deserializer)?;
+    serde_json::from_value(Value::String(word))
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 /// Published input schemas are objects; serde would also decode a struct from an array.
 fn parse<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, String> {
@@ -2141,6 +2186,83 @@ mod tests {
         assert_eq!(
             refused(ask("Which\nnow?", &["A", "B"], 0, "r")),
             "ask_not_one_line"
+        );
+    }
+
+    /// An ask may say more: a summary, and per choice its undo, effort,
+    /// pros and cons. Each is bounded like the rest, and an auto-pick is
+    /// allowed only when the recommended choice is easy to undo.
+    #[test]
+    fn an_ask_may_say_more_within_bounds() {
+        let ask = |extra: serde_json::Value, choice: serde_json::Value| {
+            let mut input = json!({
+                "question": "Which cap?",
+                "choices": [
+                    {"label": "Cap at 4", "consequence": "Panes stop at four."},
+                    {"label": "No cap", "consequence": "Panes split forever."},
+                ],
+                "recommended": 0,
+                "reason": "Four fits a laptop.",
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                input[key] = value.clone();
+            }
+            for (key, value) in choice.as_object().unwrap() {
+                input["choices"][0][key] = value.clone();
+            }
+            parse::<Ask>(input).map_err(|_| "parse".to_owned())?.kept()
+        };
+        let kept = ask(
+            json!({"summary": " How many panes a window holds. ", "autoPick": "allowed"}),
+            json!({"undo": "easy", "effort": "small", "pros": [" Fits "], "cons": ["Less room"]}),
+        )
+        .unwrap();
+        assert_eq!(
+            kept.summary.as_deref(),
+            Some("How many panes a window holds.")
+        );
+        assert_eq!(kept.choices[0].pros, ["Fits"]);
+        assert_eq!(kept.choices[0].undo, Some(AskUndo::Easy));
+        assert_eq!(kept.choices[0].effort, Some(AskEffort::Small));
+        assert!(kept.auto_pick_allowed());
+
+        let plain = ask(json!({}), json!({})).unwrap();
+        assert_eq!(plain.auto_pick, None);
+        assert!(!plain.auto_pick_allowed());
+        assert!(!ask(json!({"autoPick": "never"}), json!({"undo": "easy"}))
+            .unwrap()
+            .auto_pick_allowed());
+
+        for undo in [json!({}), json!({"undo": "costly"}), json!({"undo": "no"})] {
+            assert_eq!(
+                ask(json!({"autoPick": "allowed"}), undo).unwrap_err(),
+                "ask_auto_pick"
+            );
+        }
+        let long = "x".repeat(MAX_ASK_DETAIL_BYTES + 1);
+        for (extra, choice) in [
+            (json!({"summary": ""}), json!({})),
+            (
+                json!({"summary": "y".repeat(MAX_ASK_LINE_BYTES + 1)}),
+                json!({}),
+            ),
+            (json!({}), json!({"pros": ["a", "b", "c"]})),
+            (json!({}), json!({"cons": [long]})),
+            (json!({}), json!({"cons": [" "]})),
+        ] {
+            assert_eq!(ask(extra, choice).unwrap_err(), "ask_details");
+        }
+        assert_eq!(
+            ask(json!({}), json!({"pros": ["one\ntwo"]})).unwrap_err(),
+            "ask_not_one_line"
+        );
+        assert_eq!(
+            ask(json!({}), json!({"undo": "maybe"})).unwrap_err(),
+            "parse"
+        );
+        assert_eq!(
+            ask(json!({"summary": null}), json!({})).unwrap_err(),
+            "parse"
         );
     }
 

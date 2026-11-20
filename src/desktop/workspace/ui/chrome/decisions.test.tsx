@@ -100,9 +100,10 @@ const settled: readonly Decision[] = [
   decision("d4", 50, { state: "decided", text: "Wait", choice: 1, atMs: 52 * minute }),
 ]
 
-/** A source that answers with `list()` as it is when asked, and counts the reads. */
+/** A source that answers with `list()` as it is when asked, and counts the reads and pauses. */
 function decisionsOf(list: () => readonly Decision[] | Error) {
   const reads: string[] = []
+  const pauses: [string, string, boolean][] = []
   const source: DecisionSource = {
     decisions: async (sessionId) => {
       reads.push(sessionId)
@@ -110,8 +111,12 @@ function decisionsOf(list: () => readonly Decision[] | Error) {
       if (answer instanceof Error) throw answer
       return answer
     },
+    pauseAutoPick: async (sessionId, askId, paused) => {
+      pauses.push([sessionId, askId, paused])
+      return true
+    },
   }
-  return { source, reads }
+  return { source, reads, pauses }
 }
 
 async function render(source: DecisionSource, fake: FakeSource = fakeSource()) {
@@ -279,6 +284,86 @@ describe("Decisions in Chat context", () => {
     await frames()
     expect(reads).toEqual(["a", "a"])
     expect(rows()).toEqual(["d3", "d2", "d1"])
+  })
+
+  it("counts down to auto-pick on the chat's ask, and pauses it in one tap", async () => {
+    const fake = fakeSource()
+    let held = false
+    const waiting = (): Decision => ({
+      ...decision("live", 99, { state: "waiting" }),
+      autoPick: held
+        ? { state: "paused" }
+        : { state: "due", atMs: now + 4 * minute + 5_000 },
+    })
+    const { source, pauses } = decisionsOf(() => [waiting()])
+    const store = await render(source, fake)
+    expect(section()?.textContent).toContain("Waiting on you · auto-picks in 4:05")
+    const summary = selectSession(store.getState(), "a")
+    if (!summary) throw new Error("no session a")
+    await act(async () =>
+      fake.emit({
+        kind: "session",
+        session: { ...summary, ask: ask("live"), revision: summary.revision + 1 },
+      }),
+    )
+    await settle()
+    await frames()
+    const line = () => host.querySelector('[data-owner-ask="live"] [data-auto-pick-line]')
+    expect(line()?.textContent).toContain("Picks Ship in 4:05")
+    held = true
+    await click(line()?.querySelector('[data-auto-pick-hold="pause"]'))
+    await settle()
+    await frames()
+    expect(pauses).toEqual([["a", "live", true]])
+    expect(line()?.getAttribute("data-auto-pick-line")).toBe("paused")
+    expect(line()?.textContent).toContain("Auto-pick paused")
+    held = false
+    await click(line()?.querySelector('[data-auto-pick-hold="resume"]'))
+    await settle()
+    await frames()
+    expect(pauses).toEqual([
+      ["a", "live", true],
+      ["a", "live", false],
+    ])
+    expect(line()?.getAttribute("data-auto-pick-line")).toBe("due")
+  })
+
+  it("says a decision was auto-picked, and Change my answer sends another choice", async () => {
+    const fake = fakeSource()
+    const { source } = decisionsOf(() => [
+      decision("auto", 90, {
+        state: "decided",
+        text: "Ship. Picked for you: no answer in 5 minutes.",
+        choice: 0,
+        auto: true,
+        atMs: 95 * minute,
+      }),
+    ])
+    await render(source, fake)
+    expect(section()?.textContent).toContain("Auto-picked Ship · 5m ago")
+    await click(section()?.querySelector('[data-decision="auto"]'))
+    const detail = () => dialog()?.querySelector('[data-decision-detail="auto"]')
+    expect(detail()?.textContent).toContain("Auto-picked: Ship")
+    expect(detail()?.textContent).toContain("No answer in time")
+    // The pick's own words are not shown as something the person said.
+    expect(detail()?.querySelector("blockquote")).toBeNull()
+    await click(detail()?.querySelector("[data-change-answer]"))
+    const offered = [
+      ...(detail()?.querySelectorAll("[data-change-answer-choice]") ?? []),
+    ].map((choice) => choice.getAttribute("data-change-answer-choice"))
+    expect(offered).toEqual(["Wait"])
+    await click(detail()?.querySelector('[data-change-answer-choice="Wait"]'))
+    await settle()
+    await frames()
+    const sent = fake.calls.filter(([method]) => method === "send")
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.[1]).toMatchObject({
+      sessionId: "a",
+      text: "Wait. Changed from the auto-pick on “Question auto?”",
+    })
+    expect(detail()?.querySelector("[data-change-answer-sent]")?.textContent).toBe(
+      "Sent: Wait",
+    )
   })
 
   it("is not there beside no source of decisions", async () => {

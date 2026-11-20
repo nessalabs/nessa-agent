@@ -362,6 +362,8 @@ export function failureStages(error: unknown): StageMismatch | null {
  */
 export interface DecisionSource {
   decisions(sessionId: string): Promise<readonly Decision[]>
+  /** Hold, or let go, auto-pick on one waiting decision; false when it no longer waits. */
+  pauseAutoPick(sessionId: string, askId: string, paused: boolean): Promise<boolean>
 }
 
 /**

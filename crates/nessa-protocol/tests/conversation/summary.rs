@@ -1,7 +1,9 @@
 //! A conversation's summary rules, tested without storage, a runtime, or an agent.
 use super::{ConversationPreview, ConversationSummary, ConversationTitle};
 use crate::conversation::view::{
-    OwnerDecisionOutcome, MAX_DECISION_ANSWER_BYTES, MAX_DECISION_OUTCOME_JSON_BYTES,
+    AskEffort, AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome, MAX_ASK_CHOICES,
+    MAX_ASK_DETAILS, MAX_ASK_DETAIL_BYTES, MAX_ASK_LABEL_BYTES, MAX_ASK_LINE_BYTES,
+    MAX_ASK_QUESTION_BYTES, MAX_DECISION_ANSWER_BYTES, MAX_DECISION_OUTCOME_JSON_BYTES,
 };
 
 fn preview(text: &str) -> Option<String> {
@@ -259,15 +261,25 @@ fn asked(ask_id: &str, at_ms: u64) -> crate::conversation::view::OwnerAsk {
             crate::conversation::view::OwnerAskChoice {
                 label: "Yes".into(),
                 consequence: "It ships.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
             crate::conversation::view::OwnerAskChoice {
                 label: "No".into(),
                 consequence: "It waits.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
         ],
         recommended: 0,
         reason: "It is ready.".into(),
         asked_at_ms: at_ms,
+        summary: None,
+        auto_pick: None,
     }
 }
 
@@ -294,16 +306,22 @@ fn an_ask_lifts_its_conversation_to_the_top_of_the_list() {
 fn an_ask_goes_only_with_the_message_that_answers_it() {
     let asking = ConversationSummary::after_asking(None, asked("a", 10));
     // A message that answers nothing, or answers an earlier ask, keeps it.
-    let kept =
-        ConversationSummary::after_message(Some(&asking), "hm", None, 20).answering(None, "hm");
+    let kept = ConversationSummary::after_message(Some(&asking), "hm", None, 20)
+        .answering(None, "hm", false);
     assert!(kept.ask().is_some());
     assert!(kept.settled().is_none());
-    let stale = ConversationSummary::after_message(Some(&asking), "hm", None, 20)
-        .answering(Some("earlier"), "hm");
+    let stale = ConversationSummary::after_message(Some(&asking), "hm", None, 20).answering(
+        Some("earlier"),
+        "hm",
+        false,
+    );
     assert!(stale.ask().is_some());
     assert!(stale.settled().is_none());
-    let answered = ConversationSummary::after_message(Some(&asking), "Yes", None, 30)
-        .answering(Some("a"), "Yes");
+    let answered = ConversationSummary::after_message(Some(&asking), "Yes", None, 30).answering(
+        Some("a"),
+        "Yes",
+        false,
+    );
     assert!(answered.ask().is_none());
     let settled = answered.settled().expect("the answered ask is settled");
     assert_eq!(settled.ask.ask_id, "a");
@@ -313,6 +331,7 @@ fn an_ask_goes_only_with_the_message_that_answers_it() {
             text: "Yes".into(),
             choice: Some(0),
             at_ms: 30,
+            auto: false,
         }
     );
     // Settling is the change's alone: what is made of the summary next does
@@ -379,5 +398,104 @@ fn an_answer_of_control_characters_still_fits_where_decisions_are_kept() {
         json.len() <= MAX_DECISION_OUTCOME_JSON_BYTES,
         "{} bytes",
         json.len()
+    );
+}
+
+/// The largest ask an agent can leave, every part at its bound and written
+/// in characters JSON escapes, still fits the 8 KiB column it is kept in.
+#[test]
+fn the_largest_ask_fits_where_asks_are_kept() {
+    let quoted = |bytes: usize| "\"".repeat(bytes);
+    let ask = OwnerAsk {
+        ask_id: "0123456789abcdef0123456789abcdef".into(),
+        question: format!("a {}", quoted(MAX_ASK_QUESTION_BYTES - 2)),
+        choices: (0..MAX_ASK_CHOICES)
+            .map(|index| OwnerAskChoice {
+                label: format!("{index}{}", quoted(MAX_ASK_LABEL_BYTES - 1)),
+                consequence: quoted(MAX_ASK_LINE_BYTES),
+                undo: Some(AskUndo::Costly),
+                effort: Some(AskEffort::Medium),
+                pros: vec![quoted(MAX_ASK_DETAIL_BYTES); MAX_ASK_DETAILS],
+                cons: vec![quoted(MAX_ASK_DETAIL_BYTES); MAX_ASK_DETAILS],
+            })
+            .collect(),
+        recommended: 0,
+        reason: quoted(MAX_ASK_LINE_BYTES),
+        asked_at_ms: u64::MAX,
+        summary: Some(quoted(MAX_ASK_LINE_BYTES)),
+        auto_pick: Some(AutoPick::Never),
+    };
+    assert_eq!(ask.check(), Ok(()));
+    let json = serde_json::to_string(&ask).unwrap();
+    assert!(json.len() <= 8192, "{} bytes", json.len());
+}
+
+/// An ask kept before asks could say more reads back as it was.
+#[test]
+fn an_ask_kept_before_details_reads_back() {
+    let ask: OwnerAsk = serde_json::from_str(
+        r#"{"askId":"0123456789abcdef0123456789abcdef","question":"Ship it?","choices":[{"label":"Yes","consequence":"It ships."},{"label":"No","consequence":"It waits."}],"recommended":0,"reason":"It is ready.","askedAtMs":5}"#,
+    )
+    .unwrap();
+    assert_eq!(ask, asked("0123456789abcdef0123456789abcdef", 5));
+}
+
+/// An ask is picked for its owner only when the agent allowed it and its
+/// recommended choice is easy to undo, while it waits unpaused and the
+/// owner's auto-pick is on; the pick's text names that choice the way an
+/// answer does, and says why it was sent.
+#[test]
+fn auto_pick_is_due_only_for_an_allowed_easy_choice_and_names_it() {
+    use crate::conversation::view::{DecisionSettings, OwnerDecision};
+    let mut ask = asked("a", 10_000);
+    let on = DecisionSettings {
+        auto_pick: true,
+        auto_pick_after_seconds: 300,
+    };
+    let decision = |ask: &OwnerAsk| OwnerDecision {
+        ask: ask.clone(),
+        outcome: None,
+        auto_pick_paused: false,
+        auto_pick_due_at_ms: None,
+    };
+    assert_eq!(decision(&ask).auto_pick_due(on), None);
+    ask.auto_pick = Some(AutoPick::Allowed);
+    ask.choices[0].undo = Some(AskUndo::Costly);
+    assert_eq!(decision(&ask).auto_pick_due(on), None);
+    ask.choices[0].undo = Some(AskUndo::Easy);
+    assert_eq!(decision(&ask).auto_pick_due(on), Some(310_000));
+    assert_eq!(
+        decision(&ask).auto_pick_due(DecisionSettings {
+            auto_pick: false,
+            ..on
+        }),
+        None
+    );
+    let paused = OwnerDecision {
+        auto_pick_paused: true,
+        ..decision(&ask)
+    };
+    assert_eq!(paused.auto_pick_due(on), None);
+    let answered = OwnerDecision {
+        outcome: Some(OwnerDecisionOutcome::answered(&ask, "No", 20_000)),
+        ..decision(&ask)
+    };
+    assert_eq!(answered.auto_pick_due(on), None);
+    ask.auto_pick = Some(AutoPick::Never);
+    assert_eq!(decision(&ask).auto_pick_due(on), None);
+
+    let text = ask.auto_pick_text(300).unwrap();
+    assert_eq!(text, "Yes. Picked for you: no answer in 5 minutes.");
+    match OwnerDecisionOutcome::answered(&ask, &text, 1) {
+        OwnerDecisionOutcome::Decided { choice, .. } => assert_eq!(choice, Some(0)),
+        OwnerDecisionOutcome::Replaced { .. } => panic!("a pick is decided"),
+    }
+    assert_eq!(
+        ask.auto_pick_text(3600).unwrap(),
+        "Yes. Picked for you: no answer in 1 hour."
+    );
+    assert_eq!(
+        ask.auto_pick_text(5400).unwrap(),
+        "Yes. Picked for you: no answer in 90 minutes."
     );
 }

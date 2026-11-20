@@ -161,7 +161,7 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         connection
             .execute_batch(
                 "DROP TABLE agent_switches; DROP TABLE closed_threads;
-                 DROP TABLE owner_decisions; ALTER TABLE summaries DROP COLUMN ask",
+                 DROP TABLE owner_decisions; DROP TABLE decision_settings; ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
@@ -184,7 +184,7 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
         connection
             .execute_batch(
                 "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
-                 DROP TABLE closed_threads; DROP TABLE owner_decisions;
+                 DROP TABLE closed_threads; DROP TABLE owner_decisions; DROP TABLE decision_settings;
                  ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
@@ -215,7 +215,7 @@ async fn a_version_9_file_gains_the_closed_threads() {
         let connection = Connection::open(&path).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE closed_threads; DROP TABLE owner_decisions;
+                "DROP TABLE closed_threads; DROP TABLE owner_decisions; DROP TABLE decision_settings;
                  ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
@@ -251,7 +251,7 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE owner_decisions; ALTER TABLE summaries DROP COLUMN ask")
+            .execute_batch("DROP TABLE owner_decisions; DROP TABLE decision_settings; ALTER TABLE summaries DROP COLUMN ask")
             .unwrap();
         connection.pragma_update(None, "user_version", 10).unwrap();
     }
@@ -271,15 +271,25 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
             nessa_protocol::conversation::view::OwnerAskChoice {
                 label: "Yes".into(),
                 consequence: "It ships.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
             nessa_protocol::conversation::view::OwnerAskChoice {
                 label: "No".into(),
                 consequence: "It waits.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
         ],
         recommended: 0,
         reason: "It is ready.".into(),
         asked_at_ms: 3000,
+        summary: None,
+        auto_pick: None,
     };
     let asked = nessa_protocol::conversation::domain::ConversationSummary::after_asking(
         Some(&kept),
@@ -326,15 +336,25 @@ fn ask(ask_id: &str, at_ms: u64) -> nessa_protocol::conversation::view::OwnerAsk
             nessa_protocol::conversation::view::OwnerAskChoice {
                 label: "Yes".into(),
                 consequence: "It ships.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
             nessa_protocol::conversation::view::OwnerAskChoice {
                 label: "No".into(),
                 consequence: "It waits.".into(),
+                undo: None,
+                effort: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
             },
         ],
         recommended: 0,
         reason: "It is ready.".into(),
         asked_at_ms: at_ms,
+        summary: None,
+        auto_pick: None,
     }
 }
 
@@ -368,7 +388,7 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE owner_decisions")
+            .execute_batch("DROP TABLE owner_decisions; DROP TABLE decision_settings")
             .unwrap();
         connection.pragma_update(None, "user_version", 11).unwrap();
     }
@@ -380,6 +400,8 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
         vec![OwnerDecision {
             ask: first.clone(),
             outcome: None,
+            auto_pick_paused: false,
+            auto_pick_due_at_ms: None,
         }]
     );
     let waiting = ConversationSummaries::load(&store, &id)
@@ -387,7 +409,7 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
         .unwrap()
         .unwrap();
     let answered = ConversationSummary::after_message(Some(&waiting), "No. Next week.", None, 4000)
-        .answering(Some(&first.ask_id), "No. Next week.");
+        .answering(Some(&first.ask_id), "No. Next week.", false);
     ConversationSummaries::record(&store, &id, answered.clone())
         .await
         .unwrap();
@@ -409,6 +431,8 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
             OwnerDecision {
                 ask: second,
                 outcome: None,
+                auto_pick_paused: false,
+                auto_pick_due_at_ms: None,
             },
             OwnerDecision {
                 ask: first,
@@ -416,7 +440,10 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
                     text: "No. Next week.".into(),
                     choice: Some(1),
                     at_ms: 4000,
+                    auto: false,
                 }),
+                auto_pick_paused: false,
+                auto_pick_due_at_ms: None,
             },
         ]
     );
@@ -451,8 +478,11 @@ async fn a_control_character_answer_is_kept_and_a_newer_ask_leads_whatever_its_c
         .await
         .unwrap();
     let worst = "\u{1}".repeat(MAX_DECISION_ANSWER_BYTES * 2);
-    let answered = ConversationSummary::after_message(Some(&asked), &worst, None, 9500)
-        .answering(Some(&first.ask_id), &worst);
+    let answered = ConversationSummary::after_message(Some(&asked), &worst, None, 9500).answering(
+        Some(&first.ask_id),
+        &worst,
+        false,
+    );
     ConversationSummaries::record(&store, &id, answered.clone())
         .await
         .unwrap();
@@ -503,4 +533,141 @@ fn a_step_that_fails_leaves_the_file_at_its_version_and_says_which() {
         )
         .unwrap();
     assert_eq!(kept, "Kept across the upgrade");
+}
+
+/// An owner's decision settings are the default until kept, kept per owner,
+/// and the file refuses a wait outside the bounds whatever writes it.
+#[tokio::test]
+async fn decision_settings_are_kept_per_owner_within_their_bounds() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::view::DecisionSettings;
+    let (_directory, path) = private_path();
+    let store = LocalConversationStore::open(&path).unwrap();
+    let organization = OrganizationId::new("org").unwrap();
+    let owner = PrincipalId::new("owner").unwrap();
+    let other = PrincipalId::new("other").unwrap();
+    assert_eq!(
+        store
+            .decision_settings(&organization, &owner)
+            .await
+            .unwrap(),
+        DecisionSettings::default()
+    );
+    let hour = DecisionSettings {
+        auto_pick: false,
+        auto_pick_after_seconds: 3600,
+    };
+    store
+        .save_decision_settings(&organization, &owner, hour)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .decision_settings(&organization, &owner)
+            .await
+            .unwrap(),
+        hour
+    );
+    assert_eq!(
+        store
+            .decision_settings(&organization, &other)
+            .await
+            .unwrap(),
+        DecisionSettings::default()
+    );
+    for seconds in [59, 86_401] {
+        assert!(store
+            .save_decision_settings(
+                &organization,
+                &owner,
+                DecisionSettings {
+                    auto_pick: true,
+                    auto_pick_after_seconds: seconds,
+                },
+            )
+            .await
+            .is_err());
+    }
+    drop(store);
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .decision_settings(&organization, &owner)
+            .await
+            .unwrap(),
+        hour
+    );
+}
+
+/// Auto-pick reads each decision still waiting and not paused, with its
+/// owner's settings (the default until kept); a pause takes it out until it
+/// is lifted, and an answered one is never paused or read again.
+#[tokio::test]
+async fn auto_pick_reads_the_waiting_decisions_its_owners_did_not_pause() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::domain::ConversationSummary;
+    use nessa_protocol::conversation::view::{AskUndo, AutoPick, DecisionSettings};
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    let organization = OrganizationId::new("org").unwrap();
+    let alice = PrincipalId::new("alice").unwrap();
+    let store = LocalConversationStore::open(&path).unwrap();
+    let kept = ConversationSummaries::load(&store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut first = ask("0123456789abcdef0123456789abcdef", 3000);
+    first.auto_pick = Some(AutoPick::Allowed);
+    first.choices[0].undo = Some(AskUndo::Easy);
+    let asked = ConversationSummary::after_asking(Some(&kept), first.clone());
+    ConversationSummaries::record(&store, &id, asked.clone())
+        .await
+        .unwrap();
+    let waiting = store.auto_picks_waiting().await.unwrap();
+    let [only] = &waiting[..] else {
+        panic!("the one waiting decision is read, not {}", waiting.len());
+    };
+    assert_eq!(only.conversation, id);
+    assert_eq!(only.organization, organization);
+    assert_eq!(only.owner, alice);
+    assert_eq!(only.ask, first);
+    assert_eq!(only.settings, DecisionSettings::default());
+    let off = DecisionSettings {
+        auto_pick: false,
+        auto_pick_after_seconds: 120,
+    };
+    store
+        .save_decision_settings(&organization, &alice, off)
+        .await
+        .unwrap();
+    assert_eq!(store.auto_picks_waiting().await.unwrap()[0].settings, off);
+    assert!(store
+        .pause_auto_pick(&id, &first.ask_id, Some(3500))
+        .await
+        .unwrap());
+    assert!(store.auto_picks_waiting().await.unwrap().is_empty());
+    assert!(ConversationSummaries::decisions(&store, &id).await.unwrap()[0].auto_pick_paused);
+    assert!(!store
+        .pause_auto_pick(&id, "fedcba9876543210fedcba9876543210", Some(3500))
+        .await
+        .unwrap());
+    assert!(store
+        .pause_auto_pick(&id, &first.ask_id, None)
+        .await
+        .unwrap());
+    assert_eq!(store.auto_picks_waiting().await.unwrap().len(), 1);
+    let answered = ConversationSummary::after_message(Some(&asked), "Yes.", None, 4000).answering(
+        Some(&first.ask_id),
+        "Yes.",
+        true,
+    );
+    ConversationSummaries::record(&store, &id, answered)
+        .await
+        .unwrap();
+    assert!(store.auto_picks_waiting().await.unwrap().is_empty());
+    assert!(!store
+        .pause_auto_pick(&id, &first.ask_id, Some(4500))
+        .await
+        .unwrap());
 }

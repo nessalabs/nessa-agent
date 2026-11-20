@@ -246,6 +246,27 @@
       "destructive": false
     },
     {
+      "name": "conversation.decisionSettings",
+      "params": "ConversationDecisionSettingsParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.pauseAutoPick",
+      "params": "ConversationPauseAutoPickParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.setDecisionSettings",
+      "params": "DecisionSettings",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "conversation.delete",
       "params": "ConversationDeleteParams",
       "grant": "conversation.write",

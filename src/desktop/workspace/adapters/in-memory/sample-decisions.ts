@@ -16,7 +16,36 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
     "split-panes": [
       {
         ask: {
-          askId: "split-panes-cap",
+          askId: "panes-shortcut",
+          question: "Which key should split a pane?",
+          choices: [
+            {
+              label: "⌘D",
+              consequence: "Matches the terminal people already use.",
+              undo: "easy",
+            },
+            {
+              label: "⌘\\",
+              consequence: "Free today, but nobody expects it.",
+              undo: "easy",
+            },
+          ],
+          recommended: 0,
+          reason: "It is the key people try first.",
+          autoPick: "allowed",
+        },
+        askedAtMs: at(12),
+        outcome: {
+          state: "decided",
+          text: "⌘D. Picked for you: no answer in 5 minutes.",
+          choice: 0,
+          auto: true,
+          atMs: at(7),
+        },
+      },
+      {
+        ask: {
+          askId: "panes-cap",
           question: "How many panes should the workspace hold?",
           choices: [
             {
@@ -36,7 +65,7 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
       },
       {
         ask: {
-          askId: "split-panes-drop",
+          askId: "panes-drop",
           question: "Where should a dragged chat land?",
           choices: [
             {
@@ -58,7 +87,7 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
       },
       {
         ask: {
-          askId: "split-panes-sizes",
+          askId: "panes-sizes",
           question: "Should pane sizes be kept per channel?",
           choices: [
             {
@@ -78,7 +107,7 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
       },
       {
         ask: {
-          askId: "split-panes-fractions",
+          askId: "panes-fractions",
           question: "Lay panes out as fractions or fixed widths?",
           choices: [
             {
@@ -104,5 +133,7 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
   }
   return {
     decisions: async (sessionId) => bySession[sessionId] ?? [],
+    // Nothing waits in the sample, so there is nothing to pause.
+    pauseAutoPick: async () => false,
   }
 }

@@ -61,7 +61,15 @@ export type FakeGatewayClient = {
   WindowCommandClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
-      Pick<ConversationApi, "permissionRules" | "revokePermissionRule" | "decisions">
+      Pick<
+        ConversationApi,
+        | "permissionRules"
+        | "revokePermissionRule"
+        | "decisions"
+        | "pauseAutoPick"
+        | "decisionSettings"
+        | "setDecisionSettings"
+      >
   }
 
 /** The default channel, as the gateway lists it first. */
@@ -119,6 +127,9 @@ type Method =
   | "permissionRules"
   | "revokePermissionRule"
   | "decisions"
+  | "pauseAutoPick"
+  | "decisionSettings"
+  | "setDecisionSettings"
   | "listChannels"
   | "createChannel"
 
@@ -157,6 +168,9 @@ export const fakeCallMethods = {
   permissionRules: "conversation.permissionRules",
   revokePermissionRule: "conversation.revokePermissionRule",
   decisions: "conversation.decisions",
+  pauseAutoPick: "conversation.pauseAutoPick",
+  decisionSettings: "conversation.decisionSettings",
+  setDecisionSettings: "conversation.setDecisionSettings",
   listChannels: "channel.list",
   createChannel: "channel.create",
 } as const satisfies Record<
@@ -553,6 +567,7 @@ export function fakeGateway(
   let state: ConnectionState = { status: "connected" }
   let closed = false
   let ids = 0
+  let decisionSettings = { autoPick: true, autoPickAfterSeconds: 300 }
   const fake = {
     complete: true,
     listLimit: null as number | null,
@@ -963,6 +978,16 @@ export function fakeGateway(
       // Nothing asked in any fake conversation.
       decisions: (...args) =>
         answer("decisions", args, () => ({ decisions: [] })) as never,
+      // Nothing waits, so there is nothing to pause.
+      pauseAutoPick: (...args) => answer("pauseAutoPick", args, () => false) as never,
+      // Kept as the gateway keeps them: the default until set.
+      decisionSettings: () =>
+        answer("decisionSettings", [], () => ({ ...decisionSettings })) as never,
+      setDecisionSettings: (...args) =>
+        answer("setDecisionSettings", args, () => {
+          decisionSettings = { ...args[0] }
+          return { ...decisionSettings }
+        }) as never,
     },
     channels: {
       list: () =>

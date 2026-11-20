@@ -3,6 +3,7 @@ import { OwnerAskCard } from "../../../../conversation"
 import { sendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
+import { AutoPickLine } from "../chrome/auto-pick"
 
 /**
  * The decision an agent in this session asked the person, while the session's
@@ -28,6 +29,7 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
       ask={ask}
       sending={sending?.askId === ask.askId ? sending.label : null}
       failure={failure}
+      aside={<AutoPickLine sessionId={sessionId} askId={ask.askId} />}
       onChoose={(label) => {
         setSending({ askId: ask.askId, label })
         setFailure(null)

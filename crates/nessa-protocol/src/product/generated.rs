@@ -921,12 +921,24 @@ pub struct OwnerAsk {
     pub recommended: u64,
     pub reason: String,
     pub asked_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnerAskChoice {
     pub label: String,
     pub consequence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pros: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cons: Option<Vec<String>>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -934,6 +946,10 @@ pub struct OwnerDecision {
     pub ask: OwnerAsk,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<OwnerDecisionOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_paused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_due_at_ms: Option<u64>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum OwnerDecisionState {
@@ -960,6 +976,8 @@ pub struct OwnerDecisionOutcome {
     pub choice: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
     pub at_ms: u64,
 }
 #[derive(Deserialize, Serialize)]
@@ -1248,6 +1266,27 @@ pub struct ConversationRenameParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationDecisionsParams {
     pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPauseAutoPickParams {
+    pub conversation_id: String,
+    pub ask_id: String,
+    pub paused: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPauseAutoPickResult {
+    pub applied: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionSettingsParams {}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionSettings {
+    pub auto_pick: bool,
+    pub auto_pick_after_seconds: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4894,6 +4933,9 @@ pub mod product_method {
     pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
     pub const CONVERSATION_RENAME: &str = "conversation.rename";
     pub const CONVERSATION_DECISIONS: &str = "conversation.decisions";
+    pub const CONVERSATION_DECISION_SETTINGS: &str = "conversation.decisionSettings";
+    pub const CONVERSATION_PAUSE_AUTO_PICK: &str = "conversation.pauseAutoPick";
+    pub const CONVERSATION_SET_DECISION_SETTINGS: &str = "conversation.setDecisionSettings";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
@@ -5198,7 +5240,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 139
+                items.len() <= 142
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5252,6 +5294,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.unarchive",
     "conversation.rename",
     "conversation.decisions",
+    "conversation.decisionSettings",
+    "conversation.pauseAutoPick",
+    "conversation.setDecisionSettings",
     "conversation.delete",
     "conversation.reorder",
     "artifact.read",
@@ -5486,6 +5531,12 @@ pub enum ProductMethod {
     ConversationRename,
     /// `conversation.decisions`
     ConversationDecisions,
+    /// `conversation.decisionSettings`
+    ConversationDecisionSettings,
+    /// `conversation.pauseAutoPick`
+    ConversationPauseAutoPick,
+    /// `conversation.setDecisionSettings`
+    ConversationSetDecisionSettings,
     /// `conversation.delete`
     ConversationDelete,
     /// `conversation.reorder`
@@ -5741,6 +5792,9 @@ impl ProductMethod {
         ProductMethod::ConversationUnarchive,
         ProductMethod::ConversationRename,
         ProductMethod::ConversationDecisions,
+        ProductMethod::ConversationDecisionSettings,
+        ProductMethod::ConversationPauseAutoPick,
+        ProductMethod::ConversationSetDecisionSettings,
         ProductMethod::ConversationDelete,
         ProductMethod::ConversationReorder,
         ProductMethod::ArtifactRead,
@@ -5887,6 +5941,11 @@ impl ProductMethod {
             "conversation.unarchive" => Some(ProductMethod::ConversationUnarchive),
             "conversation.rename" => Some(ProductMethod::ConversationRename),
             "conversation.decisions" => Some(ProductMethod::ConversationDecisions),
+            "conversation.decisionSettings" => Some(ProductMethod::ConversationDecisionSettings),
+            "conversation.pauseAutoPick" => Some(ProductMethod::ConversationPauseAutoPick),
+            "conversation.setDecisionSettings" => {
+                Some(ProductMethod::ConversationSetDecisionSettings)
+            }
             "conversation.delete" => Some(ProductMethod::ConversationDelete),
             "conversation.reorder" => Some(ProductMethod::ConversationReorder),
             "artifact.read" => Some(ProductMethod::ArtifactRead),
@@ -6038,6 +6097,9 @@ impl ProductMethod {
             ProductMethod::ConversationUnarchive => "conversation.unarchive",
             ProductMethod::ConversationRename => "conversation.rename",
             ProductMethod::ConversationDecisions => "conversation.decisions",
+            ProductMethod::ConversationDecisionSettings => "conversation.decisionSettings",
+            ProductMethod::ConversationPauseAutoPick => "conversation.pauseAutoPick",
+            ProductMethod::ConversationSetDecisionSettings => "conversation.setDecisionSettings",
             ProductMethod::ConversationDelete => "conversation.delete",
             ProductMethod::ConversationReorder => "conversation.reorder",
             ProductMethod::ArtifactRead => "artifact.read",
@@ -6187,6 +6249,9 @@ impl ProductMethod {
             ProductMethod::ConversationUnarchive => Some("conversation.write"),
             ProductMethod::ConversationRename => Some("conversation.write"),
             ProductMethod::ConversationDecisions => Some("conversation.write"),
+            ProductMethod::ConversationDecisionSettings => Some("conversation.write"),
+            ProductMethod::ConversationPauseAutoPick => Some("conversation.write"),
+            ProductMethod::ConversationSetDecisionSettings => Some("conversation.write"),
             ProductMethod::ConversationDelete => Some("conversation.write"),
             ProductMethod::ConversationReorder => Some("conversation.write"),
             ProductMethod::ArtifactRead => Some("conversation.read"),
@@ -6333,6 +6398,9 @@ impl ProductMethod {
             ProductMethod::ConversationUnarchive => ProductLane::Controls,
             ProductMethod::ConversationRename => ProductLane::Controls,
             ProductMethod::ConversationDecisions => ProductLane::Requests,
+            ProductMethod::ConversationDecisionSettings => ProductLane::Requests,
+            ProductMethod::ConversationPauseAutoPick => ProductLane::Requests,
+            ProductMethod::ConversationSetDecisionSettings => ProductLane::Requests,
             ProductMethod::ConversationDelete => ProductLane::Deletions,
             ProductMethod::ConversationReorder => ProductLane::Controls,
             ProductMethod::ArtifactRead => ProductLane::ArtifactReads,
@@ -6546,6 +6614,19 @@ impl ProductMethod {
             ProductMethod::ConversationDecisions => ProductParams::ConversationDecisions(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::ConversationDecisionSettings => {
+                ProductParams::ConversationDecisionSettings(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationPauseAutoPick => ProductParams::ConversationPauseAutoPick(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSetDecisionSettings => {
+                ProductParams::ConversationSetDecisionSettings(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
             ProductMethod::ConversationDelete => ProductParams::ConversationDelete(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6953,6 +7034,9 @@ pub enum ProductParams {
     ConversationUnarchive(ConversationArchiveParams),
     ConversationRename(ConversationRenameParams),
     ConversationDecisions(ConversationDecisionsParams),
+    ConversationDecisionSettings(ConversationDecisionSettingsParams),
+    ConversationPauseAutoPick(ConversationPauseAutoPickParams),
+    ConversationSetDecisionSettings(DecisionSettings),
     ConversationDelete(ConversationDeleteParams),
     ConversationReorder(ConversationReorderParams),
     ArtifactRead(ArtifactReadParams),
@@ -7105,6 +7189,13 @@ impl ProductParams {
             ProductParams::ConversationUnarchive(_) => ProductMethod::ConversationUnarchive,
             ProductParams::ConversationRename(_) => ProductMethod::ConversationRename,
             ProductParams::ConversationDecisions(_) => ProductMethod::ConversationDecisions,
+            ProductParams::ConversationDecisionSettings(_) => {
+                ProductMethod::ConversationDecisionSettings
+            }
+            ProductParams::ConversationPauseAutoPick(_) => ProductMethod::ConversationPauseAutoPick,
+            ProductParams::ConversationSetDecisionSettings(_) => {
+                ProductMethod::ConversationSetDecisionSettings
+            }
             ProductParams::ConversationDelete(_) => ProductMethod::ConversationDelete,
             ProductParams::ConversationReorder(_) => ProductMethod::ConversationReorder,
             ProductParams::ArtifactRead(_) => ProductMethod::ArtifactRead,

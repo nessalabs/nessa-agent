@@ -33,6 +33,7 @@ import {
   type ConversationTool,
   type ConversationView,
   type Channel as WireChannel,
+  type OwnerAsk as WireOwnerAsk,
 } from "@nessa/client"
 import {
   referencedContent,
@@ -64,6 +65,7 @@ import {
   defaultModel,
   type Channel,
   type ModelRef,
+  type OwnerAsk,
   type Section,
   type SessionSummary,
 } from "../../model/workspace-index"
@@ -161,18 +163,33 @@ export function summaryFrom(
     unread: false,
     ...(row.ask
       ? {
-          ask: {
-            askId: row.ask.askId,
-            question: row.ask.question,
-            choices: row.ask.choices.map(({ label, consequence }) => ({
-              label,
-              consequence,
-            })),
-            recommended: row.ask.recommended,
-            reason: row.ask.reason,
-          },
+          ask: askFrom(row.ask),
         }
       : {}),
+  }
+}
+
+/**
+ * An agent's ask in the workspace's words: what the client checked, with each
+ * optional part only when the agent gave it. A list row and a decision read it
+ * the same way.
+ */
+export function askFrom(ask: WireOwnerAsk): OwnerAsk {
+  return {
+    askId: ask.askId,
+    question: ask.question,
+    choices: ask.choices.map(({ label, consequence, undo, effort, pros, cons }) => ({
+      label,
+      consequence,
+      ...(undo === undefined ? {} : { undo }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(pros?.length ? { pros } : {}),
+      ...(cons?.length ? { cons } : {}),
+    })),
+    recommended: ask.recommended,
+    reason: ask.reason,
+    ...(ask.summary === undefined ? {} : { summary: ask.summary }),
+    ...(ask.autoPick === undefined ? {} : { autoPick: ask.autoPick }),
   }
 }
 

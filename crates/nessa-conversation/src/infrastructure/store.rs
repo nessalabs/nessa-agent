@@ -16,6 +16,7 @@ pub use export::{
 
 use super::catalogue_changes::CatalogueChanges;
 
+use crate::application::WaitingAutoPick;
 use crate::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
     CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator,
@@ -45,7 +46,7 @@ use nessa_protocol::conversation::domain::{
     ConversationTitle,
 };
 use nessa_protocol::conversation::view::{
-    OwnerAsk, OwnerDecision, OwnerDecisionOutcome, MAX_DECISIONS_KEPT,
+    DecisionSettings, OwnerAsk, OwnerDecision, OwnerDecisionOutcome, MAX_DECISIONS_KEPT,
 };
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{
@@ -1828,18 +1829,23 @@ impl ConversationSummaries for LocalConversationStore {
         self.run(move |connection| {
             let mut statement = connection
                 .prepare_cached(
-                    "SELECT ask, outcome FROM owner_decisions WHERE conversation_id = ?1
+                    "SELECT ask, outcome, auto_pick_paused_at_ms IS NOT NULL
+                     FROM owner_decisions WHERE conversation_id = ?1
                      ORDER BY rowid DESC LIMIT ?2",
                 )
                 .map_err(failed)?;
             let rows = statement
                 .query_map(params![id.to_string(), MAX_DECISIONS_KEPT as i64], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
                 })
                 .map_err(failed)?;
             let mut decisions = Vec::new();
             for row in rows {
-                let (ask, outcome) = row.map_err(failed)?;
+                let (ask, outcome, paused) = row.map_err(failed)?;
                 // A row that does not read back as what was written is left
                 // out, as a damaged summary's ask is: one bad row never hides
                 // the rest.
@@ -1861,9 +1867,149 @@ impl ConversationSummaries for LocalConversationStore {
                         continue;
                     }
                 };
-                decisions.push(OwnerDecision { ask, outcome });
+                decisions.push(OwnerDecision {
+                    ask,
+                    auto_pick_paused: paused && outcome.is_none(),
+                    outcome,
+                    auto_pick_due_at_ms: None,
+                });
             }
             Ok(decisions)
+        })
+    }
+    fn auto_picks_waiting(&self) -> ConversationFuture<'_, Vec<WaitingAutoPick>> {
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare_cached(
+                    "SELECT d.conversation_id, d.ask, c.organization, c.owner,
+                         s.auto_pick, s.auto_pick_after_seconds
+                     FROM owner_decisions d
+                     JOIN conversations c ON c.id = d.conversation_id
+                     LEFT JOIN decision_settings s
+                         ON s.organization = c.organization AND s.owner = c.owner
+                     WHERE d.outcome IS NULL AND d.auto_pick_paused_at_ms IS NULL",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<bool>>(4)?,
+                        row.get::<_, Option<u32>>(5)?,
+                    ))
+                })
+                .map_err(failed)?;
+            let mut waiting = Vec::new();
+            for row in rows {
+                let (conversation, ask, organization, owner, on, after) = row.map_err(failed)?;
+                // A row that does not read back is left out, as the
+                // decisions read leaves it out: it is never picked.
+                let (Ok(conversation), Ok(organization), Ok(owner)) = (
+                    ConversationId::new(&conversation),
+                    OrganizationId::new(&organization),
+                    PrincipalId::new(&owner),
+                ) else {
+                    unreadable("owner_decisions", &conversation);
+                    continue;
+                };
+                let Some(ask) = serde_json::from_str::<OwnerAsk>(&ask)
+                    .ok()
+                    .filter(|ask| ask.check().is_ok())
+                else {
+                    unreadable("owner_decisions", &conversation.to_string());
+                    continue;
+                };
+                let settings = match (on, after) {
+                    (Some(auto_pick), Some(auto_pick_after_seconds)) => DecisionSettings {
+                        auto_pick,
+                        auto_pick_after_seconds,
+                    },
+                    _ => DecisionSettings::default(),
+                };
+                waiting.push(WaitingAutoPick {
+                    conversation,
+                    organization,
+                    owner,
+                    ask,
+                    settings,
+                });
+            }
+            Ok(waiting)
+        })
+    }
+    fn pause_auto_pick(
+        &self,
+        id: &ConversationId,
+        ask_id: &str,
+        paused_at_ms: Option<u64>,
+    ) -> ConversationFuture<'_, bool> {
+        let (id, ask_id) = (id.to_string(), ask_id.to_owned());
+        self.run(move |connection| {
+            let paused_at_ms = paused_at_ms.map(stored_time).transpose()?;
+            let changed = connection
+                .prepare_cached(
+                    "UPDATE owner_decisions SET auto_pick_paused_at_ms = ?3
+                     WHERE conversation_id = ?1 AND ask_id = ?2 AND outcome IS NULL",
+                )
+                .map_err(failed)?
+                .execute(params![id, ask_id, paused_at_ms])
+                .map_err(failed)?;
+            Ok(changed > 0)
+        })
+    }
+    fn decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, DecisionSettings> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            let kept = connection
+                .prepare_cached(
+                    "SELECT auto_pick, auto_pick_after_seconds FROM decision_settings
+                     WHERE organization = ?1 AND owner = ?2",
+                )
+                .map_err(failed)?
+                .query_row(params![organization, owner], |row| {
+                    Ok(DecisionSettings {
+                        auto_pick: row.get(0)?,
+                        auto_pick_after_seconds: row.get(1)?,
+                    })
+                })
+                .optional()
+                .map_err(failed)?;
+            Ok(kept.unwrap_or_default())
+        })
+    }
+    fn save_decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        settings: DecisionSettings,
+    ) -> ConversationFuture<'_, ()> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            connection
+                .prepare_cached(
+                    "INSERT INTO decision_settings
+                         (organization, owner, auto_pick, auto_pick_after_seconds)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (organization, owner) DO UPDATE SET
+                         auto_pick = excluded.auto_pick,
+                         auto_pick_after_seconds = excluded.auto_pick_after_seconds",
+                )
+                .map_err(failed)?
+                .execute(params![
+                    organization,
+                    owner,
+                    settings.auto_pick,
+                    settings.auto_pick_after_seconds
+                ])
+                .map_err(failed)?;
+            Ok(())
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {

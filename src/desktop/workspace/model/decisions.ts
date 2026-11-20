@@ -14,6 +14,8 @@ export type DecisionOutcome =
       readonly text: string
       /** Index into the ask's choices of the one the message names; absent for the person's own words. */
       readonly choice?: number
+      /** Auto-pick sent the recommended choice because nobody answered in time. */
+      readonly auto?: true
       readonly atMs: number
     }
   | { readonly state: "replaced"; readonly atMs: number }
@@ -22,6 +24,13 @@ export interface Decision {
   readonly ask: OwnerAsk
   readonly askedAtMs: number
   readonly outcome: DecisionOutcome
+  /**
+   * While it waits, auto-pick's place: when the gateway sends the recommended
+   * choice, or that the person paused it. Absent when it will not pick: the
+   * agent did not allow it, or auto-pick is off in Settings.
+   */
+  readonly autoPick?:
+    { readonly state: "due"; readonly atMs: number } | { readonly state: "paused" }
 }
 
 export type DecisionState = DecisionOutcome["state"]
@@ -64,7 +73,7 @@ export function filterFor(decision: Decision | undefined): DecisionsFilter {
   return decision?.outcome.state === "waiting" ? "waiting" : "all"
 }
 
-/** What the person's answer was, in words: the choice's label, or "Your own words". */
+/** The chosen choice's label, or "Your own words". */
 export function answerLabel(decision: Decision): string | undefined {
   const outcome = decision.outcome
   if (outcome.state !== "decided") return undefined
@@ -77,22 +86,37 @@ export function answerLabel(decision: Decision): string | undefined {
 export function decisionLine(decision: Decision, now: number): string {
   const outcome = decision.outcome
   switch (outcome.state) {
-    case "waiting":
+    case "waiting": {
+      const pick = decision.autoPick
+      if (pick?.state === "due")
+        return `Waiting on you · auto-picks in ${left(pick.atMs, now)}`
+      if (pick?.state === "paused") return "Waiting on you · auto-pick paused"
       return `Waiting on you · asked ${ago(decision.askedAtMs, now)}`
+    }
     case "decided":
-      return `${answerLabel(decision)} · ${ago(outcome.atMs, now)}`
+      return `${outcome.auto ? "Auto-picked " : ""}${answerLabel(decision)} · ${ago(outcome.atMs, now)}`
     case "replaced":
       return "Replaced by a newer question"
   }
 }
 
-/** The state as a label: Waiting on you, Decided, Replaced. */
-export function stateLabel(state: DecisionState): string {
-  return state === "waiting"
+/** The state as a label: Waiting on you, Decided, Auto-picked, Replaced. */
+export function stateLabel(outcome: DecisionOutcome): string {
+  return outcome.state === "waiting"
     ? "Waiting on you"
-    : state === "decided"
-      ? "Decided"
+    : outcome.state === "decided"
+      ? outcome.auto
+        ? "Auto-picked"
+        : "Decided"
       : "Replaced"
+}
+
+/** Time until `atMs`, the way a countdown says it: 4:05, 59:59, 2h 5m; 0:00 once it has passed. */
+export function left(atMs: number, now: number): string {
+  const seconds = Math.ceil(Math.max(0, atMs - now) / 1000)
+  if (seconds >= 3600)
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
 }
 
 /** How long ago, the way a list says it: just now, 4m ago, 2h ago, 3d ago. */

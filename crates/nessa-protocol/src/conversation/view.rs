@@ -813,6 +813,10 @@ pub const MAX_ASK_LINE_BYTES: usize = 200;
 /// Fewest and most choices an ask offers.
 pub const MIN_ASK_CHOICES: usize = 2;
 pub const MAX_ASK_CHOICES: usize = 4;
+/// Most pros, and most cons, a choice lists.
+pub const MAX_ASK_DETAILS: usize = 2;
+/// Most bytes of one pro or con.
+pub const MAX_ASK_DETAIL_BYTES: usize = 120;
 
 /// A question an agent asked the person who owns its conversation, with
 /// `ask_owner`: one short question, two to four choices that each say what
@@ -835,6 +839,74 @@ pub struct OwnerAsk {
     pub reason: String,
     /// When it was asked, in Unix milliseconds.
     pub asked_at_ms: u64,
+    /// One line under the question with what the card is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Whether the recommended choice may be picked for the person when
+    /// they do not answer in time. Absent is [`AutoPick::Never`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick: Option<AutoPick>,
+}
+
+/// Whether an ask may be answered with its recommended choice when nobody
+/// answers in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoPick {
+    /// It may, when the recommended choice is easy to undo.
+    Allowed,
+    /// It waits for the person.
+    Never,
+}
+
+impl AutoPick {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Never => "never",
+        }
+    }
+}
+
+/// How hard a choice is to take back once made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AskUndo {
+    Easy,
+    Costly,
+    No,
+}
+
+impl AskUndo {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Costly => "costly",
+            Self::No => "no",
+        }
+    }
+}
+
+/// How much work a choice is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AskEffort {
+    Small,
+    Medium,
+    Large,
+}
+
+impl AskEffort {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+        }
+    }
 }
 
 /// One choice an [`OwnerAsk`] offers.
@@ -844,6 +916,18 @@ pub struct OwnerAskChoice {
     pub label: String,
     /// What happens if the person picks it, in one line.
     pub consequence: String,
+    /// How hard it is to take back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<AskUndo>,
+    /// How much work it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<AskEffort>,
+    /// At most [`MAX_ASK_DETAILS`] lines for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pros: Vec<String>,
+    /// At most [`MAX_ASK_DETAILS`] lines against it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cons: Vec<String>,
 }
 
 /// Why an ask was refused: every part has to fit on a card and in a notice.
@@ -865,6 +949,12 @@ pub enum OwnerAskRefusal {
     /// Its key is not 32 lowercase hex digits: a damaged row, never an
     /// agent's mistake.
     Key,
+    /// The summary, or a choice's pros or cons, is empty, too long, or
+    /// more than [`MAX_ASK_DETAILS`] of them.
+    Details,
+    /// It allows an auto-pick, but the recommended choice is not marked easy
+    /// to undo.
+    AutoPick,
 }
 
 impl OwnerAskRefusal {
@@ -877,6 +967,8 @@ impl OwnerAskRefusal {
             Self::Recommended => "ask_recommended",
             Self::NotOneLine => "ask_not_one_line",
             Self::Key => "invalid_request",
+            Self::Details => "ask_details",
+            Self::AutoPick => "ask_auto_pick",
         }
     }
 }
@@ -894,9 +986,11 @@ impl OwnerAsk {
             !text.is_empty() && text.len() <= bytes
         };
         let mut parts = vec![self.question.as_str(), self.reason.as_str()];
+        parts.extend(self.summary.as_deref());
         for choice in &self.choices {
             parts.push(&choice.label);
             parts.push(&choice.consequence);
+            parts.extend(choice.pros.iter().chain(&choice.cons).map(String::as_str));
         }
         if !parts.into_iter().all(one_line) {
             return Err(OwnerAskRefusal::NotOneLine);
@@ -926,6 +1020,25 @@ impl OwnerAsk {
         if usize::from(self.recommended) >= self.choices.len() {
             return Err(OwnerAskRefusal::Recommended);
         }
+        let details = |lines: &[String]| {
+            lines.len() <= MAX_ASK_DETAILS
+                && lines.iter().all(|text| line(text, MAX_ASK_DETAIL_BYTES))
+        };
+        let summary = self
+            .summary
+            .as_deref()
+            .is_none_or(|text| line(text, MAX_ASK_LINE_BYTES));
+        if !summary
+            || !self
+                .choices
+                .iter()
+                .all(|choice| details(&choice.pros) && details(&choice.cons))
+        {
+            return Err(OwnerAskRefusal::Details);
+        }
+        if self.auto_pick == Some(AutoPick::Allowed) && !self.recommended_is_easy_to_undo() {
+            return Err(OwnerAskRefusal::AutoPick);
+        }
         let key = self.ask_id.len() == 32
             && self
                 .ask_id
@@ -936,7 +1049,56 @@ impl OwnerAsk {
         }
         Ok(())
     }
+
+    /// Whether its recommended choice may be picked for the person when
+    /// nobody answers in time: the agent allowed it, and that choice is easy
+    /// to undo.
+    pub fn auto_pick_allowed(&self) -> bool {
+        self.auto_pick == Some(AutoPick::Allowed) && self.recommended_is_easy_to_undo()
+    }
+
+    fn recommended_is_easy_to_undo(&self) -> bool {
+        self.choices
+            .get(usize::from(self.recommended))
+            .is_some_and(|choice| choice.undo == Some(AskUndo::Easy))
+    }
 }
+/// Shortest wait before an ask's recommended choice is picked for its owner.
+pub const MIN_AUTO_PICK_SECONDS: u32 = 60;
+/// Longest wait: a day.
+pub const MAX_AUTO_PICK_SECONDS: u32 = 24 * 60 * 60;
+/// The wait until the owner sets one: five minutes.
+pub const DEFAULT_AUTO_PICK_SECONDS: u32 = 5 * 60;
+
+/// How an owner's decisions behave, kept for them on the gateway: whether an
+/// ask the agent allowed it on is answered with its recommended choice after
+/// `auto_pick_after_seconds` with no answer
+/// ([`OwnerAsk::auto_pick_allowed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecisionSettings {
+    pub auto_pick: bool,
+    pub auto_pick_after_seconds: u32,
+}
+
+impl Default for DecisionSettings {
+    /// On, after five minutes.
+    fn default() -> Self {
+        Self {
+            auto_pick: true,
+            auto_pick_after_seconds: DEFAULT_AUTO_PICK_SECONDS,
+        }
+    }
+}
+
+impl DecisionSettings {
+    /// These settings, when the wait is one they allow.
+    pub fn checked(self) -> Option<Self> {
+        (MIN_AUTO_PICK_SECONDS..=MAX_AUTO_PICK_SECONDS)
+            .contains(&self.auto_pick_after_seconds)
+            .then_some(self)
+    }
+}
+
 /// Most bytes of an answer a decision keeps: the person's message, cut on a
 /// character boundary. The whole message is in the conversation.
 pub const MAX_DECISION_ANSWER_BYTES: usize = 1024;
@@ -959,6 +1121,30 @@ pub struct OwnerDecision {
     pub ask: OwnerAsk,
     /// `None` while it waits.
     pub outcome: Option<OwnerDecisionOutcome>,
+    /// While it waits: the owner paused its auto-pick.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_pick_paused: bool,
+    /// While it waits: when auto-pick sends its recommended choice, in Unix
+    /// milliseconds. `None` when it will not: the agent did not allow it,
+    /// the owner turned auto-pick off, or paused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_due_at_ms: Option<u64>,
+}
+
+impl OwnerDecision {
+    /// When auto-pick answers this decision under `settings`: still waiting,
+    /// allowed by its agent, not paused, and auto-pick on.
+    pub fn auto_pick_due(&self, settings: DecisionSettings) -> Option<u64> {
+        (self.outcome.is_none()
+            && !self.auto_pick_paused
+            && settings.auto_pick
+            && self.ask.auto_pick_allowed())
+        .then(|| {
+            self.ask
+                .asked_at_ms
+                .saturating_add(u64::from(settings.auto_pick_after_seconds) * 1000)
+        })
+    }
 }
 
 /// How an ask stopped waiting.
@@ -978,6 +1164,10 @@ pub enum OwnerDecisionOutcome {
         /// `". "` and a note.
         choice: Option<u8>,
         at_ms: u64,
+        /// Sent for the owner with the recommended choice when nobody
+        /// answered in time ([`AUTO_PICK_SURFACE`]), not typed or tapped.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto: bool,
     },
     /// A newer ask, `by`, took its place before anyone answered.
     Replaced { by: String, at_ms: u64 },
@@ -1003,8 +1193,41 @@ impl OwnerDecisionOutcome {
             text: said[..end].to_owned(),
             choice: choice.and_then(|index| u8::try_from(index).ok()),
             at_ms,
+            auto: false,
         }
     }
+}
+
+/// The surface a message sent for the owner by auto-pick is written from:
+/// what tells it apart from one they typed or tapped, in the turn's origin
+/// and in the decision it settles.
+pub const AUTO_PICK_SURFACE: &str = "auto-pick";
+
+impl OwnerAsk {
+    /// The message auto-pick sends for the owner after `after_seconds` with no
+    /// answer: the recommended choice's label, then a note the agent and the
+    /// person read, so it is answered as that choice
+    /// ([`OwnerDecisionOutcome::answered`]) and still says how it was made.
+    pub fn auto_pick_text(&self, after_seconds: u32) -> Option<String> {
+        let choice = self.choices.get(usize::from(self.recommended))?;
+        Some(format!(
+            "{}. Picked for you: no answer in {}.",
+            choice.label.trim(),
+            wait_words(after_seconds)
+        ))
+    }
+}
+
+/// A wait in words: "5 minutes", "1 hour", "90 seconds".
+pub fn wait_words(seconds: u32) -> String {
+    let (amount, one, many) = if seconds.is_multiple_of(3600) {
+        (seconds / 3600, "hour", "hours")
+    } else if seconds.is_multiple_of(60) {
+        (seconds / 60, "minute", "minutes")
+    } else {
+        (seconds, "second", "seconds")
+    };
+    format!("{amount} {}", if amount == 1 { one } else { many })
 }
 
 #[derive(Clone, Debug, Serialize)]

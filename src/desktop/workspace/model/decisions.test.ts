@@ -3,6 +3,8 @@ import {
   ago,
   answerLabel,
   decisionLine,
+  left,
+  stateLabel,
   decisionsFiltered,
   decisionsInOrder,
   filterFor,
@@ -77,6 +79,36 @@ describe("decisions", () => {
     expect(decisionLine(waiting, now)).toBe("Waiting on you · asked 10m ago")
     expect(decisionLine(decided, now)).toBe("Wait · 4m ago")
     expect(decisionLine(replaced, now)).toBe("Replaced by a newer question")
+  })
+
+  it("say when auto-pick will pick, that it is paused, or that it picked", () => {
+    expect(
+      decisionLine({ ...waiting, autoPick: { state: "due", atMs: now + 65_000 } }, now),
+    ).toBe("Waiting on you · auto-picks in 1:05")
+    expect(decisionLine({ ...waiting, autoPick: { state: "paused" } }, now)).toBe(
+      "Waiting on you · auto-pick paused",
+    )
+    const picked = {
+      ...decided,
+      outcome: {
+        state: "decided",
+        text: "Wait.",
+        choice: 1,
+        auto: true,
+        atMs: now - minute,
+      },
+    } as const
+    expect(decisionLine(picked, now)).toBe("Auto-picked Wait · 1m ago")
+    expect(stateLabel(picked.outcome)).toBe("Auto-picked")
+    expect(stateLabel(decided.outcome)).toBe("Decided")
+  })
+
+  it("count down in minutes and seconds, then hours, and stop at zero", () => {
+    expect(left(now + 4 * minute + 5_000, now)).toBe("4:05")
+    expect(left(now + 59 * minute + 59_000, now)).toBe("59:59")
+    expect(left(now + 125 * minute, now)).toBe("2h 5m")
+    expect(left(now + 1, now)).toBe("0:01")
+    expect(left(now - minute, now)).toBe("0:00")
   })
 
   it("say how long ago in the units a list uses", () => {

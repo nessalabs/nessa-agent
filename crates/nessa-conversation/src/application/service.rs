@@ -1,4 +1,8 @@
 mod agent_tools;
+mod auto_picks;
+mod decision_traces;
+use auto_picks::auto_pick_action;
+pub use decision_traces::DECISION_TARGET;
 mod background_tasks;
 mod channels;
 mod creation;
@@ -78,7 +82,7 @@ use nessa_protocol::conversation::view::{
     ConversationQuestionEntry, ConversationReorderOutcome, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
     ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
-    SubmissionReceipt,
+    SubmissionReceipt, AUTO_PICK_SURFACE,
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
@@ -1005,6 +1009,14 @@ struct Inner {
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
     schedule_wakeup: Arc<Notify>,
+    /// Wakes auto-pick when an ask is kept, paused or resumed, or an owner's
+    /// decision settings change (`auto_picks.rs`).
+    auto_pick_wakeup: Notify,
+    /// Asks auto-pick could not send, with when to try again and how many
+    /// tries failed: kept here only, so a restart tries each at once.
+    auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
+    /// One open `decision` span per waiting ask (`decision_traces.rs`).
+    decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
     /// same debt when it accepted the write. This map is the copy written
     /// when that write failed, so this process still retries it. A crash
@@ -1550,6 +1562,9 @@ impl ConversationService {
                 credential_devices: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
+                auto_pick_wakeup: Notify::new(),
+                auto_pick_failures: std::sync::Mutex::default(),
+                decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
@@ -4636,6 +4651,12 @@ impl ConversationService {
             } else {
                 None
             };
+            // Auto-pick answers only the ask it was sent for: one that a newer
+            // ask replaced as it was sent stays as it is, and the newer one
+            // waits for the owner.
+            let auto = caller.surface_id == AUTO_PICK_SURFACE;
+            let answered =
+                answered.filter(|answered| !auto || auto_pick_action(answered) == caller.action_id);
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -4718,7 +4739,7 @@ impl ConversationService {
             // the list never shows the message and the question still up.
             if !known && !matches!(writer, Writer::Internal) {
                 service
-                    .summarize_message(&id, &message, answered.as_deref())
+                    .summarize_message(&id, &message, answered.as_deref(), auto)
                     .await;
             }
             match delivery {
@@ -5078,6 +5099,7 @@ impl ConversationService {
         id: &ConversationId,
         message: &UserMessage,
         answered: Option<&str>,
+        auto: bool,
     ) {
         let at_ms = self.inner.clock.unix_milliseconds();
         let first_file = message
@@ -5088,7 +5110,7 @@ impl ConversationService {
         self.change_summary(id, |previous| {
             Some(
                 ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
-                    .answering(answered, message.text_str()),
+                    .answering(answered, message.text_str(), auto),
             )
         })
         .await;
@@ -5146,6 +5168,7 @@ impl ConversationService {
         let Some(next) = change(previous.as_ref()) else {
             return;
         };
+        let settled = next.settled().cloned();
         if let Err(error) = self.inner.summaries.record(id, next).await {
             tracing::warn!(
                 conversation_id = %id,
@@ -5153,6 +5176,9 @@ impl ConversationService {
                 "conversation summary could not be written; the list shows the last one"
             );
             return;
+        }
+        if let Some(settled) = settled {
+            self.inner.decision_traces.settled(id, &settled);
         }
         // A view shows the summary's title.
         self.inner.live_changes.publish(id);

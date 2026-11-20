@@ -7,10 +7,11 @@
 import type { ConversationApi, OwnerDecision } from "@nessa/client"
 import type { DecisionSource } from "../../application/ports"
 import type { Decision, DecisionOutcome } from "../../model/decisions"
+import { askFrom } from "./gateway-views"
 
 /** What reading decisions asks of the window's gateway client. */
 export interface DecisionsClient {
-  readonly conversation: Pick<ConversationApi, "decisions">
+  readonly conversation: Pick<ConversationApi, "decisions" | "pauseAutoPick">
 }
 
 export function decisionsGateway({
@@ -23,20 +24,28 @@ export function decisionsGateway({
       const { decisions } = await (await connected()).conversation.decisions(sessionId)
       return decisions.map(decisionFrom)
     },
+    async pauseAutoPick(sessionId, askId, paused) {
+      return (await connected()).conversation.pauseAutoPick(sessionId, askId, paused)
+    },
   }
 }
 
-export function decisionFrom({ ask, outcome }: OwnerDecision): Decision {
+export function decisionFrom({
+  ask,
+  outcome,
+  autoPickPaused,
+  autoPickDueAtMs,
+}: OwnerDecision): Decision {
+  const autoPick: Decision["autoPick"] = autoPickPaused
+    ? { state: "paused" }
+    : autoPickDueAtMs === undefined
+      ? undefined
+      : { state: "due", atMs: autoPickDueAtMs }
   return {
-    ask: {
-      askId: ask.askId,
-      question: ask.question,
-      choices: ask.choices.map(({ label, consequence }) => ({ label, consequence })),
-      recommended: ask.recommended,
-      reason: ask.reason,
-    },
+    ask: askFrom(ask),
     askedAtMs: ask.askedAtMs,
     outcome: outcomeFrom(outcome),
+    ...(autoPick ? { autoPick } : {}),
   }
 }
 
@@ -47,6 +56,7 @@ function outcomeFrom(outcome: OwnerDecision["outcome"]): DecisionOutcome {
     state: "decided",
     text: outcome.text ?? "",
     ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+    ...(outcome.auto ? { auto: true as const } : {}),
     atMs: outcome.atMs,
   }
 }

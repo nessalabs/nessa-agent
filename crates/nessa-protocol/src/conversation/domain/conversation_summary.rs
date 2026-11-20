@@ -207,12 +207,16 @@ impl ConversationSummary {
     /// The same summary once a message saying `text` that answers ask
     /// `ask_id` is recorded on it: that ask goes, settled as answered by the
     /// message, and one asked since it stays
-    /// (`an_ask_goes_only_with_the_message_that_answers_it`).
+    /// (`an_ask_goes_only_with_the_message_that_answers_it`). `auto` when
+    /// auto-pick sent it for the owner.
     #[must_use]
-    pub fn answering(mut self, ask_id: Option<&str>, text: &str) -> Self {
+    pub fn answering(mut self, ask_id: Option<&str>, text: &str, auto: bool) -> Self {
         if ask_id.is_some() && self.ask.as_ref().map(|ask| ask.ask_id.as_str()) == ask_id {
             if let Some(ask) = self.ask.take() {
-                let outcome = OwnerDecisionOutcome::answered(&ask, text, self.updated_at_ms);
+                let mut outcome = OwnerDecisionOutcome::answered(&ask, text, self.updated_at_ms);
+                if let OwnerDecisionOutcome::Decided { auto: picked, .. } = &mut outcome {
+                    *picked = auto;
+                }
                 self.settled = Some(SettledAsk { ask, outcome });
             }
         }
