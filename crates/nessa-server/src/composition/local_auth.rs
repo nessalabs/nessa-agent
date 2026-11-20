@@ -543,6 +543,7 @@ pub(super) async fn product_state(
                 built
                     .service
                     .bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
+                built.service.bind_credential_devices(store.clone());
                 (
                     Some((
                         built.service,

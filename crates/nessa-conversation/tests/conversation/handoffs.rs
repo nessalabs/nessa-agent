@@ -1851,3 +1851,124 @@ async fn write_deferred_turn(storage: &RecordStorage, id: &str) -> Result<(), St
         .map_err(|error| error.to_string())?;
     Ok(())
 }
+
+/// What the test registry says each credential was issued to.
+struct Devices;
+impl nessa_auth::application::pairing::CredentialDeviceSource for Devices {
+    fn credential_device<'a>(
+        &'a self,
+        credential: &'a nessa_auth::domain::CredentialId,
+    ) -> nessa_auth::application::ports::PortFuture<
+        'a,
+        Option<nessa_auth::application::pairing::CredentialDevice>,
+    > {
+        let device = (credential.as_str() == "panel")
+            .then_some(nessa_auth::application::pairing::CredentialDevice::Phone);
+        Box::pin(async move { Ok(device) })
+    }
+}
+
+/// A continuation the gateway sent after a usage limit reads as continued,
+/// and leads back to the turn the person sent, from the device they sent it
+/// from. A turn admitted for an external event reads as that event, though
+/// both were submitted as the person.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_continuation_reads_back_to_the_persons_turn_and_its_device() {
+    use crate::application::{ChainEnd, Device, TurnOrigin, EVENT_SURFACE_PREFIX};
+    let fixture = Fixture::new();
+    fixture.service.bind_credential_devices(Arc::new(Devices));
+    let id = fixture.create().await;
+    let schedule = fixture.schedules(true).await;
+    fixture.blocked(&id, "typed-turn", AgentId::Claude).await;
+    fixture
+        .service
+        .reconcile_usage_limit_schedule(&id)
+        .await
+        .unwrap();
+    let row = schedule.open(&id.to_string()).await.unwrap().unwrap();
+    assert_eq!(row.causal_execution, "typed-turn");
+    schedule.claim_due(row.due_at_ms, 8).await.unwrap();
+    assert!(schedule
+        .begin_submit(&row.execution_id, row.due_at_ms)
+        .await
+        .unwrap());
+    schedule.release_submit(&row.execution_id).await.unwrap();
+    let connection =
+        Connection::open(fixture._directory.path().join("gateway/scheduled.sqlite3")).unwrap();
+    let now = i64::try_from(TestClock.unix_milliseconds()).unwrap();
+    connection
+        .execute(
+            "UPDATE message SET due_at_ms=?1, fence_until_ms=?1-1 WHERE execution_id=?2",
+            nessa_local_database::rusqlite::params![now, row.execution_id],
+        )
+        .unwrap();
+    tokio::time::timeout(BOUND, fixture.service.deliver_due_scheduled())
+        .await
+        .unwrap();
+    assert_eq!(
+        schedule.status(&row.execution_id).await.unwrap().as_deref(),
+        Some("delivered")
+    );
+
+    let chain = fixture
+        .service
+        .read_turn_chain(&caller("read"), id.clone(), row.execution_id.clone(), 0)
+        .await
+        .unwrap();
+    assert_eq!(chain.end, ChainEnd::Start);
+    let origins: Vec<_> = chain.turns.iter().map(|turn| turn.origin.clone()).collect();
+    assert_eq!(
+        origins,
+        [
+            TurnOrigin::Continued {
+                execution: "typed-turn".into()
+            },
+            TurnOrigin::Person {
+                device: Device::Phone
+            },
+        ]
+    );
+    assert_eq!(chain.turns[1].said, "blocked typed-turn");
+
+    // The gateway admits an event with its own surface; no credential has it.
+    let event = ConversationCaller {
+        surface_id: format!("{EVENT_SURFACE_PREFIX}build-hook"),
+        ..caller("event-turn")
+    };
+    fixture
+        .service
+        .submit(
+            id.clone(),
+            event,
+            "event-turn".into(),
+            SubmittedMessage {
+                uploads: Vec::new(),
+                text: "build failed".into(),
+                ..Default::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let chain = tokio::time::timeout(BOUND, async {
+        loop {
+            if let Ok(chain) = fixture
+                .service
+                .read_turn_chain(&caller("read"), id.clone(), "event-turn".into(), 0)
+                .await
+            {
+                return chain;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    })
+    .await
+    .expect("the event turn is saved");
+    assert_eq!(
+        chain.turns[0].origin,
+        TurnOrigin::Event {
+            source: "build-hook".into()
+        }
+    );
+    fixture.retire().await;
+}

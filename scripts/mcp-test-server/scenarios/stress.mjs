@@ -887,6 +887,8 @@ export function stressScenario({
             chunks: [
               SAYS.origin,
               "${chain.startedBy}",
+              " on ",
+              "${chain.turns.0.device}",
               ": ",
               "${chain.turns.0.said}",
               SAYS.earlier,

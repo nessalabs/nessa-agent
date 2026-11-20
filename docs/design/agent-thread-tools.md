@@ -37,9 +37,25 @@ ends, and one not open stays parked until a new message opens it.
 from and follows it back. A message from an agent names the turn it was sent
 from (`Agent(source conversation, source execution)` below), and a resumed turn
 names the turn it picks up; `read_turn` follows those links, at most 8, until
-an input nobody relayed. Each turn in the answer says its `origin` (`person`,
-`grant`, `agent`, `resumed`, `app`, `internal`) and what it `said`, exactly as
-saved; `startedBy` names the origin the chain starts at. It keeps no copy: the
+an input nobody relayed. A usage-limit continuation the gateway sent is
+followed back the same way, to the turn it continues. Each turn in the answer
+says its `origin` (`person`, `grant`, `agent`, `resumed`, `continued`, `event`,
+`app`, `internal`) and what it `said`, exactly as saved; `startedBy` names the
+origin the chain starts at.
+
+The gateway submits continuations and external events with the person as
+sender, so `read_turn` tells them apart from typed turns by facts each kept by
+one owner and never changed after admission:
+
+| Origin | Saved fact | Owner |
+| --- | --- | --- |
+| `continued` | the turn's execution id is a scheduled row's, which names the turn it continues | scheduled-message store (`continued_from`) |
+| `event` | the turn's surface is `event:<source>` and no credential has that id | event admission (`EVENT_SURFACE_PREFIX`) |
+| `person` / `grant` `device` | the turn's surface is the credential it was sent with; how that credential was issued says what it was issued to: `phone` (owner phone pairing), `computer` (a bearer token on the gateway's computer: the desktop app or command line), `pairedDevice`, `peer`, or `unknown` | credential registry (`CredentialDeviceSource`) |
+
+A credential's proof never changes once issued, so a revoked phone still reads
+as the phone its old turns came from. There is no device name: pairing keeps
+none. It keeps no copy: the
 SDK records are written once at admission and never changed, so the words the
 chain ends at are the owner's own. With `earlier` (at most 3) a chain that
 reaches the person also brings their messages before it in that thread, and
@@ -57,7 +73,7 @@ sequenceDiagram
     A->>G: send_message(child, "please close")
     G->>B: Agent-authored input {A, turn 7}: "please close"
     B->>G: read_turn(A, turn 7)
-    G-->>B: [{origin: person, said: "close it when done"}], startedBy: person
+    G-->>B: [{origin: person, device: phone, said: "close it when done"}], startedBy: person
     A->>G: close_thread {threadId: child}
     G-->>A: closing (A created it)
 ```

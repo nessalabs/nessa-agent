@@ -357,7 +357,8 @@ pub use service::{
     MAX_RESOURCE_META_BYTES,
 };
 pub use service::{
-    ChainEnd, TurnChain, TurnOrigin, TurnReading, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL,
+    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS,
+    MAX_TURN_HOPS, READ_TURN_TOOL,
 };
 pub use service::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
