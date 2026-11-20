@@ -194,10 +194,12 @@ A reviewer is the second pair of eyes, not the first.
 - **Stop rule.** The loop ends when a full round reports nothing at any
   priority. Each round gets a fresh reviewer and the current dispositions.
 - **Bounded rounds.** A code review runs at most three rounds. Findings still
-  open after the third mean something is structurally wrong: stop patching,
-  write down what is mostly producing them (an ownership in the wrong place, a
-  missing type, one rule in two places, a design that fights the codebase),
-  make that structural change, and review again — at most two more rounds.
+  open after the third mean something is structurally wrong: stop patching.
+  A separate agent, given every finding so far (fixed and open) and the code
+  but not the patcher's view of it, writes down what is mostly producing them
+  (an ownership in the wrong place, a missing type, one rule in two places, a
+  design that fights the codebase) and the simpler design that removes them.
+  Make that structural change, and review again — at most two more rounds.
   Still open after those, the work stops: push what is done to its branch —
   never `main` — and hand it off in a draft pull request and on its issue —
   what is done, what is
