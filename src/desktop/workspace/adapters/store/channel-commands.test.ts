@@ -28,6 +28,7 @@ import {
   loadWorkspace,
   openChannelCreation,
   removeChannelResource,
+  setChannelCoordinator,
   setChannelPlacement,
   showContent,
   watchChannelDrops,
@@ -523,6 +524,70 @@ describe("moving", () => {
           placement: { coordinatorPlacement: "boat", threadPlacement: "boat" },
         }),
       ),
+    ).resolves.toBe(false)
+  })
+})
+
+describe("switching the coordinator", () => {
+  async function made(coordinator = true) {
+    // The source lists a switched channel as switched, as the gateway's list does.
+    const kept = channels()
+    const source: ChannelSource = {
+      ...kept,
+      setCoordinator: async (channelId, on, requestId) => {
+        const changed = await kept.setCoordinator!(channelId, on, requestId)
+        const at = listed.findIndex((each) => each.id === changed.id)
+        if (at >= 0) {
+          listed[at] = { ...listed[at]!, ...changed }
+        }
+        return changed
+      },
+    }
+    const { store } = await storeWith({ channels: source })
+    store.dispatch(openChannelCreation())
+    store.dispatch(draftChannel({ change: { name: "switches", coordinator } }))
+    const id = await store.dispatch(createChannel())
+    if (!id) throw new Error("no channel made")
+    await settle()
+    const read = () => store.getState().workspace.channels.find((each) => each.id === id)
+    return { store, id, read }
+  }
+
+  it("off keeps the main chat, and on again is the same one", async () => {
+    const { store, id, read } = await made()
+    const first = read()?.coordinatorConversationId
+    expect(first).toBeDefined()
+    expect(read()?.coordinatorOn).toBe(true)
+    await expect(
+      store.dispatch(setChannelCoordinator({ channelId: id, on: false })),
+    ).resolves.toBe(true)
+    expect(read()?.coordinatorOn).toBe(false)
+    expect(read()?.coordinatorConversationId).toBe(first)
+    // The index read again after the switch agrees.
+    await settle()
+    expect(read()?.coordinatorOn).toBe(false)
+    expect(read()?.coordinatorConversationId).toBe(first)
+    await store.dispatch(setChannelCoordinator({ channelId: id, on: true }))
+    await settle()
+    expect(read()?.coordinatorOn).toBe(true)
+    expect(read()?.coordinatorConversationId).toBe(first)
+  })
+
+  it("a channel made without one still names the main chat it turns on", async () => {
+    const { store, id, read } = await made(false)
+    expect(read()?.coordinatorOn).toBe(false)
+    const main = read()?.coordinatorConversationId
+    expect(main).toBeDefined()
+    await store.dispatch(setChannelCoordinator({ channelId: id, on: true }))
+    await settle()
+    expect(read()?.coordinatorOn).toBe(true)
+    expect(read()?.coordinatorConversationId).toBe(main)
+  })
+
+  it("says it cannot where the window has no way to switch it", async () => {
+    const { store } = await storeWith()
+    await expect(
+      store.dispatch(setChannelCoordinator({ channelId: "any", on: false })),
     ).resolves.toBe(false)
   })
 })

@@ -27,7 +27,25 @@ impl StyleRole {
     pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|role| role.as_str() == value)
     }
+    /// What an agent in this role is told its job is, whatever its style;
+    /// a thread is an ordinary conversation and is told none.
+    pub const fn job(self) -> Option<&'static str> {
+        match self {
+            Self::Coordinator => Some(COORDINATOR_JOB),
+            Self::Thread => None,
+        }
+    }
 }
+
+/// The coordinator's job. Kept apart from its style: turning the style off
+/// leaves the job.
+const COORDINATOR_JOB: &str = "You are this channel's coordinator. You run the work; you do not do it yourself.\n\
+- For each piece of work, start a thread with create_thread, and tell the person which thread you started.\n\
+- Check on a thread with subscribe only when coordinating needs it, and tell the person in a few lines how things stand.\n\
+- When the person asks something a thread owns, pass it to that thread with send_message on their behalf, and say where you asked, for example \"I've asked the Safari thread for you.\" Do not wait for its answer or repeat it here.\n\
+- Do not copy what threads say into this chat. Keep to the big picture.\n\
+- Stop a thread with stop_thread once its work is done.\n\
+- When there is nothing important to say, say nothing.";
 
 /// Rules every agent follows unless the person chose otherwise.
 const PLAIN: &str = "How to write to the person:\n\

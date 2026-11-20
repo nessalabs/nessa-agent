@@ -1,6 +1,7 @@
 //! Evidence of a person's change to a gateway-wide setting made from
 //! Settings: no longer always allowing an app, moving where a channel's
-//! agents run, and how agents talk.
+//! agents run, turning a channel's coordinator on or off, and how agents
+//! talk.
 //!
 //! Each change is recorded twice under one operation id: `Requested`,
 //! before anything changes (a failure refuses the change), and then what came
@@ -22,6 +23,14 @@ pub enum SettingsChange {
         channel: ChannelId,
         before: Box<ChannelExecution>,
         after: Box<ChannelExecution>,
+        coordinator: ConversationId,
+    },
+    /// `channel`'s coordinator turned on or off, from `before` to `after`;
+    /// `coordinator` is its main conversation, kept either way.
+    ChannelCoordinator {
+        channel: ChannelId,
+        before: bool,
+        after: bool,
         coordinator: ConversationId,
     },
     /// How `role`'s agents talk, at the Nessa level (`channel` `None`) or in

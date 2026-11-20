@@ -206,6 +206,7 @@ fn request(folder: Option<&str>) -> ChannelRequest {
         },
         notes: ChannelNotes::new("Check every export.").unwrap(),
         resources: ChannelResources::new(vec![path(&absolute("/work/brand-kit"))]).unwrap(),
+        coordinator_on: true,
     }
 }
 
@@ -1225,6 +1226,160 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
 }
 
 #[tokio::test]
+async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
+    use crate::application::{ChannelError, SettingsChange, SettingsOutcome};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    assert!(made.coordinator_on());
+    // The default channel has no coordinator to switch, and neither another
+    // person nor an unknown id learns whether a channel exists.
+    for (who, id) in [
+        ("person", ChannelId::default_channel()),
+        ("other", made.id().clone()),
+        ("person", ChannelId::from_random([9; 10])),
+    ] {
+        assert_eq!(
+            fixture
+                .service
+                .set_channel_coordinator(&caller(who, "switch"), &id, false)
+                .await,
+            Err(ChannelError::Forbidden),
+            "{who} switched {id:?}"
+        );
+    }
+    // Asking for what it already is changes nothing and records nothing.
+    let same = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert_eq!(same, made);
+    assert!(fixture.settings.records.lock().unwrap().is_empty());
+    let off = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), false)
+        .await
+        .unwrap();
+    assert!(!off.coordinator_on());
+    assert_eq!(off.coordinator_id(), made.coordinator_id());
+    assert_eq!(off.execution(), made.execution());
+    let on = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert!(on.coordinator_on());
+    // On again is the same chat: nothing about it was retired.
+    assert_eq!(on.coordinator_id(), made.coordinator_id());
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    assert!(listed
+        .channels
+        .iter()
+        .any(|each| each.id() == made.id() && each.coordinator_on()));
+    let records = fixture.settings.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0].caller, caller("person", "switch"));
+    assert_eq!(
+        records[0].change,
+        SettingsChange::ChannelCoordinator {
+            channel: made.id().clone(),
+            before: true,
+            after: false,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        records[2].change,
+        SettingsChange::ChannelCoordinator {
+            channel: made.id().clone(),
+            before: false,
+            after: true,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        fixture.settings.outcomes()[..2],
+        [
+            SettingsOutcome::Requested,
+            SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(made.coordinator_id()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_channel_made_without_a_coordinator_keeps_one_ready_to_turn_on() {
+    let fixture = Fixture::new();
+    let made = fixture
+        .service
+        .create_channel(
+            caller("person", "quiet"),
+            "quiet".into(),
+            ChannelRequest {
+                coordinator_on: false,
+                ..request(None)
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!made.coordinator_on());
+    // A retry answers the same channel, still off.
+    let again = fixture
+        .service
+        .create_channel(
+            caller("person", "quiet"),
+            "quiet".into(),
+            ChannelRequest {
+                coordinator_on: false,
+                ..request(None)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(again, made);
+    let on = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert!(on.coordinator_on());
+    assert_eq!(on.coordinator_id(), made.coordinator_id());
+}
+
+#[tokio::test]
+async fn a_switch_that_cannot_be_recorded_is_refused_and_changes_nothing() {
+    use crate::application::ChannelError;
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    fixture
+        .settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .set_channel_coordinator(&caller("person", "switch"), made.id(), false)
+            .await,
+        Err(ChannelError::Unavailable)
+    );
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    assert!(listed
+        .channels
+        .iter()
+        .any(|each| each.id() == made.id() && each.coordinator_on()));
+}
+
+#[tokio::test]
 async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
     use crate::application::ChannelError;
     let fixture = Fixture::new();
@@ -1457,10 +1612,11 @@ async fn a_conversation_keeps_the_style_it_started_with_and_only_the_owner_sets_
         .await
         .unwrap();
     assert_eq!(
-        fixture.service.reply_style_instructions(&id).await.unwrap(),
-        Some("Answer in one line.".to_owned())
+        fixture.service.role_and_style(&id).await.unwrap(),
+        (None, Some("Answer in one line.".to_owned()))
     );
-    // The channel's coordinator was pinned off: it is told nothing.
+    // The channel's coordinator was pinned off: it is told its job and no
+    // style.
     let coordinator = channel.coordinator_id();
     fixture
         .service
@@ -1475,13 +1631,10 @@ async fn a_conversation_keeps_the_style_it_started_with_and_only_the_owner_sets_
         .await
         .unwrap();
     assert_eq!(
-        fixture
-            .service
-            .reply_style_instructions(&coordinator)
-            .await
-            .unwrap(),
-        None
+        fixture.service.role_and_style(&coordinator).await.unwrap(),
+        (StyleRole::Coordinator.job().map(str::to_owned), None)
     );
+    assert!(StyleRole::Coordinator.job().is_some());
     // Somebody else may not read or change this channel's style.
     let other = caller("someone-else", "style");
     assert!(matches!(

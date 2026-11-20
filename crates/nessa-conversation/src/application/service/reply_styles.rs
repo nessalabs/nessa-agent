@@ -41,21 +41,25 @@ pub trait ReplyStyleStore: Send + Sync {
         role: StyleRole,
         choice: Option<ReplyStyle>,
     ) -> ConversationFuture<'_, ()>;
-    /// Fix the style `conversation` starts with. The first pin stays: a
-    /// retried creation keeps what the first attempt fixed.
-    fn pin(
-        &self,
-        conversation: &ConversationId,
-        role: StyleRole,
-        style: ReplyStyle,
-    ) -> ConversationFuture<'_, ()>;
-    /// The style `conversation` was started with; `None` for one created
-    /// before styles were kept, which is told none. A deleted conversation's
-    /// pin goes with its channel placement (`ChannelStore::forget`).
-    fn pinned(
-        &self,
-        conversation: &ConversationId,
-    ) -> ConversationFuture<'_, Option<(StyleRole, ReplyStyle)>>;
+    /// Fix the role, style and job text `conversation` starts with. The
+    /// first pin stays: a retried creation keeps what the first attempt fixed.
+    fn pin(&self, conversation: &ConversationId, start: PinnedStart) -> ConversationFuture<'_, ()>;
+    /// What `conversation` was started with; `None` for one created before
+    /// styles were kept, which is told none. A deleted conversation's pin
+    /// goes with its channel placement (`ChannelStore::forget`).
+    fn pinned(&self, conversation: &ConversationId) -> ConversationFuture<'_, Option<PinnedStart>>;
+}
+
+/// What a conversation was started with, fixed once: its role, its style,
+/// and the job text it was told (`None` for a thread, and for a coordinator
+/// pinned before jobs were told). The job is kept as told rather than read
+/// from `StyleRole::job` at each opening, so neither a coordinator from
+/// before nor a later rewording ever changes a saved prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedStart {
+    pub role: StyleRole,
+    pub style: ReplyStyle,
+    pub job: Option<String>,
 }
 
 /// The store reply styles are kept in, bound once at startup.
@@ -218,21 +222,24 @@ impl ConversationService {
             .read_styles(&caller.organization_id, &caller.principal_id, scope)
             .await?
             .effective(role);
-        store.pin(id, role, style).await
+        let job = role.job().map(str::to_owned);
+        store.pin(id, PinnedStart { role, style, job }).await
     }
 
-    /// What `id`'s agent is told about how to write, from the style it was
-    /// started with. With no store bound, none: nothing was pinned.
-    pub(super) async fn reply_style_instructions(
+    /// What `id`'s agent is told of its job and how to write, from the role
+    /// and style it was started with. With no store bound, or for a
+    /// conversation from before styles were kept, nothing: nothing was
+    /// pinned, and telling it now would change its saved prompt.
+    pub(super) async fn role_and_style(
         &self,
         id: &ConversationId,
-    ) -> Result<Option<String>, ConversationError> {
+    ) -> Result<(Option<String>, Option<String>), ConversationError> {
         let Some(store) = self.reply_style_store() else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        Ok(store
-            .pinned(id)
-            .await?
-            .and_then(|(role, style)| style.instructions(role)))
+        Ok(match store.pinned(id).await? {
+            Some(start) => (start.job, start.style.instructions(start.role)),
+            None => (None, None),
+        })
     }
 }

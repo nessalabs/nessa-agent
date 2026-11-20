@@ -412,8 +412,9 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
     case "placement":
       return (
         <span>
-          Main agent: <em>{channelPlaceWords(draft.coordinatorPlacement)}</em> · New
-          threads: <em>{channelPlaceWords(draft.threadPlacement)}</em>
+          Coordinator: <em>{draft.coordinator ? "on" : "off"}</em> · Main agent:{" "}
+          <em>{channelPlaceWords(draft.coordinatorPlacement)}</em> · New threads:{" "}
+          <em>{channelPlaceWords(draft.threadPlacement)}</em>
         </span>
       )
     case "folder":
@@ -657,6 +658,25 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
+      {/* A coordinator starts threads and keeps you up to date; it can be
+      turned on or off later in the channel's settings. */}
+      <label>
+        Coordinator
+        <select
+          aria-label="Coordinator"
+          data-new-channel-coordinator=""
+          value={flow.draft.coordinator ? "on" : "off"}
+          disabled={flow.creating}
+          onChange={(event) =>
+            dispatch(
+              draftChannel({ change: { coordinator: event.target.value === "on" } }),
+            )
+          }
+        >
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
       {(
         [
           ["coordinatorPlacement", "Main agent"],

@@ -109,9 +109,12 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
             "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
             "createdAtMs": 0,
-            "coordinatorPlacement": "local", "threadPlacement": "local", "coordinatorConversationId": null
+            "coordinatorPlacement": "local", "threadPlacement": "local", "coordinatorConversationId": null,
+            "coordinatorOn": false
         })
     );
+    // A made channel's coordinator is on until the person turns it off.
+    assert_eq!(wire["channels"][1]["coordinatorOn"], true);
     assert_eq!(wire["channels"][1]["agent"], "claude");
     assert_eq!(wire["channels"][1]["approvalMode"], "auto");
     assert!(!wire.to_string().contains("private notes"));

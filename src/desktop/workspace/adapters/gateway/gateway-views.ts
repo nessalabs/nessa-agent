@@ -125,6 +125,7 @@ export function channelFrom(wire: WireChannel): Channel {
     ...(wire.coordinatorConversationId
       ? { coordinatorConversationId: wire.coordinatorConversationId }
       : {}),
+    coordinatorOn: wire.coordinatorOn,
     coordinatorPlacement: wire.coordinatorPlacement,
     threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),

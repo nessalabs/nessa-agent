@@ -512,6 +512,11 @@
       "grant": "conversation.write",
       "lane": "requests"
     },
+    "channel.setCoordinator": {
+      "params": "ChannelSetCoordinatorParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "replyStyle.read": {
       "params": "ReplyStyleReadParams",
       "grant": "conversation.write",

@@ -9,6 +9,8 @@
 //! channel.setPlacement ──▶ ConversationService::set_channel_execution
 //!   (channel.settings on the channel; the default one is forbidden)
 //!   ──▶ { channel }, naming a fresh main conversation when the main agent moved
+//! channel.setCoordinator ──▶ ConversationService::set_channel_coordinator
+//!   (channel.settings, audited) ──▶ { channel }, the same main conversation
 //! ```
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
@@ -22,8 +24,8 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_protocol::product::generated::{
     ApprovalMode, Channel as WireChannel, ChannelCreateParams, ChannelCreateResult,
-    ChannelErrorCode, ChannelListParams, ChannelListResult, ChannelSetPlacementParams,
-    ChannelSetPlacementResult,
+    ChannelErrorCode, ChannelListParams, ChannelListResult, ChannelSetCoordinatorParams,
+    ChannelSetCoordinatorResult, ChannelSetPlacementParams, ChannelSetPlacementResult,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use std::path::PathBuf;
@@ -115,6 +117,31 @@ pub(super) async fn dispatch(
                 Err(error) => refused(&frame.id, error),
             }
         }
+        "channel.setCoordinator" => {
+            let Some((params, channel)) =
+                serde_json::from_value::<ChannelSetCoordinatorParams>(frame.params)
+                    .ok()
+                    .and_then(|params| {
+                        let channel = ChannelId::new(&params.channel_id).ok()?;
+                        Some((params, channel))
+                    })
+            else {
+                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
+            };
+            let caller = super::conversation::caller(session, params.request_id);
+            match service
+                .set_channel_coordinator(&caller, &channel, params.on)
+                .await
+            {
+                Ok(channel) => success(
+                    &frame.id,
+                    &ChannelSetCoordinatorResult {
+                        channel: wire_channel(&channel),
+                    },
+                ),
+                Err(error) => refused(&frame.id, error),
+            }
+        }
         _ => failure(&frame.id, "unknown_method"),
     }
 }
@@ -152,6 +179,7 @@ fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
                 .collect::<Option<_>>()?,
         )
         .ok()?,
+        coordinator_on: params.coordinator.unwrap_or(true),
     })
 }
 
@@ -174,6 +202,7 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         model: Some(defaults.model.as_str().to_owned()),
         approval_mode: wire_mode(defaults.mode),
         coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
+        coordinator_on: channel.coordinator_on(),
         coordinator_placement: channel.execution().coordinator_word(),
         thread_placement: channel.execution().threads_word(),
         created_at_ms: channel.created_at_ms(),
@@ -203,6 +232,7 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 model: None,
                 approval_mode: ApprovalMode::Ask,
                 coordinator_conversation_id: None,
+                coordinator_on: false,
                 coordinator_placement: ChannelExecution::default().coordinator_word(),
                 thread_placement: ChannelExecution::default().threads_word(),
                 created_at_ms: 0,
