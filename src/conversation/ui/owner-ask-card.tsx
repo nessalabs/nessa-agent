@@ -9,6 +9,7 @@ import {
   QuestionnaireTitle,
 } from "@nessa-ui/react/questionnaire"
 import type { ReactNode } from "react"
+import "./owner-ask-card.css"
 import { type OwnerAskShown, undoDiffers, undoLabels } from "../model/owner-ask"
 
 /**
@@ -50,12 +51,15 @@ export function OwnerAskCard({
       data-owner-ask={ask.askId}
     >
       <QuestionnaireHeader>
-        <QuestionnaireTitle>{ask.question}</QuestionnaireTitle>
-        {ask.summary ? (
-          <QuestionnaireDescription data-owner-ask-summary>
-            {ask.summary}
-          </QuestionnaireDescription>
-        ) : null}
+        {/* One child, so the summary sits under the question, not beside it. */}
+        <div className="conversation-owner-ask-question">
+          <QuestionnaireTitle>{ask.question}</QuestionnaireTitle>
+          {ask.summary ? (
+            <QuestionnaireDescription data-owner-ask-summary>
+              {ask.summary}
+            </QuestionnaireDescription>
+          ) : null}
+        </div>
         {recommended ? (
           <QuestionnaireDescription data-owner-ask-reason>
             Recommended: {recommended.label}. {ask.reason}
@@ -77,17 +81,19 @@ export function OwnerAskCard({
               disabled={sending !== null}
               data-owner-ask-choice={choice.label}
             >
-              {choice.label}
-              {index === ask.recommended ? (
-                <Badge variant="secondary" data-owner-ask-recommended>
-                  Recommended
-                </Badge>
-              ) : null}
-              {undo && choice.undo ? (
-                <Badge variant="outline" data-owner-ask-undo={choice.undo}>
-                  {undoLabels[choice.undo]}
-                </Badge>
-              ) : null}
+              <span className="conversation-owner-ask-label">
+                {choice.label}
+                {index === ask.recommended ? (
+                  <Badge variant="secondary" data-owner-ask-recommended>
+                    Recommended
+                  </Badge>
+                ) : null}
+                {undo && choice.undo ? (
+                  <Badge variant="outline" data-owner-ask-undo={choice.undo}>
+                    {undoLabels[choice.undo]}
+                  </Badge>
+                ) : null}
+              </span>
               <QuestionnaireDescription>{choice.consequence}</QuestionnaireDescription>
             </QuestionnaireChoice>
           ))}

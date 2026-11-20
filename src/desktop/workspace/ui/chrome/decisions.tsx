@@ -174,6 +174,22 @@ function DecisionsDialog({
   const pick = (index: number) => {
     if (live && !sending && index < live.ask.choices.length) setPicked(index)
   }
+  // 1–4 picks a choice wherever focus is in the dialog, unless typing.
+  const choices = live?.ask.choices.length ?? 0
+  useEffect(() => {
+    if (!choices || sending) return
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+        return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (!/^[1-4]$/.test(event.key)) return
+      const index = Number(event.key) - 1
+      if (index < choices) setPicked(index)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [choices, sending])
   const answer = () => {
     const choice = live && picked !== null ? live.ask.choices[picked] : undefined
     if (!choice || sending) return
@@ -237,14 +253,7 @@ function DecisionsDialog({
         ) : undefined
       }
     >
-      <div
-        className="decisions-dialog"
-        onKeyDown={(event) => {
-          // 1–4 picks a choice, unless typing.
-          if (!live || event.target instanceof HTMLInputElement) return
-          if (/^[1-4]$/.test(event.key)) pick(Number(event.key) - 1)
-        }}
-      >
+      <div className="decisions-dialog">
         <div className="decisions-dialog-side">
           <SegmentedControl
             aria-label="Show"

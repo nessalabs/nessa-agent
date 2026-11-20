@@ -35,6 +35,11 @@
   .decisions-dialog {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* Stacked, the list scrolls away above the decision. */
+  .decisions-dialog-side {
+    position: static;
+  }
 }
 
 .decisions-dialog-side {
