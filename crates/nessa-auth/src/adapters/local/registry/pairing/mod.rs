@@ -1,5 +1,6 @@
 //! Registry-owned pairing persistence, conditional publication, and key authentication.
 //! Restored history asks the domain transition to correlate cancellation and revocation.
+mod credential_device;
 mod device_verifier;
 mod discovery;
 pub use discovery::GrantorPeer;

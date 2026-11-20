@@ -1929,6 +1929,26 @@ impl ScheduledMessageStore for LocalScheduledMessages {
         })
     }
 
+    fn continued_from(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<String>> {
+        let conversation = conversation.to_owned();
+        let execution = execution.to_owned();
+        self.run(move |connection| {
+            connection
+                .query_row(
+                    "SELECT causal_execution FROM message \
+                     WHERE conversation = ?1 AND execution_id = ?2",
+                    params![conversation, execution],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(failed)
+        })
+    }
+
     fn status(&self, execution_id: &str) -> ConversationFuture<'_, Option<String>> {
         let execution_id = execution_id.to_owned();
         self.run(move |connection| {

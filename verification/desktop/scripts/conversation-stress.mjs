@@ -115,7 +115,8 @@ import {
  *               only the next message sent there starts it again
  *   provenance  a person's request in the main chat reaches a thread its
  *               agent creates; the thread follows the message back with
- *               read_turn to the person's exact words and says them; the
+ *               read_turn to the person's exact words and the device they
+ *               were sent from (this computer) and says them; the
  *               parent's close_thread of a thread it did not create is
  *               refused, of its own is taken, and that thread is parked
  *   rename      another conversation is renamed from its row's More menu;
@@ -9545,8 +9546,9 @@ const steps = {
     const [, childId, refused, closing, reply] = found
     run.checked.push(childId)
     // The thread read the message back to the person's exact words: the turn
-    // the check typed, not the parent agent's relay of it.
-    if (!reply.includes(`${SAYS.origin}person: ${text}`))
+    // the check typed, not the parent agent's relay of it, sent from the
+    // window, which signs in with a token on this computer.
+    if (!reply.includes(`${SAYS.origin}person on computer: ${text}`))
       failures.push(
         `the thread did not follow its message back to the person's words: ${reply.slice(0, 200)}`,
       )
