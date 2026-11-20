@@ -32,8 +32,8 @@ export const starredSamples: readonly SampleSession[] = [
     published: [
       {
         kind: "file",
-        name: "split-panes-plan.md",
-        digest: "sha256:split-panes-plan",
+        name: "pane-layout-plan.md",
+        digest: "sha256:pane-layout-plan",
         mimeType: "text/markdown",
         size: 4_210,
       },
