@@ -16,6 +16,7 @@ pub use export::{
 
 use super::catalogue_changes::CatalogueChanges;
 
+use crate::application::WaitingAutoPick;
 use crate::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
     CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator,
@@ -44,7 +45,9 @@ use nessa_protocol::conversation::domain::{
     ConversationId, ConversationModelId, ConversationPreview, ConversationSummary,
     ConversationTitle,
 };
-use nessa_protocol::conversation::view::OwnerAsk;
+use nessa_protocol::conversation::view::{
+    DecisionSettings, OwnerAsk, OwnerDecision, OwnerDecisionOutcome, MAX_DECISIONS_KEPT,
+};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{
     validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
@@ -125,12 +128,13 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 5] = [
+static UPGRADES: [Upgrade; 6] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
     Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
     Upgrade::new(10, include_str!("schema_upgrades/10.sql")),
+    Upgrade::new(11, include_str!("schema_upgrades/11.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -1677,6 +1681,78 @@ impl UnfinishedTurns for LocalConversationStore {
     }
 }
 
+fn to_json(value: &impl serde::Serialize) -> Result<String, ConversationError> {
+    serde_json::to_string(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// Keep in `id`'s decisions what `summary` asks and settles, in the
+/// transaction that records it: the ask it waits on, as a decision still
+/// waiting, and the ask it took down, with how. The settled one is written
+/// first, so the order rows are written in is the order they were asked in:
+/// decisions are listed and trimmed by it (`rowid`), never by the wall clock,
+/// which can step back. Only the newest [`MAX_DECISIONS_KEPT`] are kept.
+fn record_decisions(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &ConversationId,
+    summary: &ConversationSummary,
+) -> Result<(), ConversationError> {
+    if let Some(settled) = summary.settled() {
+        // The ask is written with it, so an ask asked before decisions were
+        // kept is settled too.
+        transaction
+            .cached_execute(
+                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (conversation_id, ask_id) DO UPDATE SET outcome = excluded.outcome
+                 WHERE outcome IS NULL",
+                params![
+                    id.to_string(),
+                    settled.ask.ask_id,
+                    stored_time(settled.ask.asked_at_ms)?,
+                    to_json(&settled.ask)?,
+                    to_json(&settled.outcome)?,
+                ],
+            )
+            .map_err(failed)?;
+    }
+    if let (true, Some(ask)) = (summary.reopened(), summary.ask()) {
+        // Auto-pick's answer that never reached the agent is taken back.
+        transaction
+            .cached_execute(
+                "UPDATE owner_decisions SET outcome = NULL, auto_pick_paused_at_ms = NULL
+                 WHERE conversation_id = ?1 AND ask_id = ?2",
+                params![id.to_string(), ask.ask_id],
+            )
+            .map_err(failed)?;
+    }
+    if let Some(ask) = summary.ask() {
+        transaction
+            .cached_execute(
+                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
+                 VALUES (?1, ?2, ?3, ?4, NULL)
+                 ON CONFLICT (conversation_id, ask_id) DO NOTHING",
+                params![
+                    id.to_string(),
+                    ask.ask_id,
+                    stored_time(ask.asked_at_ms)?,
+                    to_json(ask)?,
+                ],
+            )
+            .map_err(failed)?;
+    }
+    if summary.ask().is_some() || summary.settled().is_some() {
+        transaction
+            .cached_execute(
+                "DELETE FROM owner_decisions WHERE conversation_id = ?1 AND ask_id NOT IN (
+                     SELECT ask_id FROM owner_decisions WHERE conversation_id = ?1
+                     ORDER BY rowid DESC LIMIT ?2)",
+                params![id.to_string(), MAX_DECISIONS_KEPT as i64],
+            )
+            .map_err(failed)?;
+    }
+    Ok(())
+}
+
 impl ConversationSummaries for LocalConversationStore {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>> {
         let id = id.clone();
@@ -1748,12 +1824,201 @@ impl ConversationSummaries for LocalConversationStore {
                     ],
                 )
                 .map_err(failed)?;
+            record_decisions(&transaction, &id, &summary)?;
             transaction.cached_execute(
                 "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                 params![revision, id.to_string()],
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             changes.publish(&(conversation.organization().clone(), conversation.owner().clone()));
+            Ok(())
+        })
+    }
+    fn decisions(&self, id: &ConversationId) -> ConversationFuture<'_, Vec<OwnerDecision>> {
+        let id = id.clone();
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare_cached(
+                    "SELECT ask, outcome, auto_pick_paused_at_ms IS NOT NULL
+                     FROM owner_decisions WHERE conversation_id = ?1
+                     ORDER BY rowid DESC LIMIT ?2",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![id.to_string(), MAX_DECISIONS_KEPT as i64], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                })
+                .map_err(failed)?;
+            let mut decisions = Vec::new();
+            for row in rows {
+                let (ask, outcome, paused) = row.map_err(failed)?;
+                // A row that does not read back as what was written is left
+                // out, as a damaged summary's ask is: one bad row never hides
+                // the rest.
+                let Ok(ask) = serde_json::from_str::<OwnerAsk>(&ask) else {
+                    unreadable("owner_decisions", &id.to_string());
+                    continue;
+                };
+                if ask.check().is_err() {
+                    unreadable("owner_decisions", &id.to_string());
+                    continue;
+                }
+                let outcome = match outcome
+                    .map(|outcome| serde_json::from_str::<OwnerDecisionOutcome>(&outcome))
+                    .transpose()
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        unreadable("owner_decisions", &id.to_string());
+                        continue;
+                    }
+                };
+                decisions.push(OwnerDecision {
+                    ask,
+                    auto_pick_paused: paused && outcome.is_none(),
+                    outcome,
+                    auto_pick_due_at_ms: None,
+                });
+            }
+            Ok(decisions)
+        })
+    }
+    fn auto_picks_waiting(&self) -> ConversationFuture<'_, Vec<WaitingAutoPick>> {
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare_cached(
+                    "SELECT d.conversation_id, d.ask, c.organization, c.owner,
+                         s.auto_pick, s.auto_pick_after_seconds
+                     FROM owner_decisions d
+                     JOIN conversations c ON c.id = d.conversation_id
+                     LEFT JOIN decision_settings s
+                         ON s.organization = c.organization AND s.owner = c.owner
+                     WHERE d.outcome IS NULL AND d.auto_pick_paused_at_ms IS NULL",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<bool>>(4)?,
+                        row.get::<_, Option<u32>>(5)?,
+                    ))
+                })
+                .map_err(failed)?;
+            let mut waiting = Vec::new();
+            for row in rows {
+                let (conversation, ask, organization, owner, on, after) = row.map_err(failed)?;
+                // A row that does not read back is left out, as the
+                // decisions read leaves it out: it is never picked.
+                let (Ok(conversation), Ok(organization), Ok(owner)) = (
+                    ConversationId::new(&conversation),
+                    OrganizationId::new(&organization),
+                    PrincipalId::new(&owner),
+                ) else {
+                    unreadable("owner_decisions", &conversation);
+                    continue;
+                };
+                let Some(ask) = serde_json::from_str::<OwnerAsk>(&ask)
+                    .ok()
+                    .filter(|ask| ask.check().is_ok())
+                else {
+                    unreadable("owner_decisions", &conversation.to_string());
+                    continue;
+                };
+                let settings = match (on, after) {
+                    (Some(auto_pick), Some(auto_pick_after_seconds)) => DecisionSettings {
+                        auto_pick,
+                        auto_pick_after_seconds,
+                    },
+                    _ => DecisionSettings::default(),
+                };
+                waiting.push(WaitingAutoPick {
+                    conversation,
+                    organization,
+                    owner,
+                    ask,
+                    settings,
+                });
+            }
+            Ok(waiting)
+        })
+    }
+    fn pause_auto_pick(
+        &self,
+        id: &ConversationId,
+        ask_id: &str,
+        paused_at_ms: Option<u64>,
+    ) -> ConversationFuture<'_, bool> {
+        let (id, ask_id) = (id.to_string(), ask_id.to_owned());
+        self.run(move |connection| {
+            let paused_at_ms = paused_at_ms.map(stored_time).transpose()?;
+            let changed = connection
+                .prepare_cached(
+                    "UPDATE owner_decisions SET auto_pick_paused_at_ms = ?3
+                     WHERE conversation_id = ?1 AND ask_id = ?2 AND outcome IS NULL",
+                )
+                .map_err(failed)?
+                .execute(params![id, ask_id, paused_at_ms])
+                .map_err(failed)?;
+            Ok(changed > 0)
+        })
+    }
+    fn decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, DecisionSettings> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            let kept = connection
+                .prepare_cached(
+                    "SELECT auto_pick, auto_pick_after_seconds FROM decision_settings
+                     WHERE organization = ?1 AND owner = ?2",
+                )
+                .map_err(failed)?
+                .query_row(params![organization, owner], |row| {
+                    Ok(DecisionSettings {
+                        auto_pick: row.get(0)?,
+                        auto_pick_after_seconds: row.get(1)?,
+                    })
+                })
+                .optional()
+                .map_err(failed)?;
+            Ok(kept.unwrap_or_default())
+        })
+    }
+    fn save_decision_settings(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        settings: DecisionSettings,
+    ) -> ConversationFuture<'_, ()> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            connection
+                .prepare_cached(
+                    "INSERT INTO decision_settings
+                         (organization, owner, auto_pick, auto_pick_after_seconds)
+                     VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT (organization, owner) DO UPDATE SET
+                         auto_pick = excluded.auto_pick,
+                         auto_pick_after_seconds = excluded.auto_pick_after_seconds",
+                )
+                .map_err(failed)?
+                .execute(params![
+                    organization,
+                    owner,
+                    settings.auto_pick,
+                    settings.auto_pick_after_seconds
+                ])
+                .map_err(failed)?;
             Ok(())
         })
     }
@@ -1768,6 +2033,12 @@ impl ConversationSummaries for LocalConversationStore {
             let removed = transaction
                 .cached_execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",
+                    [id.to_string()],
+                )
+                .map_err(failed)?;
+            transaction
+                .cached_execute(
+                    "DELETE FROM owner_decisions WHERE conversation_id = ?1",
                     [id.to_string()],
                 )
                 .map_err(failed)?;

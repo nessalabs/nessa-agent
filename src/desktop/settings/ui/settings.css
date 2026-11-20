@@ -1633,6 +1633,25 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-runtime .settings-boat-amount[aria-invalid="true"] {
   border-color: var(--destructive);
 }
+/* Auto-pick's wait: an amount, then its unit's menu, as Auto-stop's length. */
+.settings-decisions-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-decisions-wait .settings-decisions-amount {
+  inline-size: 64px;
+  block-size: 32px;
+  padding-inline: 10px;
+  font-size: var(--desktop-text-body);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  border-color: transparent;
+  background: var(--secondary);
+}
+.settings-decisions-wait .settings-decisions-amount[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
 .settings-boat-select {
   width: auto;
   min-width: 140px;

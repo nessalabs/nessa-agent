@@ -73,6 +73,7 @@ import {
   type VoiceKeyGateway,
 } from "./voice"
 import {
+  decisionSettingsGateway,
   githubGateway,
   savedLoginsGateway,
   type SavedLoginsClient,
@@ -81,6 +82,8 @@ import {
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  type DecisionSettingsClient,
+  type DecisionSettingsGateway,
   type GithubClient,
   type GithubGateway,
   type LinkedDevicesClient,
@@ -125,6 +128,10 @@ import {
   rememberedFilter,
   inMemorySharing,
   sharingGateway,
+  decisionsGateway,
+  sampleDecisions,
+  type DecisionSource,
+  type DecisionsClient,
   channelGateway,
   inMemoryChannels,
   windowPublisher,
@@ -154,6 +161,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly devices: DevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
+  /** Auto-pick, for Settings › Chat settings › Decisions; absent without a gateway. Provided by `main.tsx`. */
+  readonly decisionSettings: DecisionSettingsGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -182,6 +191,12 @@ export interface DesktopDependencies extends WorkspaceDependencies {
    * an empty list in place of a source it has not read. Provided by `main.tsx`.
    */
   readonly subagents: SubagentSource
+  /**
+   * Where Chat context reads a chat's decisions: the gateway's own, the
+   * sample's beside the sample workspace, and none beside a given source.
+   * Provided by `main.tsx`.
+   */
+  readonly decisions: DecisionSource | undefined
 }
 
 export function createDesktopDependencies(
@@ -307,6 +322,9 @@ export function createDesktopDependencies(
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
+    decisionSettings: source
+      ? decisionSettingsGateway({ connected: () => source.connected() })
+      : undefined,
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
@@ -350,6 +368,11 @@ export function createDesktopDependencies(
     questionFlights: createQuestionFlights(),
     widgets,
     subagents,
+    decisions: source
+      ? decisionsGateway({ connected: () => source.connected() })
+      : samples
+        ? sampleDecisions({ now })
+        : undefined,
     heldFiles: source
       ? heldFileReader(() => source.connected().then((client) => client.attachments))
       : // The sample's and a given source's sessions name no file anybody holds.
@@ -359,7 +382,7 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
+/** A gateway client the window can show conversations, draw apps, read held files and decisions, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
@@ -373,8 +396,10 @@ type WindowGatewayClient = GatewayClient &
   } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
+  DecisionSettingsClient &
   PermissionRulesClient &
   SharingClient &
+  DecisionsClient &
   WindowPublishClient &
   WindowCommandClient & {
     readonly agents: AgentsApi

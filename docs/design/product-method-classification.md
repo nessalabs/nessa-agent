@@ -163,6 +163,10 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.archive` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `conversation.unarchive` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `conversation.rename` | `conversation` | Control | Controls | Request(CatalogueWrite) |
+| `conversation.decisions` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.decisionSettings` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.setDecisionSettings` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.pauseAutoPick` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.delete` | `conversation` | Ordinary | Deletions | Request(CatalogueWrite) |
 | `conversation.reorder` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `artifact.read` | `attachment::dispatch_read` | Ordinary | ArtifactReads | ManifestThenArtifactRead |

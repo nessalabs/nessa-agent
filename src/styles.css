@@ -225,7 +225,7 @@ body {
   animation: none;
   backdrop-filter: none;
   box-shadow: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--hairline);
 }
 
 /*
@@ -387,7 +387,7 @@ body {
      rather than a strip. The foot falls to the bottom of whichever it is. */
   min-height: 176px;
   padding: 16px 16px 18px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-xl);
   background: var(--card);
   color: var(--card-foreground);
@@ -1000,7 +1000,7 @@ body {
   border-radius: 8px;
   background: var(--popover);
   color: var(--popover-foreground);
-  box-shadow: 0 0 0 1px var(--border);
+  box-shadow: 0 0 0 1px var(--hairline);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;

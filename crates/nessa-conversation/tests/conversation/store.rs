@@ -229,7 +229,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 1,
-                expected: 11
+                expected: 12
             }
         ))
     ));
@@ -258,7 +258,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 2,
-                expected: 11
+                expected: 12
             }
         ))
     ));
@@ -2791,7 +2791,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 4,
-                expected: 11
+                expected: 12
             }
         ))
     ));
@@ -2830,7 +2830,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 5,
-                expected: 11
+                expected: 12
             }
         ))
     ));

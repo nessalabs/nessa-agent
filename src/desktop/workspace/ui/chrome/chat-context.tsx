@@ -1,7 +1,8 @@
 /**
  * Chat context: the right panel's first tab, for the chat in front. What it
- * runs on (Environment), the model and its window (Context), and the files
- * its agent published (Outputs), each a section that folds from its header.
+ * runs on (Environment), the model and its window (Context), what its agents
+ * asked the person (Decisions, `decisions.tsx`), and the files its agent
+ * published (Outputs), each a section that folds from its header.
  * It only reads the chat's transcript; nothing here changes the chat.
  */
 import { useId, type ReactNode } from "react"
@@ -16,9 +17,11 @@ import { selectChatContextFolded, selectTranscript } from "../../adapters/store/
 import type { Transcript } from "../../model/transcript"
 import { useNativePlugins } from "../../../widgets"
 import { useAccessoryOpen } from "../../adapters/store/widget-hosts"
+import { DecisionRows } from "./decisions"
+import { useDecisions } from "./decisions-source"
 import "./chat-context.css"
 
-type SectionId = "environment" | "context" | "outputs"
+type SectionId = "environment" | "context" | "decisions" | "outputs"
 
 export function ChatContext({ sessionId }: { sessionId: string }) {
   const transcript = useWorkspaceSelector((state) => selectTranscript(state, sessionId))
@@ -27,6 +30,8 @@ export function ChatContext({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
   const toggle = (id: SectionId) => dispatch(toggleChatContextSection({ sectionId: id }))
   const published = transcript?.published ?? []
+  const decisions = useDecisions(sessionId)
+  const asked = decisions.state === "none" ? undefined : decisions.decisions?.length
   return (
     <section className="chat-context" aria-label="Chat context" data-chat-context>
       <Section id="environment" label="Environment" shut={shut} onToggle={toggle}>
@@ -36,6 +41,19 @@ export function ChatContext({ sessionId }: { sessionId: string }) {
         <ContextFacts transcript={transcript} />
         <PluginRows sessionId={sessionId} />
       </Section>
+      {/* A window with no source of decisions has no section for them. */}
+      {decisions.state === "none" ? null : (
+        <Section
+          id="decisions"
+          label="Decisions"
+          count={asked || undefined}
+          shut={shut}
+          onToggle={toggle}
+        >
+          {/* Keyed by chat: an open dialog belongs to the chat it opened for. */}
+          <DecisionRows key={sessionId} sessionId={sessionId} read={decisions} />
+        </Section>
+      )}
       <Section
         id="outputs"
         label="Outputs"

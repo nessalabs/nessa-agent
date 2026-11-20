@@ -1,4 +1,7 @@
 mod agent_tools;
+mod auto_picks;
+mod decision_traces;
+pub use decision_traces::DECISION_TARGET;
 mod background_tasks;
 mod channels;
 mod creation;
@@ -78,7 +81,7 @@ use nessa_protocol::conversation::view::{
     ConversationQuestionEntry, ConversationReorderOutcome, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
     ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
-    SubmissionReceipt,
+    SubmissionReceipt, AUTO_PICK_SURFACE,
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
@@ -1005,6 +1008,23 @@ struct Inner {
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
     schedule_wakeup: Arc<Notify>,
+    /// Wakes auto-pick when an ask is kept, paused or resumed, or an owner's
+    /// decision settings change (`auto_picks.rs`).
+    auto_pick_wakeup: Notify,
+    /// Asks auto-pick could not send, with when to try again and how many
+    /// tries failed: kept here only, so a restart tries each at once.
+    auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
+    /// Conversations with an auto-pick recorded and not yet sent, and
+    /// whether a person wrote there since (`auto_picks.rs`).
+    picks_in_flight: std::sync::Mutex<HashMap<ConversationId, bool>>,
+    /// Person messages on their way in, by conversation: one already on its
+    /// way when a pick is recorded counts as written after it.
+    persons_writing: std::sync::Mutex<HashMap<ConversationId, usize>>,
+    /// Picks that never reached the agent and could not be taken back yet,
+    /// by ask: tried again on auto-pick's next look.
+    auto_pick_takebacks: std::sync::Mutex<HashMap<String, auto_picks::RecordedPick>>,
+    /// One open `decision` span per waiting ask (`decision_traces.rs`).
+    decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
     /// same debt when it accepted the write. This map is the copy written
     /// when that write failed, so this process still retries it. A crash
@@ -1550,6 +1570,12 @@ impl ConversationService {
                 credential_devices: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
+                auto_pick_wakeup: Notify::new(),
+                auto_pick_failures: std::sync::Mutex::default(),
+                picks_in_flight: std::sync::Mutex::default(),
+                persons_writing: std::sync::Mutex::default(),
+                auto_pick_takebacks: std::sync::Mutex::default(),
+                decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
@@ -4624,7 +4650,13 @@ impl ConversationService {
             // owner does not answer it. Read before the agent has the
             // message, so a question it asks after it is not taken for the
             // one answered; taken down with the message's summary below.
-            let answered = if !known && writer.is_person() {
+            // Auto-pick answers nothing here: it recorded its answer before
+            // it sent it (`auto_picks.rs`), so whatever is waiting now is
+            // newer, and the owner's.
+            let auto = caller.surface_id == AUTO_PICK_SURFACE;
+            // Held until the message's summary is written, below.
+            let _writing = (!auto && writer.is_person()).then(|| service.person_writing(&id));
+            let answered = if !known && !auto && writer.is_person() {
                 service
                     .waiting_ask_answered(
                         &id,
@@ -5088,7 +5120,7 @@ impl ConversationService {
         self.change_summary(id, |previous| {
             Some(
                 ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
-                    .answering(answered),
+                    .answering(answered, message.text_str(), false),
             )
         })
         .await;
@@ -5146,6 +5178,7 @@ impl ConversationService {
         let Some(next) = change(previous.as_ref()) else {
             return;
         };
+        let settled = next.settled().cloned();
         if let Err(error) = self.inner.summaries.record(id, next).await {
             tracing::warn!(
                 conversation_id = %id,
@@ -5153,6 +5186,9 @@ impl ConversationService {
                 "conversation summary could not be written; the list shows the last one"
             );
             return;
+        }
+        if let Some(settled) = settled {
+            self.inner.decision_traces.settled(id, &settled);
         }
         // A view shows the summary's title.
         self.inner.live_changes.publish(id);
@@ -6356,6 +6392,7 @@ impl ConversationService {
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
+            self.inner.decision_traces.erased(&id);
             // Where it ran goes with its history; failing to forget it is
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {

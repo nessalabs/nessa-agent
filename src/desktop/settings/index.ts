@@ -36,6 +36,10 @@
  *   (Native hooks: Claude/Codex   (`client.agents` list and
  *    hook switches)                setNativeHooks)
  *
+ *   ui/decision-settings-rows.tsx ──▶ adapters/decision-settings-gateway.ts
+ *   (Chat settings › Decisions:      (`client.conversation`
+ *    auto-pick and its wait)          decisionSettings and setDecisionSettings)
+ *
  *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts
  *   (Access: remembered rules     (`client.conversation` list and
  *    and revoke)                   revokePermissionRule)
@@ -71,6 +75,12 @@ export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
 export { DeviceLoginsSwitch, SavedLoginsProvider } from "./ui/saved-logins"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
+export { DecisionSettingsProvider, useAutoPickWords } from "./ui/decision-settings-rows"
+export {
+  decisionSettingsGateway,
+  type DecisionSettingsClient,
+  type DecisionSettingsGateway,
+} from "./adapters/decision-settings-gateway"
 export { PermissionRulesProvider } from "./ui/permission-rule-rows"
 export {
   mcpServersGateway,

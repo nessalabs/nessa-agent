@@ -1162,6 +1162,12 @@ impl ConversationListing for Unlisted {
 #[derive(Default)]
 pub struct MemorySummaries {
     pub summaries: Mutex<HashMap<ConversationId, ConversationSummary>>,
+    /// Each conversation's decisions, oldest first.
+    pub decisions:
+        Mutex<HashMap<ConversationId, Vec<nessa_protocol::conversation::view::OwnerDecision>>>,
+    /// Each owner's decision settings, keyed by organization and owner.
+    pub decision_settings:
+        Mutex<HashMap<(String, String), nessa_protocol::conversation::view::DecisionSettings>>,
     pub writes: AtomicUsize,
     pub load_fails: AtomicBool,
     pub record_fails: AtomicBool,
@@ -1203,9 +1209,112 @@ impl ConversationSummaries for MemorySummaries {
             if self.record_fails.load(Ordering::SeqCst) {
                 return Err(ConversationError::Metadata);
             }
+            {
+                use nessa_protocol::conversation::view::OwnerDecision;
+                let mut decisions = self.decisions.lock().unwrap();
+                let kept = decisions.entry(id.clone()).or_default();
+                if let (true, Some(ask)) = (summary.reopened(), summary.ask()) {
+                    if let Some(kept) = kept.iter_mut().find(|kept| kept.ask.ask_id == ask.ask_id) {
+                        kept.outcome = None;
+                        kept.auto_pick_paused = false;
+                    }
+                }
+                if let Some(ask) = summary.ask() {
+                    if !kept.iter().any(|kept| kept.ask.ask_id == ask.ask_id) {
+                        kept.push(OwnerDecision {
+                            ask: ask.clone(),
+                            outcome: None,
+                            auto_pick_paused: false,
+                            auto_pick_due_at_ms: None,
+                        });
+                    }
+                }
+                if let Some(settled) = summary.settled() {
+                    match kept
+                        .iter_mut()
+                        .find(|kept| kept.ask.ask_id == settled.ask.ask_id)
+                    {
+                        Some(kept) if kept.outcome.is_none() => {
+                            kept.outcome = Some(settled.outcome.clone());
+                            kept.auto_pick_paused = false;
+                        }
+                        Some(_) => {}
+                        None => kept.push(OwnerDecision {
+                            ask: settled.ask.clone(),
+                            outcome: Some(settled.outcome.clone()),
+                            auto_pick_paused: false,
+                            auto_pick_due_at_ms: None,
+                        }),
+                    }
+                }
+            }
             self.summaries.lock().unwrap().insert(id, summary);
             Ok(())
         })
+    }
+    /// Kept as the store keeps them: each write's waiting ask and settled one.
+    fn decisions(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Vec<nessa_protocol::conversation::view::OwnerDecision>> {
+        let kept = self
+            .decisions
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|kept| kept.iter().rev().cloned().collect())
+            .unwrap_or_default();
+        Box::pin(async move { Ok(kept) })
+    }
+    /// The memory store keeps no owners, so it never offers a pick: auto-pick
+    /// is tested against the file store.
+    fn auto_picks_waiting(
+        &self,
+    ) -> ConversationFuture<'_, Vec<crate::application::WaitingAutoPick>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn pause_auto_pick(
+        &self,
+        id: &ConversationId,
+        ask_id: &str,
+        paused_at_ms: Option<u64>,
+    ) -> ConversationFuture<'_, bool> {
+        let mut decisions = self.decisions.lock().unwrap();
+        let applied = decisions
+            .get_mut(id)
+            .and_then(|kept| {
+                kept.iter_mut()
+                    .find(|kept| kept.ask.ask_id == ask_id && kept.outcome.is_none())
+            })
+            .map(|kept| kept.auto_pick_paused = paused_at_ms.is_some())
+            .is_some();
+        Box::pin(async move { Ok(applied) })
+    }
+    fn decision_settings(
+        &self,
+        organization: &nessa_auth::domain::OrganizationId,
+        owner: &nessa_auth::domain::PrincipalId,
+    ) -> ConversationFuture<'_, nessa_protocol::conversation::view::DecisionSettings> {
+        let kept = self
+            .decision_settings
+            .lock()
+            .unwrap()
+            .get(&(organization.as_str().to_owned(), owner.as_str().to_owned()))
+            .copied()
+            .unwrap_or_default();
+        Box::pin(async move { Ok(kept) })
+    }
+    fn save_decision_settings(
+        &self,
+        organization: &nessa_auth::domain::OrganizationId,
+        owner: &nessa_auth::domain::PrincipalId,
+        settings: nessa_protocol::conversation::view::DecisionSettings,
+    ) -> ConversationFuture<'_, ()> {
+        self.decision_settings.lock().unwrap().insert(
+            (organization.as_str().to_owned(), owner.as_str().to_owned()),
+            settings,
+        );
+        Box::pin(async { Ok(()) })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
@@ -1214,6 +1323,7 @@ impl ConversationSummaries for MemorySummaries {
                 return Err(ConversationError::Metadata);
             }
             self.summaries.lock().unwrap().remove(&id);
+            self.decisions.lock().unwrap().remove(&id);
             Ok(())
         })
     }
