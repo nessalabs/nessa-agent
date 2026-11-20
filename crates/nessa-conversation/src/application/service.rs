@@ -1017,6 +1017,9 @@ struct Inner {
     /// Conversations with an auto-pick recorded and not yet sent, and
     /// whether a person wrote there since (`auto_picks.rs`).
     picks_in_flight: std::sync::Mutex<HashMap<ConversationId, bool>>,
+    /// Person messages on their way in, by conversation: one already on its
+    /// way when a pick is recorded counts as written after it.
+    persons_writing: std::sync::Mutex<HashMap<ConversationId, usize>>,
     /// Picks that never reached the agent and could not be taken back yet,
     /// by ask: tried again on auto-pick's next look.
     auto_pick_takebacks: std::sync::Mutex<HashMap<String, auto_picks::RecordedPick>>,
@@ -1570,6 +1573,7 @@ impl ConversationService {
                 auto_pick_wakeup: Notify::new(),
                 auto_pick_failures: std::sync::Mutex::default(),
                 picks_in_flight: std::sync::Mutex::default(),
+                persons_writing: std::sync::Mutex::default(),
                 auto_pick_takebacks: std::sync::Mutex::default(),
                 decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
@@ -4650,9 +4654,8 @@ impl ConversationService {
             // it sent it (`auto_picks.rs`), so whatever is waiting now is
             // newer, and the owner's.
             let auto = caller.surface_id == AUTO_PICK_SURFACE;
-            if !auto && writer.is_person() {
-                service.person_wrote(&id);
-            }
+            // Held until the message's summary is written, below.
+            let _writing = (!auto && writer.is_person()).then(|| service.person_writing(&id));
             let answered = if !known && !auto && writer.is_person() {
                 service
                     .waiting_ask_answered(

@@ -173,8 +173,13 @@ impl ConversationService {
             .await?;
         // From here a person's message in this conversation says so, for a
         // take-back not to undo what they said after it.
+        let writing = self
+            .inner
+            .persons_writing
+            .lock()
+            .map_or(true, |writing| writing.contains_key(&waiting.conversation));
         if let Ok(mut flight) = self.inner.picks_in_flight.lock() {
-            flight.insert(waiting.conversation.clone(), false);
+            flight.insert(waiting.conversation.clone(), writing);
         }
         self.inner.live_changes.publish(&waiting.conversation);
         Ok(Some(RecordedPick {
@@ -186,14 +191,22 @@ impl ConversationService {
         }))
     }
 
-    /// A person's message is on its way into `conversation`: a pick recorded
-    /// there and not yet sent is no longer the last word, so taking it back
-    /// leaves its ask waiting for them, not for another pick.
-    pub(super) fn person_wrote(&self, conversation: &ConversationId) {
+    /// A person's message is on its way into `conversation`, until the
+    /// guard drops: a pick recorded there meanwhile, and not yet sent, is no
+    /// longer the last word, so taking it back leaves its ask waiting for
+    /// them, not for another pick.
+    pub(super) fn person_writing(&self, conversation: &ConversationId) -> PersonWriting<'_> {
+        if let Ok(mut writing) = self.inner.persons_writing.lock() {
+            *writing.entry(conversation.clone()).or_default() += 1;
+        }
         if let Ok(mut flight) = self.inner.picks_in_flight.lock() {
             if let Some(after) = flight.get_mut(conversation) {
                 *after = true;
             }
+        }
+        PersonWriting {
+            service: self,
+            conversation: conversation.clone(),
         }
     }
 
@@ -243,7 +256,9 @@ impl ConversationService {
                 .pause_auto_pick(conversation, &pick.waiting.ask.ask_id, Some(at))
                 .await
             {
+                // Tried again: reopening an ask already reopened changes nothing.
                 tracing::warn!(%conversation, ?error, "a taken-back auto-pick could not be paused");
+                return false;
             }
         }
         self.pick_done(conversation);
@@ -373,4 +388,23 @@ pub(crate) struct RecordedPick {
     written: ConversationSummary,
     /// The decision it settled, traced once the answer stands.
     settled: Option<SettledAsk>,
+}
+
+/// A person's message on its way in ([`ConversationService::person_writing`]).
+pub(super) struct PersonWriting<'a> {
+    service: &'a ConversationService,
+    conversation: ConversationId,
+}
+
+impl Drop for PersonWriting<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut writing) = self.service.inner.persons_writing.lock() {
+            if let Some(count) = writing.get_mut(&self.conversation) {
+                *count -= 1;
+                if *count == 0 {
+                    writing.remove(&self.conversation);
+                }
+            }
+        }
+    }
 }

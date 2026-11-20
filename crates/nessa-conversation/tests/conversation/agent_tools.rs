@@ -2260,6 +2260,16 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
     assert_eq!(held.outcome, None);
     assert!(held.auto_pick_paused);
     assert!(service.record_pick(&due).await.unwrap().is_none());
+    // So is one whose message was already on its way as the pick was made.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume-held"), &fifth.ask_id, false)
+        .await
+        .unwrap());
+    let writing = service.person_writing(&source);
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
+    drop(writing);
+    assert!(service.take_back_pick(&pick).await);
+    assert!(decision(service.clone()).await.auto_pick_paused);
 
     // Picked and sent, the owner's next message is a message after it, not
     // a second answer.
