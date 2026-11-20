@@ -1017,7 +1017,9 @@ struct Inner {
     auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
     /// Asks auto-pick claimed and is sending the answer to: a pause from the
     /// claim on is refused, since the answer goes anyway (`auto_picks.rs`).
-    auto_picks_sending: std::sync::Mutex<std::collections::HashSet<String>>,
+    auto_picks_sending: std::sync::Mutex<auto_picks::Gates>,
+    /// Told each time auto-pick is done sending one.
+    auto_pick_sent: Notify,
     /// One open `decision` span per waiting ask (`decision_traces.rs`).
     decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
@@ -1568,6 +1570,7 @@ impl ConversationService {
                 auto_pick_wakeup: Notify::new(),
                 auto_pick_failures: std::sync::Mutex::default(),
                 auto_picks_sending: std::sync::Mutex::default(),
+                auto_pick_sent: Notify::new(),
                 decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
@@ -4086,6 +4089,13 @@ impl ConversationService {
         // again with the message, not reported dropped and then missing
         // from it; should no offer be taken, it is reported dropped unsent
         // as this goes (row C11).
+        // A person's message and an auto-pick in this conversation go one
+        // after the other, never interleaved (`auto_picks.rs`).
+        let _person = if writer.is_person() && caller.surface_id != AUTO_PICK_SURFACE {
+            Some(self.owner_sending(&id).await)
+        } else {
+            None
+        };
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
         let (asked, outcome) = loop {
@@ -4601,6 +4611,20 @@ impl ConversationService {
                 );
                 revision_hold = Some(grants.hold_revision(&id, &receiver, revision).await?);
                 saved_grant = Some((grants, receiver, revision));
+            }
+            // An auto-pick whose ask a newer one replaced since it was
+            // claimed is not sent: the agent would read it as the newer
+            // one's answer.
+            if caller.surface_id == AUTO_PICK_SURFACE && !known {
+                let current = service
+                    .inner
+                    .summaries
+                    .load(&id)
+                    .await?
+                    .and_then(|summary| summary.ask().map(|ask| auto_pick_action(&ask.ask_id)));
+                if current.as_deref() != Some(caller.action_id.as_str()) {
+                    return Err(ConversationError::InvalidInput.into());
+                }
             }
             // Marked before the agent is asked, so a restart from here on
             // finds this conversation and resumes the turn (`resumption`).

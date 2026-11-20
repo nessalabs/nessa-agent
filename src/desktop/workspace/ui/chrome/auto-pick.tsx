@@ -10,7 +10,8 @@ import { Button } from "@nessa-ui/react/button"
 import { useNow } from "../../../../clock"
 import { left, type Decision } from "../../model/decisions"
 import { sendMessage } from "../../adapters/store/commands"
-import { useWorkspaceDispatch } from "../../adapters/store/hooks"
+import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectSession } from "../../adapters/store/selectors"
 import { DesktopIcon } from "../../../ui/icons"
 import { useDecisionSource, useDecisions } from "./decisions-source"
 import "./decisions.css"
@@ -20,7 +21,7 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
   const read = useDecisions(sessionId)
   const source = useDecisionSource()
   const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState<"failed" | "late" | null>(null)
   if (read.state === "none" || !source) return null
   const decision = read.decisions?.find((each) => each.ask.askId === askId)
   const pick = decision?.autoPick
@@ -28,16 +29,18 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
   const label = decision.ask.choices[decision.ask.recommended]?.label ?? ""
   const hold = (paused: boolean) => {
     setBusy(true)
-    setFailed(false)
+    setFailed(null)
     source.pauseAutoPick(sessionId, askId, paused).then(
-      () => {
+      (applied) => {
         setBusy(false)
+        // Not applied while due: the pick was already on its way.
+        if (!applied && paused) setFailed("late")
         read.retry()
       },
       (error: unknown) => {
         console.error("Pausing auto-pick failed", error)
         setBusy(false)
-        setFailed(true)
+        setFailed("failed")
       },
     )
   }
@@ -71,7 +74,7 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
       </Button>
       {failed ? (
         <span role="status" className="auto-pick-failed">
-          Didn’t go through. Try again.
+          {failed === "late" ? "Already picked." : "Didn’t go through. Try again."}
         </span>
       ) : null}
     </p>
@@ -125,6 +128,9 @@ export function ChangeAnswer({
 }) {
   const dispatch = useWorkspaceDispatch()
   const read = useDecisions(sessionId)
+  const waitingNow = useWorkspaceSelector(
+    (state) => selectSession(state, sessionId)?.ask?.askId,
+  )
   const [open, setOpen] = useState(false)
   const [sent, setSent] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -133,11 +139,14 @@ export function ChangeAnswer({
   if (outcome.state !== "decided" || !outcome.auto) return null
   // Any message from the person answers the ask waiting now, so with a newer
   // one waiting a change would be taken for its answer: answer that instead.
+  // The chat's row says first; the decisions read may lag it.
   const newer =
-    read.state !== "none" &&
-    read.decisions?.some(
-      (each) => each.outcome.state === "waiting" && each.ask.askId !== decision.ask.askId,
-    )
+    (waitingNow !== undefined && waitingNow !== decision.ask.askId) ||
+    (read.state !== "none" &&
+      read.decisions?.some(
+        (each) =>
+          each.outcome.state === "waiting" && each.ask.askId !== decision.ask.askId,
+      ))
   if (newer && sent === null) return null
   if (sent !== null)
     return (

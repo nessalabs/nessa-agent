@@ -418,6 +418,33 @@ describe("Decisions in Chat context", () => {
     )
   })
 
+  it("says Already picked when a pause comes as the pick is sent", async () => {
+    const fake = fakeSource()
+    const { source } = decisionsOf(() => [
+      {
+        ...decision("live", 99, { state: "waiting" }),
+        autoPick: { state: "due", atMs: now + minute },
+      },
+    ])
+    const late: DecisionSource = { ...source, pauseAutoPick: async () => false }
+    const store = await render(late, fake)
+    const summary = selectSession(store.getState(), "a")
+    if (!summary) throw new Error("no session a")
+    await act(async () =>
+      fake.emit({
+        kind: "session",
+        session: { ...summary, ask: ask("live"), revision: summary.revision + 1 },
+      }),
+    )
+    await settle()
+    await frames()
+    const line = () => host.querySelector('[data-owner-ask="live"] [data-auto-pick-line]')
+    await click(line()?.querySelector('[data-auto-pick-hold="pause"]'))
+    await settle()
+    await frames()
+    expect(line()?.textContent).toContain("Already picked.")
+  })
+
   it("offers no Change my answer while a newer ask waits, since it would answer that one", async () => {
     const { source } = decisionsOf(() => [
       decision("next", 97, { state: "waiting" }),

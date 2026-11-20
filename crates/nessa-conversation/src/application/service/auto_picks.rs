@@ -13,7 +13,10 @@ use super::{
 };
 use crate::application::WaitingAutoPick;
 use crate::timer::clock;
+use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::DecisionSettings;
 use nessa_protocol::conversation::view::AUTO_PICK_SURFACE;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// The longest auto-pick sleeps before it looks again, even with nothing
@@ -107,12 +110,15 @@ impl ConversationService {
     /// they are now. What `pick_due` read may be stale by the time a slow
     /// send before it is done, so this is asked again under the summary lock
     /// an answer, a newer ask and a pause are each written under. On yes the
-    /// ask is marked sending until [`Sending`] drops, and a pause in that
-    /// time is refused, since the answer goes anyway.
+    /// ask is marked sending until [`Sending`] drops: a pause in that time is
+    /// refused, since the answer goes anyway, and the owner's own message
+    /// waits for it ([`Self::owner_sending`]), so the agent has the pick
+    /// first and the owner's word last. The settings it read come with it,
+    /// for the pick to say the wait it kept.
     async fn claim(
         &self,
         waiting: &WaitingAutoPick,
-    ) -> Result<Option<Sending<'_>>, ConversationError> {
+    ) -> Result<Option<(Sending<'_>, DecisionSettings)>, ConversationError> {
         let ask_id = &waiting.ask.ask_id;
         let _writes = self
             .inner
@@ -146,14 +152,74 @@ impl ConversationService {
         if !settings.auto_pick || due > self.inner.clock.unix_milliseconds() {
             return Ok(None);
         }
-        let Ok(mut sending) = self.inner.auto_picks_sending.lock() else {
+        let Ok(mut gates) = self.inner.auto_picks_sending.lock() else {
             return Ok(None);
         };
-        sending.insert(ask_id.clone());
-        Ok(Some(Sending {
+        // An owner's message on its way answers it, or fails and wakes this
+        // to look again.
+        if gates.owners.contains_key(&waiting.conversation) {
+            gates.refused.insert(waiting.conversation.clone());
+            return Ok(None);
+        }
+        gates
+            .sending
+            .insert(ask_id.clone(), waiting.conversation.clone());
+        Ok(Some((
+            Sending {
+                service: self,
+                ask_id: ask_id.clone(),
+            },
+            settings,
+        )))
+    }
+
+    /// An owner's message on its way into `conversation`, until dropped:
+    /// waits first while auto-pick sends an answer there, so the agent has
+    /// the pick first and the owner's word after it, and holds off a claim
+    /// meanwhile, so a pick never lands after the owner's answer. A person
+    /// it is shared with counts too: any person's message answers the ask.
+    pub(super) async fn owner_sending(&self, conversation: &ConversationId) -> OwnerSending<'_> {
+        loop {
+            let sent = self.inner.auto_pick_sent.notified();
+            tokio::pin!(sent);
+            sent.as_mut().enable();
+            {
+                let Ok(mut gates) = self.inner.auto_picks_sending.lock() else {
+                    break;
+                };
+                if !gates.sending.values().any(|of| of == conversation) {
+                    *gates.owners.entry(conversation.clone()).or_default() += 1;
+                    break;
+                }
+            }
+            // Retiring, a pick may never finish: the message goes on.
+            tokio::select! {
+                () = &mut sent => {}
+                () = self.retired() => break,
+            }
+        }
+        OwnerSending {
             service: self,
-            ask_id: ask_id.clone(),
-        }))
+            conversation: conversation.clone(),
+        }
+    }
+
+    /// Mark `ask_id` as being sent, as a claim does, until dropped.
+    #[cfg(test)]
+    pub(crate) fn sending_for_test(
+        &self,
+        conversation: &ConversationId,
+        ask_id: &str,
+    ) -> Sending<'_> {
+        if let Ok(mut gates) = self.inner.auto_picks_sending.lock() {
+            gates
+                .sending
+                .insert(ask_id.to_owned(), conversation.clone());
+        }
+        Sending {
+            service: self,
+            ask_id: ask_id.to_owned(),
+        }
     }
 
     /// Whether auto-pick is sending the answer to `ask_id` now.
@@ -161,7 +227,7 @@ impl ConversationService {
         self.inner
             .auto_picks_sending
             .lock()
-            .map_or(true, |sending| sending.contains(ask_id))
+            .map_or(true, |gates| gates.sending.contains_key(ask_id))
     }
 
     /// Send `waiting`'s recommended choice as its owner's answer, if it is
@@ -170,12 +236,12 @@ impl ConversationService {
         &self,
         waiting: &WaitingAutoPick,
     ) -> Result<(), ConversationError> {
-        let Some(_sending) = self.claim(waiting).await? else {
+        let Some((_sending, settings)) = self.claim(waiting).await? else {
             return Ok(());
         };
         let text = waiting
             .ask
-            .auto_pick_text(waiting.settings.auto_pick_after_seconds)
+            .auto_pick_text(settings.auto_pick_after_seconds)
             .ok_or(ConversationError::InvalidInput)?;
         let action = auto_pick_action(&waiting.ask.ask_id);
         let caller = ConversationCaller {
@@ -196,6 +262,12 @@ impl ConversationService {
         )
         .await
         .map(|_| ())
+        .or_else(|error| match error {
+            // Refused because a newer ask took its place as it was sent
+            // (`submit`): nothing is left to pick.
+            ConversationError::InvalidInput => Ok(()),
+            error => Err(error),
+        })
     }
 
     fn auto_pick_retry_at(&self, ask_id: &str) -> Option<u64> {
@@ -227,16 +299,52 @@ impl ConversationService {
     }
 }
 
+/// Who is sending into which conversation: the asks auto-pick claimed, and
+/// how many owner messages are on their way, by conversation. One lock over
+/// both, so a claim and an owner's message are ordered.
+#[derive(Default)]
+pub(crate) struct Gates {
+    sending: HashMap<String, ConversationId>,
+    owners: HashMap<ConversationId, usize>,
+    /// Conversations a claim was refused in for an owner's message: auto-pick
+    /// looks again once it is through.
+    refused: HashSet<ConversationId>,
+}
+
 /// An ask auto-pick is sending the answer to, until dropped.
-struct Sending<'a> {
+pub(crate) struct Sending<'a> {
     service: &'a ConversationService,
     ask_id: String,
 }
 
 impl Drop for Sending<'_> {
     fn drop(&mut self) {
-        if let Ok(mut sending) = self.service.inner.auto_picks_sending.lock() {
-            sending.remove(&self.ask_id);
+        if let Ok(mut gates) = self.service.inner.auto_picks_sending.lock() {
+            gates.sending.remove(&self.ask_id);
+        }
+        self.service.inner.auto_pick_sent.notify_waiters();
+    }
+}
+
+/// An owner's message on its way, until dropped ([`ConversationService::owner_sending`]).
+pub(super) struct OwnerSending<'a> {
+    service: &'a ConversationService,
+    conversation: ConversationId,
+}
+
+impl Drop for OwnerSending<'_> {
+    fn drop(&mut self) {
+        let Ok(mut gates) = self.service.inner.auto_picks_sending.lock() else {
+            return;
+        };
+        if let Some(count) = gates.owners.get_mut(&self.conversation) {
+            *count -= 1;
+            if *count == 0 {
+                gates.owners.remove(&self.conversation);
+                if gates.refused.remove(&self.conversation) {
+                    self.service.inner.auto_pick_wakeup.notify_one();
+                }
+            }
         }
     }
 }
