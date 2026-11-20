@@ -30,6 +30,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AttachmentPhase, permissions::ActionContext,
 };
 use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
@@ -71,15 +72,71 @@ impl ConversationService {
         if !live.agent.operation_capabilities().session_resume() {
             return Err(ConversationError::AgentUnsupported);
         }
-        // The conversation's, kept before this agent is marked: an opening
-        // after it is parked, or after a restart, reads it and is parked
-        // again until a new message opens the thread.
-        // With a new message's opening of the thread, one at a time: the
-        // store and the mark always say the same.
-        let _change = slot.closing_changes.lock().await;
-        self.inner.metadata.close_thread(id).await?;
-        slot.closing.store(true, Ordering::SeqCst);
+        self.mark_closed(id).await?;
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
+        Ok(())
+    }
+
+    /// Write `id`'s close to the store, then refresh any open slot's copy
+    /// of it. The store is the close's one authority; see [`Slot::closing`].
+    async fn mark_closed(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        self.inner.metadata.close_thread(id).await?;
+        let opened = self.inner.conversations.lock().await.get(id).cloned();
+        match opened {
+            Some(slot) => self.refresh_closing(id, &slot).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Copy `id`'s close mark, as the store now says, into `slot` (the
+    /// contract on [`Slot::closing`]).
+    pub(super) async fn refresh_closing(
+        &self,
+        id: &ConversationId,
+        slot: &Slot,
+    ) -> Result<(), ConversationError> {
+        let _change = slot.closing_changes.lock().await;
+        let closed = self.inner.metadata.thread_closed(id).await?;
+        slot.closing.store(closed, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The thread whose agent created `child` with `create_thread`, if one
+    /// did. The SDK's ownership record of the spawn is the one place that
+    /// says so; it keeps closed history, so a child that already ended still
+    /// names it. A fact for the access policy, which decides who may close
+    /// `child` (`conversation.close_created`).
+    pub fn thread_creator(&self, child: &ConversationId) -> Option<String> {
+        let ownership = self.inner.ownership.get()?;
+        let session = SessionId::new(child.to_string()).ok()?;
+        ownership
+            .coordinator
+            .child_lifetime_for_session(&session)
+            .and_then(|lifetime| ownership.coordinator.spawn_binding_for_lifetime(&lifetime))
+            .map(|binding| binding.parent_session.as_str().to_owned())
+    }
+
+    /// `parent` closes `child`, a thread the access policy admitted it to
+    /// close (`close_thread` with a `threadId`). The same close as the
+    /// child's own: open now, it stops once its turn ends; not open now, the
+    /// mark alone keeps whatever opens it before a new message parked.
+    ///
+    /// # Errors
+    /// [`ConversationError::AgentUnsupported`] when it is open on an agent
+    /// that cannot resume its session, so it is never parked.
+    pub async fn close_created_thread(
+        &self,
+        parent: &ConversationId,
+        child: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        let opened = self.inner.conversations.lock().await.get(child).cloned();
+        if let Some(live) = opened.as_ref().and_then(|slot| settled(slot)) {
+            if !live.agent.operation_capabilities().session_resume() {
+                return Err(ConversationError::AgentUnsupported);
+            }
+        }
+        self.mark_closed(child).await?;
+        tracing::info!(conversation_id = %child, parent = %parent, "a thread was closed by the thread that created it");
         Ok(())
     }
 

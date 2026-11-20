@@ -35,6 +35,8 @@ export const STRESS = {
   ownedSeed: "stress owned seed",
   await: "stress await",
   close: "stress close",
+  provenance: "stress provenance",
+  originChild: "stress origin child",
   watch: "stress watch",
   long: "stress long",
   oversized: "stress oversized",
@@ -95,6 +97,9 @@ export const SAYS = {
   delegated: "Delegated to ",
   awaited: "Awaited ",
   closed: "Closing this thread: ",
+  provenance: "Provenance: ",
+  origin: "Asked by ",
+  earlier: " | before that: ",
   report: "Report received.",
   owned: "Owned execution: ",
   backgroundStarted: "Background task started.",
@@ -804,6 +809,96 @@ export function stressScenario({
             save: "closed",
           },
           { do: "text", chunks: [SAYS.closed, "${closed}"] },
+          { do: "end" },
+        ],
+      },
+      // A person asks a parent, which hands the work to a thread it creates
+      // and waits for it. The thread follows the message back with read_turn
+      // to the person's own words and says them. The parent then cannot close
+      // a thread it did not create (the prompt names one), and closes its own.
+      {
+        when: STRESS.provenance,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: { threadId: "${thread.threadId}", message: STRESS.originChild },
+            save: "sent",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "subscribe",
+            arguments: {
+              threadId: "${thread.threadId}",
+              executionId: "${sent.executionId}",
+            },
+            save: "waited",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: "${prompt.arguments}",
+            save: "refused",
+            keepErrors: true,
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: { threadId: "${thread.threadId}" },
+            save: "closed",
+          },
+          {
+            do: "text",
+            chunks: [
+              SAYS.provenance,
+              "${thread.threadId}",
+              " | ",
+              "${refused.error}",
+              " | ",
+              "${closed.closing}",
+              " | ",
+              "${waited.turn.reply}",
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.originChild,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "read_turn",
+            arguments: {
+              threadId: "${prompt.source.conversationId}",
+              executionId: "${prompt.source.executionId}",
+              earlier: 3,
+            },
+            save: "chain",
+          },
+          {
+            do: "text",
+            chunks: [
+              SAYS.origin,
+              "${chain.startedBy}",
+              ": ",
+              "${chain.turns.0.said}",
+              SAYS.earlier,
+              "${chain.earlier}",
+            ],
+          },
           { do: "end" },
         ],
       },

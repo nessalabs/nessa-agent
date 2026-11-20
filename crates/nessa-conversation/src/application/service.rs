@@ -13,6 +13,7 @@ mod records;
 mod scheduled_messages;
 mod thread_report_admission;
 mod thread_reports;
+mod turn_origins;
 mod workspace_windows;
 use self::mutation::SubmissionPermit;
 use super::background_tasks::BackgroundTarget;
@@ -49,6 +50,7 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
+pub use agent_tools::READ_TURN_TOOL;
 pub use channels::{
     AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
 };
@@ -144,6 +146,9 @@ use std::{
 pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
+};
+pub use turn_origins::{
+    ChainEnd, TurnChain, TurnOrigin, TurnReading, MAX_EARLIER_TURNS, MAX_TURN_HOPS,
 };
 pub use workspace_windows::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
@@ -867,16 +872,19 @@ struct Slot {
     /// agents, the one with the oldest is parked first
     /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
-    /// Its agent closed its thread (`close_thread`): it is parked as soon
-    /// as it is idle, watched or not. The close is the conversation's, kept
-    /// by the metadata store (`ConversationRepository::thread_closed`); this
-    /// is that fact as the opening read it, written with it by
-    /// `close_after_turn` and by a message that opens the thread again.
+    /// Its thread is closed (`close_thread`): it is parked as soon as it is
+    /// idle, watched or not.
+    ///
+    /// Contract: the metadata store (`ConversationRepository::thread_closed`)
+    /// is the close's one authority, and this is only its copy for the
+    /// parking sweep. Every change writes the store first, then copies the
+    /// store's mark as it then stands, under `closing_changes`
+    /// (`ConversationService::refresh_closing`). Nothing sets this from a
+    /// value it worked out itself, so a close, an opening and a new message
+    /// that reopens the thread can interleave in any order and the last copy
+    /// still matches the store.
     closing: AtomicBool,
-    /// Held across each change of the thread's close, its store write and
-    /// `closing` together: a close from a running turn and a new message
-    /// that opens the thread would otherwise interleave, leaving the store
-    /// closed and this open, or the other way round.
+    /// Held while `closing` is copied from the store: one copy at a time.
     closing_changes: tokio::sync::Mutex<()>,
 }
 impl Slot {
@@ -2089,16 +2097,12 @@ impl ConversationService {
                             // opens it, a read or a restart's resumption, until
                             // a new message opens it again: this agent is
                             // parked once idle, as the one that closed it was.
-                            let closed = service
-                                .inner
-                                .metadata
-                                .thread_closed(&id)
-                                .await
-                                .map_err(|cause| OpeningFailure {
+                            service.refresh_closing(&id, &owner).await.map_err(|cause| {
+                                OpeningFailure {
                                     cause,
                                     holds: false,
-                                })?;
-                            owner.closing.store(closed, Ordering::SeqCst);
+                                }
+                            })?;
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
                             // and never opened on some other agent. A
@@ -4214,11 +4218,8 @@ impl ConversationService {
                 // retry of a message the agent already has is not new work:
                 // the turn that closed the thread may be that very message.
                 if !known && owner.closing.load(Ordering::SeqCst) {
-                    let _change = owner.closing_changes.lock().await;
-                    if owner.closing.load(Ordering::SeqCst) {
-                        service.inner.metadata.open_thread(&id).await?;
-                        owner.closing.store(false, Ordering::SeqCst);
-                    }
+                    service.inner.metadata.open_thread(&id).await?;
+                    service.refresh_closing(&id, &owner).await?;
                 }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new

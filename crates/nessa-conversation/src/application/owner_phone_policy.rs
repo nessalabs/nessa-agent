@@ -90,6 +90,7 @@ impl OwnerPhoneReader {
                 organization,
                 owner,
                 deleted,
+                created_by: None,
             },
         )
     }

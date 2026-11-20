@@ -23,6 +23,45 @@ snapshot, independently of the bounded message view: later Injected steering
 children do not hide their running parent. Queued work requires an explicit
 execution identity. A stop does not delete or close the conversation.
 
+`close_thread` with no argument closes the calling thread once its turn ends.
+With `threadId` it closes a thread the caller created with `create_thread`:
+the SDK's ownership record of that spawn (its `parent_session`) is the one
+place that says who created it. That creator is a fact on the thread, and
+Cedar's `owner.close_created` (`conversation.close_created`) decides whether
+the asking turn's thread is it; any other thread is refused with
+`not_your_thread`.
+The close is the same mark either way: a child open now stops once its turn
+ends, and one not open stays parked until a new message opens it.
+
+`read_turn {threadId, executionId}` reads where a saved turn's input came
+from and follows it back. A message from an agent names the turn it was sent
+from (`Agent(source conversation, source execution)` below), and a resumed turn
+names the turn it picks up; `read_turn` follows those links, at most 8, until
+an input nobody relayed. Each turn in the answer says its `origin` (`person`,
+`grant`, `agent`, `resumed`, `app`, `internal`) and what it `said`, exactly as
+saved; `startedBy` names the origin the chain starts at. It keeps no copy: the
+SDK records are written once at admission and never changed, so the words the
+chain ends at are the owner's own. With `earlier` (at most 3) a chain that
+reaches the person also brings their messages before it in that thread, and
+the thread's first, so the agent can tell what they meant. It decides nothing either. The reading agent
+judges whether those words cover what it is asked to do.
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant A as Parent agent
+    participant G as Gateway
+    participant B as Child agent
+    P->>G: "close it when done" (saved: person, turn 7)
+    G->>A: turn 7
+    A->>G: send_message(child, "please close")
+    G->>B: Agent-authored input {A, turn 7}: "please close"
+    B->>G: read_turn(A, turn 7)
+    G-->>B: [{origin: person, said: "close it when done"}], startedBy: person
+    A->>G: close_thread {threadId: child}
+    G-->>A: closing (A created it)
+```
+
 An optional `requestId` makes an intentional command retry recoverable. Creation,
 submission and stop use the existing durable command coordinators. Default
 conversation/execution IDs derive from source identity, request and purpose, so
@@ -182,6 +221,7 @@ the message text.
 | Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
 | Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
+| An agent-authored target turn calls `read_turn` | Cedar's `owner.read_turns` admits it on the owner's live conversations: it only reads | Reading the chain grants nothing; every other agent tool is still refused |
 | An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
 

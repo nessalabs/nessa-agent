@@ -89,6 +89,7 @@ import {
 } from "./scripted-frames.mjs"
 import {
   promptArguments,
+  promptSource,
   promptFiles,
   promptImages,
   promptText,
@@ -606,6 +607,9 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
             // text that looks like arguments, as a fork's copied history does.
             ...(JSON.stringify(matched.steps).includes("${prompt.arguments}")
               ? { arguments: promptArguments(text) }
+              : {}),
+            ...(JSON.stringify(matched.steps).includes("${prompt.source")
+              ? { source: promptSource(text) }
               : {}),
             images: promptImages(blocks),
             files: promptFiles(blocks),

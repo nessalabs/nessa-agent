@@ -11,6 +11,15 @@ use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+/// The one agent tool that only reads, and so is admitted under
+/// [`AccessAction::ReadTurns`] in any turn of the owner's, one another agent
+/// started included.
+pub const READ_TURN_TOOL: &str = "read_turn";
+
+/// The agent tool that, given another thread, closes it, and so is also
+/// asked under [`AccessAction::CloseCreated`] on that thread.
+pub const CLOSE_THREAD_TOOL: &str = "close_thread";
+
 impl ConversationService {
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {
         let _ = self.inner.agent_tool_audit.set(audit);
@@ -100,18 +109,58 @@ impl ConversationService {
         let record = load_conversation(self.inner.metadata.as_ref(), &source)
             .await?
             .ok_or(ConversationError::NotFound)?;
+        // Closing another thread is also asked on that thread, with the
+        // thread that created it, as the SDK's record of the spawn says, as
+        // a fact: the policy decides whether this turn's thread is it.
+        let closed = match (&target, tool.as_str()) {
+            (Some(target), CLOSE_THREAD_TOOL) => Some((
+                load_conversation(self.inner.metadata.as_ref(), target).await?,
+                self.thread_creator(target),
+            )),
+            _ => None,
+        };
+        let conversation = source.to_string();
+        let subject = AccessSubject::AgentTurn {
+            organization: record.organization(),
+            principal: &principal,
+            owner_initiated,
+            conversation: &conversation,
+        };
         let decision = self.inner.access_policy.evaluate(&AccessAsk {
-            subject: AccessSubject::AgentTurn {
-                organization: record.organization(),
-                principal: &principal,
-                owner_initiated,
+            subject,
+            action: if tool == READ_TURN_TOOL {
+                AccessAction::ReadTurns
+            } else {
+                AccessAction::AgentTools
             },
-            action: AccessAction::AgentTools,
             resource: AccessResource::of(&record),
             held: None,
             request: RequestShape::default(),
             target: None,
         });
+        let decision = match (decision, &closed) {
+            (AccessDecision::Allow { mut policies }, Some((child, creator))) => {
+                // A thread that is not saved is never another's to close.
+                let Some(child) = child else {
+                    return Err(ConversationError::NotFound);
+                };
+                match self.inner.access_policy.evaluate(&AccessAsk {
+                    subject,
+                    action: AccessAction::CloseCreated,
+                    resource: AccessResource::created(child, creator.as_deref()),
+                    held: None,
+                    request: RequestShape::default(),
+                    target: None,
+                }) {
+                    AccessDecision::Allow { policies: closing } => {
+                        policies.extend(closing);
+                        AccessDecision::Allow { policies }
+                    }
+                    refused => refused,
+                }
+            }
+            (decision, _) => decision,
+        };
         let (allowed, policies, reason) = match decision {
             AccessDecision::Allow { policies } => (true, policies, None),
             AccessDecision::Deny(AccessDenial::Forbidden { policies }) => {
