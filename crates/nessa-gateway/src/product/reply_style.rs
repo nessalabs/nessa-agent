@@ -98,7 +98,7 @@ fn choice(style: &ReplyStyle) -> ReplyStyleChoice {
         },
         ReplyStyle::Custom(text) => ReplyStyleChoice {
             mode: ReplyStyleMode::Custom,
-            text: Some(text.clone()),
+            text: Some(text.as_str().to_owned()),
         },
     }
 }

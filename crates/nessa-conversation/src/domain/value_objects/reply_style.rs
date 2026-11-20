@@ -41,8 +41,23 @@ const PLAIN: &str = "How to write to the person:\n\
 const COORDINATOR: &str = "\n- Be very short: status, what is next, and links to threads. Pass detailed questions to the thread that owns them, on the person's behalf, and say where you asked.";
 const THREAD: &str = "\n- Be specific: name the files, commands and results, still in plain words.";
 
-/// One style choice. Text is non-empty after trimming and at most
-/// [`MAX_REPLY_STYLE_BYTES`].
+/// A person's own style text: trimmed, non-empty and at most
+/// [`MAX_REPLY_STYLE_BYTES`]. Made only through [`StyleText::new`], and never
+/// changed after, so every kept or told text holds to that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StyleText(String);
+impl StyleText {
+    /// `text` trimmed, refused when empty or too long.
+    pub fn new(text: &str) -> Option<Self> {
+        let text = text.trim();
+        (!text.is_empty() && text.len() <= MAX_REPLY_STYLE_BYTES).then(|| Self(text.to_owned()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One style choice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReplyStyle {
     /// Nessa's own plain style for the role.
@@ -50,14 +65,12 @@ pub enum ReplyStyle {
     /// No style instructions at all: the agent talks as its harness does.
     Off,
     /// The person's own words.
-    Custom(String),
+    Custom(StyleText),
 }
 impl ReplyStyle {
     /// The person's own text, refused when empty or too long.
     pub fn custom(text: &str) -> Option<Self> {
-        let text = text.trim();
-        (!text.is_empty() && text.len() <= MAX_REPLY_STYLE_BYTES)
-            .then(|| Self::Custom(text.to_owned()))
+        StyleText::new(text).map(Self::Custom)
     }
     /// What the agent is told, for `role`; `None` for [`Self::Off`].
     pub fn instructions(&self, role: StyleRole) -> Option<String> {
@@ -70,7 +83,7 @@ impl ReplyStyle {
                     StyleRole::Thread => THREAD,
                 }
             )),
-            Self::Custom(text) => Some(text.clone()),
+            Self::Custom(text) => Some(text.as_str().to_owned()),
         }
     }
 }

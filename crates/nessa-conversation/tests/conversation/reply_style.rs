@@ -29,7 +29,7 @@ fn a_channel_choice_replaces_the_nessa_level_for_its_role_only() {
     assert_eq!(settings.effective(StyleRole::Coordinator), ReplyStyle::Off);
     assert_eq!(
         settings.effective(StyleRole::Thread),
-        ReplyStyle::Custom("Terse.".into())
+        ReplyStyle::custom("Terse.").unwrap()
     );
     assert_eq!(ReplyStyle::Off.instructions(StyleRole::Thread), None);
 }
@@ -54,7 +54,11 @@ fn a_global_read_has_no_channel_choices() {
 fn custom_text_is_trimmed_and_bounded() {
     assert_eq!(
         ReplyStyle::custom("  Be brief.  "),
-        Some(ReplyStyle::Custom("Be brief.".into()))
+        ReplyStyle::custom("Be brief.")
+    );
+    assert_eq!(
+        ReplyStyle::custom("  Be brief.  ").and_then(|style| style.instructions(StyleRole::Thread)),
+        Some("Be brief.".to_owned())
     );
     assert_eq!(ReplyStyle::custom("   "), None);
     assert!(ReplyStyle::custom(&"a".repeat(MAX_REPLY_STYLE_BYTES)).is_some());

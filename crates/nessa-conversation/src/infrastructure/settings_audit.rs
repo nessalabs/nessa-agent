@@ -40,7 +40,7 @@ fn style(choice: Option<&ReplyStyle>) -> Value {
         None => Value::Null,
         Some(ReplyStyle::Plain) => json!({ "style": "plain" }),
         Some(ReplyStyle::Off) => json!({ "style": "off" }),
-        Some(ReplyStyle::Custom(text)) => json!({ "style": "custom", "text": text }),
+        Some(ReplyStyle::Custom(text)) => json!({ "style": "custom", "text": text.as_str() }),
     }
 }
 

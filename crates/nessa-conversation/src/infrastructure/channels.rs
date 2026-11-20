@@ -7,6 +7,7 @@ use crate::application::{
 use crate::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
     ChannelNotes, ChannelParts, ChannelPath, ChannelResources, ReplyStyle, RoleStyles, StyleRole,
+    StyleText,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
@@ -463,8 +464,9 @@ fn style_of(style: &str, text: Option<String>) -> Result<ReplyStyle, Conversatio
     match (style, text) {
         ("plain", None) => Ok(ReplyStyle::Plain),
         ("off", None) => Ok(ReplyStyle::Off),
-        ("custom", Some(text)) => ReplyStyle::custom(&text)
-            .filter(|read| *read == ReplyStyle::Custom(text.clone()))
+        ("custom", Some(text)) => StyleText::new(&text)
+            .filter(|read| read.as_str() == text)
+            .map(ReplyStyle::Custom)
             .ok_or_else(|| unreadable("reply style")),
         _ => Err(unreadable("reply style")),
     }

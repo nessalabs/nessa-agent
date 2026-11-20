@@ -1492,3 +1492,56 @@ async fn a_conversation_keeps_the_style_it_started_with_and_only_the_owner_sets_
         Err(ConversationError::ChannelNotFound)
     ));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn style_changes_at_once_each_record_what_they_replaced() {
+    use crate::application::{SettingsChange, SettingsOutcome};
+    use crate::domain::{ReplyStyle, StyleRole};
+    let fixture = Fixture::new();
+    let person = caller("person", "style");
+    for round in 0..8 {
+        fixture.settings.records.lock().unwrap().clear();
+        let (first, second) = if round % 2 == 0 {
+            (ReplyStyle::Off, ReplyStyle::Plain)
+        } else {
+            (ReplyStyle::Plain, ReplyStyle::Off)
+        };
+        let set = |choice: ReplyStyle| {
+            let service = fixture.service.clone();
+            let person = person.clone();
+            tokio::spawn(async move {
+                service
+                    .set_reply_style(&person, None, StyleRole::Thread, Some(choice))
+                    .await
+                    .unwrap()
+            })
+        };
+        let (a, b) = tokio::join!(set(first), set(second));
+        a.unwrap();
+        b.unwrap();
+        // Each change that was applied replaced what the one before it left:
+        // no two record the same `before`.
+        let befores: Vec<_> = fixture
+            .settings
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record.outcome == SettingsOutcome::Requested)
+            .map(|record| match &record.change {
+                SettingsChange::ReplyStyle { before, .. } => before.clone(),
+                other => panic!("not a style change: {other:?}"),
+            })
+            .collect();
+        let unique: std::collections::HashSet<_> =
+            befores.iter().map(|before| format!("{before:?}")).collect();
+        assert_eq!(unique.len(), befores.len(), "round {round}: {befores:?}");
+        // Clear it again for the next round.
+        fixture
+            .service
+            .set_reply_style(&person, None, StyleRole::Thread, None)
+            .await
+            .unwrap();
+    }
+    fixture.service.shutdown().await.unwrap();
+}

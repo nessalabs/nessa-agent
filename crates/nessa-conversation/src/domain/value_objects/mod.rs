@@ -42,7 +42,7 @@ pub use workspace_window::{
 pub use place::{Place, UnknownPlace};
 pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
 pub use reply_style::{
-    ReplyStyle, ReplyStyleSettings, RoleStyles, StyleRole, MAX_REPLY_STYLE_BYTES,
+    ReplyStyle, ReplyStyleSettings, RoleStyles, StyleRole, StyleText, MAX_REPLY_STYLE_BYTES,
 };
 pub use settings_scope::SettingsScope;
 pub use vm_lifetime::{RestCause, VmLifetime, VmLifetimeSettings};

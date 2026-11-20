@@ -10,13 +10,13 @@ CREATE TABLE reply_styles (
     channel TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
     style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
-    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(CAST(text AS BLOB)) <= 4096),
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096),
     PRIMARY KEY (organization_id, owner_id, channel, role)
 ) STRICT, WITHOUT ROWID;
 CREATE TABLE conversation_reply_styles (
     conversation TEXT PRIMARY KEY NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
     style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
-    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(CAST(text AS BLOB)) <= 4096)
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096)
 ) STRICT, WITHOUT ROWID;
 PRAGMA user_version = 7;

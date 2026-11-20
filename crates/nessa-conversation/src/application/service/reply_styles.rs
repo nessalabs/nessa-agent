@@ -62,6 +62,9 @@ pub trait ReplyStyleStore: Send + Sync {
 #[derive(Default)]
 pub struct ReplyStyleBinding {
     store: std::sync::OnceLock<std::sync::Arc<dyn ReplyStyleStore>>,
+    /// Held across a change's read of `before`, its audit and its write, so
+    /// two changes at once never both record the same `before`.
+    changes: tokio::sync::Mutex<()>,
 }
 
 impl ConversationService {
@@ -146,6 +149,7 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)?
             .clone();
         let (organization, owner) = (&caller.organization_id, &caller.principal_id);
+        let _change = self.inner.reply_styles.changes.lock().await;
         let before = store
             .styles(organization, owner, scope.channel())
             .await?
