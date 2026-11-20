@@ -136,6 +136,24 @@ pub enum ChainEnd {
 }
 
 impl ConversationService {
+    /// Whether a message about to be admitted with the person as its sender
+    /// was sent by a person, read as `read_turn` will read its saved turn: a
+    /// usage-limit continuation or an external event was not. Its answer
+    /// decides whether the message answers what an agent asked
+    /// (`ask_owner`).
+    pub(super) async fn sent_by_a_person(
+        &self,
+        thread: &ConversationId,
+        execution: &str,
+        caller: &ConversationCaller,
+        initiator: &Initiator,
+    ) -> Result<bool, ConversationError> {
+        Ok(Origins::new(self)
+            .sent_as_person(thread, execution, &caller.surface_id, initiator)
+            .await?
+            .is_a_person())
+    }
+
     /// Read turn `execution` of `thread`, then each turn its input came from,
     /// until one whose input nobody relayed. Every thread read is checked
     /// against `caller` as a `conversation.read` would be; the first one it
@@ -316,13 +334,31 @@ impl<'a> Origins<'a> {
             MessageSender::Internal => return Ok(TurnOrigin::Internal),
             MessageSender::Person => {}
         }
-        let execution = record.request.execution_id.as_str();
+        self.sent_as_person(
+            thread,
+            record.request.execution_id.as_str(),
+            record.actor.surface_id(),
+            record.initiation.initiator(),
+        )
+        .await
+    }
+
+    /// How a turn sent with the person as its sender arrived: a usage-limit
+    /// continuation, an external event, or the person (or a grant) on a
+    /// device. Read from the facts saved at admission, which a submission
+    /// also has before it is saved.
+    async fn sent_as_person(
+        &mut self,
+        thread: &ConversationId,
+        execution: &str,
+        surface: &str,
+        initiator: &Initiator,
+    ) -> Result<TurnOrigin, ConversationError> {
         if let Some(store) = self.service.scheduled_messages() {
             if let Some(causal) = store.continued_from(&thread.to_string(), execution).await? {
                 return Ok(TurnOrigin::Continued { execution: causal });
             }
         }
-        let surface = record.actor.surface_id();
         let device = self.device(surface).await?;
         if device == Device::Unknown {
             if let Some(source) = surface.strip_prefix(EVENT_SURFACE_PREFIX) {
@@ -331,7 +367,7 @@ impl<'a> Origins<'a> {
                 });
             }
         }
-        Ok(match record.initiation.initiator() {
+        Ok(match initiator {
             Initiator::Grant(grant) => TurnOrigin::Grant {
                 grant: grant.grant().to_owned(),
                 device,

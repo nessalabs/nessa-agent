@@ -57,9 +57,12 @@ The ask is kept in the conversation metadata (`owner_asks`, one per
 conversation; a later ask replaces it) and nowhere else: every list row of
 that conversation carries it as `ask`, which is how each window and the
 floating panel learn of it, followed or not. The person's next message in the
-conversation is the answer, a tapped choice or anything they type, and
-removes it before the message is recorded, so the list that record wakes no
-longer shows it. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
+conversation is the answer, a tapped choice or anything they type. It
+removes the ask once the agent has the message, before the list summary that
+message writes, so the list that wakes no longer shows it. A message refused
+on its way answers nothing, and neither does a usage-limit continuation or
+an external event the gateway sends for the person: whether a message is
+the person's own is read from the same saved facts `read_turn` reads. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
 any turn of the owner's agents on their own live conversation, one another
 agent started included: a coordinator woken by a thread's report is who most
 needs to ask. Asking changes nothing else.

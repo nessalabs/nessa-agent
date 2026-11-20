@@ -4260,13 +4260,6 @@ impl ConversationService {
                     service.inner.metadata.open_thread(&id).await?;
                     service.refresh_closing(&id, &owner).await?;
                 }
-                // A person's new message is their answer to whatever the
-                // agent asked them (`ask_owner`), a tapped choice or not.
-                // Removed before the message is recorded, so the list that
-                // record wakes no longer shows it.
-                if !known && writer.is_person() {
-                    service.inner.metadata.answer_owner_ask(&id).await?;
-                }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new
                 // message (`an_owner_marked_as_stopping_is_handed_no_message`,
@@ -4700,6 +4693,20 @@ impl ConversationService {
                 Err(error) if again => return Err(Halt::Again(error)),
                 delivery => delivery?,
             };
+            // A person's new message is their answer to whatever the agent
+            // asked them (`ask_owner`), a tapped choice or not: once the agent
+            // has it, so a message refused on the way leaves the question
+            // waiting. A continuation or an external event sent for the
+            // person is not their answer. Removed before the summary below,
+            // so the list that summary wakes no longer shows it.
+            if !known
+                && writer.is_person()
+                && service
+                    .sent_by_a_person(&id, &execution_id, &caller, writer.initiation().initiator())
+                    .await?
+            {
+                service.inner.metadata.answer_owner_ask(&id).await?;
+            }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.

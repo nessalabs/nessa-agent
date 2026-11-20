@@ -6,7 +6,7 @@ use super::super::super::{
 use super::*;
 use crate::application::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture, ReportRegistration,
-    ThreadReport, ThreadReportStore, ThreadTurn,
+    ThreadReport, ThreadReportStore, ThreadTurn, EVENT_SURFACE_PREFIX,
 };
 use crate::infrastructure::LocalThreadReports;
 #[cfg(unix)]
@@ -1833,7 +1833,8 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
 
 /// An agent asks its owner a question: it is admitted and audited under its
 /// own action, the list row carries it until the person writes in the
-/// conversation, and a later ask replaces it. An ask past its bounds is
+/// conversation, and a later ask replaces it. A message refused on its way,
+/// or an external event sent for the person, answers nothing. An ask past its bounds is
 /// refused with what to fix, before it is admitted or audited.
 #[cfg(unix)]
 #[tokio::test]
@@ -1930,6 +1931,32 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     drop(grant);
     serving.await.unwrap();
     drop(release);
+    // A message refused on its way never reached the agent, so it answered
+    // nothing: the question still waits.
+    assert!(service
+        .submit(
+            source.clone(),
+            caller("refused-turn"),
+            "refused-turn".into(),
+            image_message("image/png", 16),
+            SubmissionMode::Queue,
+        )
+        .await
+        .is_err());
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
+    // An external event the gateway sends for the person is not their
+    // answer either.
+    service
+        .submit(
+            source.clone(),
+            caller_on("event-turn", &format!("{EVENT_SURFACE_PREFIX}hook")),
+            "event-turn".into(),
+            message("A push landed."),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
     // The person's next message is the answer: the ask is gone.
     settled_send(&service, &source, "answer-turn", "Ship").await;
     assert_eq!(row(service.clone()).await, None);
