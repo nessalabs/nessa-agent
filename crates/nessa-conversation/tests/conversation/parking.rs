@@ -697,8 +697,18 @@ async fn a_close_cleared_before_the_park_takes_the_lock_keeps_the_thread() {
     fixture.service.close_after_turn(&fixture.id).await.unwrap();
     let slot = fixture.slot().await.unwrap();
     // What a message does on its way in.
-    fixture.service.inner.metadata.open_thread(&fixture.id).await.unwrap();
-    fixture.service.refresh_closing(&fixture.id, &slot).await.unwrap();
+    fixture
+        .service
+        .inner
+        .metadata
+        .open_thread(&fixture.id)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .refresh_closing(&fixture.id, &slot)
+        .await
+        .unwrap();
     let submissions = fixture
         .service
         .inner
