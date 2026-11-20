@@ -162,6 +162,8 @@ export const SAYS = {
   answered: "Answered: ",
   requested: "Requested access: ",
   approvedAccess: "The person answered the access request: ",
+  /** Then the session's own permission mode the turn ran at. */
+  ranAt: ", ran at ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }
@@ -865,14 +867,30 @@ export function stressScenario({
             arguments: ACCESS,
             save: "requested",
           },
-          { do: "text", chunks: [SAYS.requested, "${requested.askId}"] },
+          {
+            do: "text",
+            chunks: [
+              SAYS.requested,
+              "${requested.askId}",
+              SAYS.ranAt,
+              "${configuration.mode}",
+            ],
+          },
           { do: "end" },
         ],
       },
       {
         when: STRESS.approved,
         steps: [
-          { do: "text", chunks: [SAYS.approvedAccess, "${prompt.text}"] },
+          {
+            do: "text",
+            chunks: [
+              SAYS.approvedAccess,
+              "${prompt.text}",
+              SAYS.ranAt,
+              "${configuration.mode}",
+            ],
+          },
           { do: "end" },
         ],
       },

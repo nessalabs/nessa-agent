@@ -390,9 +390,9 @@ import {
  *               the row's ask is Nessa's own question and choices with the
  *               agent's reason, and Not now is the one recommended. The red
  *               card says them and lists nothing yet; Approve raises the chat
- *               to Auto by the person's own access command, and no read of
- *               the chat ever holds their Approve while it still runs at Ask;
- *               the agent answers it; the card stays to
+ *               to Auto by the person's own access command, and the agent's
+ *               turn on their Approve begins at a different permission mode
+ *               than the asking turn ran at (each turn says its own); the card stays to
  *               list the three lines of what was allowed, and the row's ask
  *               goes. The chat is set back to Ask after
  *
@@ -2216,22 +2216,17 @@ async function pickAccess(page, mode) {
   if (!restored) throw new Error("the access menu did not restore focus to its control")
 }
 
-/** Waits for the gateway to say the conversation runs at `mode`. */
 /**
- * Reads the chat until the person's Approve is in it, and says the access the
- * chat ran at when it first was, if that was not yet {@link ACCESS}'s: the
- * order the access card promises the agent. Undefined when the order held,
- * or Approve never came (the step's own checks say so).
+ * The session's own permission mode a scenario turn says it ran at
+ * (`SAYS.ranAt`), fixed when the turn began; undefined when it said none.
  */
-async function watchApproveOrder(run, conversationId, ms = 30_000) {
-  const until = Date.now() + ms
-  while (Date.now() < until) {
-    const view = await run.client.conversation.read(conversationId).catch(() => null)
-    if (view?.messages.some((each) => each.userText === STRESS.approved))
-      return view.approvalMode === ACCESS.access ? undefined : view.approvalMode
-    await sleep(50)
-  }
-  return undefined
+function ranAt(turn) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  const at = said.lastIndexOf(SAYS.ranAt)
+  return at < 0 ? undefined : said.slice(at + SAYS.ranAt.length).trim()
 }
 
 /**
@@ -2246,7 +2241,7 @@ async function approveAccess(run, step, conversationId, named, failures) {
   await run.client.conversation.submit(
     run.client.conversation.prepare(conversationId, asking),
   )
-  const { view: asked } = await settled(
+  const { view: asked, turn: askingTurn } = await settled(
     run,
     conversationId,
     new Set(named?.messages.map((each) => each.executionId) ?? []),
@@ -2291,14 +2286,10 @@ async function approveAccess(run, step, conversationId, named, failures) {
     failures.push("the access card lists what is allowed before it is approved")
   if ((await run.client.conversation.read(conversationId)).approvalMode !== "ask")
     failures.push("asking for access changed the chat's access")
-  // From the click on, every read of the chat must never hold the person's
-  // Approve while the chat still runs at Ask: the answer goes only once
-  // the access it raised is in effect.
-  const early = watchApproveOrder(run, conversationId)
   await card.getByRole("button", { name: STRESS.approved, exact: true }).click()
   if (!(await accessIs(run, conversationId, ACCESS.access)))
     failures.push("Approve did not raise the chat to the access asked for")
-  await settled(
+  const { turn: answered } = await settled(
     run,
     conversationId,
     new Set(asked?.messages.map((each) => each.executionId) ?? []),
@@ -2306,6 +2297,19 @@ async function approveAccess(run, step, conversationId, named, failures) {
     "completed",
     failures,
   )
+  // The agent's session says the permission mode each turn began at: the
+  // Approve turn must begin at the raised one, not the Ask the asking turn
+  // ran at. That is fixed when the answer went, whenever it is read.
+  const before = ranAt(askingTurn)
+  const after = ranAt(answered)
+  if (!before || !after)
+    failures.push(
+      `the scenario did not say the mode its turns ran at (${before}, ${after})`,
+    )
+  else if (after === before)
+    failures.push(
+      `the Approve turn ran at ${after}, the mode the chat asked at: the answer went before the access changed`,
+    )
   await expectShown(run.page, `${SAYS.approvedAccess}${STRESS.approved}`, failures)
   const listed = card.locator("[data-slot=access-request-grants] li")
   const lines = await waitFor(async () => {
@@ -2318,11 +2322,6 @@ async function approveAccess(run, step, conversationId, named, failures) {
     )
   if (await card.getByRole("button").count())
     failures.push("the approved card still offers a choice")
-  const sentEarly = await early
-  if (sentEarly)
-    failures.push(
-      `Approve was in the chat while its access was still ${sentEarly}: the answer went before the access changed`,
-    )
   if (
     await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
       (cleared) => !cleared,
@@ -2331,6 +2330,7 @@ async function approveAccess(run, step, conversationId, named, failures) {
     failures.push("the list row still carries the approved access request")
 }
 
+/** Waits for the gateway to say the conversation runs at `mode`. */
 const accessIs = (run, conversationId, mode, ms = 20_000) =>
   waitFor(async () => {
     try {

@@ -67,7 +67,8 @@ function sayConversation(
     revision: held.revision + 1,
   }
   source.transcripts.set("c", next)
-  source.emit({ kind: "transcript", transcript: next })
+  // Drawn inside act, so the card's updates from it are all applied.
+  act(() => source.emit({ kind: "transcript", transcript: next }))
 }
 
 const button = (name: string): HTMLButtonElement => {
@@ -150,10 +151,12 @@ it("sends no Approve when the ask leaves before the access arrives", async () =>
   await act(async () => button("Approve").click())
   await act(async () => settle(10))
   // The person answered in words; the list lets the ask go.
-  source.emit({
-    kind: "session",
-    session: summary("c", "desktop", 110, "idle", { revision: 2 }),
-  })
+  act(() =>
+    source.emit({
+      kind: "session",
+      session: summary("c", "desktop", 110, "idle", { revision: 2 }),
+    }),
+  )
   await act(async () => settle(10))
   sayConversation(source, false, { mode: "full", modes: ["ask", "auto", "full"] })
   await act(async () => settle(10))

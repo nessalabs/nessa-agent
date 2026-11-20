@@ -615,7 +615,9 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
             files: promptFiles(blocks),
           },
         ],
-        ["configuration", { model: session.values.model }],
+        // The model and the native permission mode the session runs this
+        // turn at, as the gateway last set them.
+        ["configuration", { model: session.values.model, mode: session.values.mode }],
         // Asked only by a turn that says them: git is not run for every turn.
         ...(JSON.stringify(matched.steps).includes("${credentials.")
           ? [["credentials", credentialFacts()]]

@@ -2007,9 +2007,11 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
 }
 
 /// An agent asks its owner to raise the chat's access: the ask is admitted
-/// and audited as `ask_owner` is, and Nessa writes it, the agent giving only
-/// the access and why. A reason that is not one line is refused before
-/// admission. A chat already at that access or more is not asked.
+/// under `owner.request_access` and audited, and Nessa writes it, the agent
+/// giving only the access and why. A reason that is not one line is refused
+/// before admission. (A chat already at that access or more is not asked;
+/// this fixture's agent runs only at Ask, so that rule is
+/// `RaisedAccess::held_at`'s test, in nessa-protocol.)
 #[cfg(unix)]
 #[tokio::test]
 async fn an_access_request_is_nessas_card_with_the_agents_reason() {

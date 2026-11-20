@@ -1,10 +1,5 @@
 import * as React from "react"
-import {
-  AccessRequestCard,
-  isAccessRequest,
-  OwnerAskCard,
-  type OwnerAskView,
-} from "../../conversation"
+import { AccessRequestHost, OwnerAskCard, type OwnerAskView } from "../../conversation"
 
 /**
  * The decision an agent asked the person in the conversation on screen,
@@ -13,18 +8,17 @@ import {
  * nothing is asked and the card leaves. A choice not sent offers them all
  * again.
  *
- * An agent's request for more access is the red card: Approve raises the
- * conversation's access first (`raiseAccess`, the access picker's own
- * command), and sends Approve as the answer only once the conversation says
- * it runs at the access asked for (`access`), the end state and not the
- * command's reply. The card then stays to list what was allowed. While the
- * agent is at work (`working`) Approve waits.
+ * An agent's request for more access is the red card, whose round is
+ * `AccessRequestHost`'s, the same as the desktop window's: Approve raises
+ * the conversation's access by the access picker's own command
+ * (`raiseAccess`) and answers once the conversation runs at it (`access`).
  */
 export function PanelOwnerAsk({
   ask,
   submit,
   raiseAccess,
   access,
+  heading,
   working,
 }: {
   ask: OwnerAskView | undefined
@@ -37,6 +31,8 @@ export function PanelOwnerAsk({
    * while a change is on its way and not yet in effect.
    */
   access: "ask" | "auto" | "full" | undefined
+  /** The access a change on its way asks for, if any. */
+  heading?: "ask" | "auto" | "full" | undefined
   /** The agent is at work, so access cannot change yet. */
   working: boolean
 }) {
@@ -44,93 +40,37 @@ export function PanelOwnerAsk({
     null,
   )
   const [failure, setFailure] = React.useState<string | null>(null)
-  const [approved, setApproved] = React.useState<OwnerAskView | null>(null)
-  // Approve's answer, due once the conversation runs at the access it raised.
-  const [due, setDue] = React.useState<{ ask: OwnerAskView; label: string } | null>(null)
   const askId = ask?.askId
-  // A new ask, or none, starts with nothing on its way.
   React.useEffect(() => {
     setSending(null)
     setFailure(null)
-    setDue(null)
   }, [askId])
-  const send = (label: string, notSent: string): Promise<boolean> => {
-    const failed = () => {
-      setSending(null)
-      setFailure(notSent)
-      return false
-    }
-    return submit(label).then((taken) => taken || failed(), failed)
-  }
-  const raised = due?.ask.access?.mode
-  React.useEffect(() => {
-    if (!due || working || raised === undefined || access !== raised) return
-    setDue(null)
-    void send(
-      due.label,
-      "Access changed, but your answer was not sent. Write it to the agent.",
-    ).then((sent) => {
-      if (sent) setApproved(due.ask)
-    })
-    // `send` is this render's; only the due answer and the access start it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [due, working, raised, access])
-  if (approved && isAccessRequest(approved) && (!ask || ask.askId === approved.askId))
-    return (
-      <AccessRequestCard
-        ask={approved}
-        state="approved"
-        held={null}
-        failure={null}
-        onApprove={() => {}}
-        onDecline={() => {}}
-      />
-    )
-  if (!ask) return null
-  if (isAccessRequest(ask)) {
-    const [approve, decline] = ask.choices
-    const on = sending?.askId === ask.askId ? sending.label : null
-    return (
-      <AccessRequestCard
-        ask={ask}
-        state={on === null ? "asking" : "approving"}
-        held={working ? "You can approve once the agent stops." : null}
-        failure={failure}
-        onApprove={() => {
-          if (!approve) return
-          setSending({ askId: ask.askId, label: approve.label })
-          setFailure(null)
-          const refused = () => {
-            setSending(null)
-            setFailure("Access didn’t change. Press Approve again, or write your answer.")
-          }
-          raiseAccess(ask.access.mode).then((taken) => {
-            if (!taken) return refused()
-            setDue({ ask, label: approve.label })
-          }, refused)
-        }}
-        onDecline={() => {
-          if (!decline) return
-          setSending({ askId: ask.askId, label: decline.label })
-          setFailure(null)
-          void send(
-            decline.label,
-            "Not now was not sent. Press it again, or write your answer.",
-          )
-        }}
-      />
-    )
-  }
   return (
-    <OwnerAskCard
-      ask={ask}
-      sending={sending?.askId === ask.askId ? sending.label : null}
-      failure={failure}
-      onChoose={(label) => {
-        setSending({ askId: ask.askId, label })
-        setFailure(null)
-        void send(label, "This choice was not sent. Pick it again, or write your answer.")
-      }}
-    />
+    <>
+      <AccessRequestHost
+        ask={ask}
+        runsAt={access}
+        heading={heading}
+        working={working}
+        raise={(mode) => raiseAccess(mode).then((taken) => (taken ? "taken" : "refused"))}
+        answer={(text) => submit(text).catch(() => false)}
+      />
+      {ask && !ask.access ? (
+        <OwnerAskCard
+          ask={ask}
+          sending={sending?.askId === ask.askId ? sending.label : null}
+          failure={failure}
+          onChoose={(label) => {
+            setSending({ askId: ask.askId, label })
+            setFailure(null)
+            const failed = () => {
+              setSending(null)
+              setFailure("This choice was not sent. Pick it again, or write your answer.")
+            }
+            submit(label).then((taken) => taken || failed(), failed)
+          }}
+        />
+      ) : null}
+    </>
   )
 }
