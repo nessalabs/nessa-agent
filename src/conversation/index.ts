@@ -41,6 +41,7 @@ export type { RaiseOutcome } from "./model/access-approval"
 export { forgetChatApprovals } from "./ui/access-approvals"
 export { useOwnerAsks } from "./ui/use-owner-asks"
 export type { OwnerAskAccessView, OwnerAskView } from "./model/owner-ask"
+export { undoLabels } from "./model/owner-ask"
 export { usageLimitOnClientClock } from "./model"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.

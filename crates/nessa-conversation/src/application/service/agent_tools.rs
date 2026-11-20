@@ -7,7 +7,7 @@ use crate::application::{
 };
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
-use nessa_protocol::conversation::view::{OwnerAsk, RaisedAccess};
+use nessa_protocol::conversation::view::{DecisionSettings, OwnerAsk, OwnerDecision, RaisedAccess};
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -82,25 +82,154 @@ impl ConversationService {
         ask.asked_at_ms = self.inner.clock.unix_milliseconds();
         ask.check().map_err(|_| ConversationError::InvalidInput)?;
         let _writes = self.inner.records.summary_writes().lock(conversation).await;
-        match load_conversation(self.inner.metadata.as_ref(), conversation).await? {
+        let record = match load_conversation(self.inner.metadata.as_ref(), conversation).await? {
             Some(record) if record.deletion().is_none() => {
                 if raising.is_some_and(|access| access.held_at(record.approval_mode())) {
                     return Ok(AccessRequestOutcome::Held);
                 }
+                record
             }
             Some(_) => return Err(ConversationError::Deleted),
             None => return Err(ConversationError::NotFound),
-        }
+        };
         let previous = self.inner.summaries.load(conversation).await?;
+        let next = ConversationSummary::after_asking(previous.as_ref(), ask.clone());
+        let replaced = next.settled().cloned();
+        self.inner.summaries.record(conversation, next).await?;
+        self.inner.live_changes.publish(conversation);
+        // Measured only: settings that cannot be read leave them off the trace.
+        let settings = self
+            .inner
+            .summaries
+            .decision_settings(record.organization(), record.owner())
+            .await
+            .ok();
+        if let Some(replaced) = replaced {
+            self.inner.decision_traces.settled(conversation, &replaced);
+        }
+        self.inner
+            .decision_traces
+            .asked(conversation, record.agent(), &ask, settings);
+        self.inner.auto_pick_wakeup.notify_one();
+        Ok(AccessRequestOutcome::Asked)
+    }
+
+    /// What the conversation's agents asked its owner (`ask_owner`) and
+    /// what became of each, newest first: for the owner alone, as the ask
+    /// on a list row is.
+    pub async fn decisions(
+        &self,
+        conversation: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<Vec<OwnerDecision>, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let record = load_conversation(self.inner.metadata.as_ref(), &conversation)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        self.access().admit(&record, &caller)?;
+        let mut decisions = self.inner.summaries.decisions(&conversation).await?;
+        if decisions.iter().any(|decision| decision.outcome.is_none()) {
+            let settings = self
+                .inner
+                .summaries
+                .decision_settings(record.organization(), record.owner())
+                .await?;
+            for decision in &mut decisions {
+                decision.auto_pick_due_at_ms = decision.auto_pick_due(settings);
+            }
+        }
+        Ok(decisions)
+    }
+
+    /// How the caller's decisions behave, as they last set it.
+    pub async fn decision_settings(
+        &self,
+        caller: ConversationCaller,
+    ) -> Result<DecisionSettings, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
         self.inner
             .summaries
-            .record(
-                conversation,
-                ConversationSummary::after_asking(previous.as_ref(), ask),
-            )
+            .decision_settings(&caller.organization_id, &caller.principal_id)
+            .await
+    }
+
+    /// Keep how the caller's decisions behave, and return it as kept. A wait
+    /// outside the bounds is refused.
+    pub async fn set_decision_settings(
+        &self,
+        caller: ConversationCaller,
+        settings: DecisionSettings,
+    ) -> Result<DecisionSettings, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let settings = settings.checked().ok_or(ConversationError::InvalidInput)?;
+        self.inner
+            .summaries
+            .save_decision_settings(&caller.organization_id, &caller.principal_id, settings)
             .await?;
-        self.inner.live_changes.publish(conversation);
-        Ok(AccessRequestOutcome::Asked)
+        self.inner.auto_pick_wakeup.notify_one();
+        Ok(settings)
+    }
+
+    /// Pause auto-pick on the caller's waiting ask `ask_id`, or resume it.
+    /// The owner's alone, as the decisions are. False when that ask is not
+    /// waiting, or was already so.
+    pub async fn pause_auto_pick(
+        &self,
+        conversation: ConversationId,
+        caller: ConversationCaller,
+        ask_id: &str,
+        paused: bool,
+    ) -> Result<bool, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let record = load_conversation(self.inner.metadata.as_ref(), &conversation)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        self.access().admit(&record, &caller)?;
+        // Read and written under the summary lock auto-pick records its
+        // answer under: a pause either lands first and holds the pick, or
+        // finds the ask answered and says it did not apply.
+        let _writes = self
+            .inner
+            .records
+            .summary_writes()
+            .lock(&conversation)
+            .await;
+        let waiting = self
+            .inner
+            .summaries
+            .decisions(&conversation)
+            .await?
+            .into_iter()
+            .find(|decision| decision.ask.ask_id == ask_id && decision.outcome.is_none());
+        let Some(waiting) = waiting else {
+            return Ok(false);
+        };
+        if waiting.auto_pick_paused == paused {
+            return Ok(false);
+        }
+        let at_ms = paused.then(|| self.inner.clock.unix_milliseconds());
+        let applied = self
+            .inner
+            .summaries
+            .pause_auto_pick(&conversation, ask_id, at_ms)
+            .await?;
+        if applied {
+            self.inner.live_changes.publish(&conversation);
+            self.inner.auto_pick_wakeup.notify_one();
+            self.inner.decision_traces.event(
+                ask_id,
+                if paused {
+                    "auto_pick_paused"
+                } else {
+                    "auto_pick_resumed"
+                },
+            );
+        }
+        Ok(applied)
     }
 
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {

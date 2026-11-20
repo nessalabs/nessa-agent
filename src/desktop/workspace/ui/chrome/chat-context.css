@@ -89,3 +89,48 @@
 .chat-context-plugin:has(> .chat-context-plugin-accessory:empty) {
   display: none;
 }
+
+/* Decisions (`decisions.tsx`): a dot for where each stands (`decisions.css`),
+ * the question, and one quiet line under it. */
+.chat-context-decisions > li {
+  display: contents;
+}
+
+.chat-context-decision {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  row-gap: 1px;
+  padding-block: var(--desktop-control-inset);
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chat-context-decision:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 1px;
+}
+
+.chat-context-decision[data-state="waiting"] .chat-context-name {
+  font-weight: 500;
+}
+
+.chat-context-line {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-more {
+  align-self: flex-start;
+  margin-inline-start: calc(var(--desktop-gutter) * 2);
+  color: var(--desktop-muted);
+}

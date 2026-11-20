@@ -38,6 +38,17 @@ export const settingsCategories = [
     ],
   },
   {
+    id: "chat",
+    label: "Chat settings",
+    tabs: [
+      {
+        id: "decisions",
+        label: "Decisions",
+        keywords: "auto-pick autopick ask questions choices recommended wait",
+      },
+    ],
+  },
+  {
     id: "connections",
     label: "Connections",
     // MCP servers first: Accounts reads the vault, so opening Connections on
@@ -206,6 +217,20 @@ export const settingsEntries = [
     tab: "keyboard",
     label: "Shortcuts",
     keywords: "keys hotkeys",
+  },
+  // Chat settings › Decisions
+  {
+    id: "auto-pick",
+    tab: "decisions",
+    label: "Auto-pick recommended choice",
+    detail: "Only for easy-to-undo choices.",
+    keywords: "autopick answer default timeout",
+  },
+  {
+    id: "auto-pick-after",
+    tab: "decisions",
+    label: "Pick after",
+    keywords: "wait minutes hours",
   },
   // Connections › Accounts
   {

@@ -147,6 +147,26 @@
       "grant": "conversation.write",
       "lane": "controls"
     },
+    "conversation.decisions": {
+      "params": "ConversationDecisionsParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.decisionSettings": {
+      "params": "ConversationDecisionSettingsParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.pauseAutoPick": {
+      "params": "ConversationPauseAutoPickParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.setDecisionSettings": {
+      "params": "DecisionSettings",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "conversation.delete": {
       "params": "ConversationDeleteParams",
       "grant": "conversation.write",

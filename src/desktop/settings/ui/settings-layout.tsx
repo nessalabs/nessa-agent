@@ -36,6 +36,7 @@ import { tooltip } from "../../ui/tooltip"
 const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
   appearance: "appearance",
   workspace: "workspace",
+  chat: "chatSettings",
   connections: "connections",
   privacy: "privacy",
   advanced: "advanced",

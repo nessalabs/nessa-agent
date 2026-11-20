@@ -328,7 +328,7 @@ pub use ports::{
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
     RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
-    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns, WaitingAutoPick,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -344,7 +344,8 @@ pub use service::{
 };
 pub use service::{
     AccessRequestOutcome, ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL,
-    EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL, REQUEST_ACCESS_TOOL,
+    DECISION_TARGET, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL,
+    REQUEST_ACCESS_TOOL,
 };
 pub use service::{
     AgentBrief, AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing,
