@@ -15,7 +15,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { OwnerAsk } from "./owner-ask"
-import { forgetChatApprovals } from "../../../../conversation/ui/access-approvals"
+import { forgetChatApprovals } from "../../../../conversation"
 
 let root: Root
 let host: HTMLDivElement

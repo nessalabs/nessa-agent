@@ -4,7 +4,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { PanelOwnerAsk } from "./owner-ask"
-import { forgetChatApprovals } from "../../conversation/ui/access-approvals"
+import { forgetChatApprovals } from "../../conversation"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

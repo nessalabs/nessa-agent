@@ -38,6 +38,7 @@ export {
   isAccessRequest,
 } from "./ui/access-request-card"
 export type { RaiseOutcome } from "./model/access-approval"
+export { forgetChatApprovals } from "./ui/access-approvals"
 export { useOwnerAsks } from "./ui/use-owner-asks"
 export type { OwnerAskAccessView, OwnerAskView } from "./model/owner-ask"
 export { usageLimitOnClientClock } from "./model"
