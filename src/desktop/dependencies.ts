@@ -125,6 +125,10 @@ import {
   rememberedFilter,
   inMemorySharing,
   sharingGateway,
+  decisionsGateway,
+  sampleDecisions,
+  type DecisionSource,
+  type DecisionsClient,
   channelGateway,
   inMemoryChannels,
   windowPublisher,
@@ -182,6 +186,12 @@ export interface DesktopDependencies extends WorkspaceDependencies {
    * an empty list in place of a source it has not read. Provided by `main.tsx`.
    */
   readonly subagents: SubagentSource
+  /**
+   * Where Chat context reads a chat's decisions: the gateway's own, the
+   * sample's beside the sample workspace, and none beside a given source.
+   * Provided by `main.tsx`.
+   */
+  readonly decisions: DecisionSource | undefined
 }
 
 export function createDesktopDependencies(
@@ -350,6 +360,11 @@ export function createDesktopDependencies(
     questionFlights: createQuestionFlights(),
     widgets,
     subagents,
+    decisions: source
+      ? decisionsGateway({ connected: () => source.connected() })
+      : samples
+        ? sampleDecisions({ now })
+        : undefined,
     heldFiles: source
       ? heldFileReader(() => source.connected().then((client) => client.attachments))
       : // The sample's and a given source's sessions name no file anybody holds.
@@ -359,7 +374,7 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
+/** A gateway client the window can show conversations, draw apps, read held files and decisions, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
@@ -375,6 +390,7 @@ type WindowGatewayClient = GatewayClient &
   NativeHooksClient &
   PermissionRulesClient &
   SharingClient &
+  DecisionsClient &
   WindowPublishClient &
   WindowCommandClient & {
     readonly agents: AgentsApi

@@ -45,6 +45,7 @@ import type {
 import type { ChannelDraft, ChannelFailure, ResourceKind } from "../model/channel-draft"
 import type { PaneRoom } from "../../split-panes/model/pane-sizing"
 import type { QuestionChoice, Transcript } from "../model/transcript"
+import type { Decision } from "../model/decisions"
 import type { AgentsFilter } from "../model/overview/filter"
 import type {
   ShareGrant,
@@ -350,6 +351,17 @@ export function failureStages(error: unknown): StageMismatch | null {
     error.stages
     ? error.stages
     : null
+}
+
+/**
+ * The decisions an agent asked the person in a chat, and what became of
+ * each (`model/decisions.ts`): the gateway keeps them
+ * (`adapters/gateway/decisions-gateway.ts`), the sample keeps a few of its
+ * own (`adapters/in-memory/sample-decisions.ts`). A read that fails rejects;
+ * nothing is guessed in its place.
+ */
+export interface DecisionSource {
+  decisions(sessionId: string): Promise<readonly Decision[]>
 }
 
 /**

@@ -61,7 +61,7 @@ export type FakeGatewayClient = {
   WindowCommandClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
-      Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
+      Pick<ConversationApi, "permissionRules" | "revokePermissionRule" | "decisions">
   }
 
 /** The default channel, as the gateway lists it first. */
@@ -118,6 +118,7 @@ type Method =
   | "delete"
   | "permissionRules"
   | "revokePermissionRule"
+  | "decisions"
   | "listChannels"
   | "createChannel"
 
@@ -155,6 +156,7 @@ export const fakeCallMethods = {
   delete: "conversation.delete",
   permissionRules: "conversation.permissionRules",
   revokePermissionRule: "conversation.revokePermissionRule",
+  decisions: "conversation.decisions",
   listChannels: "channel.list",
   createChannel: "channel.create",
 } as const satisfies Record<
@@ -958,6 +960,9 @@ export function fakeGateway(
           requestId: "revoke",
           applied: false,
         })) as never,
+      // Nothing asked in any fake conversation.
+      decisions: (...args) =>
+        answer("decisions", args, () => ({ decisions: [] })) as never,
     },
     channels: {
       list: () =>

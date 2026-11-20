@@ -1,0 +1,126 @@
+/*
+ * Decisions (`decisions.tsx`). The dot says where a decision stands, in
+ * Chat context and in the dialog alike. The dialog is portalled out of the
+ * desktop surface, so it takes the kit's theme tokens and type steps, not
+ * the surface's own.
+ */
+.decisions-dot {
+  width: 7px;
+  height: 7px;
+  box-sizing: border-box;
+  justify-self: center;
+  border-radius: 50%;
+  background: var(--foreground);
+}
+
+.decisions-dot[data-state="decided"] {
+  background: var(--muted-foreground);
+}
+
+.decisions-dot[data-state="replaced"] {
+  border: 1px dashed var(--muted-foreground);
+  background: none;
+}
+
+.decisions-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  padding-bottom: calc(var(--spacing) * 2);
+}
+
+.decisions-dialog-list,
+.decisions-dialog-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.decisions-dialog-item {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--spacing) * 0.5) calc(var(--spacing) * 2);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2.5);
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.decisions-dialog-item:hover {
+  background: var(--muted);
+}
+
+.decisions-dialog-item[aria-expanded="true"] {
+  background: var(--accent);
+}
+
+.decisions-dialog-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.decisions-dialog-item[data-state="waiting"] .decisions-dialog-question {
+  font-weight: 500;
+}
+
+.decisions-dialog-line {
+  grid-column: 2;
+  color: var(--muted-foreground);
+}
+
+.decisions-dialog-detail {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2.5) calc(var(--spacing) * 3)
+    calc(var(--spacing) * 9);
+}
+
+.decisions-dialog-state,
+.decisions-dialog-why {
+  margin: 0;
+}
+
+.decisions-dialog-state {
+  font-weight: 500;
+}
+
+.decisions-dialog-why {
+  color: var(--muted-foreground);
+}
+
+.decisions-dialog-choices > li {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.5);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2.5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.decisions-dialog-choices > li[data-chosen] {
+  border-color: var(--foreground);
+}
+
+.decisions-dialog-said {
+  margin: 0;
+  padding-inline-start: calc(var(--spacing) * 2.5);
+  border-inline-start: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.decisions-dialog-choice {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  font-weight: 500;
+}
