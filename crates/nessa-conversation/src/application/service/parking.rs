@@ -72,15 +72,32 @@ impl ConversationService {
         if !live.agent.operation_capabilities().session_resume() {
             return Err(ConversationError::AgentUnsupported);
         }
-        // The conversation's, kept before this agent is marked: an opening
-        // after it is parked, or after a restart, reads it and is parked
-        // again until a new message opens the thread.
-        // With a new message's opening of the thread, one at a time: the
-        // store and the mark always say the same.
-        let _change = slot.closing_changes.lock().await;
-        self.inner.metadata.close_thread(id).await?;
-        slot.closing.store(true, Ordering::SeqCst);
+        self.mark_closed(id).await?;
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
+        Ok(())
+    }
+
+    /// Write `id`'s close to the store, then refresh any open slot's copy
+    /// of it. The store is the close's one authority; see [`Slot::closing`].
+    async fn mark_closed(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        self.inner.metadata.close_thread(id).await?;
+        let opened = self.inner.conversations.lock().await.get(id).cloned();
+        match opened {
+            Some(slot) => self.refresh_closing(id, &slot).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Copy `id`'s close mark, as the store now says, into `slot` (the
+    /// contract on [`Slot::closing`]).
+    pub(super) async fn refresh_closing(
+        &self,
+        id: &ConversationId,
+        slot: &Slot,
+    ) -> Result<(), ConversationError> {
+        let _change = slot.closing_changes.lock().await;
+        let closed = self.inner.metadata.thread_closed(id).await?;
+        slot.closing.store(closed, Ordering::SeqCst);
         Ok(())
     }
 
@@ -105,28 +122,20 @@ impl ConversationService {
     /// mark alone keeps whatever opens it before a new message parked.
     ///
     /// # Errors
-    /// [`Self::close_after_turn`]'s errors when it is open.
+    /// [`ConversationError::AgentUnsupported`] when it is open on an agent
+    /// that cannot resume its session, so it is never parked.
     pub async fn close_created_thread(
         &self,
         parent: &ConversationId,
         child: &ConversationId,
     ) -> Result<(), ConversationError> {
-        let open = self.inner.conversations.lock().await.contains_key(child);
-        if open {
-            return self.close_after_turn(child).await;
-        }
-        self.inner.metadata.close_thread(child).await?;
-        // An opening that began after the look above may have read the store
-        // before this write, and a new message may have opened the thread
-        // again since. Each changes the store and `closing` together under
-        // `closing_changes`, so the slot takes the store's mark as it stands
-        // under that lock; an opening that reads later sees it itself.
         let opened = self.inner.conversations.lock().await.get(child).cloned();
-        if let Some(slot) = opened {
-            let _change = slot.closing_changes.lock().await;
-            let closed = self.inner.metadata.thread_closed(child).await?;
-            slot.closing.store(closed, Ordering::SeqCst);
+        if let Some(live) = opened.as_ref().and_then(|slot| settled(slot)) {
+            if !live.agent.operation_capabilities().session_resume() {
+                return Err(ConversationError::AgentUnsupported);
+            }
         }
+        self.mark_closed(child).await?;
         tracing::info!(conversation_id = %child, parent = %parent, "a thread was closed by the thread that created it");
         Ok(())
     }
