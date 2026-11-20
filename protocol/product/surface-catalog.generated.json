@@ -694,6 +694,13 @@
       "destructive": false
     },
     {
+      "name": "channel.setCoordinator",
+      "params": "ChannelSetCoordinatorParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "replyStyle.read",
       "params": "ReplyStyleReadParams",
       "grant": "conversation.write",

@@ -772,8 +772,8 @@ impl ConversationAgentSource for CurrentAgentResolver {
         )
     }
 
-    /// With a style, the agent is built for this conversation alone, as a
-    /// placed one is: nothing composed without the style is reused.
+    /// With a job or a style, the agent is built for this conversation
+    /// alone, as a placed one is: nothing composed without them is reused.
     fn resolve_briefed<'a>(
         &'a self,
         agent: AgentId,
@@ -781,17 +781,18 @@ impl ConversationAgentSource for CurrentAgentResolver {
         mode: ConversationApprovalMode,
         brief: &'a AgentBrief,
     ) -> ConversationAgentFuture<'a> {
-        let Some(style) = &brief.style else {
+        if brief.style.is_none() && brief.job.is_none() {
             return match &brief.place {
                 None => self.resolve_for(agent, model, mode),
                 Some(place) => self.resolve_in(agent, model, mode, place),
             };
-        };
+        }
         let mut briefed = match &brief.place {
             None => self.clone(),
             Some(place) => self.placed(place),
         };
-        briefed.config.reply_style = Some(style.clone());
+        briefed.config.role_job.clone_from(&brief.job);
+        briefed.config.reply_style.clone_from(&brief.style);
         Box::pin(briefed.resolve_placed(agent, model.to_owned(), mode))
     }
 }

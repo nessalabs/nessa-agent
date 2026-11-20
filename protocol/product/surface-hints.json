@@ -359,6 +359,10 @@
     "readOnly": false,
     "destructive": false
   },
+  "channel.setCoordinator": {
+    "readOnly": false,
+    "destructive": false
+  },
   "conversation.readEarlier": {
     "readOnly": true,
     "destructive": false

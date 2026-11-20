@@ -3797,6 +3797,7 @@ pub struct Channel {
     pub thread_placement: String,
     #[serde(deserialize_with = "Option::deserialize")]
     pub coordinator_conversation_id: Option<String>,
+    pub coordinator_on: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3817,6 +3818,8 @@ pub struct ChannelCreateParams {
     pub coordinator_placement: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_placement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3830,6 +3833,18 @@ pub struct ChannelSetPlacementParams {
     pub channel_id: String,
     pub coordinator_placement: String,
     pub thread_placement: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetCoordinatorParams {
+    pub request_id: String,
+    pub channel_id: String,
+    pub on: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetCoordinatorResult {
+    pub channel: Channel,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4890,6 +4905,7 @@ pub mod product_method {
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
+    pub const CHANNEL_SET_COORDINATOR: &str = "channel.setCoordinator";
     pub const REPLY_STYLE_READ: &str = "replyStyle.read";
     pub const REPLY_STYLE_SET: &str = "replyStyle.set";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
@@ -5119,7 +5135,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 137
+                items.len() <= 138
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5245,6 +5261,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "channel.create",
     "channel.list",
     "channel.setPlacement",
+    "channel.setCoordinator",
     "replyStyle.read",
     "replyStyle.set",
     "conversation.subscribeEvents",
@@ -5549,6 +5566,8 @@ pub enum ProductMethod {
     ChannelList,
     /// `channel.setPlacement`
     ChannelSetPlacement,
+    /// `channel.setCoordinator`
+    ChannelSetCoordinator,
     /// `replyStyle.read`
     ReplyStyleRead,
     /// `replyStyle.set`
@@ -5728,6 +5747,7 @@ impl ProductMethod {
         ProductMethod::ChannelCreate,
         ProductMethod::ChannelList,
         ProductMethod::ChannelSetPlacement,
+        ProductMethod::ChannelSetCoordinator,
         ProductMethod::ReplyStyleRead,
         ProductMethod::ReplyStyleSet,
         ProductMethod::ConversationSubscribeEvents,
@@ -5876,6 +5896,7 @@ impl ProductMethod {
             "channel.create" => Some(ProductMethod::ChannelCreate),
             "channel.list" => Some(ProductMethod::ChannelList),
             "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
+            "channel.setCoordinator" => Some(ProductMethod::ChannelSetCoordinator),
             "replyStyle.read" => Some(ProductMethod::ReplyStyleRead),
             "replyStyle.set" => Some(ProductMethod::ReplyStyleSet),
             "conversation.subscribeEvents" => Some(ProductMethod::ConversationSubscribeEvents),
@@ -6023,6 +6044,7 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => "channel.create",
             ProductMethod::ChannelList => "channel.list",
             ProductMethod::ChannelSetPlacement => "channel.setPlacement",
+            ProductMethod::ChannelSetCoordinator => "channel.setCoordinator",
             ProductMethod::ReplyStyleRead => "replyStyle.read",
             ProductMethod::ReplyStyleSet => "replyStyle.set",
             ProductMethod::ConversationSubscribeEvents => "conversation.subscribeEvents",
@@ -6168,6 +6190,7 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => Some("conversation.write"),
             ProductMethod::ChannelList => Some("conversation.write"),
             ProductMethod::ChannelSetPlacement => Some("conversation.write"),
+            ProductMethod::ChannelSetCoordinator => Some("conversation.write"),
             ProductMethod::ReplyStyleRead => Some("conversation.write"),
             ProductMethod::ReplyStyleSet => Some("conversation.write"),
             ProductMethod::ConversationSubscribeEvents => Some("conversation.write"),
@@ -6312,6 +6335,7 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => ProductLane::Requests,
             ProductMethod::ChannelList => ProductLane::Requests,
             ProductMethod::ChannelSetPlacement => ProductLane::Requests,
+            ProductMethod::ChannelSetCoordinator => ProductLane::Requests,
             ProductMethod::ReplyStyleRead => ProductLane::Requests,
             ProductMethod::ReplyStyleSet => ProductLane::Requests,
             ProductMethod::ConversationSubscribeEvents => ProductLane::Requests,
@@ -6692,6 +6716,9 @@ impl ProductMethod {
             ProductMethod::ChannelSetPlacement => ProductParams::ChannelSetPlacement(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::ChannelSetCoordinator => ProductParams::ChannelSetCoordinator(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ReplyStyleRead => ProductParams::ReplyStyleRead(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6924,6 +6951,7 @@ pub enum ProductParams {
     ChannelCreate(ChannelCreateParams),
     ChannelList(ChannelListParams),
     ChannelSetPlacement(ChannelSetPlacementParams),
+    ChannelSetCoordinator(ChannelSetCoordinatorParams),
     ReplyStyleRead(ReplyStyleReadParams),
     ReplyStyleSet(ReplyStyleSetParams),
     ConversationSubscribeEvents(ConversationSubscribeEventsParams),
@@ -7086,6 +7114,7 @@ impl ProductParams {
             ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
             ProductParams::ChannelList(_) => ProductMethod::ChannelList,
             ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,
+            ProductParams::ChannelSetCoordinator(_) => ProductMethod::ChannelSetCoordinator,
             ProductParams::ReplyStyleRead(_) => ProductMethod::ReplyStyleRead,
             ProductParams::ReplyStyleSet(_) => ProductMethod::ReplyStyleSet,
             ProductParams::ConversationSubscribeEvents(_) => {

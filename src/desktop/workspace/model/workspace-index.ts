@@ -24,8 +24,16 @@ export interface Channel {
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
-  /** The channel’s current main chat, replaced after confirmed erasure. */
+  /**
+   * The channel’s current main chat, replaced after confirmed erasure.
+   * Absent while its coordinator is off.
+   */
   readonly coordinatorConversationId?: string
+  /**
+   * Whether its coordinator is on, where it can be switched (a made
+   * channel). Off keeps its chat and threads; on again opens the same chat.
+   */
+  readonly coordinatorOn?: boolean
   /** Where its main agent runs ({@link ChannelPlace}). */
   readonly coordinatorPlacement?: ChannelPlace
   /**

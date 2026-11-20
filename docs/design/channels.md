@@ -115,6 +115,35 @@ The stress step `style` sets Threads' own words in the default channel's
 settings, checks a new chat is told them and the main chat keeps its plain
 style, then clears the choice.
 
+## Its coordinator
+
+A made channel has a coordinator: the main agent that starts threads and keeps
+the person up to date. It is on unless the person turns it off when making
+the channel (`channel.create` with `coordinator: false`), and it can be
+switched at any time in the channel's settings (`channel.setCoordinator`).
+Only the owner switches it: the gateway checks Cedar's channel-settings
+action, refuses the default channel, and audits each switch as
+`channel_coordinator`, from what it was to what it became. Switches are taken
+one at a time, so each record names the state it replaced.
+
+Off keeps the coordinator's chat and every thread. The channel still names
+its main chat (`coordinatorConversationId`) and says `coordinatorOn: false`;
+the desktop leaves the main chat out of the channel while it is off, so
+opening the channel shows its newest chat or a new one, which is an ordinary
+thread. On again, it is the same chat: nothing is retired or remade.
+
+The coordinator is told its job (`StyleRole::job`) in Nessa's own launch
+prompt as `nessa/role`, after the channel's notes and before the style. Like
+the style, it comes from the role pinned when the conversation was created,
+so switching the coordinator off and on never changes a prompt and never
+restarts a session. A coordinator chat made before the pin existed is told no
+job.
+
+The stress step `coordinator` makes a channel with it on (its first chat is
+the coordinator, told its job), switches it off in settings (a new chat there
+is a thread, told no job), on again (the same chat still answers), and makes
+a second channel with it off.
+
 ## Changing where a channel runs
 
 A channel says where its main agent runs and where its threads run

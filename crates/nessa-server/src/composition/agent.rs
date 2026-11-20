@@ -126,6 +126,13 @@ pub(super) struct AgentsConfig {
     #[serde(skip)]
     #[cfg_attr(not(unix), allow(dead_code))]
     pub reply_style: Option<String>,
+    /// The role's job (`StyleRole::job`, a coordinator's), pinned when its
+    /// conversation was started, told after the channel's text and before the
+    /// style; `None` adds nothing. Set only on the copy of this configuration
+    /// one conversation's agent is built from. Never configured.
+    #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub role_job: Option<String>,
     /// When an unanswered review settles (ADR 141): a read inside the
     /// workspace is allowed after eight seconds, and any other review is
     /// denied after `agents.reviewWaitSeconds`, [`REVIEW_WAIT`] when left out.
@@ -1177,6 +1184,14 @@ pub(super) mod build {
                 PromptSource::new(PromptSourceKind::User, "nessa/channel")
                     .map_err(|e| RunError::Agent(e.to_string()))?,
                 format!("\n\n{channel}"),
+            ),
+            None => builder,
+        };
+        let builder = match &config.role_job {
+            Some(job) => builder.text(
+                PromptSource::new(PromptSourceKind::User, "nessa/role")
+                    .map_err(|e| RunError::Agent(e.to_string()))?,
+                format!("\n\n{job}"),
             ),
             None => builder,
         };

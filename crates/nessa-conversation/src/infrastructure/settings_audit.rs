@@ -65,6 +65,19 @@ pub fn stored(record: &SettingsAuditRecord) -> Value {
             }),
             json!({ "before": placement(before), "requested": placement(after) }),
         ),
+        SettingsChange::ChannelCoordinator {
+            channel,
+            before,
+            after,
+            coordinator,
+        } => (
+            "channel_coordinator",
+            json!({
+                "channelId": channel.as_str(),
+                "coordinatorConversationId": coordinator.to_string(),
+            }),
+            json!({ "before": { "on": before }, "requested": { "on": after } }),
+        ),
         SettingsChange::ReplyStyle {
             channel,
             role,

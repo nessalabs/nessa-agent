@@ -329,14 +329,19 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2, 3, 4, 5, 6] {
+    for version in [1, 2, 3, 4, 5, 6, 7] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("channels.sqlite3");
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
-        let tables = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        let tables = current[..current.find("-- A replacement is recorded").unwrap()]
+            // No older file can turn its coordinator off (v8).
+            .replace(
+                "    -- Whether its coordinator is on; off keeps its main conversation.\n    coordinator_on INTEGER NOT NULL DEFAULT 1 CHECK (coordinator_on IN (0, 1)),\n",
+                "",
+            );
         // Before one named computer (v6), a channel held a kind of place only.
         // A v6 file is today's tables without how agents talk (v7).
         let tables = if version >= 6 {
@@ -374,8 +379,16 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 "cause = 'coordinator_conversation_erased'",
             )
         };
+        // A v7 file already keeps how agents talk.
+        let styles = if version >= 7 {
+            current[current.find("-- How agents talk").unwrap()
+                ..current.find("PRAGMA user_version").unwrap()]
+                .to_owned()
+        } else {
+            String::new()
+        };
         let old = if version >= 3 {
-            format!("{tables}{replacements}")
+            format!("{tables}{replacements}{styles}")
         } else if version == 1 {
             tables
                 .lines()
@@ -408,6 +421,8 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
         assert_eq!(*restored.execution(), ChannelExecution::default());
+        // A channel from before kept its main agent, so its coordinator is on.
+        assert!(restored.coordinator_on(), "version {version}");
         assert_eq!(restored.coordinator_id(), main);
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
@@ -459,6 +474,40 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             main
         );
     }
+}
+
+#[tokio::test]
+async fn a_coordinator_switched_off_keeps_its_chat_and_reads_back_after_a_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("switch", "design", 1);
+    assert!(original.coordinator_on());
+    store.create(original.clone()).await.unwrap();
+    let off = store
+        .set_coordinator_on(original.id(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!off.coordinator_on());
+    assert_eq!(off.coordinator_id(), original.coordinator_id());
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept = reopened.get(original.id()).await.unwrap().unwrap();
+    assert!(!kept.coordinator_on());
+    let on = reopened
+        .set_coordinator_on(original.id(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(on.coordinator_on());
+    assert_eq!(on.coordinator_id(), original.coordinator_id());
+    let missing = made("absent", "none", 1);
+    assert!(reopened
+        .set_coordinator_on(missing.id(), false)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

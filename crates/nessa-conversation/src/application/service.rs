@@ -992,6 +992,8 @@ struct Inner {
     channels: channels::ChannelBinding,
     /// How agents talk; unbound, no agent is told a style.
     reply_styles: reply_styles::ReplyStyleBinding,
+    /// Held across a channel coordinator switch's read, audit and write.
+    channel_switches: tokio::sync::Mutex<()>,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
     /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
@@ -1539,6 +1541,7 @@ impl ConversationService {
                 background_tasks: OnceLock::new(),
                 channels: Default::default(),
                 reply_styles: Default::default(),
+                channel_switches: tokio::sync::Mutex::new(()),
                 scheduled_messages: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
@@ -1721,6 +1724,7 @@ impl ConversationService {
             place: channel
                 .as_ref()
                 .map(|channel| AgentPlace::of(channel, place_asked.is_remote())),
+            job: None,
             style: None,
         };
         let configured = match model.as_deref() {

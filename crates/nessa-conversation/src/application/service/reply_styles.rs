@@ -221,18 +221,20 @@ impl ConversationService {
         store.pin(id, role, style).await
     }
 
-    /// What `id`'s agent is told about how to write, from the style it was
-    /// started with. With no store bound, none: nothing was pinned.
-    pub(super) async fn reply_style_instructions(
+    /// What `id`'s agent is told of its job and how to write, from the role
+    /// and style it was started with. With no store bound, or for a
+    /// conversation from before styles were kept, nothing: nothing was
+    /// pinned, and telling it now would change its saved prompt.
+    pub(super) async fn role_and_style(
         &self,
         id: &ConversationId,
-    ) -> Result<Option<String>, ConversationError> {
+    ) -> Result<(Option<String>, Option<String>), ConversationError> {
         let Some(store) = self.reply_style_store() else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        Ok(store
-            .pinned(id)
-            .await?
-            .and_then(|(role, style)| style.instructions(role)))
+        Ok(match store.pinned(id).await? {
+            Some((role, style)) => (role.job().map(str::to_owned), style.instructions(role)),
+            None => (None, None),
+        })
     }
 }

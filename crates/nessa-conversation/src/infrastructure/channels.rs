@@ -32,10 +32,11 @@ const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(4, include_str!("channels-placement-moves.sql")),
     nessa_local_database::Upgrade::new(5, include_str!("channels-any-place.sql")),
     nessa_local_database::Upgrade::new(6, include_str!("channels-reply-styles.sql")),
+    nessa_local_database::Upgrade::new(7, include_str!("channels-coordinator-switch.sql")),
 ];
-const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
+const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement, coordinator_on";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
-                       folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement, \
+                       folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement, coordinator_on, \
                        (SELECT coordinator FROM channel_coordinator_replacements WHERE channel = channels.channel ORDER BY generation DESC LIMIT 1)";
 
 /// Channels and their conversations, in one private SQLite file.
@@ -97,6 +98,7 @@ type Stored = (
     i64,
     String,
     String,
+    bool,
     Option<String>,
 );
 
@@ -118,6 +120,7 @@ fn stored(row: &Row<'_>) -> nessa_local_database::rusqlite::Result<Stored> {
         row.get(13)?,
         row.get(14)?,
         row.get(15)?,
+        row.get(16)?,
     ))
 }
 
@@ -138,6 +141,7 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         created_at,
         coordinator_placement,
         thread_placement,
+        coordinator_on,
         coordinator,
     ) = row;
     let invalid = || unreadable(&id);
@@ -169,7 +173,8 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         request_id,
         u64::try_from(created_at).map_err(|_| invalid())?,
     )
-    .map_err(|_| invalid())?;
+    .map_err(|_| invalid())?
+    .with_coordinator_on(coordinator_on);
     match coordinator {
         Some(id) => Ok(channel.with_coordinator(ConversationId::new(&id).map_err(|_| invalid())?)),
         None => Ok(channel),
@@ -213,7 +218,7 @@ impl ChannelStore for LocalChannelStore {
                 .execute(
                     &format!(
                         "INSERT INTO channels ({WRITTEN_COLUMNS}) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
                          ON CONFLICT DO NOTHING"
                     ),
                     params![
@@ -233,6 +238,7 @@ impl ChannelStore for LocalChannelStore {
                             .map_err(|_| ConversationError::InvalidInput)?,
                         made.execution().coordinator_word(),
                         made.execution().threads_word(),
+                        made.coordinator_on(),
                     ],
                 )
                 .map_err(failed)?;
@@ -446,6 +452,35 @@ impl ChannelStore for LocalChannelStore {
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(Some(changed))
+        })
+    }
+
+    fn set_coordinator_on(
+        &self,
+        id: &ChannelId,
+        on: bool,
+    ) -> ConversationFuture<'_, Option<Channel>> {
+        let id = id.as_str().to_owned();
+        self.run(move |connection| {
+            let transaction = connection.transaction().map_err(failed)?;
+            transaction
+                .execute(
+                    "UPDATE channels SET coordinator_on = ?2 WHERE channel = ?1",
+                    params![id, on],
+                )
+                .map_err(failed)?;
+            let changed = transaction
+                .query_row(
+                    &format!("SELECT {COLUMNS} FROM channels WHERE channel = ?1"),
+                    [&id],
+                    stored,
+                )
+                .optional()
+                .map_err(failed)?
+                .map(channel)
+                .transpose()?;
+            transaction.commit().map_err(failed)?;
+            Ok(changed)
         })
     }
 }

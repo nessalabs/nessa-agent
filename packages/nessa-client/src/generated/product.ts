@@ -3541,8 +3541,10 @@ export interface Channel {
   coordinatorPlacement: string
   /** Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name. */
   threadPlacement: string
-  /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity. */
+  /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation while coordinatorOn; New thread uses another identity. */
   coordinatorConversationId: string | null
+  /** Whether the channel's coordinator is on; false for the default channel. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator). */
+  coordinatorOn: boolean
 }
 /** Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder. */
 export interface ChannelCreateParams {
@@ -3566,6 +3568,8 @@ export interface ChannelCreateParams {
   coordinatorPlacement?: string
   /** Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name. */
   threadPlacement?: string
+  /** Whether the channel starts with a coordinator; omitted is true. It can be switched later (channel.setCoordinator), so a retry is not told apart by it. */
+  coordinator?: boolean
 }
 /** The channel channel.create made, or made earlier under the same requestId. */
 export interface ChannelCreateResult {
@@ -3581,6 +3585,19 @@ export interface ChannelSetPlacementParams {
   coordinatorPlacement: string
   /** Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name. */
   threadPlacement: string
+}
+/** Turn a made channel's coordinator on or off (channel.setCoordinator). Off keeps its main conversation and its threads; the channel is no longer opened at it. On again, the same conversation is its coordinator. The default channel has none and is refused forbidden, as is a channel the caller may not change. */
+export interface ChannelSetCoordinatorParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The made channel to change. */
+  channelId: string
+  /** Whether its coordinator is on from now. */
+  on: boolean
+}
+/** The channel as channel.setCoordinator left it. */
+export interface ChannelSetCoordinatorResult {
+  channel: Channel
 }
 /** The channel as channel.setPlacement left it. */
 export interface ChannelSetPlacementResult {
@@ -4191,7 +4208,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 137,
+  maxReadyMethods: 138,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4516,6 +4533,7 @@ export const ProductMethod = {
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
   ChannelSetPlacement: "channel.setPlacement",
+  ChannelSetCoordinator: "channel.setCoordinator",
   ReplyStyleRead: "replyStyle.read",
   ReplyStyleSet: "replyStyle.set",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
@@ -4669,6 +4687,7 @@ export const productReadyMethods = [
   "channel.create",
   "channel.list",
   "channel.setPlacement",
+  "channel.setCoordinator",
   "replyStyle.read",
   "replyStyle.set",
   "conversation.subscribeEvents",
@@ -4810,6 +4829,7 @@ export const productMethodGrants = {
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
   "channel.setPlacement": "conversation.write",
+  "channel.setCoordinator": "conversation.write",
   "replyStyle.read": "conversation.write",
   "replyStyle.set": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",

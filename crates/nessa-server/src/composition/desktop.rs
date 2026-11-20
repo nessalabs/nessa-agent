@@ -133,6 +133,7 @@ pub(super) fn configure(
             runtimes: HashMap::new(),
             channel_instructions: None,
             reply_style: None,
+            role_job: None,
             review_deadlines: super::agent::review_deadlines(),
         });
     }

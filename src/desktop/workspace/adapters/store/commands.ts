@@ -129,6 +129,7 @@ export {
   draftChannel,
   openChannelCreation,
   removeChannelResource,
+  setChannelCoordinator,
   setChannelPlacement,
   watchChannelDrops,
 } from "./channel-commands"

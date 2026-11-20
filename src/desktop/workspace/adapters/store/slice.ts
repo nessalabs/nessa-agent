@@ -491,20 +491,26 @@ const workspaceSlice = createSlice({
     ) => channelCreation.channelMade(state, payload),
     // A channel's settings changed: the index keeps its section and the rest
     // of what the window knows of it, and takes where its agents run now.
+    // A changed channel as its source answered it: where it runs, and its
+    // coordinator, on (with its main chat) or off (with none).
     channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
       ...state,
-      channels: state.channels.map((each) =>
-        each.id === payload.channel.id
-          ? {
-              ...each,
-              coordinatorPlacement: payload.channel.coordinatorPlacement,
-              threadPlacement: payload.channel.threadPlacement,
-              ...(payload.channel.coordinatorConversationId
-                ? { coordinatorConversationId: payload.channel.coordinatorConversationId }
-                : {}),
-            }
-          : each,
-      ),
+      channels: state.channels.map((each) => {
+        if (each.id !== payload.channel.id) return each
+        const { coordinatorConversationId: _held, ...rest } = each
+        const main =
+          payload.channel.coordinatorConversationId ??
+          (payload.channel.coordinatorOn === false ? undefined : _held)
+        return {
+          ...rest,
+          coordinatorPlacement: payload.channel.coordinatorPlacement,
+          threadPlacement: payload.channel.threadPlacement,
+          ...(payload.channel.coordinatorOn === undefined
+            ? {}
+            : { coordinatorOn: payload.channel.coordinatorOn }),
+          ...(main ? { coordinatorConversationId: main } : {}),
+        }
+      }),
     }),
   },
 })

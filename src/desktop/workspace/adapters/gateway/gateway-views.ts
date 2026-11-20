@@ -122,9 +122,11 @@ export function channelFrom(wire: WireChannel): Channel {
     private: false,
     topic: "",
     folder: wire.folder,
-    ...(wire.coordinatorConversationId
+    // Off, the channel is not opened at its main chat.
+    ...(wire.coordinatorConversationId && wire.coordinatorOn
       ? { coordinatorConversationId: wire.coordinatorConversationId }
       : {}),
+    coordinatorOn: wire.coordinatorOn,
     coordinatorPlacement: wire.coordinatorPlacement,
     threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),

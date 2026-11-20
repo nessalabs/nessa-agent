@@ -383,6 +383,10 @@ pub struct Channel {
     resources: ChannelResources,
     request_id: String,
     created_at_ms: u64,
+    /// Whether the channel's coordinator is on. Off, its main conversation
+    /// is kept, with its threads, but the channel no longer opens it as its
+    /// main chat; on again, the same conversation is its coordinator.
+    coordinator_on: bool,
 }
 
 /// What a channel is made of, besides who owns it.
@@ -439,6 +443,7 @@ impl Channel {
             resources,
             request_id,
             created_at_ms,
+            coordinator_on: true,
         })
     }
 
@@ -481,6 +486,20 @@ impl Channel {
     pub fn with_execution(&self, execution: ChannelExecution) -> Self {
         Self {
             execution,
+            ..self.clone()
+        }
+    }
+    /// Whether this channel's coordinator is on. A channel is made with it on
+    /// unless its maker says otherwise.
+    pub fn coordinator_on(&self) -> bool {
+        self.coordinator_on
+    }
+    /// This channel with its coordinator turned on or off. Its main
+    /// conversation's id is kept either way.
+    #[must_use]
+    pub fn with_coordinator_on(&self, on: bool) -> Self {
+        Self {
+            coordinator_on: on,
             ..self.clone()
         }
     }
@@ -564,6 +583,9 @@ pub struct ChannelRequest {
     pub execution: ChannelExecution,
     pub notes: ChannelNotes,
     pub resources: ChannelResources,
+    /// Whether it starts with a coordinator. It can be switched later, so a
+    /// retry is not told apart by it.
+    pub coordinator_on: bool,
 }
 
 #[cfg(test)]
