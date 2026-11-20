@@ -513,6 +513,15 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'githubs') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --githubs 1 --evidence "$STRESS_EVIDENCE/github-webkit" 2>&1 | tee "$STRESS_EVIDENCE/github-webkit.log"
         timeout-minutes: 10
+      # Channel settings in WebKit too: Auto-stop's amount field saves on ↩ and
+      # as it loses focus to its unit's menu, then the unit applies to it.
+      - name: Run the channel stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'channels') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --channels 1 --evidence "$STRESS_EVIDENCE/channel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/channel-webkit.log"
+        timeout-minutes: 10
       # First-run setup ships in WKWebView too: the welcome is whole as it
       # opens, and a summon sends nothing through the light behind it.
       - name: Run the onboarding stress step in WebKit
