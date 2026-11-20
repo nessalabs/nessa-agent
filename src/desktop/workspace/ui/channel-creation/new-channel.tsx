@@ -715,13 +715,9 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
           </select>
         </label>
       ))}
-      <p>
-        A cloud runs Claude or Codex in a workspace VM of each thread’s own: Boat on your
-        connected subscriptions, Agent37 on your own Agent37 account (connect it in
-        Settings › Accounts). Keep your Nessa gateway online; local folders need an
-        approved connection. New channels use your default VM lifetime; change it in
-        channel settings to override.
-      </p>
+      {/* One line: what a cloud choice means. Clouds are connected in
+      Settings, and a VM's lifetime is changed in the channel's settings. */}
+      <p data-new-channel-placement-note="">Each cloud thread gets its own VM.</p>
       {boatReady || boat.unread ? null : (
         <div className="settings-boat" data-boat-connect>
           <BoatTokenForm connection={boat} />

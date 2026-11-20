@@ -2821,6 +2821,8 @@ async function makeChannel(
   if ((await coordinatorChoice.inputValue()) !== "on")
     failures.push("a new channel's coordinator is not on until it is turned off")
   if (!coordinator) await coordinatorChoice.selectOption("off")
+  // The note under the choices stays one line, even at the narrowest window.
+  await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
   await page.keyboard.press(keys.enter)
