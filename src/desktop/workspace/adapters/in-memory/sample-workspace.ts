@@ -84,6 +84,9 @@ export function sampleWorkspace(now: number): {
           activity,
           approvals: sample.approval ? [sample.approval] : [],
           revision: 1,
+          ...(sample.runtime ? { runtime: sample.runtime } : {}),
+          ...(sample.lease ? { lease: sample.lease } : {}),
+          ...(sample.published ? { published: sample.published } : {}),
         },
       ]
     }),

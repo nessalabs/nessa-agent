@@ -390,6 +390,8 @@ export const selectShowAll = (state: Root, channelId: string) =>
   state.workspace.tree.showAllChannels.includes(channelId)
 export const selectSectionCollapsed = (state: Root, sectionId: string) =>
   state.workspace.tree.collapsedSections.includes(sectionId)
+export const selectChatContextFolded = (state: Root) =>
+  state.workspace.tree.chatContextFolded
 
 export interface ListGroup {
   readonly id: string

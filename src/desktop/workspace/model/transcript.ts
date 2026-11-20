@@ -490,6 +490,14 @@ export interface TranscriptLease {
  * streams in. A live tool run already shows the agent at work, so the
  * transcript draws this only where none does (`shownActivity`).
  */
+/** What a conversation runs on (`Transcript.runtime`). */
+export interface TranscriptRuntime {
+  /** The working directory on the gateway's machine, not this one's. */
+  readonly workspace: string
+  readonly modelName: string
+  readonly contextWindowTokens: number
+}
+
 export interface Activity {
   readonly label: string
   readonly since: number
@@ -534,6 +542,14 @@ export interface Transcript {
   readonly agent?: string
   /** Where its agent runs; absent until the gateway has recorded a lease. */
   readonly lease?: TranscriptLease
+  /**
+   * What it runs on, as the source configured it: the catalog's model name
+   * and context window, and the working directory on the gateway's machine.
+   * Absent while its agent has no runtime yet.
+   */
+  readonly runtime?: TranscriptRuntime
+  /** Files its agent published, newest first, as many as the view listed. */
+  readonly published?: readonly FilePart[]
   /** The approval preset its agent runs at; absent where the source did not say (`access.ts`). */
   readonly access?: SessionAccess
   /** The source's count of changes to this conversation; see `revision.ts`. */

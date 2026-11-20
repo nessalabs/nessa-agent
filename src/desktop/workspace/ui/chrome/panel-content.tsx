@@ -25,12 +25,18 @@ import {
 import { DesktopIcon } from "../../../ui/icons"
 import { panelWidgetAttribute } from "../../adapters/dom/focus"
 import { panelScope, useEscapeScope } from "../../adapters/dom/widget-escape"
-import { closePanelTab, openSession, showPanelTab } from "../../adapters/store/commands"
+import {
+  closePanelTab,
+  openSession,
+  openWidget,
+  showPanelTab,
+} from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChatPanel, selectFocusedSessionId } from "../../adapters/store/selectors"
 import { usePanelWidgetHost } from "../../adapters/store/widget-hosts"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import type { ChatPanel } from "../../model/chat-panel"
+import { isChatContextTab, panelTabs } from "../../model/chat-context"
+import { ChatContext } from "./chat-context"
 import { IconButton } from "../../../ui/icon-button"
 import { WidgetTrail } from "../panes/widget-trail"
 
@@ -39,9 +45,9 @@ const tabId = (widget: WidgetRef): string => paneItemKey(widgetItem(widget))
 
 /**
  * What the right panel shows: the focused chat's own panel (ADR 326's
- * `panel` place) — its widgets as tabs across the panel's top row, the one
- * in front drawn below — or, with none open, a note saying so. Chats have no
- * tabs; only what opens in the panel does.
+ * `panel` place). Its first tab is always Chat context (`chat-context.ts`),
+ * then the widgets opened in it; with none opened, Chat context alone, and
+ * no tab row. With no chat in front, a note saying so.
  */
 export const PanelContent = memo(function PanelContent() {
   const sessionId = useWorkspaceSelector(selectFocusedSessionId)
@@ -49,53 +55,94 @@ export const PanelContent = memo(function PanelContent() {
     (state) => (sessionId === null ? null : selectChatPanel(state, sessionId)),
     shallowEqual,
   )
-  if (sessionId === null || !panel)
+  if (sessionId === null)
     return (
       <div className="workspace-panel-body" data-panel-empty>
         <EmptyState
           variant="compact"
           className="desktop-empty-note"
-          title="Nothing open"
+          title="No chat open"
         />
       </div>
     )
+  const { tabs, front, widgets } = panelTabs(sessionId, panel)
   return (
     <>
-      <PanelTabs sessionId={sessionId} panel={panel} />
-      {/* Under the tab in front's key: another tab is drawn afresh, its
-          view, its steps back and the caret in it never the last one's. */}
-      <PanelWidget key={tabId(panel.front)} sessionId={sessionId} widget={panel.front} />
+      {widgets.length > 0 ? (
+        <PanelTabs sessionId={sessionId} tabs={tabs} front={front} />
+      ) : null}
+      {isChatContextTab(front) ? (
+        <div
+          className="workspace-panel-context"
+          data-tabbed={widgets.length > 0 || undefined}
+          role={widgets.length > 0 ? "tabpanel" : undefined}
+          id={widgets.length > 0 ? `chat-tab-panel-${tabId(front)}` : undefined}
+          aria-labelledby={widgets.length > 0 ? `chat-tab-${tabId(front)}` : undefined}
+        >
+          <ChatContext sessionId={sessionId} />
+        </div>
+      ) : (
+        // Under the tab in front's key: another tab is drawn afresh, its
+        // view, its steps back and the caret in it never the last one's.
+        <PanelWidget key={tabId(front)} sessionId={sessionId} widget={front} />
+      )}
     </>
   )
 })
 
-/** The panel's tabs, in its top row: one per widget open in it, each closeable. */
-function PanelTabs({ sessionId, panel }: { sessionId: string; panel: ChatPanel }) {
+/**
+ * The panel's tabs, in its top row: Chat context, which stays, then one per
+ * widget open in it, each closeable.
+ */
+function PanelTabs({
+  sessionId,
+  tabs,
+  front,
+}: {
+  sessionId: string
+  tabs: readonly WidgetRef[]
+  front: WidgetRef
+}) {
   const dispatch = useWorkspaceDispatch()
-  const byId = new Map(panel.tabs.map((widget) => [tabId(widget), widget]))
-  const act = (id: string, change: typeof showPanelTab | typeof closePanelTab) => {
+  const byId = new Map(tabs.map((widget) => [tabId(widget), widget]))
+  const show = (id: string) => {
     const widget = byId.get(id)
-    if (widget) dispatch(change({ sessionId, widget }))
+    if (!widget) return
+    // Chat context is stored as a tab only once it is chosen (`chat-context.ts`).
+    if (isChatContextTab(widget))
+      dispatch(openWidget({ widget, place: "panel", origin: sessionId }))
+    else dispatch(showPanelTab({ sessionId, widget }))
   }
+  const close = (id: string) => {
+    const widget = byId.get(id)
+    if (widget && !isChatContextTab(widget))
+      dispatch(closePanelTab({ sessionId, widget }))
+  }
+  const widgets = tabs.filter((widget) => !isChatContextTab(widget))
   return (
     <div className="workspace-panel-tabs" data-tauri-drag-region>
-      <WithTitles widgets={panel.tabs}>
+      <WithTitles widgets={widgets}>
         {(titles) => (
           <ChatTabs
             label="Panel"
             // The window's top row, over the header picture: plain tabs, the
             // one in front opaque.
             variant="plain"
-            tabs={panel.tabs.map((widget, at): ChatTabItem => ({
-              id: tabId(widget),
-              title: titles[at],
-              kind: "file",
-              icon: <DesktopIcon name="panelRight" size={16} />,
-              closeable: true,
-            }))}
-            value={tabId(panel.front)}
-            onValueChange={(id) => act(id, showPanelTab)}
-            onClose={(id) => act(id, closePanelTab)}
+            tabs={tabs.map((widget): ChatTabItem => {
+              const context = isChatContextTab(widget)
+              return {
+                id: tabId(widget),
+                title: context ? "Chat context" : titles[widgets.indexOf(widget)],
+                kind: "file",
+                icon: (
+                  <DesktopIcon name={context ? "chatContext" : "panelRight"} size={16} />
+                ),
+                closeable: !context,
+              }
+            })}
+            value={tabId(front)}
+            onValueChange={show}
+            onClose={close}
           />
         )}
       </WithTitles>

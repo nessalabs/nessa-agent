@@ -72,9 +72,14 @@ export function drawnColumns(chrome: Chrome): { sidebar: boolean; sessionList: b
   return { sidebar: drawn(chrome.sidebar), sessionList: drawn(chrome.sessionList) }
 }
 
-/** What is folded in the sidebar. */
+/** What is folded in the sidebar, and in Chat context. */
 export interface Tree {
   readonly collapsedSections: readonly string[]
+  /**
+   * Chat context's sections folded from their headers, by section id. One
+   * set for every chat, so a section folded in one stays folded in the next.
+   */
+  readonly chatContextFolded: readonly string[]
   /** Channels disclosing their sessions, in the sidebar that shows them inline. */
   readonly expandedChannels: readonly string[]
   /** Channels showing every session rather than the newest few. */
@@ -478,7 +483,12 @@ export const initialWorkspace: WorkspaceState = {
   },
   arrangement: null,
   panelOpen: false,
-  tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
+  tree: {
+    collapsedSections: [],
+    chatContextFolded: [],
+    expandedChannels: [],
+    showAllChannels: [],
+  },
   shareable: false,
   share: null,
   channelMaking: { creatable: false, pickable: false, home: null },

@@ -7,8 +7,9 @@
  * and stays put when scrolled up; focus stays in the panel; Escape returns
  * to the list, and from there the panel's Escape changes nothing more while
  * the window's returns to the panes; the list fits the panel of a narrow,
- * short window, and that conversation's header shows its subagents — the
- * busiest first — without overflowing. A click on the stack opens the panel.
+ * short window, and that conversation's Chat context, opened from its header,
+ * shows its subagents — the busiest first — in a Subagents row whose stack
+ * opens their tab; the header keeps its title and does not overflow.
  *
  * The sample adds three lines to Mara's conversation, at 15s, 25s and 35s
  * after the card is first read (`sample-source.ts`). The follow check waits
@@ -60,10 +61,11 @@ Checks, per engine and layout (--only <names> to pick):
            scrolled up; Escape returns to the list (the panel's next Escape
            changes nothing; the window's returns to the panes)
   narrow   the list fits the panel of a narrow, short window; the
-           conversation's header shows its subagents, the busiest first, and
-           a click there opens the panel; the title, the stack and the menu
+           conversation's header's Chat context button opens Chat context,
+           whose Subagents row shows its subagents, the busiest first, and
+           whose stack opens their tab; the title, the button and the menu
            stay inside the header, and the title keeps a positive width. A production
-           Chromium run fails when the click's longest frame exceeds the
+           Chromium run fails when the stack click's longest frame exceeds the
            frame budget (budgetMs).
   card-open the card's Open, at the same size, measured the same way. A
            production Chromium run fails on the same budget.
@@ -144,6 +146,8 @@ async function scrollGap(page) {
 
 const headerSelectors = {
   stack: css.subagentStack,
+  button: css.chatContextButton,
+  context: css.chatContext,
   header: css.paneHeader,
   pane: css.pane,
   transcript: css.transcript,
@@ -158,7 +162,7 @@ const headerSelectors = {
 function revealHeaderTitle(page) {
   return page
     .evaluate((sel) => {
-      const header = document.querySelector(sel.stack)?.closest(sel.header)
+      const header = document.querySelector(sel.button)?.closest(sel.header)
       const scroller = header?.closest(sel.pane)?.querySelector(sel.transcript)
       if (scroller) scroller.scrollTop = scroller.scrollHeight
     }, headerSelectors)
@@ -168,7 +172,7 @@ function revealHeaderTitle(page) {
         (sel) =>
           Boolean(
             document
-              .querySelector(sel.stack)
+              .querySelector(sel.button)
               ?.closest(sel.header)
               ?.querySelector(sel.name)
               ?.hasAttribute("data-shown"),
@@ -178,15 +182,18 @@ function revealHeaderTitle(page) {
     )
 }
 
-/** Where the stack sits in its header, and which faces it shows. */
+/**
+ * Where the Chat context button sits in its header beside the title and the
+ * menu, and the subagent stack Chat context shows: its faces, and that it is
+ * in Chat context, never in the header.
+ */
 function headerFit(page) {
   return page.evaluate((sel) => {
-    const stacks = [...document.querySelectorAll(sel.stack)]
-    const stack = stacks[0]
-    const header = stack?.closest(sel.header)
-    if (!stack || !header) return { present: false, count: stacks.length }
+    const button = document.querySelector(sel.button)
+    const header = button?.closest(sel.header)
+    if (!button || !header) return { present: false }
     const hr = header.getBoundingClientRect()
-    const sr = stack.getBoundingClientRect()
+    const br = button.getBoundingClientRect()
     const menu = header.querySelector(sel.menu)
     const mr = menu?.getBoundingClientRect()
     const name = header.querySelector(sel.name)
@@ -197,44 +204,57 @@ function headerFit(page) {
       rect.right <= hr.right + 1 &&
       rect.top >= hr.top - 1 &&
       rect.bottom <= hr.bottom + 1
+    const stacks = [...document.querySelectorAll(sel.stack)]
+    const stack = stacks[0]
     return {
       present: true,
-      count: stacks.length,
       titleShown: Boolean(name?.hasAttribute("data-shown")),
       overflow: header.scrollWidth - header.clientWidth,
-      stackInside: inside(sr),
+      buttonInside: inside(br),
       menuInside: mr ? inside(mr) : false,
-      stackBeforeMenu: mr ? sr.right <= mr.left + 1 : false,
+      buttonBeforeMenu: mr ? br.right <= mr.left + 1 : false,
       titleWidth: tr ? tr.width : 0,
       titleInside: tr ? inside(tr) : false,
-      titleBeforeStack: tr ? tr.right <= sr.left + 1 : false,
-      faces: [...stack.querySelectorAll(sel.face)].map((node) =>
-        node.getAttribute("aria-label"),
-      ),
-      more: stack.querySelector(sel.more)?.textContent ?? "",
+      titleBeforeButton: tr ? tr.right <= br.left + 1 : false,
+      stacks: stacks.length,
+      stackInHeader: stacks.some((node) => node.closest(sel.header) !== null),
+      stackInContext: Boolean(stack?.closest(sel.context)),
+      faces: stack
+        ? [...stack.querySelectorAll(sel.face)].map((node) =>
+            node.getAttribute("aria-label"),
+          )
+        : [],
+      more: stack?.querySelector(sel.more)?.textContent ?? "",
       header: { w: Math.round(hr.width), h: Math.round(hr.height) },
-      stack: { w: Math.round(sr.width), h: Math.round(sr.height) },
     }
   }, headerSelectors)
 }
 
 function assertHeader(fit, failures, when) {
   if (!fit.present) {
-    failures.push(`no subagent stack ${when}`)
+    failures.push(`no Chat context button ${when}`)
     return
   }
-  if (fit.count !== 1) failures.push(`${fit.count} stacks ${when}, not one`)
   if (!fit.titleShown) failures.push(`the header title is hidden ${when}`)
-  if (fit.faces.join(",") !== "Mara, working,Idris,Nia")
-    failures.push(`the faces ${when} are ${fit.faces.join(", ")}`)
-  if (fit.more !== "+1") failures.push(`the count ${when} says "${fit.more}", not +1`)
   if (fit.overflow > 1) failures.push(`the header overflows by ${fit.overflow}px ${when}`)
-  if (!fit.stackInside) failures.push(`the stack is outside the header ${when}`)
+  if (!fit.buttonInside)
+    failures.push(`the Chat context button is outside the header ${when}`)
   if (!fit.menuInside) failures.push(`the pane menu is outside the header ${when}`)
-  if (!fit.stackBeforeMenu) failures.push(`the stack overlaps the pane menu ${when}`)
+  if (!fit.buttonBeforeMenu)
+    failures.push(`the Chat context button overlaps the pane menu ${when}`)
   if (!(fit.titleWidth > 0)) failures.push(`the header title has no width ${when}`)
   if (!fit.titleInside) failures.push(`the header title is outside the header ${when}`)
-  if (!fit.titleBeforeStack) failures.push(`the stack overlaps the title ${when}`)
+  if (!fit.titleBeforeButton)
+    failures.push(`the Chat context button overlaps the title ${when}`)
+  if (fit.stackInHeader) failures.push(`the header draws a subagent stack ${when}`)
+}
+
+function assertStack(fit, failures) {
+  if (fit.stacks !== 1) failures.push(`${fit.stacks} stacks in Chat context, not one`)
+  if (!fit.stackInContext) failures.push("the subagent stack is not in Chat context")
+  if (fit.faces.join(",") !== "Mara, working,Idris,Nia")
+    failures.push(`the faces are ${fit.faces.join(", ")}`)
+  if (fit.more !== "+1") failures.push(`the count says "${fit.more}", not +1`)
 }
 
 /**
@@ -461,6 +481,11 @@ const checks = {
     await shot(page, label, `header-${label.engine}.png`, css.paneHeader)
     if (!before.present) return { before, failures }
 
+    await page.locator(`${css.focusedPane} ${css.chatContextButton}`).click()
+    await need(page, `${css.chatContext} ${css.subagentStack}`, "the Subagents row")
+    const context = await headerFit(page)
+    assertStack(context, failures)
+    await shot(page, label, `context-${label.engine}.png`, css.panel)
     const measured = await opensNoPane(
       page,
       () => measureOpening(page, label, () => page.locator(css.subagentStack).click()),
@@ -472,6 +497,8 @@ const checks = {
       failures.push("the header title did not stay shown beside the panel")
     const after = await headerFit(page)
     assertHeader(after, failures, "beside the panel")
+    if (!(await page.locator(css.subagentPanel).count()))
+      failures.push("the stack's click did not bring the subagents tab to the front")
     await shot(page, label, `narrow-${label.engine}.png`, css.panel)
     const fit = await page.evaluate(
       ([pane, panel]) => {
@@ -494,6 +521,7 @@ const checks = {
     }
     return {
       before,
+      context,
       after,
       fit,
       opening: measured.opening,
