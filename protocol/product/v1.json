@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 138,
+          "maxItems": 139,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2321,6 +2321,58 @@
       },
       "required": ["label", "consequence"]
     },
+    "OwnerDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question an agent asked its conversation's owner with ask_owner, and what became of it: still waiting (no outcome), answered by the owner's next message, or replaced by a newer ask before anyone answered.",
+      "properties": {
+        "ask": { "$ref": "#/$defs/OwnerAsk" },
+        "outcome": {
+          "$ref": "#/$defs/OwnerDecisionOutcome",
+          "description": "How it stopped waiting; absent while it waits."
+        }
+      },
+      "required": ["ask"]
+    },
+    "OwnerDecisionState": {
+      "type": "string",
+      "enum": ["decided", "replaced"],
+      "description": "How an ask stopped waiting: decided by the owner's message, or replaced by a newer ask before anyone answered."
+    },
+    "OwnerDecisionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How an ask stopped waiting. A decided one carries the owner's message as text, and choice when that message names one; a replaced one carries by.",
+      "properties": {
+        "state": { "$ref": "#/$defs/OwnerDecisionState" },
+        "text": {
+          "type": "string",
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Decided: the owner's message, trimmed and cut on a character boundary to 1024 bytes. The whole message is in the conversation."
+        },
+        "choice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Decided: index into the ask's choices of the one the message names, its label or its label then \". \" and a note. Absent when the message is the owner's own words."
+        },
+        "by": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "Replaced: the askId of the ask that took its place."
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it stopped waiting, in Unix milliseconds."
+        }
+      },
+      "required": ["state", "atMs"]
+    },
     "ConversationSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -3087,6 +3139,34 @@
         }
       },
       "required": ["conversationId", "requestId", "title"]
+    },
+    "ConversationDecisionsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read what a conversation's agents asked its owner with ask_owner, and what became of each: the owner's alone, as the ask on a list row is.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "ConversationDecisionsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A conversation's decisions, newest first: at most 100, an older one going when a newer one is asked.",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/OwnerDecision" }
+        }
+      },
+      "required": ["decisions"]
     },
     "ConversationDeleteParams": {
       "type": "object",

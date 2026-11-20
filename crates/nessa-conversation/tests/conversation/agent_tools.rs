@@ -2003,6 +2003,37 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     // The person's next message is the answer: the ask is gone.
     settled_send(&service, &source, "answer-turn", "Ship").await;
     assert_eq!(row(service.clone()).await, None);
+    // Both asks are the chat's decisions, newest first: the second answered
+    // by that message, naming its choice, and the first replaced by it.
+    {
+        use nessa_protocol::conversation::view::OwnerDecisionOutcome;
+        let decisions = service
+            .decisions(source.clone(), caller("decisions"))
+            .await
+            .unwrap();
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].ask.ask_id, replaced.ask_id);
+        assert!(matches!(
+            &decisions[0].outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(0), .. }) if text == "Ship"
+        ));
+        assert_eq!(decisions[1].ask.ask_id, first);
+        assert!(matches!(
+            &decisions[1].outcome,
+            Some(OwnerDecisionOutcome::Replaced { by, .. }) if *by == replaced.ask_id
+        ));
+        // They are the owner's alone.
+        assert!(service
+            .decisions(
+                source.clone(),
+                ConversationCaller {
+                    principal_id: PrincipalId::new("someone-else").unwrap(),
+                    ..caller("decisions")
+                },
+            )
+            .await
+            .is_err());
+    }
     retire(service, storage, metadata).await;
 }
 

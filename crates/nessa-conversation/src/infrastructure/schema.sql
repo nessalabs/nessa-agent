@@ -239,4 +239,21 @@ CREATE TABLE closed_threads (
     conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 11;
+-- What became of every question an agent asked the owner (`ask_owner`):
+-- one row per ask, written by the summary write that asks it and settled by
+-- the one that takes it down, answered or replaced
+-- (docs/design/agent-thread-tools.md, "Decisions"). `ask` is the ask's JSON,
+-- `outcome` the JSON of how it stopped waiting, or NULL while it waits.
+-- Read newest first: by when it was asked, then by rowid, the order the
+-- asks were written in, for asks made in the same millisecond.
+-- Added by schema_upgrades/11.sql.
+CREATE TABLE owner_decisions (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    ask_id TEXT NOT NULL,
+    asked_at_ms INTEGER NOT NULL,
+    ask TEXT NOT NULL CHECK (length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192),
+    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 4096),
+    PRIMARY KEY (conversation_id, ask_id)
+) STRICT;
+
+PRAGMA user_version = 12;

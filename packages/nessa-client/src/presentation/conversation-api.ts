@@ -25,6 +25,7 @@ import type {
   ConversationMessageDelivery,
   ConversationMessageReceipt,
   ConversationMessageStatusResult,
+  ConversationDecisionsResult,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
@@ -66,6 +67,7 @@ import {
   conversationList,
   conversationMessageReceipt,
   conversationMessageStatus,
+  conversationDecisions,
   conversationObserve,
   conversationView,
   conversationEarlier,
@@ -424,6 +426,8 @@ export type ConversationApi = {
     title: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /** What `conversationId`'s agents asked its owner with `ask_owner`, and what became of each — waiting, decided by the owner's next message, or replaced by a newer ask — newest first, at most 100. The owner's alone: anyone else is refused `conversation_not_found`. */
+  decisions: (conversationId: string) => Promise<ConversationDecisionsResult>
   /**
    * The owner's remembered permission rules, in the order they were stored.
    * A shared user is refused. A rule is one tool in one workspace.
@@ -1263,6 +1267,12 @@ export function createConversationApi(
         false,
       )
     },
+    decisions: async (id) =>
+      conversationDecisions(
+        await session.request(ProductMethod.ConversationDecisions, {
+          conversationId: validConversationId(id),
+        }),
+      ),
     delete: (id, options) =>
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,

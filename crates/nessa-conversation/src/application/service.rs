@@ -5088,7 +5088,7 @@ impl ConversationService {
         self.change_summary(id, |previous| {
             Some(
                 ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
-                    .answering(answered),
+                    .answering(answered, message.text_str()),
             )
         })
         .await;

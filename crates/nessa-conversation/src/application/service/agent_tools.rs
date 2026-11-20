@@ -7,7 +7,7 @@ use crate::application::{
 };
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
-use nessa_protocol::conversation::view::OwnerAsk;
+use nessa_protocol::conversation::view::{OwnerAsk, OwnerDecision};
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -55,6 +55,23 @@ impl ConversationService {
             .await?;
         self.inner.live_changes.publish(conversation);
         Ok(())
+    }
+
+    /// What the conversation's agents asked its owner (`ask_owner`) and
+    /// what became of each, newest first: for the owner alone, as the ask
+    /// on a list row is.
+    pub async fn decisions(
+        &self,
+        conversation: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<Vec<OwnerDecision>, ConversationError> {
+        let _admission = self.admit().await?;
+        caller.actor()?;
+        let record = load_conversation(self.inner.metadata.as_ref(), &conversation)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        self.access().admit(&record, &caller)?;
+        self.inner.summaries.decisions(&conversation).await
     }
 
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {

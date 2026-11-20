@@ -937,6 +937,71 @@ impl OwnerAsk {
         Ok(())
     }
 }
+/// Most bytes of an answer a decision keeps: the person's message, cut on a
+/// character boundary. The whole message is in the conversation.
+pub const MAX_DECISION_ANSWER_BYTES: usize = 1024;
+/// Most decisions a conversation keeps, newest first; an older one goes when
+/// a newer one is asked.
+pub const MAX_DECISIONS_KEPT: usize = 100;
+
+/// One question an agent asked the owner, and what became of it: still
+/// waiting, answered by the owner's next message, or replaced by a newer ask
+/// before anyone answered. The history a conversation's decisions list
+/// shows (`conversation.decisions`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecision {
+    pub ask: OwnerAsk,
+    /// `None` while it waits.
+    pub outcome: Option<OwnerDecisionOutcome>,
+}
+
+/// How an ask stopped waiting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "state",
+    deny_unknown_fields
+)]
+pub enum OwnerDecisionOutcome {
+    /// The owner wrote in the conversation: that message is the answer.
+    Decided {
+        /// The message, cut to [`MAX_DECISION_ANSWER_BYTES`].
+        text: String,
+        /// The choice it names, when it is one: its label, or its label then
+        /// `". "` and a note.
+        choice: Option<u8>,
+        at_ms: u64,
+    },
+    /// A newer ask, `by`, took its place before anyone answered.
+    Replaced { by: String, at_ms: u64 },
+}
+
+impl OwnerDecisionOutcome {
+    /// `ask` answered by a message saying `text` at `at_ms`.
+    pub fn answered(ask: &OwnerAsk, text: &str, at_ms: u64) -> Self {
+        let said = text.trim();
+        let choice = ask.choices.iter().position(|choice| {
+            let label = choice.label.trim();
+            said.eq_ignore_ascii_case(label)
+                || said
+                    .get(..label.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(label))
+                    && said[label.len()..].starts_with(". ")
+        });
+        let mut end = said.len().min(MAX_DECISION_ANSWER_BYTES);
+        while !said.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self::Decided {
+            text: said[..end].to_owned(),
+            choice: choice.and_then(|index| u8::try_from(index).ok()),
+            at_ms,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionReceipt {

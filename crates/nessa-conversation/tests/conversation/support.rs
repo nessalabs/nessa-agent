@@ -1162,6 +1162,9 @@ impl ConversationListing for Unlisted {
 #[derive(Default)]
 pub struct MemorySummaries {
     pub summaries: Mutex<HashMap<ConversationId, ConversationSummary>>,
+    /// Each conversation's decisions, oldest first.
+    pub decisions:
+        Mutex<HashMap<ConversationId, Vec<nessa_protocol::conversation::view::OwnerDecision>>>,
     pub writes: AtomicUsize,
     pub load_fails: AtomicBool,
     pub record_fails: AtomicBool,
@@ -1203,9 +1206,51 @@ impl ConversationSummaries for MemorySummaries {
             if self.record_fails.load(Ordering::SeqCst) {
                 return Err(ConversationError::Metadata);
             }
+            {
+                use nessa_protocol::conversation::view::OwnerDecision;
+                let mut decisions = self.decisions.lock().unwrap();
+                let kept = decisions.entry(id.clone()).or_default();
+                if let Some(ask) = summary.ask() {
+                    if !kept.iter().any(|kept| kept.ask.ask_id == ask.ask_id) {
+                        kept.push(OwnerDecision {
+                            ask: ask.clone(),
+                            outcome: None,
+                        });
+                    }
+                }
+                if let Some(settled) = summary.settled() {
+                    match kept
+                        .iter_mut()
+                        .find(|kept| kept.ask.ask_id == settled.ask.ask_id)
+                    {
+                        Some(kept) if kept.outcome.is_none() => {
+                            kept.outcome = Some(settled.outcome.clone());
+                        }
+                        Some(_) => {}
+                        None => kept.push(OwnerDecision {
+                            ask: settled.ask.clone(),
+                            outcome: Some(settled.outcome.clone()),
+                        }),
+                    }
+                }
+            }
             self.summaries.lock().unwrap().insert(id, summary);
             Ok(())
         })
+    }
+    /// Kept as the store keeps them: each write's waiting ask and settled one.
+    fn decisions(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Vec<nessa_protocol::conversation::view::OwnerDecision>> {
+        let kept = self
+            .decisions
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|kept| kept.iter().rev().cloned().collect())
+            .unwrap_or_default();
+        Box::pin(async move { Ok(kept) })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
@@ -1214,6 +1259,7 @@ impl ConversationSummaries for MemorySummaries {
                 return Err(ConversationError::Metadata);
             }
             self.summaries.lock().unwrap().remove(&id);
+            self.decisions.lock().unwrap().remove(&id);
             Ok(())
         })
     }

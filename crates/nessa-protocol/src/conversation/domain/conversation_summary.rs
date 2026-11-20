@@ -1,4 +1,4 @@
-use crate::conversation::view::OwnerAsk;
+use crate::conversation::view::{OwnerAsk, OwnerDecisionOutcome};
 
 /// What a conversation is called in a list of conversations.
 ///
@@ -119,6 +119,18 @@ pub struct ConversationSummary {
     /// also takes it down, and so that it goes wherever the summary goes:
     /// listed, archived, erased.
     ask: Option<OwnerAsk>,
+    /// The ask this change took off the summary, and why: answered by the
+    /// message it records, or replaced by the ask it records. Not stored on
+    /// the summary: the write that records this change keeps it in the
+    /// conversation's decisions, in the same transaction.
+    settled: Option<SettledAsk>,
+}
+
+/// An ask that stopped waiting, and how.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettledAsk {
+    pub ask: OwnerAsk,
+    pub outcome: OwnerDecisionOutcome,
 }
 /// The latest time a conversation's times may hold, in Unix milliseconds:
 /// the largest integer a JSON number carries exactly, which is what a list
@@ -148,12 +160,17 @@ impl ConversationSummary {
             updated_at_ms,
             archived,
             ask: None,
+            settled: None,
         })
     }
     /// This summary with `ask` waiting on it, as read back from storage.
     #[must_use]
     pub fn with_ask(self, ask: Option<OwnerAsk>) -> Self {
-        Self { ask, ..self }
+        Self {
+            ask,
+            settled: None,
+            ..self
+        }
     }
     /// After a person's message was accepted. The title is taken only if the
     /// conversation has none yet; the preview is the message, or
@@ -184,15 +201,20 @@ impl ConversationSummary {
             updated_at_ms: later(previous, at_ms),
             archived: false,
             ask: previous.and_then(|summary| summary.ask.clone()),
+            settled: None,
         }
     }
-    /// The same summary once a message answering ask `ask_id` is recorded
-    /// on it: that ask goes, and one asked since it stays
+    /// The same summary once a message saying `text` that answers ask
+    /// `ask_id` is recorded on it: that ask goes, settled as answered by the
+    /// message, and one asked since it stays
     /// (`an_ask_goes_only_with_the_message_that_answers_it`).
     #[must_use]
-    pub fn answering(mut self, ask_id: Option<&str>) -> Self {
+    pub fn answering(mut self, ask_id: Option<&str>, text: &str) -> Self {
         if ask_id.is_some() && self.ask.as_ref().map(|ask| ask.ask_id.as_str()) == ask_id {
-            self.ask = None;
+            if let Some(ask) = self.ask.take() {
+                let outcome = OwnerDecisionOutcome::answered(&ask, text, self.updated_at_ms);
+                self.settled = Some(SettledAsk { ask, outcome });
+            }
         }
         self
     }
@@ -200,13 +222,27 @@ impl ConversationSummary {
     /// It is something new for the owner, so like a message it moves the
     /// conversation to the top of the list and out of the archive, where
     /// nobody would see it (`an_ask_lifts_its_conversation_to_the_top_of_the_list`).
+    ///
+    /// An earlier ask still waiting is settled as replaced by this one
+    /// (`a_newer_ask_settles_the_one_it_replaces`).
     pub fn after_asking(previous: Option<&Self>, ask: OwnerAsk) -> Self {
+        let settled = previous
+            .and_then(|summary| summary.ask.clone())
+            .filter(|earlier| earlier.ask_id != ask.ask_id)
+            .map(|earlier| SettledAsk {
+                ask: earlier,
+                outcome: OwnerDecisionOutcome::Replaced {
+                    by: ask.ask_id.clone(),
+                    at_ms: ask.asked_at_ms,
+                },
+            });
         Self {
             title: previous.and_then(|summary| summary.title.clone()),
             preview: previous.and_then(|summary| summary.preview.clone()),
             updated_at_ms: later(previous, ask.asked_at_ms),
             archived: false,
             ask: Some(ask),
+            settled,
         }
     }
     /// After the agent replied, or `None` when the reply said nothing a
@@ -221,6 +257,7 @@ impl ConversationSummary {
             updated_at_ms: later(previous, at_ms),
             archived: previous.is_some_and(|summary| summary.archived),
             ask: previous.and_then(|summary| summary.ask.clone()),
+            settled: None,
         })
     }
     /// After somebody archived the conversation, or unarchived it. Nothing
@@ -233,6 +270,7 @@ impl ConversationSummary {
     pub fn after_archiving(&self, archived: bool) -> Self {
         Self {
             archived,
+            settled: None,
             ..self.clone()
         }
     }
@@ -245,6 +283,7 @@ impl ConversationSummary {
     pub fn after_renaming(&self, title: ConversationTitle) -> Self {
         Self {
             title: Some(title),
+            settled: None,
             ..self.clone()
         }
     }
@@ -259,6 +298,7 @@ impl ConversationSummary {
             archived: false,
             // Asked of the source's owner, in the source.
             ask: None,
+            settled: None,
         }
     }
     pub fn title(&self) -> Option<&ConversationTitle> {
@@ -278,6 +318,10 @@ impl ConversationSummary {
     /// What an agent asked the owner and is still waiting on.
     pub fn ask(&self) -> Option<&OwnerAsk> {
         self.ask.as_ref()
+    }
+    /// The ask this change settled, for the conversation's decisions.
+    pub fn settled(&self) -> Option<&SettledAsk> {
+        self.settled.as_ref()
     }
 }
 

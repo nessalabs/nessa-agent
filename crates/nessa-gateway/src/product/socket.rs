@@ -2092,6 +2092,7 @@ async fn dispatch_authorized(
         | ProductMethod::ConversationArchive
         | ProductMethod::ConversationUnarchive
         | ProductMethod::ConversationRename
+        | ProductMethod::ConversationDecisions
         | ProductMethod::ConversationDelete
         | ProductMethod::ConversationReorder
         | ProductMethod::ConversationSetApprovalMode

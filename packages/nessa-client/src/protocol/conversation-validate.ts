@@ -5,7 +5,9 @@ import type {
   ConversationMessageStatusResult,
   ConversationObserveResult,
   ConversationSummary,
+  ConversationDecisionsResult,
   OwnerAsk,
+  OwnerDecision,
   ConversationView,
   ConversationEarlier,
   ConversationPermission,
@@ -1544,6 +1546,60 @@ function ownerAsk(value: unknown): OwnerAsk {
     reason: text(ask, "reason", 200, false),
     askedAtMs: time(ask, "askedAtMs"),
   }
+}
+
+/**
+ * A conversation's decisions as `conversation.decisions` listed them, newest
+ * first: each ask held to `ownerAsk`'s bounds, and its outcome to the
+ * schema's. A decided one carries the answer's text and, when it names one,
+ * a choice the ask has; a replaced one names a different ask that took its
+ * place. An ask listed twice is refused: the list is keyed by ask.
+ */
+export function conversationDecisions(value: unknown): ConversationDecisionsResult {
+  const item = record(value)
+  exact(item, ["decisions"])
+  const seen = new Set<string>()
+  const decisions = items(item, "decisions", 100).map((entry): OwnerDecision => {
+    exact(entry, ["ask", "outcome"])
+    const ask = ownerAsk(entry.ask)
+    if (seen.has(ask.askId)) throw new Error("Conversation decision listed twice")
+    seen.add(ask.askId)
+    if (entry.outcome === undefined) return { ask }
+    const outcome = record(entry.outcome)
+    exact(outcome, ["state", "text", "choice", "by", "atMs"])
+    const atMs = time(outcome, "atMs")
+    if (outcome.state === "decided") {
+      if (outcome.by !== undefined) throw new Error("Invalid conversation decision")
+      const said = text(outcome, "text", 1024)
+      const choice = outcome.choice
+      if (
+        choice !== undefined &&
+        (!Number.isSafeInteger(choice) ||
+          (choice as number) < 0 ||
+          (choice as number) >= ask.choices.length)
+      )
+        throw new Error("Invalid conversation decision choice")
+      return {
+        ask,
+        outcome: {
+          state: "decided",
+          text: said,
+          ...(choice === undefined ? {} : { choice: choice as number }),
+          atMs,
+        },
+      }
+    }
+    if (outcome.state === "replaced") {
+      if (outcome.text !== undefined || outcome.choice !== undefined)
+        throw new Error("Invalid conversation decision")
+      const by = text(outcome, "by", 32, false)
+      if (!/^[0-9a-f]{32}$/.test(by) || by === ask.askId)
+        throw new Error("Invalid conversation decision")
+      return { ask, outcome: { state: "replaced", by, atMs } }
+    }
+    throw new Error("Invalid conversation decision state")
+  })
+  return { decisions }
 }
 
 /**

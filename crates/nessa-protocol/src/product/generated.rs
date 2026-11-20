@@ -930,6 +930,40 @@ pub struct OwnerAskChoice {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecision {
+    pub ask: OwnerAsk,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<OwnerDecisionOutcome>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum OwnerDecisionState {
+    #[serde(rename = "decided")]
+    Decided,
+    #[serde(rename = "replaced")]
+    Replaced,
+}
+impl OwnerDecisionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decided => "decided",
+            Self::Replaced => "replaced",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecisionOutcome {
+    pub state: OwnerDecisionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    pub at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSummary {
     pub conversation_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -1209,6 +1243,16 @@ pub struct ConversationRenameParams {
     pub conversation_id: String,
     pub request_id: String,
     pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionsParams {
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionsResult {
+    pub decisions: Vec<OwnerDecision>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4849,6 +4893,7 @@ pub mod product_method {
     pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
     pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
     pub const CONVERSATION_RENAME: &str = "conversation.rename";
+    pub const CONVERSATION_DECISIONS: &str = "conversation.decisions";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
@@ -5153,7 +5198,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 138
+                items.len() <= 139
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5206,6 +5251,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.archive",
     "conversation.unarchive",
     "conversation.rename",
+    "conversation.decisions",
     "conversation.delete",
     "conversation.reorder",
     "artifact.read",
@@ -5438,6 +5484,8 @@ pub enum ProductMethod {
     ConversationUnarchive,
     /// `conversation.rename`
     ConversationRename,
+    /// `conversation.decisions`
+    ConversationDecisions,
     /// `conversation.delete`
     ConversationDelete,
     /// `conversation.reorder`
@@ -5692,6 +5740,7 @@ impl ProductMethod {
         ProductMethod::ConversationArchive,
         ProductMethod::ConversationUnarchive,
         ProductMethod::ConversationRename,
+        ProductMethod::ConversationDecisions,
         ProductMethod::ConversationDelete,
         ProductMethod::ConversationReorder,
         ProductMethod::ArtifactRead,
@@ -5837,6 +5886,7 @@ impl ProductMethod {
             "conversation.archive" => Some(ProductMethod::ConversationArchive),
             "conversation.unarchive" => Some(ProductMethod::ConversationUnarchive),
             "conversation.rename" => Some(ProductMethod::ConversationRename),
+            "conversation.decisions" => Some(ProductMethod::ConversationDecisions),
             "conversation.delete" => Some(ProductMethod::ConversationDelete),
             "conversation.reorder" => Some(ProductMethod::ConversationReorder),
             "artifact.read" => Some(ProductMethod::ArtifactRead),
@@ -5987,6 +6037,7 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => "conversation.archive",
             ProductMethod::ConversationUnarchive => "conversation.unarchive",
             ProductMethod::ConversationRename => "conversation.rename",
+            ProductMethod::ConversationDecisions => "conversation.decisions",
             ProductMethod::ConversationDelete => "conversation.delete",
             ProductMethod::ConversationReorder => "conversation.reorder",
             ProductMethod::ArtifactRead => "artifact.read",
@@ -6135,6 +6186,7 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => Some("conversation.write"),
             ProductMethod::ConversationUnarchive => Some("conversation.write"),
             ProductMethod::ConversationRename => Some("conversation.write"),
+            ProductMethod::ConversationDecisions => Some("conversation.write"),
             ProductMethod::ConversationDelete => Some("conversation.write"),
             ProductMethod::ConversationReorder => Some("conversation.write"),
             ProductMethod::ArtifactRead => Some("conversation.read"),
@@ -6280,6 +6332,7 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => ProductLane::Controls,
             ProductMethod::ConversationUnarchive => ProductLane::Controls,
             ProductMethod::ConversationRename => ProductLane::Controls,
+            ProductMethod::ConversationDecisions => ProductLane::Controls,
             ProductMethod::ConversationDelete => ProductLane::Deletions,
             ProductMethod::ConversationReorder => ProductLane::Controls,
             ProductMethod::ArtifactRead => ProductLane::ArtifactReads,
@@ -6488,6 +6541,9 @@ impl ProductMethod {
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::ConversationRename => ProductParams::ConversationRename(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationDecisions => ProductParams::ConversationDecisions(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::ConversationDelete => ProductParams::ConversationDelete(
@@ -6896,6 +6952,7 @@ pub enum ProductParams {
     ConversationArchive(ConversationArchiveParams),
     ConversationUnarchive(ConversationArchiveParams),
     ConversationRename(ConversationRenameParams),
+    ConversationDecisions(ConversationDecisionsParams),
     ConversationDelete(ConversationDeleteParams),
     ConversationReorder(ConversationReorderParams),
     ArtifactRead(ArtifactReadParams),
@@ -7047,6 +7104,7 @@ impl ProductParams {
             ProductParams::ConversationArchive(_) => ProductMethod::ConversationArchive,
             ProductParams::ConversationUnarchive(_) => ProductMethod::ConversationUnarchive,
             ProductParams::ConversationRename(_) => ProductMethod::ConversationRename,
+            ProductParams::ConversationDecisions(_) => ProductMethod::ConversationDecisions,
             ProductParams::ConversationDelete(_) => ProductMethod::ConversationDelete,
             ProductParams::ConversationReorder(_) => ProductMethod::ConversationReorder,
             ProductParams::ArtifactRead(_) => ProductMethod::ArtifactRead,

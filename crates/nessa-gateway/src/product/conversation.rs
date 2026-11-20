@@ -27,9 +27,10 @@ use nessa_protocol::product::generated::{
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
-    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
-    ConversationObserveParams, ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationDecisionsParams, ConversationDecisionsResult, ConversationDeleteParams,
+    ConversationForkParams, ConversationListParams, ConversationListResult,
+    ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
+    ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
@@ -42,7 +43,8 @@ use nessa_protocol::product::generated::{
     ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
     ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
     ConversationView as WireConversationView, ModelChangeEffect, OwnerAsk, OwnerAskChoice,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    OwnerDecision, OwnerDecisionOutcome, OwnerDecisionState, PermissionRule, PermissionRuleEffect,
+    MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -910,6 +912,21 @@ async fn answer(
                     },
                 ))
             }
+            "conversation.decisions" => {
+                let params = target_params!(ConversationDecisionsParams);
+                let decisions = service
+                    .decisions(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationDecisionsResult {
+                        decisions: decisions.into_iter().map(wire_decision).collect(),
+                    },
+                ))
+            }
             "conversation.delete" => {
                 let params = target_params!(
                     ConversationDeleteParams,
@@ -1705,6 +1722,34 @@ fn wire_ask(ask: nessa_protocol::conversation::view::OwnerAsk) -> OwnerAsk {
         recommended: u64::from(ask.recommended),
         reason: ask.reason,
         asked_at_ms: ask.asked_at_ms,
+    }
+}
+
+/// A decision as `conversation.decisions` lists it.
+fn wire_decision(decision: nessa_protocol::conversation::view::OwnerDecision) -> OwnerDecision {
+    use nessa_protocol::conversation::view::OwnerDecisionOutcome as Outcome;
+    OwnerDecision {
+        ask: wire_ask(decision.ask),
+        outcome: decision.outcome.map(|outcome| match outcome {
+            Outcome::Decided {
+                text,
+                choice,
+                at_ms,
+            } => OwnerDecisionOutcome {
+                state: OwnerDecisionState::Decided,
+                text: Some(text),
+                choice: choice.map(u64::from),
+                by: None,
+                at_ms,
+            },
+            Outcome::Replaced { by, at_ms } => OwnerDecisionOutcome {
+                state: OwnerDecisionState::Replaced,
+                text: None,
+                choice: None,
+                by: Some(by),
+                at_ms,
+            },
+        }),
     }
 }
 

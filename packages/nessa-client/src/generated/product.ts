@@ -911,6 +911,28 @@ export interface OwnerAskChoice {
   /** What happens if the person picks it, in one line. */
   consequence: string
 }
+/** One question an agent asked its conversation's owner with ask_owner, and what became of it: still waiting (no outcome), answered by the owner's next message, or replaced by a newer ask before anyone answered. */
+export interface OwnerDecision {
+  ask: OwnerAsk
+  /** How it stopped waiting; absent while it waits. */
+  outcome?: OwnerDecisionOutcome
+}
+/** How an ask stopped waiting: decided by the owner's message, or replaced by a newer ask before anyone answered. */
+export const OwnerDecisionState = { Decided: "decided", Replaced: "replaced" } as const
+export type OwnerDecisionState =
+  (typeof OwnerDecisionState)[keyof typeof OwnerDecisionState]
+/** How an ask stopped waiting. A decided one carries the owner's message as text, and choice when that message names one; a replaced one carries by. */
+export interface OwnerDecisionOutcome {
+  state: OwnerDecisionState
+  /** Decided: the owner's message, trimmed and cut on a character boundary to 1024 bytes. The whole message is in the conversation. */
+  text?: string
+  /** Decided: index into the ask's choices of the one the message names, its label or its label then ". " and a note. Absent when the message is the owner's own words. */
+  choice?: number
+  /** Replaced: the askId of the ask that took its place. */
+  by?: string
+  /** When it stopped waiting, in Unix milliseconds. */
+  atMs: number
+}
 /** One conversation as a list row: what it is called, the last thing said in it, and when. Read from stored summaries and live state; listing never opens or resumes a provider. */
 export interface ConversationSummary {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -1185,6 +1207,15 @@ export interface ConversationRenameParams {
   requestId: string
   /** The new title: one line, with no whitespace at either end and no run of more than one whitespace character. Anything else is refused invalid_request; normalize before sending. */
   title: string
+}
+/** Read what a conversation's agents asked its owner with ask_owner, and what became of each: the owner's alone, as the ask on a list row is. */
+export interface ConversationDecisionsParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** A conversation's decisions, newest first: at most 100, an older one going when a newer one is asked. */
+export interface ConversationDecisionsResult {
+  decisions: OwnerDecision[]
 }
 /** Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again. */
 export interface ConversationDeleteParams {
@@ -4232,7 +4263,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 138,
+  maxReadyMethods: 139,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4484,6 +4515,7 @@ export const ProductMethod = {
   ConversationArchive: "conversation.archive",
   ConversationUnarchive: "conversation.unarchive",
   ConversationRename: "conversation.rename",
+  ConversationDecisions: "conversation.decisions",
   ConversationDelete: "conversation.delete",
   ConversationReorder: "conversation.reorder",
   ArtifactRead: "artifact.read",
@@ -4638,6 +4670,7 @@ export const productReadyMethods = [
   "conversation.archive",
   "conversation.unarchive",
   "conversation.rename",
+  "conversation.decisions",
   "conversation.delete",
   "conversation.reorder",
   "artifact.read",
@@ -4780,6 +4813,7 @@ export const productMethodGrants = {
   "conversation.archive": "conversation.write",
   "conversation.unarchive": "conversation.write",
   "conversation.rename": "conversation.write",
+  "conversation.decisions": "conversation.write",
   "conversation.delete": "conversation.write",
   "conversation.reorder": "conversation.write",
   "artifact.read": "conversation.read",

@@ -8,6 +8,9 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationSummary,
 };
+use nessa_protocol::conversation::view::OwnerDecision;
+#[cfg(doc)]
+use nessa_protocol::conversation::view::MAX_DECISIONS_KEPT;
 use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::PublishedFile;
@@ -584,6 +587,10 @@ pub trait ConversationSummaries: Send + Sync {
     /// waits on it. Durable before it returns; a summary that is already
     /// gone is not an error.
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// What the conversation's agents asked the owner and what became of
+    /// each, newest first: the ones each [`Self::record`] asked and settled,
+    /// at most [`MAX_DECISIONS_KEPT`]. Gone with the summary.
+    fn decisions(&self, id: &ConversationId) -> ConversationFuture<'_, Vec<OwnerDecision>>;
 }
 
 /// An image as a caller submitted it, before any of it has been checked.

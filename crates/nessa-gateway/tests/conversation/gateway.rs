@@ -857,6 +857,75 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
     }
 
     #[tokio::test]
+    async fn decisions_list_what_was_asked_and_what_became_of_it_to_the_owner_alone() {
+        use nessa_protocol::conversation::view::{OwnerAsk, OwnerAskChoice};
+        let (service, _, _, _) = chat_fixture();
+        let asks = service.clone();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-00000000000d";
+        let decisions = || json!({"conversationId":id});
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
+        let none = chat_request(&state, &owner, "conversation.decisions", decisions()).await;
+        assert_eq!(none.payload, Some(json!({"decisions": []})));
+        let conversation =
+            nessa_protocol::conversation::domain::ConversationId::new(id).unwrap();
+        asks.ask_owner(
+            &conversation,
+            OwnerAsk {
+                ask_id: "0123456789abcdef0123456789abcdef".into(),
+                question: "Ship it?".into(),
+                choices: vec![
+                    OwnerAskChoice {
+                        label: "Ship".into(),
+                        consequence: "It goes out today.".into(),
+                    },
+                    OwnerAskChoice {
+                        label: "Wait".into(),
+                        consequence: "It waits for Monday.".into(),
+                    },
+                ],
+                recommended: 0,
+                reason: "Every check passed.".into(),
+                asked_at_ms: 0,
+            },
+        )
+        .await
+        .unwrap();
+        let waiting = chat_request(&state, &owner, "conversation.decisions", decisions())
+            .await
+            .payload
+            .unwrap();
+        assert_eq!(waiting["decisions"].as_array().unwrap().len(), 1);
+        assert_eq!(waiting["decisions"][0]["ask"]["question"], "Ship it?");
+        assert!(waiting["decisions"][0].get("outcome").is_none());
+        let send = json!({"conversationId":id,"requestId":"send-1","executionId":"send-1","text":"Wait. Monday is fine.","attachments":[],"files":[]});
+        assert!(chat_request(&state, &owner, "conversation.send", send).await.ok);
+        let decided = chat_request(&state, &owner, "conversation.decisions", decisions())
+            .await
+            .payload
+            .unwrap();
+        let outcome = &decided["decisions"][0]["outcome"];
+        assert_eq!(outcome["state"], "decided");
+        assert_eq!(outcome["text"], "Wait. Monday is fine.");
+        assert_eq!(outcome["choice"], 1);
+        assert!(outcome.get("by").is_none());
+        // Somebody else is told nothing about it.
+        let other = chat_session(&state, "other").await;
+        let refused = chat_request(&state, &other, "conversation.decisions", decisions()).await;
+        assert_eq!(refused.error.unwrap().code, "conversation_not_found");
+    }
+
+    #[tokio::test]
     async fn rename_answers_as_a_mutation_and_refuses_a_title_the_domain_would_not_hold() {
         let (service, _, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));

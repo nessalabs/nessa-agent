@@ -239,6 +239,13 @@
       "destructive": false
     },
     {
+      "name": "conversation.decisions",
+      "params": "ConversationDecisionsParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
       "name": "conversation.delete",
       "params": "ConversationDeleteParams",
       "grant": "conversation.write",

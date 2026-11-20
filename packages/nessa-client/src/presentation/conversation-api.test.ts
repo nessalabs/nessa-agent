@@ -1639,6 +1639,83 @@ it("keeps an agent's ask on its row, and refuses one past the schema's bounds", 
     await expect(listing({ ...summary, ask: bad }).list(), name).rejects.toThrow()
 })
 
+it("reads a chat's decisions newest first, and refuses an outcome the ask could not have", async () => {
+  const ask = (askId: string) => ({
+    askId,
+    question: "Ship the Safari fix?",
+    choices: [
+      { label: "Ship", consequence: "It goes out today." },
+      { label: "Wait", consequence: "It waits for Monday." },
+    ],
+    recommended: 0,
+    reason: "Every check passed.",
+    askedAtMs: 5,
+  })
+  const first = "0123456789abcdef0123456789abcdef"
+  const second = "fedcba9876543210fedcba9876543210"
+  const listed = {
+    decisions: [
+      {
+        ask: ask(second),
+        outcome: { state: "decided", text: "Wait. Monday.", choice: 1, atMs: 9 },
+      },
+      { ask: ask(first), outcome: { state: "replaced", by: second, atMs: 7 } },
+    ],
+  }
+  const request = vi.fn().mockResolvedValue(listed)
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.decisions(conversationId)).resolves.toEqual(listed)
+  expect(request.mock.calls[0]).toEqual(["conversation.decisions", { conversationId }])
+  const waiting = { decisions: [{ ask: ask(first) }] }
+  await expect(
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue(waiting) },
+      () => "unused",
+    ).decisions(conversationId),
+  ).resolves.toEqual(waiting)
+  const reading = (decisions: unknown[]) =>
+    createConversationApi(
+      { request: vi.fn().mockResolvedValue({ decisions }) },
+      () => "unused",
+    ).decisions(conversationId)
+  for (const [name, bad] of [
+    [
+      "a choice past the ask's",
+      [{ ask: ask(first), outcome: { state: "decided", text: "?", choice: 2, atMs: 1 } }],
+    ],
+    [
+      "replaced by itself",
+      [{ ask: ask(first), outcome: { state: "replaced", by: first, atMs: 1 } }],
+    ],
+    [
+      "a decided one naming a replacement",
+      [
+        {
+          ask: ask(first),
+          outcome: { state: "decided", text: "Ship", by: second, atMs: 1 },
+        },
+      ],
+    ],
+    ["an unknown state", [{ ask: ask(first), outcome: { state: "skipped", atMs: 1 } }]],
+    [
+      "an answer past its bound",
+      [
+        {
+          ask: ask(first),
+          outcome: { state: "decided", text: "é".repeat(513), atMs: 1 },
+        },
+      ],
+    ],
+    ["the same ask twice", [{ ask: ask(first) }, { ask: ask(first) }]],
+  ] as const)
+    await expect(reading([...bad]), name).rejects.toThrow()
+  const unasked = vi.fn()
+  await expect(
+    createConversationApi({ request: unasked }, () => "unused").decisions("not-a-chat"),
+  ).rejects.toThrow()
+  expect(unasked).not.toHaveBeenCalled()
+})
+
 const observeCursor = {
   incarnation: "a".repeat(32),
   boundary: "9",

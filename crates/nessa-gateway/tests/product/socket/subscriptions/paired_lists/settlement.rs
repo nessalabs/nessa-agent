@@ -36,6 +36,13 @@ impl ConversationSummaries for HeldReplySummary {
         })
     }
 
+    fn decisions(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Vec<nessa_protocol::conversation::view::OwnerDecision>> {
+        ConversationSummaries::decisions(self.store.as_ref(), id)
+    }
+
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         self.store.erase(id)
     }

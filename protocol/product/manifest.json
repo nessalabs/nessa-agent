@@ -147,6 +147,11 @@
       "grant": "conversation.write",
       "lane": "controls"
     },
+    "conversation.decisions": {
+      "params": "ConversationDecisionsParams",
+      "grant": "conversation.write",
+      "lane": "controls"
+    },
     "conversation.delete": {
       "params": "ConversationDeleteParams",
       "grant": "conversation.write",

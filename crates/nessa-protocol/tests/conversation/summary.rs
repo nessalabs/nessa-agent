@@ -1,5 +1,6 @@
 //! A conversation's summary rules, tested without storage, a runtime, or an agent.
 use super::{ConversationPreview, ConversationSummary, ConversationTitle};
+use crate::conversation::view::{OwnerDecisionOutcome, MAX_DECISION_ANSWER_BYTES};
 
 fn preview(text: &str) -> Option<String> {
     ConversationPreview::from_text(text).map(|preview| preview.as_str().to_owned())
@@ -291,12 +292,77 @@ fn an_ask_lifts_its_conversation_to_the_top_of_the_list() {
 fn an_ask_goes_only_with_the_message_that_answers_it() {
     let asking = ConversationSummary::after_asking(None, asked("a", 10));
     // A message that answers nothing, or answers an earlier ask, keeps it.
-    let kept = ConversationSummary::after_message(Some(&asking), "hm", None, 20).answering(None);
+    let kept =
+        ConversationSummary::after_message(Some(&asking), "hm", None, 20).answering(None, "hm");
     assert!(kept.ask().is_some());
+    assert!(kept.settled().is_none());
     let stale = ConversationSummary::after_message(Some(&asking), "hm", None, 20)
-        .answering(Some("earlier"));
+        .answering(Some("earlier"), "hm");
     assert!(stale.ask().is_some());
-    let answered =
-        ConversationSummary::after_message(Some(&asking), "Yes", None, 30).answering(Some("a"));
+    assert!(stale.settled().is_none());
+    let answered = ConversationSummary::after_message(Some(&asking), "Yes", None, 30)
+        .answering(Some("a"), "Yes");
     assert!(answered.ask().is_none());
+    let settled = answered.settled().expect("the answered ask is settled");
+    assert_eq!(settled.ask.ask_id, "a");
+    assert_eq!(
+        settled.outcome,
+        OwnerDecisionOutcome::Decided {
+            text: "Yes".into(),
+            choice: Some(0),
+            at_ms: 30,
+        }
+    );
+    // Settling is the change's alone: what is made of the summary next does
+    // not settle it again.
+    assert!(ConversationSummary::after_reply(Some(&answered), "Ok.", 40)
+        .unwrap()
+        .settled()
+        .is_none());
+    assert!(answered.after_archiving(true).settled().is_none());
+}
+
+#[test]
+fn a_newer_ask_settles_the_one_it_replaces() {
+    let first = ConversationSummary::after_asking(None, asked("a", 10));
+    assert!(first.settled().is_none());
+    let second = ConversationSummary::after_asking(Some(&first), asked("b", 20));
+    let settled = second.settled().expect("the first ask is settled");
+    assert_eq!(settled.ask.ask_id, "a");
+    assert_eq!(
+        settled.outcome,
+        OwnerDecisionOutcome::Replaced {
+            by: "b".into(),
+            at_ms: 20,
+        }
+    );
+    // The same ask again settles nothing.
+    assert!(
+        ConversationSummary::after_asking(Some(&second), asked("b", 30))
+            .settled()
+            .is_none()
+    );
+}
+
+#[test]
+fn an_answer_names_the_choice_it_is_and_keeps_a_bounded_text() {
+    let ask = asked("a", 10);
+    let answer = |text: &str| OwnerDecisionOutcome::answered(&ask, text, 5);
+    let choice = |outcome: OwnerDecisionOutcome| match outcome {
+        OwnerDecisionOutcome::Decided { choice, .. } => choice,
+        OwnerDecisionOutcome::Replaced { .. } => panic!("an answer is decided"),
+    };
+    assert_eq!(choice(answer("No")), Some(1));
+    assert_eq!(choice(answer("  no ")), Some(1));
+    assert_eq!(choice(answer("No. Not this week.")), Some(1));
+    assert_eq!(choice(answer("Nope")), None);
+    assert_eq!(choice(answer("Not now")), None);
+    let long = "é".repeat(MAX_DECISION_ANSWER_BYTES);
+    match answer(&long) {
+        OwnerDecisionOutcome::Decided { text, .. } => {
+            assert!(text.len() <= MAX_DECISION_ANSWER_BYTES);
+            assert!(long.starts_with(&text));
+        }
+        OwnerDecisionOutcome::Replaced { .. } => panic!("an answer is decided"),
+    }
 }

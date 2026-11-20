@@ -2,7 +2,8 @@
 //! its rows: version 6 (before `unfinished_turns`), version 7 with or
 //! without `model_requests`, which #975 added without raising the version,
 //! version 8 (before `agent_switches`), version 9 (before
-//! `closed_threads`), and version 10 (before `summaries.ask`).
+//! `closed_threads`), version 10 (before `summaries.ask`), and version 11
+//! (before `owner_decisions`).
 //! `metadata_v6.sql` is version 6's definition exactly as that build shipped
 //! it (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use super::store::LocalConversationStore;
@@ -126,7 +127,7 @@ async fn a_version_6_file_is_upgraded_and_keeps_its_conversations() {
     assert_eq!(version(&path), 6);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -143,7 +144,7 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
     assert_eq!(version(&path), 7);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -160,13 +161,13 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         connection
             .execute_batch(
                 "DROP TABLE agent_switches; DROP TABLE closed_threads;
-                 ALTER TABLE summaries DROP COLUMN ask",
+                 DROP TABLE owner_decisions; ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     drop(store);
     assert_eq!(shape(&path), current_shape());
 }
@@ -183,13 +184,14 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
         connection
             .execute_batch(
                 "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
-                 DROP TABLE closed_threads; ALTER TABLE summaries DROP COLUMN ask",
+                 DROP TABLE closed_threads; DROP TABLE owner_decisions;
+                 ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 8).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert_eq!(
@@ -212,12 +214,15 @@ async fn a_version_9_file_gains_the_closed_threads() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE closed_threads; ALTER TABLE summaries DROP COLUMN ask")
+            .execute_batch(
+                "DROP TABLE closed_threads; DROP TABLE owner_decisions;
+                 ALTER TABLE summaries DROP COLUMN ask",
+            )
             .unwrap();
         connection.pragma_update(None, "user_version", 9).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert!(!ConversationRepository::thread_closed(&store, &id)
@@ -246,12 +251,12 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("ALTER TABLE summaries DROP COLUMN ask")
+            .execute_batch("DROP TABLE owner_decisions; ALTER TABLE summaries DROP COLUMN ask")
             .unwrap();
         connection.pragma_update(None, "user_version", 10).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     let kept = ConversationSummaries::load(&store, &id)
@@ -311,6 +316,116 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
         summary.title().map(|title| title.as_str()),
         Some("Kept across the upgrade")
     );
+}
+
+fn ask(ask_id: &str, at_ms: u64) -> nessa_protocol::conversation::view::OwnerAsk {
+    nessa_protocol::conversation::view::OwnerAsk {
+        ask_id: ask_id.into(),
+        question: "Ship it?".into(),
+        choices: vec![
+            nessa_protocol::conversation::view::OwnerAskChoice {
+                label: "Yes".into(),
+                consequence: "It ships.".into(),
+            },
+            nessa_protocol::conversation::view::OwnerAskChoice {
+                label: "No".into(),
+                consequence: "It waits.".into(),
+            },
+        ],
+        recommended: 0,
+        reason: "It is ready.".into(),
+        asked_at_ms: at_ms,
+    }
+}
+
+/// A version 11 file, from before decisions were kept, gains
+/// `owner_decisions` with the ask its summary waits on as a decision still
+/// waiting; the message that answers it then settles it, and the next ask
+/// is kept beside it.
+#[tokio::test]
+async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::domain::ConversationSummary;
+    use nessa_protocol::conversation::view::{OwnerDecision, OwnerDecisionOutcome};
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    let first = ask("0123456789abcdef0123456789abcdef", 3000);
+    {
+        let store = LocalConversationStore::open(&path).unwrap();
+        let kept = ConversationSummaries::load(&store, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        ConversationSummaries::record(
+            &store,
+            &id,
+            ConversationSummary::after_asking(Some(&kept), first.clone()),
+        )
+        .await
+        .unwrap();
+    }
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("DROP TABLE owner_decisions")
+            .unwrap();
+        connection.pragma_update(None, "user_version", 11).unwrap();
+    }
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(version(&path), 12);
+    assert_kept(&store).await;
+    assert_eq!(
+        ConversationSummaries::decisions(&store, &id).await.unwrap(),
+        vec![OwnerDecision {
+            ask: first.clone(),
+            outcome: None,
+        }]
+    );
+    let waiting = ConversationSummaries::load(&store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let answered = ConversationSummary::after_message(Some(&waiting), "No. Next week.", None, 4000)
+        .answering(Some(&first.ask_id), "No. Next week.");
+    ConversationSummaries::record(&store, &id, answered.clone())
+        .await
+        .unwrap();
+    let second = ask("fedcba9876543210fedcba9876543210", 5000);
+    ConversationSummaries::record(
+        &store,
+        &id,
+        ConversationSummary::after_asking(Some(&answered), second.clone()),
+    )
+    .await
+    .unwrap();
+    drop(store);
+    assert_eq!(shape(&path), current_shape());
+    // Kept across a restart, newest first.
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(
+        ConversationSummaries::decisions(&store, &id).await.unwrap(),
+        vec![
+            OwnerDecision {
+                ask: second,
+                outcome: None,
+            },
+            OwnerDecision {
+                ask: first,
+                outcome: Some(OwnerDecisionOutcome::Decided {
+                    text: "No. Next week.".into(),
+                    choice: Some(1),
+                    at_ms: 4000,
+                }),
+            },
+        ]
+    );
+    // Gone with the summary.
+    ConversationSummaries::erase(&store, &id).await.unwrap();
+    assert!(ConversationSummaries::decisions(&store, &id)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

@@ -111,6 +111,10 @@
     "readOnly": false,
     "destructive": false
   },
+  "conversation.decisions": {
+    "readOnly": true,
+    "destructive": false
+  },
   "conversation.delete": {
     "readOnly": false,
     "destructive": true

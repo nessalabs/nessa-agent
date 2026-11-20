@@ -44,7 +44,9 @@ use nessa_protocol::conversation::domain::{
     ConversationId, ConversationModelId, ConversationPreview, ConversationSummary,
     ConversationTitle,
 };
-use nessa_protocol::conversation::view::OwnerAsk;
+use nessa_protocol::conversation::view::{
+    OwnerAsk, OwnerDecision, OwnerDecisionOutcome, MAX_DECISIONS_KEPT,
+};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{
     validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
@@ -125,12 +127,13 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 5] = [
+static UPGRADES: [Upgrade; 6] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
     Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
     Upgrade::new(10, include_str!("schema_upgrades/10.sql")),
+    Upgrade::new(11, include_str!("schema_upgrades/11.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -1677,6 +1680,66 @@ impl UnfinishedTurns for LocalConversationStore {
     }
 }
 
+fn to_json(value: &impl serde::Serialize) -> Result<String, ConversationError> {
+    serde_json::to_string(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// Keep in `id`'s decisions what `summary` asks and settles, in the
+/// transaction that records it: the ask it waits on, as a decision still
+/// waiting, and the ask it took down, with how. Only the newest
+/// [`MAX_DECISIONS_KEPT`] are kept.
+fn record_decisions(
+    transaction: &rusqlite::Transaction<'_>,
+    id: &ConversationId,
+    summary: &ConversationSummary,
+) -> Result<(), ConversationError> {
+    if let Some(ask) = summary.ask() {
+        transaction
+            .cached_execute(
+                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
+                 VALUES (?1, ?2, ?3, ?4, NULL)
+                 ON CONFLICT (conversation_id, ask_id) DO NOTHING",
+                params![
+                    id.to_string(),
+                    ask.ask_id,
+                    stored_time(ask.asked_at_ms)?,
+                    to_json(ask)?,
+                ],
+            )
+            .map_err(failed)?;
+    }
+    if let Some(settled) = summary.settled() {
+        // The ask is written with it, so an ask asked before decisions were
+        // kept is settled too.
+        transaction
+            .cached_execute(
+                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (conversation_id, ask_id) DO UPDATE SET outcome = excluded.outcome
+                 WHERE outcome IS NULL",
+                params![
+                    id.to_string(),
+                    settled.ask.ask_id,
+                    stored_time(settled.ask.asked_at_ms)?,
+                    to_json(&settled.ask)?,
+                    to_json(&settled.outcome)?,
+                ],
+            )
+            .map_err(failed)?;
+    }
+    if summary.ask().is_some() || summary.settled().is_some() {
+        transaction
+            .cached_execute(
+                "DELETE FROM owner_decisions WHERE conversation_id = ?1 AND ask_id NOT IN (
+                     SELECT ask_id FROM owner_decisions WHERE conversation_id = ?1
+                     ORDER BY asked_at_ms DESC, rowid DESC LIMIT ?2)",
+                params![id.to_string(), MAX_DECISIONS_KEPT as i64],
+            )
+            .map_err(failed)?;
+    }
+    Ok(())
+}
+
 impl ConversationSummaries for LocalConversationStore {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<ConversationSummary>> {
         let id = id.clone();
@@ -1748,6 +1811,7 @@ impl ConversationSummaries for LocalConversationStore {
                     ],
                 )
                 .map_err(failed)?;
+            record_decisions(&transaction, &id, &summary)?;
             transaction.cached_execute(
                 "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                 params![revision, id.to_string()],
@@ -1755,6 +1819,49 @@ impl ConversationSummaries for LocalConversationStore {
             transaction.commit().map_err(failed)?;
             changes.publish(&(conversation.organization().clone(), conversation.owner().clone()));
             Ok(())
+        })
+    }
+    fn decisions(&self, id: &ConversationId) -> ConversationFuture<'_, Vec<OwnerDecision>> {
+        let id = id.clone();
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare_cached(
+                    "SELECT ask, outcome FROM owner_decisions WHERE conversation_id = ?1
+                     ORDER BY asked_at_ms DESC, rowid DESC LIMIT ?2",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![id.to_string(), MAX_DECISIONS_KEPT as i64], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .map_err(failed)?;
+            let mut decisions = Vec::new();
+            for row in rows {
+                let (ask, outcome) = row.map_err(failed)?;
+                // A row that does not read back as what was written is left
+                // out, as a damaged summary's ask is: one bad row never hides
+                // the rest.
+                let Ok(ask) = serde_json::from_str::<OwnerAsk>(&ask) else {
+                    unreadable("owner_decisions", &id.to_string());
+                    continue;
+                };
+                if ask.check().is_err() {
+                    unreadable("owner_decisions", &id.to_string());
+                    continue;
+                }
+                let outcome = match outcome
+                    .map(|outcome| serde_json::from_str::<OwnerDecisionOutcome>(&outcome))
+                    .transpose()
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => {
+                        unreadable("owner_decisions", &id.to_string());
+                        continue;
+                    }
+                };
+                decisions.push(OwnerDecision { ask, outcome });
+            }
+            Ok(decisions)
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
@@ -1768,6 +1875,12 @@ impl ConversationSummaries for LocalConversationStore {
             let removed = transaction
                 .cached_execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",
+                    [id.to_string()],
+                )
+                .map_err(failed)?;
+            transaction
+                .cached_execute(
+                    "DELETE FROM owner_decisions WHERE conversation_id = ?1",
                     [id.to_string()],
                 )
                 .map_err(failed)?;
