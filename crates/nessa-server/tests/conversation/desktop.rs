@@ -159,6 +159,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,
+            reply_style: None,
             review_deadlines: crate::composition::agent::review_deadlines(),
             selected: None,
             runtimes: HashMap::from([(
@@ -216,6 +217,7 @@ fn default_workspace_rejects_a_symlinked_ancestor() {
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,
+            reply_style: None,
             review_deadlines: crate::composition::agent::review_deadlines(),
             selected: None,
             runtimes: HashMap::from([(
@@ -371,6 +373,7 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
             #[cfg(unix)]
             mcp_stand_ins: Default::default(),
             channel_instructions: None,
+            reply_style: None,
             review_deadlines: crate::composition::agent::review_deadlines(),
             selected: None,
             runtimes: HashMap::from([("claude".into(), runtime()), ("codex".into(), runtime())]),

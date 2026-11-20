@@ -512,6 +512,16 @@
       "grant": "conversation.write",
       "lane": "requests"
     },
+    "replyStyle.read": {
+      "params": "ReplyStyleReadParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "replyStyle.set": {
+      "params": "ReplyStyleSetParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
       "grant": "conversation.write",

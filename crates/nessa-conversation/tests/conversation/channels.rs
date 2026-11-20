@@ -36,6 +36,8 @@ type Asked = (AgentId, String, ConversationApprovalMode, Option<PathBuf>);
 struct RecordingSource {
     factory: Arc<ProviderFactory>,
     asked: Mutex<Vec<Asked>>,
+    /// The style each opening was told, in order.
+    styles: Mutex<Vec<Option<String>>>,
 }
 
 impl RecordingSource {
@@ -105,6 +107,19 @@ impl ConversationAgentSource for RecordingSource {
             place.instructions
         );
         self.record(agent, model, mode, Some(place))
+    }
+    fn resolve_briefed<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+        brief: &'a crate::application::AgentBrief,
+    ) -> ConversationAgentFuture<'a> {
+        self.styles.lock().unwrap().push(brief.style.clone());
+        match &brief.place {
+            None => self.resolve_for(agent, model, mode),
+            Some(place) => self.resolve_in(agent, model, mode, place),
+        }
     }
 }
 
@@ -245,6 +260,7 @@ impl Fixture {
         let source = Arc::new(RecordingSource {
             factory: Arc::new(ProviderFactory::default()),
             asked: Mutex::new(Vec::new()),
+            styles: Mutex::new(Vec::new()),
         });
         let agents = ConversationAgents::from_source(
             HashSet::from([AgentId::Claude, AgentId::Codex]),
@@ -279,12 +295,9 @@ impl Fixture {
         .unwrap();
         service.bind_commands(storage);
         let folders = TableFolders::default();
-        service.bind_channels(
-            channel_store.unwrap_or_else(|| {
-                Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap())
-            }),
-            Arc::new(folders.clone()),
-        );
+        let kept = Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap());
+        service.bind_reply_styles(kept.clone());
+        service.bind_channels(channel_store.unwrap_or(kept), Arc::new(folders.clone()));
         let settings =
             Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
         service.bind_settings_audit(settings.clone());
@@ -1366,4 +1379,116 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
         devbox
     );
     fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_conversation_keeps_the_style_it_started_with_and_only_the_owner_sets_a_channels() {
+    use crate::domain::{ReplyStyle, StyleRole};
+    let fixture = Fixture::new();
+    let channel = fixture.channel("styles", None).await;
+    let person = caller("person", "style");
+    // Nothing chosen: a channel's new threads get Nessa's plain style.
+    let read = fixture
+        .service
+        .reply_styles(&person, Some(channel.id().clone()))
+        .await
+        .unwrap();
+    assert_eq!(read.effective(StyleRole::Thread), ReplyStyle::Plain);
+    // The Nessa level's thread style reaches the channel; the channel's own
+    // coordinator choice does not touch threads.
+    let one_line = ReplyStyle::custom("Answer in one line.").unwrap();
+    fixture
+        .service
+        .set_reply_style(&person, None, StyleRole::Thread, Some(one_line.clone()))
+        .await
+        .unwrap();
+    let read = fixture
+        .service
+        .set_reply_style(
+            &person,
+            Some(channel.id().clone()),
+            StyleRole::Coordinator,
+            Some(ReplyStyle::Off),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.effective(StyleRole::Thread), one_line);
+    assert_eq!(read.effective(StyleRole::Coordinator), ReplyStyle::Off);
+    // Each change is recorded before and after.
+    assert_eq!(
+        fixture.settings.outcomes(),
+        [
+            crate::application::SettingsOutcome::Requested,
+            crate::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: None
+            },
+            crate::application::SettingsOutcome::Requested,
+            crate::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: None
+            },
+        ]
+    );
+    // A thread made now is told the Nessa level's text, at every opening.
+    fixture.source.styles.lock().unwrap().clear();
+    let id = new_id();
+    fixture
+        .service
+        .create(
+            id.clone(),
+            caller("person", "create"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    let told = std::mem::take(&mut *fixture.source.styles.lock().unwrap());
+    assert!(
+        told.contains(&Some("Answer in one line.".to_owned())),
+        "{told:?}"
+    );
+    // A later change reaches new conversations only.
+    fixture
+        .service
+        .set_reply_style(&person, None, StyleRole::Thread, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.reply_style_instructions(&id).await.unwrap(),
+        Some("Answer in one line.".to_owned())
+    );
+    // The channel's coordinator was pinned off: it is told nothing.
+    let coordinator = channel.coordinator_id();
+    fixture
+        .service
+        .create(
+            coordinator.clone(),
+            caller("person", "create-main"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .reply_style_instructions(&coordinator)
+            .await
+            .unwrap(),
+        None
+    );
+    // Somebody else may not read or change this channel's style.
+    let other = caller("someone-else", "style");
+    assert!(matches!(
+        fixture
+            .service
+            .set_reply_style(&other, Some(channel.id().clone()), StyleRole::Thread, None)
+            .await,
+        Err(ConversationError::ChannelNotFound)
+    ));
 }

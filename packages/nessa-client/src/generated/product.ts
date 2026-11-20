@@ -4066,6 +4066,69 @@ export const VoiceErrorCode = {
   VaultLocked: "vault_locked",
 } as const
 export type VoiceErrorCode = (typeof VoiceErrorCode)[keyof typeof VoiceErrorCode]
+/** Which agents a style is for: a channel's coordinator, or every other conversation (a thread). */
+export const ReplyStyleRole = { Coordinator: "coordinator", Thread: "thread" } as const
+export type ReplyStyleRole = (typeof ReplyStyleRole)[keyof typeof ReplyStyleRole]
+/** plain: Nessa's own plain style for the role. off: no style instructions; the agent talks as its harness does. custom: the person's own text. */
+export const ReplyStyleMode = { Plain: "plain", Off: "off", Custom: "custom" } as const
+export type ReplyStyleMode = (typeof ReplyStyleMode)[keyof typeof ReplyStyleMode]
+/** One reply style. */
+export interface ReplyStyleChoice {
+  /** Which style. */
+  mode: ReplyStyleMode
+  /** The person's own style, as the agent is told it. Present only in custom mode. */
+  text?: string
+}
+/** One level's own choices, one per role. A role left out follows the level above. */
+export interface ReplyStyleRoles {
+  /** The coordinator's own choice; omitted inherits. */
+  coordinator?: ReplyStyleChoice
+  /** Threads' own choice; omitted inherits. */
+  thread?: ReplyStyleChoice
+}
+/** Read how agents talk: the caller's Nessa-level choices and, for a channel, its own. */
+export interface ReplyStyleReadParams {
+  /** Stored channel identity; omitted reads the Nessa level. The synthetic default channel follows the Nessa level. */
+  channelId?: string
+}
+/** default: remove this level's choice, so it follows the level above (Nessa's plain style above the Nessa level). plain, off, custom: keep that choice. */
+export const ReplyStyleSelection = {
+  Default: "default",
+  Plain: "plain",
+  Off: "off",
+  Custom: "custom",
+} as const
+export type ReplyStyleSelection =
+  (typeof ReplyStyleSelection)[keyof typeof ReplyStyleSelection]
+/** Save how one role's agents talk, at the Nessa level or for one channel. Reaches conversations created after it: a conversation keeps the style it started with, because changing its prompt would start a fresh session that has forgotten it. Recorded in the settings audit. */
+export interface ReplyStyleSetParams {
+  /** Stored channel identity; omitted saves the Nessa level. */
+  channelId?: string
+  /** Whose style changes. */
+  role: ReplyStyleRole
+  /** The choice; custom requires text. */
+  mode: ReplyStyleSelection
+  /** The person's own style. Leading and trailing space is removed and nothing may be left. Present only in custom mode. */
+  text?: string
+}
+/** How agents talk, as one read: each level's own choices and what each role gets. */
+export interface ReplyStyles {
+  /** The stored channel read or saved; omitted for the Nessa level. */
+  channelId?: string
+  /** The caller's Nessa-level choices. */
+  nessa: ReplyStyleRoles
+  /** The channel's own choices; omitted for the Nessa level. */
+  channel?: ReplyStyleRoles
+  /** The style each role's new conversations start with here. */
+  effective: ReplyStyleEffective
+}
+/** The style each role's new conversations start with. */
+export interface ReplyStyleEffective {
+  /** What a new coordinator here is told. */
+  coordinator: ReplyStyleChoice
+  /** What a new thread here is told. */
+  thread: ReplyStyleChoice
+}
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -4128,7 +4191,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 135,
+  maxReadyMethods: 137,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4453,6 +4516,8 @@ export const ProductMethod = {
   ChannelCreate: "channel.create",
   ChannelList: "channel.list",
   ChannelSetPlacement: "channel.setPlacement",
+  ReplyStyleRead: "replyStyle.read",
+  ReplyStyleSet: "replyStyle.set",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationReadEarlier: "conversation.readEarlier",
   ConversationPeek: "conversation.peek",
@@ -4604,6 +4669,8 @@ export const productReadyMethods = [
   "channel.create",
   "channel.list",
   "channel.setPlacement",
+  "replyStyle.read",
+  "replyStyle.set",
   "conversation.subscribeEvents",
   "conversation.readEarlier",
   "conversation.peek",
@@ -4743,6 +4810,8 @@ export const productMethodGrants = {
   "channel.create": "conversation.write",
   "channel.list": "conversation.write",
   "channel.setPlacement": "conversation.write",
+  "replyStyle.read": "conversation.write",
+  "replyStyle.set": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.readEarlier": "conversation.write",
   "conversation.peek": "conversation.write",

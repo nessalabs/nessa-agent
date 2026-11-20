@@ -70,6 +70,7 @@ mod native;
 mod pairing;
 mod peers;
 mod pool;
+mod reply_style;
 mod voice;
 
 pub use github::GithubRoutes;

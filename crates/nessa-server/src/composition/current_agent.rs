@@ -65,8 +65,8 @@ use crate::{
     },
     conversation::{
         application::{
-            AgentPlace, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
-            ConversationError, ConversationFuture, ProviderSessionEraser,
+            AgentBrief, AgentPlace, ConversationAgent, ConversationAgentFuture,
+            ConversationAgentSource, ConversationError, ConversationFuture, ProviderSessionEraser,
         },
         domain::ProviderSessionErasure,
     },
@@ -770,6 +770,29 @@ impl ConversationAgentSource for CurrentAgentResolver {
             self.placed(place)
                 .resolve_placed(agent, model.to_owned(), mode),
         )
+    }
+
+    /// With a style, the agent is built for this conversation alone, as a
+    /// placed one is: nothing composed without the style is reused.
+    fn resolve_briefed<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+        brief: &'a AgentBrief,
+    ) -> ConversationAgentFuture<'a> {
+        let Some(style) = &brief.style else {
+            return match &brief.place {
+                None => self.resolve_for(agent, model, mode),
+                Some(place) => self.resolve_in(agent, model, mode, place),
+            };
+        };
+        let mut briefed = match &brief.place {
+            None => self.clone(),
+            Some(place) => self.placed(place),
+        };
+        briefed.config.reply_style = Some(style.clone());
+        Box::pin(briefed.resolve_placed(agent, model.to_owned(), mode))
     }
 }
 

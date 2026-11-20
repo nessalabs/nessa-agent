@@ -534,6 +534,7 @@ export {
 } from "./generated/product.js"
 
 export type { DevicesApi } from "./presentation/devices-api.js"
+export type { ReplyStyleApi } from "./presentation/reply-style-api.js"
 export type {
   DeviceDisk,
   DeviceMachine,

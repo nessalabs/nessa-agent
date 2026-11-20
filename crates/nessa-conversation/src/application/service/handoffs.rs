@@ -139,10 +139,10 @@ impl ConversationService {
         if record.agent() == Some(agent) {
             return Err(ConversationError::InvalidInput);
         }
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         self.inner
             .agents
-            .resolve_model(agent, request.requested_model.as_str(), place.as_ref())
+            .resolve_model(agent, request.requested_model.as_str(), &place)
             .await?;
         // A turn running or waiting stays with the agent it was given to,
         // and so does one a restart or a failure left owed: it was saved

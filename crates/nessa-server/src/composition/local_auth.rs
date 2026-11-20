@@ -1444,10 +1444,11 @@ async fn conversations(
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let channels_path = root.join("channels.sqlite3");
-    let channel_store: Arc<dyn ChannelStore> =
-        Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
-            RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
-        })?);
+    // One file keeps channels and how agents talk (issue #1382).
+    let channel_file = Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
+        RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
+    })?);
+    let channel_store: Arc<dyn ChannelStore> = channel_file.clone();
     let thread_workspaces = Arc::new(ThreadWorkspaces {
         service: workspace_service,
         channels: channel_store.clone(),
@@ -1835,6 +1836,7 @@ async fn conversations(
                 )
             })?,
     ));
+    service.bind_reply_styles(channel_file);
     // Channels and which conversation is in which; a channel with no chosen
     // folder works in `<data>/channels/<id>`.
     service.bind_channels(

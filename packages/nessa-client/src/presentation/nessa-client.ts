@@ -3,6 +3,7 @@ import { createAgent37Api, type Agent37Api } from "./agent37-api.js"
 import { createBoatApi, type BoatApi } from "./boat-api.js"
 import { createCloudApi, type CloudApi } from "./cloud-api.js"
 import { createDevicesApi, type DevicesApi } from "./devices-api.js"
+import { createReplyStyleApi, type ReplyStyleApi } from "./reply-style-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import type { ManagedSession, ConnectionState } from "../application/managed-session.js"
@@ -96,6 +97,8 @@ export class NessaClient {
   readonly cloud: CloudApi
   /** The hub's devices: its own machine and the workers paired to it. */
   readonly devices: DevicesApi
+  /** How agents talk, at the Nessa level and per channel. */
+  readonly replyStyle: ReplyStyleApi
   /** Authorized gateway health. */
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
@@ -149,6 +152,7 @@ export class NessaClient {
     this.agent37 = createAgent37Api(wire)
     this.cloud = createCloudApi(wire)
     this.devices = createDevicesApi(wire)
+    this.replyStyle = createReplyStyleApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
     this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)
     this.records = createRecordReadApi(wire)
