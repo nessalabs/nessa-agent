@@ -55,6 +55,7 @@ export type FakeGatewayClient = {
   readonly boat: import("@nessa/client").BoatApi
   readonly agent37: import("@nessa/client").Agent37Api
   readonly cloud: import("@nessa/client").CloudApi
+  readonly replyStyle: import("@nessa/client").ReplyStyleApi
 } & GatewayClient &
   WindowPublishClient &
   WindowCommandClient & {
@@ -696,6 +697,7 @@ export function fakeGateway(
       },
       disconnect: async () => ({ state: "disconnected" as const }),
     },
+    replyStyle: fakeReplyStyle(),
     cloud: {
       read: async () => ({ cloud: "boat" as const }),
       choose: async (cloud) => {
@@ -1154,4 +1156,38 @@ export function fakeGateway(
     closed: () => closed,
     count: (method: Method) => calls.filter((call) => call.method === method).length,
   })
+}
+
+/**
+ * How agents talk, kept in memory as the gateway keeps it: each level's own
+ * choice per role, and what a role gets where nothing is chosen.
+ */
+function fakeReplyStyle(): import("@nessa/client").ReplyStyleApi {
+  type Roles = import("@nessa/client").ReplyStyleRoles
+  type Choice = import("@nessa/client").ReplyStyleChoice
+  const levels = new Map<string, Roles>()
+  const own = (level: string): Roles => levels.get(level) ?? {}
+  const plain: Choice = { mode: "plain" }
+  const read = (channelId?: string) => {
+    const nessa = own("")
+    const channel = channelId === undefined ? undefined : own(channelId)
+    const effective = (role: "coordinator" | "thread") =>
+      channel?.[role] ?? nessa[role] ?? plain
+    return {
+      ...(channelId === undefined ? {} : { channelId, channel: channel ?? {} }),
+      nessa,
+      effective: { coordinator: effective("coordinator"), thread: effective("thread") },
+    }
+  }
+  return {
+    read: async (channelId) => read(channelId),
+    set: async (role, choice, channelId) => {
+      const level = channelId ?? ""
+      const next: Roles = { ...own(level) }
+      if (choice === undefined) delete next[role]
+      else next[role] = choice
+      levels.set(level, next)
+      return read(channelId)
+    },
+  }
 }

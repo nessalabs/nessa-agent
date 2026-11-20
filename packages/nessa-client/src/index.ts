@@ -546,6 +546,13 @@ export type {
   DevicesPool,
   PoolPreference,
 } from "./generated/product.js"
+export type {
+  ReplyStyleChoice,
+  ReplyStyleMode,
+  ReplyStyleRole,
+  ReplyStyleRoles,
+  ReplyStyles,
+} from "./generated/product.js"
 export type { Agent37Api } from "./presentation/agent37-api.js"
 export { NessaAgent37Error } from "./presentation/agent37-api.js"
 export type { CloudApi } from "./presentation/cloud-api.js"

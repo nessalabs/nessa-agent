@@ -265,6 +265,10 @@ export const KNOBS = {
     default: 1,
     what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a vertical scroll toggles nothing",
   },
+  styles: {
+    default: 1,
+    what: "times Threads are given the person's own words in the default channel's settings (saved only on Save): a new chat is told them, the main chat keeps the plain style it began with, and the choice is cleared after",
+  },
   restores: {
     default: 1,
     what: "restored conversations opened in the window: one shows its saved history, and one whose source is gone refuses a send and keeps the draft",
@@ -395,6 +399,7 @@ export function plan(knobs, accessScenario = "full") {
   for (let slot = 0; slot < knobs.peers; slot += 1) steps.push({ kind: "peer" })
   add(knobs.swipes, () => ({ kind: "swipe" }))
   add(knobs.touchIds, () => ({ kind: "touchId" }))
+  add(knobs.styles, () => ({ kind: "style" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
