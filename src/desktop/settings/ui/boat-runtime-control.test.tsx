@@ -297,3 +297,23 @@ it("saves a unit picked while the amount is still saving, after it", async () =>
   ])
   expect(chosen()).toBe("259200")
 })
+it("keeps an entered amount in its unit, so a unit picked after the save applies to it", async () => {
+  let stored: BoatRuntimeSettings = { defaultLifetime: { mode: "after", seconds: 3600 } }
+  const setRuntimeSettings = vi.fn(
+    async (params: BoatRuntimeSetParams): Promise<BoatRuntimeSettings> => {
+      stored = { defaultLifetime: { mode: "after", seconds: params.seconds } }
+      return stored
+    },
+  )
+  const gateway = { runtimeSettings: async () => stored, setRuntimeSettings }
+  await act(async () => root.render(<BoatRuntimeControl gateway={gateway} />))
+  // 24 hours is a whole day, but stays 24 hours as entered.
+  await enter("24")
+  expect(field()?.value).toBe("24")
+  expect(host.querySelector("[data-choice-trigger]")?.textContent).toContain("hours")
+  await select("days")
+  expect(setRuntimeSettings.mock.calls).toEqual([
+    [{ mode: "after", seconds: 86_400 }],
+    [{ mode: "after", seconds: 2_073_600 }],
+  ])
+})

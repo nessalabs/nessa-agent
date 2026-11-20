@@ -28,9 +28,10 @@ const offered: readonly Unit[] = ["minutes", "hours", "days"]
 type Mode = "default" | "never"
 type Choosing = Mode | Unit
 type Saving = Pick<BoatRuntimeSetParams, "mode" | "seconds">
+type Length = { amount: number; unit: Unit }
 
 /** The largest unit a length is a whole number of: 7200 → 2 hours. */
-function split(seconds: number): { amount: number; unit: Unit } {
+function split(seconds: number): Length {
   for (const unit of ["days", "hours", "minutes"] as const)
     if (seconds % units[unit].seconds === 0)
       return { amount: seconds / units[unit].seconds, unit }
@@ -75,7 +76,7 @@ export function BoatRuntimeControl({
   const savePending = useRef(false)
   // A choice made while another saves (an amount saved as its field loses
   // focus to the unit menu, then the unit) is saved after it, not dropped.
-  const queued = useRef<Saving | undefined>(undefined)
+  const queued = useRef<{ choice: Saving; entered?: Length } | undefined>(undefined)
   // The saved choice's key, read by a queued save after its state is stale.
   const savedKey = useRef<string | undefined>(undefined)
   const mounted = useRef(true)
@@ -98,14 +99,21 @@ export function BoatRuntimeControl({
   const [retry, setRetry] = useState(0)
   const own = (value: BoatRuntimeSettings) =>
     channelId === undefined ? value.defaultLifetime : value.channelOverride
-  /** Show what was read or saved, dropping anything half typed. */
-  const show = (value: BoatRuntimeSettings) => {
+  /**
+   * Show what was read or saved, dropping anything half typed. A length saved
+   * as it was entered keeps its words (24 hours stays 24 hours, not 1 day),
+   * so a unit picked from a menu opened over it applies to that amount.
+   */
+  const show = (value: BoatRuntimeSettings, entered?: Length) => {
     const lifetime = own(value)
     savedKey.current = key(lifetime)
     setSelection(key(lifetime))
     setProblem("")
     if (lifetime?.mode === "after" && lifetime.seconds !== undefined) {
-      const length = split(lifetime.seconds)
+      const length =
+        entered && entered.amount * units[entered.unit].seconds === lifetime.seconds
+          ? entered
+          : split(lifetime.seconds)
       setAmount(String(length.amount))
       setUnit(length.unit)
     }
@@ -138,10 +146,10 @@ export function BoatRuntimeControl({
     // `show` reads only `channelId`, already a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gateway, channelId, retry])
-  const submit = async (choice: Saving): Promise<void> => {
+  const submit = async (choice: Saving, entered?: Length): Promise<void> => {
     const next = choice.mode === "after" ? String(choice.seconds) : choice.mode
     if (savePending.current) {
-      queued.current = choice
+      queued.current = { choice, entered }
       setSelection(next)
       return
     }
@@ -158,7 +166,7 @@ export function BoatRuntimeControl({
       })
       if (current !== revision.current) return
       setSettings(value)
-      show(value)
+      show(value, entered)
     } catch {
       if (current === revision.current) {
         queued.current = undefined
@@ -172,7 +180,7 @@ export function BoatRuntimeControl({
         setBusy(false)
         const after = queued.current
         queued.current = undefined
-        if (after) void submit(after)
+        if (after) void submit(after.choice, after.entered)
       }
     }
   }
@@ -184,7 +192,10 @@ export function BoatRuntimeControl({
       return
     }
     setProblem("")
-    void submit({ mode: "after", seconds: parsed.seconds })
+    void submit(
+      { mode: "after", seconds: parsed.seconds },
+      { amount: parsed.seconds / units[inUnit].seconds, unit: inUnit },
+    )
   }
   const lasting = selection !== "" && selection !== "default" && selection !== "never"
   // A choice saves as it is made: there is no draft to keep or discard. The
