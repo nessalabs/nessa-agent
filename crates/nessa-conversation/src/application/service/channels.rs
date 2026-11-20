@@ -11,7 +11,7 @@
 //!   ──▶ ChannelStore::create
 //! conversation.create { channelId } ──▶ channel.use (Cedar) ──▶ ChannelStore::place
 //! opening ──▶ ChannelStore::channel_of ──▶ AgentPlace { folder, instructions }
-//!   ──▶ ConversationAgentSource::resolve_in
+//!   ──▶ AgentBrief { place, style } ──▶ ConversationAgentSource::resolve_briefed
 //! ```
 //!
 //! The folder is the one path a request may name, and only here: a
@@ -145,6 +145,15 @@ impl From<ConversationError> for ChannelError {
 pub struct AgentPlace {
     pub folder: PathBuf,
     pub instructions: String,
+}
+
+/// Everything an opening tells the agent source beyond the agent, model and
+/// preset: where it works (`None`: the gateway's workspace) and how it writes
+/// to the person (`None`: Nessa adds nothing).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentBrief {
+    pub place: Option<AgentPlace>,
+    pub style: Option<String>,
 }
 
 impl AgentPlace {
@@ -690,6 +699,21 @@ impl ConversationService {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and run where it places threads unless create_thread names an environment. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
         }
         Ok(Some(place))
+    }
+
+    /// Where `id`'s agent works and how it writes, as an opening tells its
+    /// agent source.
+    ///
+    /// # Errors
+    /// As [`Self::agent_place`], and `Metadata` when its style cannot be read.
+    pub(super) async fn agent_brief(
+        &self,
+        id: &ConversationId,
+    ) -> Result<AgentBrief, ConversationError> {
+        Ok(AgentBrief {
+            place: self.agent_place(id).await?,
+            style: self.reply_style_instructions(id).await?,
+        })
     }
 
     /// The stored channel `id` is in; `None` is the default one.

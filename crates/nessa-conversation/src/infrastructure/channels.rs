@@ -2,10 +2,12 @@
 //! folder is checked before agents may work in it.
 use crate::application::{
     ChannelFolders, ChannelStore, ConversationError, ConversationFuture, FolderRefusal,
+    ReplyStyleStore,
 };
 use crate::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelResources,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, ReplyStyle, RoleStyles, StyleRole,
+    StyleText,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
@@ -29,6 +31,7 @@ const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(3, include_str!("channels-pool.sql")),
     nessa_local_database::Upgrade::new(4, include_str!("channels-placement-moves.sql")),
     nessa_local_database::Upgrade::new(5, include_str!("channels-any-place.sql")),
+    nessa_local_database::Upgrade::new(6, include_str!("channels-reply-styles.sql")),
 ];
 const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
@@ -391,6 +394,7 @@ impl ChannelStore for LocalChannelStore {
                 }
                 transaction.execute("DELETE FROM channel_conversations WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
             }
+            transaction.execute("DELETE FROM conversation_reply_styles WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(())
         })
@@ -442,6 +446,152 @@ impl ChannelStore for LocalChannelStore {
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(Some(changed))
+        })
+    }
+}
+
+/// A style as one row's `style` and `text` columns.
+fn style_columns(style: &ReplyStyle) -> (&'static str, Option<&str>) {
+    match style {
+        ReplyStyle::Plain => ("plain", None),
+        ReplyStyle::Off => ("off", None),
+        ReplyStyle::Custom(text) => ("custom", Some(text.as_str())),
+    }
+}
+
+/// A row's `style` and `text`, read back; anything else is not one we wrote.
+fn style_of(style: &str, text: Option<String>) -> Result<ReplyStyle, ConversationError> {
+    match (style, text) {
+        ("plain", None) => Ok(ReplyStyle::Plain),
+        ("off", None) => Ok(ReplyStyle::Off),
+        ("custom", Some(text)) => StyleText::new(&text)
+            .filter(|read| read.as_str() == text)
+            .map(ReplyStyle::Custom)
+            .ok_or_else(|| unreadable("reply style")),
+        _ => Err(unreadable("reply style")),
+    }
+}
+
+impl ReplyStyleStore for LocalChannelStore {
+    fn styles(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        channel: Option<&ChannelId>,
+    ) -> ConversationFuture<'_, RoleStyles> {
+        let key = (
+            organization.as_str().to_owned(),
+            owner.as_str().to_owned(),
+            channel.map_or_else(String::new, |channel| channel.as_str().to_owned()),
+        );
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare_cached(
+                    "SELECT role, style, text FROM reply_styles \
+                     WHERE organization_id = ?1 AND owner_id = ?2 AND channel = ?3",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![key.0, key.1, key.2], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(failed)?;
+            let mut styles = RoleStyles::default();
+            for row in rows {
+                let (role, style, text) = row.map_err(failed)?;
+                let role = StyleRole::parse(&role).ok_or_else(|| unreadable("reply style"))?;
+                styles = styles.with(role, Some(style_of(&style, text)?));
+            }
+            Ok(styles)
+        })
+    }
+
+    fn set_style(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        channel: Option<&ChannelId>,
+        role: StyleRole,
+        choice: Option<ReplyStyle>,
+    ) -> ConversationFuture<'_, ()> {
+        let key = (
+            organization.as_str().to_owned(),
+            owner.as_str().to_owned(),
+            channel.map_or_else(String::new, |channel| channel.as_str().to_owned()),
+        );
+        self.run(move |connection| {
+            match &choice {
+                None => connection.execute(
+                    "DELETE FROM reply_styles \
+                     WHERE organization_id = ?1 AND owner_id = ?2 AND channel = ?3 AND role = ?4",
+                    params![key.0, key.1, key.2, role.as_str()],
+                ),
+                Some(style) => {
+                    let (style, text) = style_columns(style);
+                    connection.execute(
+                        "INSERT INTO reply_styles (organization_id, owner_id, channel, role, style, text) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                         ON CONFLICT (organization_id, owner_id, channel, role) \
+                         DO UPDATE SET style = excluded.style, text = excluded.text",
+                        params![key.0, key.1, key.2, role.as_str(), style, text],
+                    )
+                }
+            }
+            .map_err(failed)?;
+            Ok(())
+        })
+    }
+
+    fn pin(
+        &self,
+        conversation: &ConversationId,
+        role: StyleRole,
+        style: ReplyStyle,
+    ) -> ConversationFuture<'_, ()> {
+        let conversation = conversation.to_string();
+        self.run(move |connection| {
+            let (style, text) = style_columns(&style);
+            connection
+                .execute(
+                    "INSERT INTO conversation_reply_styles (conversation, role, style, text) \
+                     VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
+                    params![conversation, role.as_str(), style, text],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+
+    fn pinned(
+        &self,
+        conversation: &ConversationId,
+    ) -> ConversationFuture<'_, Option<(StyleRole, ReplyStyle)>> {
+        let conversation = conversation.to_string();
+        self.run(move |connection| {
+            let found = connection
+                .query_row(
+                    "SELECT role, style, text FROM conversation_reply_styles WHERE conversation = ?1",
+                    [conversation],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(failed)?;
+            found
+                .map(|(role, style, text)| {
+                    let role = StyleRole::parse(&role).ok_or_else(|| unreadable("reply style"))?;
+                    Ok((role, style_of(&style, text)?))
+                })
+                .transpose()
         })
     }
 }

@@ -2202,6 +2202,9 @@ async fn dispatch_authorized(
         ProductMethod::DevicesPool | ProductMethod::DevicesSetPool => {
             super::pool::dispatch(state, session, frame).await
         }
+        ProductMethod::ReplyStyleRead | ProductMethod::ReplyStyleSet => {
+            super::reply_style::dispatch(state, session, frame).await
+        }
         ProductMethod::DevicesList => {
             let Ok(params) = serde_json::from_value::<
                 nessa_protocol::product::generated::DevicesListParams,

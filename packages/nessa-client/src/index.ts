@@ -534,6 +534,7 @@ export {
 } from "./generated/product.js"
 
 export type { DevicesApi } from "./presentation/devices-api.js"
+export type { ReplyStyleApi } from "./presentation/reply-style-api.js"
 export type {
   DeviceDisk,
   DeviceMachine,
@@ -544,6 +545,13 @@ export type {
   DevicesSshHostsResult,
   DevicesPool,
   PoolPreference,
+} from "./generated/product.js"
+export type {
+  ReplyStyleChoice,
+  ReplyStyleMode,
+  ReplyStyleRole,
+  ReplyStyleRoles,
+  ReplyStyles,
 } from "./generated/product.js"
 export type { Agent37Api } from "./presentation/agent37-api.js"
 export { NessaAgent37Error } from "./presentation/agent37-api.js"

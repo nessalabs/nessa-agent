@@ -86,7 +86,7 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
     let configured = first
         .inner
         .agents
-        .resolve_model(record.agent().unwrap(), "second-model", None)
+        .resolve_model(record.agent().unwrap(), "second-model", &Default::default())
         .await
         .unwrap();
     let target = live.lease.model_provider(configured.provider).unwrap();

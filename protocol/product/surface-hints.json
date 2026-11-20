@@ -502,5 +502,13 @@
   "logins.setDevice": {
     "readOnly": false,
     "destructive": false
+  },
+  "replyStyle.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "replyStyle.set": {
+    "readOnly": false,
+    "destructive": false
   }
 }

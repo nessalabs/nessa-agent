@@ -694,6 +694,20 @@
       "destructive": false
     },
     {
+      "name": "replyStyle.read",
+      "params": "ReplyStyleReadParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "replyStyle.set",
+      "params": "ReplyStyleSetParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "conversation.readEarlier",
       "params": "ConversationReadEarlierParams",
       "grant": "conversation.write",

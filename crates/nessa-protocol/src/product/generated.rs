@@ -4608,6 +4608,107 @@ impl VoiceErrorCode {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleRole {
+    #[serde(rename = "coordinator")]
+    Coordinator,
+    #[serde(rename = "thread")]
+    Thread,
+}
+impl ReplyStyleRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Coordinator => "coordinator",
+            Self::Thread => "thread",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleMode {
+    #[serde(rename = "plain")]
+    Plain,
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl ReplyStyleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleChoice {
+    pub mode: ReplyStyleMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleRoles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<ReplyStyleChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ReplyStyleChoice>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleSelection {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "plain")]
+    Plain,
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl ReplyStyleSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Plain => "plain",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub role: ReplyStyleRole,
+    pub mode: ReplyStyleSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub nessa: ReplyStyleRoles,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ReplyStyleRoles>,
+    pub effective: ReplyStyleEffective,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleEffective {
+    pub coordinator: ReplyStyleChoice,
+    pub thread: ReplyStyleChoice,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -4789,6 +4890,8 @@ pub mod product_method {
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
+    pub const REPLY_STYLE_READ: &str = "replyStyle.read";
+    pub const REPLY_STYLE_SET: &str = "replyStyle.set";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_READ_EARLIER: &str = "conversation.readEarlier";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
@@ -5016,7 +5119,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 135
+                items.len() <= 137
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5142,6 +5245,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "channel.create",
     "channel.list",
     "channel.setPlacement",
+    "replyStyle.read",
+    "replyStyle.set",
     "conversation.subscribeEvents",
     "conversation.readEarlier",
     "conversation.peek",
@@ -5444,6 +5549,10 @@ pub enum ProductMethod {
     ChannelList,
     /// `channel.setPlacement`
     ChannelSetPlacement,
+    /// `replyStyle.read`
+    ReplyStyleRead,
+    /// `replyStyle.set`
+    ReplyStyleSet,
     /// `conversation.subscribeEvents`
     ConversationSubscribeEvents,
     /// `conversation.readEarlier`
@@ -5619,6 +5728,8 @@ impl ProductMethod {
         ProductMethod::ChannelCreate,
         ProductMethod::ChannelList,
         ProductMethod::ChannelSetPlacement,
+        ProductMethod::ReplyStyleRead,
+        ProductMethod::ReplyStyleSet,
         ProductMethod::ConversationSubscribeEvents,
         ProductMethod::ConversationReadEarlier,
         ProductMethod::ConversationPeek,
@@ -5765,6 +5876,8 @@ impl ProductMethod {
             "channel.create" => Some(ProductMethod::ChannelCreate),
             "channel.list" => Some(ProductMethod::ChannelList),
             "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
+            "replyStyle.read" => Some(ProductMethod::ReplyStyleRead),
+            "replyStyle.set" => Some(ProductMethod::ReplyStyleSet),
             "conversation.subscribeEvents" => Some(ProductMethod::ConversationSubscribeEvents),
             "conversation.readEarlier" => Some(ProductMethod::ConversationReadEarlier),
             "conversation.peek" => Some(ProductMethod::ConversationPeek),
@@ -5910,6 +6023,8 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => "channel.create",
             ProductMethod::ChannelList => "channel.list",
             ProductMethod::ChannelSetPlacement => "channel.setPlacement",
+            ProductMethod::ReplyStyleRead => "replyStyle.read",
+            ProductMethod::ReplyStyleSet => "replyStyle.set",
             ProductMethod::ConversationSubscribeEvents => "conversation.subscribeEvents",
             ProductMethod::ConversationReadEarlier => "conversation.readEarlier",
             ProductMethod::ConversationPeek => "conversation.peek",
@@ -6053,6 +6168,8 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => Some("conversation.write"),
             ProductMethod::ChannelList => Some("conversation.write"),
             ProductMethod::ChannelSetPlacement => Some("conversation.write"),
+            ProductMethod::ReplyStyleRead => Some("conversation.write"),
+            ProductMethod::ReplyStyleSet => Some("conversation.write"),
             ProductMethod::ConversationSubscribeEvents => Some("conversation.write"),
             ProductMethod::ConversationReadEarlier => Some("conversation.write"),
             ProductMethod::ConversationPeek => Some("conversation.write"),
@@ -6195,6 +6312,8 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => ProductLane::Requests,
             ProductMethod::ChannelList => ProductLane::Requests,
             ProductMethod::ChannelSetPlacement => ProductLane::Requests,
+            ProductMethod::ReplyStyleRead => ProductLane::Requests,
+            ProductMethod::ReplyStyleSet => ProductLane::Requests,
             ProductMethod::ConversationSubscribeEvents => ProductLane::Requests,
             ProductMethod::ConversationReadEarlier => ProductLane::Requests,
             ProductMethod::ConversationPeek => ProductLane::Requests,
@@ -6573,6 +6692,12 @@ impl ProductMethod {
             ProductMethod::ChannelSetPlacement => ProductParams::ChannelSetPlacement(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::ReplyStyleRead => ProductParams::ReplyStyleRead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ReplyStyleSet => ProductParams::ReplyStyleSet(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ConversationSubscribeEvents => {
                 ProductParams::ConversationSubscribeEvents(
                     serde_json::from_value(params).map_err(|_| ParamsRefused)?,
@@ -6799,6 +6924,8 @@ pub enum ProductParams {
     ChannelCreate(ChannelCreateParams),
     ChannelList(ChannelListParams),
     ChannelSetPlacement(ChannelSetPlacementParams),
+    ReplyStyleRead(ReplyStyleReadParams),
+    ReplyStyleSet(ReplyStyleSetParams),
     ConversationSubscribeEvents(ConversationSubscribeEventsParams),
     ConversationReadEarlier(ConversationReadEarlierParams),
     ConversationPeek(ConversationReadParams),
@@ -6959,6 +7086,8 @@ impl ProductParams {
             ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
             ProductParams::ChannelList(_) => ProductMethod::ChannelList,
             ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,
+            ProductParams::ReplyStyleRead(_) => ProductMethod::ReplyStyleRead,
+            ProductParams::ReplyStyleSet(_) => ProductMethod::ReplyStyleSet,
             ProductParams::ConversationSubscribeEvents(_) => {
                 ProductMethod::ConversationSubscribeEvents
             }

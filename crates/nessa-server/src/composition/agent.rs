@@ -119,6 +119,13 @@ pub(super) struct AgentsConfig {
     #[serde(skip)]
     #[cfg_attr(not(unix), allow(dead_code))]
     pub channel_instructions: Option<String>,
+    /// How the agent writes to the person (`ReplyStyle::instructions`), the
+    /// style its conversation was started with, after the channel's text;
+    /// `None` adds nothing. Set only on the copy of this configuration one
+    /// conversation's agent is built from. Never configured.
+    #[serde(skip)]
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub reply_style: Option<String>,
     /// When an unanswered review settles (ADR 141): a read inside the
     /// workspace is allowed after eight seconds, and any other review is
     /// denied after `agents.reviewWaitSeconds`, [`REVIEW_WAIT`] when left out.
@@ -1158,7 +1165,7 @@ pub(super) mod build {
     ///
     /// The same text for either agent: it describes what Nessa is and how its
     /// tools are reached, and none of that changes with the harness underneath.
-    fn system_prompt(config: &AgentsConfig) -> Result<SystemPrompt, RunError> {
+    pub(super) fn system_prompt(config: &AgentsConfig) -> Result<SystemPrompt, RunError> {
         let builder = SystemPromptBuilder::new()
             .text(
                 PromptSource::new(PromptSourceKind::Core, "nessa/gateway")
@@ -1170,6 +1177,14 @@ pub(super) mod build {
                 PromptSource::new(PromptSourceKind::User, "nessa/channel")
                     .map_err(|e| RunError::Agent(e.to_string()))?,
                 format!("\n\n{channel}"),
+            ),
+            None => builder,
+        };
+        let builder = match &config.reply_style {
+            Some(style) => builder.text(
+                PromptSource::new(PromptSourceKind::User, "nessa/reply-style")
+                    .map_err(|e| RunError::Agent(e.to_string()))?,
+                format!("\n\n{style}"),
             ),
             None => builder,
         };

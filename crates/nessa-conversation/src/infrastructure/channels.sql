@@ -38,4 +38,21 @@ CREATE TABLE channel_coordinator_replacements (
     cause TEXT NOT NULL CHECK (cause IN ('coordinator_conversation_erased', 'coordinator_moved')),
     UNIQUE (channel, generation)
 ) STRICT;
-PRAGMA user_version = 6;
+-- How agents talk: a person's own choices (channel '' is their Nessa
+-- level), and the style each conversation was started with.
+CREATE TABLE reply_styles (
+    organization_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
+    style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096),
+    PRIMARY KEY (organization_id, owner_id, channel, role)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE conversation_reply_styles (
+    conversation TEXT PRIMARY KEY NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
+    style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096)
+) STRICT, WITHOUT ROWID;
+PRAGMA user_version = 7;

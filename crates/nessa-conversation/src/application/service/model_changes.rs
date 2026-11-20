@@ -113,14 +113,14 @@ impl ConversationService {
         if record.model() == &model {
             return Err(ConversationError::ModelChangeNotApplied);
         }
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         let configured = self
             .inner
             .agents
             .resolve_model(
                 record.agent().ok_or(ConversationError::AgentUnsupported)?,
                 model.as_str(),
-                place.as_ref(),
+                &place,
             )
             .await?;
         let live = self.resolve(id, caller).await?;
@@ -374,7 +374,7 @@ impl ConversationService {
             .await
             .map_err(|_| ConversationError::ModelChangeUncertain)?;
         let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         let prior = self
             .inner
             .agents
@@ -382,7 +382,7 @@ impl ConversationService {
                 agent,
                 record.model().as_str(),
                 record.approval_mode(),
-                place.as_ref(),
+                &place,
             )
             .await?;
         let (committed, _) = self.committed_with_order(id).await?;
@@ -399,7 +399,7 @@ impl ConversationService {
                     agent,
                     request.requested_model.as_str(),
                     selection.approval_mode,
-                    place.as_ref(),
+                    &place,
                 )
                 .await?;
             (

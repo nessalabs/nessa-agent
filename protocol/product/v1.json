@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 135,
+          "maxItems": 137,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -9907,6 +9907,141 @@
         "vault_locked"
       ],
       "description": "Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first."
+    },
+    "ReplyStyleRole": {
+      "type": "string",
+      "enum": ["coordinator", "thread"],
+      "description": "Which agents a style is for: a channel's coordinator, or every other conversation (a thread)."
+    },
+    "ReplyStyleMode": {
+      "type": "string",
+      "enum": ["plain", "off", "custom"],
+      "description": "plain: Nessa's own plain style for the role. off: no style instructions; the agent talks as its harness does. custom: the person's own text."
+    },
+    "ReplyStyleChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "#/$defs/ReplyStyleMode", "description": "Which style." },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The person's own style, as the agent is told it. Present only in custom mode."
+        }
+      },
+      "description": "One reply style."
+    },
+    "ReplyStyleRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "coordinator": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "The coordinator's own choice; omitted inherits."
+        },
+        "thread": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "Threads' own choice; omitted inherits."
+        }
+      },
+      "description": "One level's own choices, one per role. A role left out follows the level above."
+    },
+    "ReplyStyleReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted reads the Nessa level. The synthetic default channel follows the Nessa level."
+        }
+      },
+      "description": "Read how agents talk: the caller's Nessa-level choices and, for a channel, its own."
+    },
+    "ReplyStyleSelection": {
+      "type": "string",
+      "enum": ["default", "plain", "off", "custom"],
+      "description": "default: remove this level's choice, so it follows the level above (Nessa's plain style above the Nessa level). plain, off, custom: keep that choice."
+    },
+    "ReplyStyleSetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "mode"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted saves the Nessa level."
+        },
+        "role": {
+          "$ref": "#/$defs/ReplyStyleRole",
+          "description": "Whose style changes."
+        },
+        "mode": {
+          "$ref": "#/$defs/ReplyStyleSelection",
+          "description": "The choice; custom requires text."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The person's own style. Leading and trailing space is removed and nothing may be left. Present only in custom mode."
+        }
+      },
+      "description": "Save how one role's agents talk, at the Nessa level or for one channel. Reaches conversations created after it: a conversation keeps the style it started with, because changing its prompt would start a fresh session that has forgotten it. Recorded in the settings audit."
+    },
+    "ReplyStyles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nessa", "effective"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel read or saved; omitted for the Nessa level."
+        },
+        "nessa": {
+          "$ref": "#/$defs/ReplyStyleRoles",
+          "description": "The caller's Nessa-level choices."
+        },
+        "channel": {
+          "$ref": "#/$defs/ReplyStyleRoles",
+          "description": "The channel's own choices; omitted for the Nessa level."
+        },
+        "effective": {
+          "$ref": "#/$defs/ReplyStyleEffective",
+          "description": "The style each role's new conversations start with here."
+        }
+      },
+      "description": "How agents talk, as one read: each level's own choices and what each role gets."
+    },
+    "ReplyStyleEffective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinator", "thread"],
+      "properties": {
+        "coordinator": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "What a new coordinator here is told."
+        },
+        "thread": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "What a new thread here is told."
+        }
+      },
+      "description": "The style each role's new conversations start with."
     }
   }
 }

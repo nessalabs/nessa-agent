@@ -9313,6 +9313,119 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  /**
+   * How agents talk, set in the default channel's settings (the Nessa
+   * level): Threads take the person's own words, saved only on Save. A chat
+   * started after it is told those words; the main chat, started before,
+   * keeps Nessa's plain style, so its agent is not restarted by the change.
+   * Only Claude's reply says its system prompt, so only there are the words
+   * checked in what the agent was told.
+   */
+  async style(run, step, failures) {
+    const marker = `Style marker r${step.index} s${run.knobs.seed}: answer in one line.`
+    const told = run.stack.agent === "claude"
+    const close = async () => {
+      const dialog = run.page.locator(css.channelSettingsDialog)
+      for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+        await run.page.keyboard.press(keys.escape)
+        await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+      }
+    }
+    try {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(MAIN_CHANNEL, { exact: true })
+        .first()
+        .hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="gateway-conversations"]`,
+        )
+        .click({ timeout: 10_000 })
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator('[data-reply-style="nessa"]')
+      const threads = control.locator('[data-reply-style-role="thread"]')
+      await threads.locator("[data-choice-trigger]:enabled").waitFor({ timeout: 10_000 })
+      await pickChoice(run.page, threads, "custom")
+      await control.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
+      // Choosing "Your own" saves nothing until Save.
+      const before = await run.client.replyStyle.read()
+      if (before.nessa.thread?.mode === "custom")
+        failures.push("choosing Your own saved before Save was pressed")
+      await control.locator('[data-reply-style-save="thread"]').click({ timeout: 10_000 })
+      const saved = await waitFor(async () => {
+        const read = await run.client.replyStyle.read()
+        return (
+          read.effective.thread.mode === "custom" && read.effective.thread.text === marker
+        )
+      }, 10_000)
+      if (!saved)
+        failures.push("the gateway never read back the Threads style as saved, trimmed")
+      if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `style-${run.engine}-threads-own.png`),
+        })
+    } finally {
+      await close()
+    }
+    // A new chat in the default channel is told the words.
+    const text = prompt(run, STRESS.channel, step, " styled")
+    await run.page.keyboard.press(keys.newSession)
+    const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    await home.locator(css.field).waitFor({ timeout: 15_000 })
+    await home.locator(css.field).fill(text)
+    await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+    const conversationId = await waitFor(
+      () => selectedStressConversation(run.page, text),
+      30_000,
+    )
+    if (!conversationId) {
+      failures.push("the chat started after the style change was never listed")
+    } else {
+      run.checked.push(conversationId)
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        text,
+        "completed",
+        failures,
+      )
+      const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text)
+        .join("")
+      if (told && !reply.includes(marker))
+        failures.push(
+          `the new chat was not told the Threads style: ${fold(reply.slice(0, 300))}`,
+        )
+      if (told && reply.includes("How to write to the person:"))
+        failures.push("the new chat was told Nessa's plain style beside the person's own")
+    }
+    // The main chat started before: it keeps the plain style it began with.
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const again = prompt(run, STRESS.channel, step, " kept")
+    const seen = await send(run, run.main.id, again, failures)
+    const { view } = await settled(run, run.main.id, seen, again, "completed", failures)
+    const kept = (view?.messages.find((each) => each.userText === again)?.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("")
+    if (told && kept.includes(marker))
+      failures.push("a chat started before the change was told the new style")
+    if (told && !kept.includes("How to write to the person:"))
+      failures.push(
+        `the main chat lost the plain style it began with: ${fold(kept.slice(0, 300))}`,
+      )
+    // Back to Nessa's plain style, as nothing chosen, for the steps after.
+    const reset = await run.client.replyStyle.set("thread", undefined)
+    if (reset.nessa.thread !== undefined || reset.effective.thread.mode !== "plain")
+      failures.push(
+        `clearing the Threads style read back ${JSON.stringify(reset.nessa.thread)}`,
+      )
+  },
+
   async huddle(run, step, failures) {
     const conversationId = randomUUID()
     run.failureConversationId = conversationId

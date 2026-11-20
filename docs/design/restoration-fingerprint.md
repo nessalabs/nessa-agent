@@ -117,6 +117,10 @@ belongs to the previous context.
    absolute path. Changing `--profile staging` or `--config
    /profiles/staging.toml` is S6. It also changes the launch fingerprint.
    Only a path in `staged_runtime_arguments` is left out.
+10. The reply style is part of the system prompt, so a changed style would
+   be S6. It is pinned on each conversation when it is created, so a later
+   change of the Nessa or channel style never reaches an existing chat
+   (see [channels](channels.md#how-agents-talk)).
 
 The atomic fingerprint/context statement above describes SessionManager's
 publication path. Raw semantic storage producers retain responsibility for their

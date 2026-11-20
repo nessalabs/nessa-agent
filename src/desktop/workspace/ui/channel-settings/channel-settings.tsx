@@ -3,6 +3,10 @@ import { Dialog } from "@nessa-ui/react/dialog"
 import { IconButton } from "../../../ui/icon-button"
 import { useBoatGateway } from "../../../settings/ui/boat-row"
 import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
+import {
+  ReplyStyleControl,
+  useReplyStyleGateway,
+} from "../../../settings/ui/reply-style-control"
 import { Choice, ItemRow } from "../../../settings/ui/settings-controls"
 import type { ChoiceOption } from "../../../ui/choice-menu"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
@@ -180,6 +184,7 @@ export function ChannelSettingsButton({
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
   const devices = useDevicesGateway()
+  const replyStyle = useReplyStyleGateway()
   const scope = gatewayChannelId(channelId)
   return (
     <>
@@ -215,6 +220,17 @@ export function ChannelSettingsButton({
             )}
             <BoatRuntimeControl channelId={scope} gateway={gateway} />
           </div>
+          {/* The default channel's dialog sets the Nessa level, which every
+          channel follows unless it has its own. */}
+          {replyStyle ? (
+            <div
+              className="settings-surface channel-settings-section"
+              data-channel-settings-reply-style=""
+            >
+              <h3 className="channel-settings-heading">How agents talk</h3>
+              <ReplyStyleControl channelId={scope} gateway={replyStyle} />
+            </div>
+          ) : null}
           {/* The default channel follows Devices' order, set there. */}
           {scope !== undefined && devices ? (
             <div

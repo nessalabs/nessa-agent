@@ -8,7 +8,7 @@ use crate::application::{
     ConversationError, ConversationFuture, SettingsAudit, SettingsAuditRecord, SettingsChange,
     SettingsOutcome,
 };
-use crate::domain::ChannelExecution;
+use crate::domain::{ChannelExecution, ReplyStyle};
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
@@ -33,6 +33,17 @@ fn placement(execution: &ChannelExecution) -> Value {
     })
 }
 
+/// A style choice as kept: `null` inherits. A person's own text is kept
+/// whole, as they typed it, so the record says what agents were told.
+fn style(choice: Option<&ReplyStyle>) -> Value {
+    match choice {
+        None => Value::Null,
+        Some(ReplyStyle::Plain) => json!({ "style": "plain" }),
+        Some(ReplyStyle::Off) => json!({ "style": "off" }),
+        Some(ReplyStyle::Custom(text)) => json!({ "style": "custom", "text": text.as_str() }),
+    }
+}
+
 /// The record as kept, without its id and observation time.
 pub fn stored(record: &SettingsAuditRecord) -> Value {
     let (kind, target, transition) = match &record.change {
@@ -53,6 +64,19 @@ pub fn stored(record: &SettingsAuditRecord) -> Value {
                 "coordinatorConversationId": coordinator.to_string(),
             }),
             json!({ "before": placement(before), "requested": placement(after) }),
+        ),
+        SettingsChange::ReplyStyle {
+            channel,
+            role,
+            before,
+            requested,
+        } => (
+            "reply_style",
+            json!({
+                "channelId": channel.as_ref().map(|channel| channel.as_str()),
+                "role": role.as_str(),
+            }),
+            json!({ "before": style(before.as_ref()), "requested": style(requested.as_ref()) }),
         ),
     };
     let (step, outcome) = match &record.outcome {
