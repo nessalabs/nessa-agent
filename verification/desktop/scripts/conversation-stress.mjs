@@ -1521,7 +1521,10 @@ function railLayout(page) {
  * Returns what it found wrong.
  */
 function footerThroughToggle(page) {
-  return page.evaluate(async (toggleSelector) => {
+  // The engine as Playwright launched it: every context's user agent claims
+  // Chrome on a Mac (`openPage`), so the page cannot tell WebKit by it.
+  const webkit = page.context().browser()?.browserType().name() === "webkit"
+  return page.evaluate(async ([toggleSelector, webkit]) => {
     const words = () =>
       document.querySelector(".side-rail-studio .desktop-identity-words")
     const name = () => document.querySelector(".split-panes-grid .workspace-pane-name")
@@ -1568,8 +1571,6 @@ function footerThroughToggle(page) {
     // its counter-scaled bar and the name each move on their own transform,
     // and WebKit lands their sum a little off. Riding the pane's flight, as
     // before this check, moves the name 32px or more.
-    const webkit =
-      /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
     const slack = webkit ? 4 : 1
     const strayed = names.find(
       (left) => left < Math.min(from, to) - slack || left > Math.max(from, to) + slack,
@@ -1590,7 +1591,7 @@ function footerThroughToggle(page) {
         )
     }
     return failures
-  }, css.sideRailToggle)
+  }, [css.sideRailToggle, webkit])
 }
 
 /**
