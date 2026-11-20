@@ -126,7 +126,7 @@ async fn a_version_6_file_is_upgraded_and_keeps_its_conversations() {
     assert_eq!(version(&path), 6);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 10);
+    assert_eq!(version(&path), 11);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -143,7 +143,7 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
     assert_eq!(version(&path), 7);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 10);
+    assert_eq!(version(&path), 11);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -158,12 +158,14 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         drop(LocalConversationStore::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE agent_switches; DROP TABLE closed_threads")
+            .execute_batch(
+                "DROP TABLE agent_switches; DROP TABLE closed_threads; DROP TABLE owner_asks",
+            )
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 10);
+    assert_eq!(version(&path), 11);
     drop(store);
     assert_eq!(shape(&path), current_shape());
 }
@@ -180,13 +182,13 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
         connection
             .execute_batch(
                 "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
-                 DROP TABLE closed_threads",
+                 DROP TABLE closed_threads; DROP TABLE owner_asks",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 8).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 10);
+    assert_eq!(version(&path), 11);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert_eq!(
@@ -209,12 +211,12 @@ async fn a_version_9_file_gains_the_closed_threads() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE closed_threads")
+            .execute_batch("DROP TABLE closed_threads; DROP TABLE owner_asks")
             .unwrap();
         connection.pragma_update(None, "user_version", 9).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 10);
+    assert_eq!(version(&path), 11);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert!(!ConversationRepository::thread_closed(&store, &id)
@@ -230,6 +232,52 @@ async fn a_version_9_file_gains_the_closed_threads() {
     assert!(ConversationRepository::thread_closed(&store, &id)
         .await
         .unwrap());
+}
+
+/// A version 10 file, from before an agent could ask its owner, gains
+/// `owner_asks` and keeps its conversations.
+#[tokio::test]
+async fn a_version_10_file_gains_the_owner_asks() {
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    drop(LocalConversationStore::open(&path).unwrap());
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DROP TABLE owner_asks").unwrap();
+        connection.pragma_update(None, "user_version", 10).unwrap();
+    }
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(version(&path), 11);
+    assert_kept(&store).await;
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    let ask = nessa_protocol::conversation::view::OwnerAsk {
+        ask_id: "0123456789abcdef0123456789abcdef".into(),
+        question: "Ship it?".into(),
+        choices: vec![
+            nessa_protocol::conversation::view::OwnerAskChoice {
+                label: "Yes".into(),
+                consequence: "It ships.".into(),
+            },
+            nessa_protocol::conversation::view::OwnerAskChoice {
+                label: "No".into(),
+                consequence: "It waits.".into(),
+            },
+        ],
+        recommended: 0,
+        reason: "It is ready.".into(),
+        asked_at_ms: 3000,
+    };
+    ConversationRepository::ask_owner(&store, &id, ask.clone())
+        .await
+        .unwrap();
+    drop(store);
+    assert_eq!(shape(&path), current_shape());
+    // Kept across a restart.
+    let store = LocalConversationStore::open(&path).unwrap();
+    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
+        .await
+        .unwrap();
+    assert_eq!(asks.get(&id), Some(&ask));
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

@@ -914,6 +914,22 @@ pub struct ConversationListParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAsk {
+    pub ask_id: String,
+    pub question: String,
+    pub choices: Vec<OwnerAskChoice>,
+    pub recommended: u64,
+    pub reason: String,
+    pub asked_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskChoice {
+    pub label: String,
+    pub consequence: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSummary {
     pub conversation_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -926,6 +942,8 @@ pub struct ConversationSummary {
     pub archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<OwnerAsk>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

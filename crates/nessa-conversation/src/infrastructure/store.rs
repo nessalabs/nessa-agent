@@ -44,12 +44,14 @@ use nessa_protocol::conversation::domain::{
     ConversationId, ConversationModelId, ConversationPreview, ConversationSummary,
     ConversationTitle,
 };
+use nessa_protocol::conversation::view::OwnerAsk;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{
     validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(any(test, feature = "test-support"))]
@@ -124,11 +126,12 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 4] = [
+static UPGRADES: [Upgrade; 5] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
     Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
+    Upgrade::new(10, include_str!("schema_upgrades/10.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -1407,6 +1410,56 @@ impl ConversationRepository for LocalConversationStore {
                     |row| row.get::<_, bool>(0),
                 )
                 .map_err(failed)
+        })
+    }
+    fn ask_owner(&self, id: &ConversationId, ask: OwnerAsk) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            let ask = serde_json::to_string(&ask).map_err(|_| ConversationError::InvalidInput)?;
+            connection
+                .cached_execute(
+                    "INSERT INTO owner_asks (conversation_id, ask) VALUES (?1, ?2)
+                     ON CONFLICT (conversation_id) DO UPDATE SET ask = excluded.ask",
+                    [id, ask],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .cached_execute("DELETE FROM owner_asks WHERE conversation_id = ?1", [id])
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn owner_asks(
+        &self,
+        ids: Vec<ConversationId>,
+    ) -> ConversationFuture<'_, HashMap<ConversationId, OwnerAsk>> {
+        self.run(move |connection| {
+            let mut asks = HashMap::new();
+            for id in ids {
+                let row: Option<String> = connection
+                    .cached_row(
+                        "SELECT ask FROM owner_asks WHERE conversation_id = ?1",
+                        [id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(failed)?;
+                let Some(row) = row else { continue };
+                match serde_json::from_str::<OwnerAsk>(&row) {
+                    Ok(ask) if ask.check().is_ok() => {
+                        asks.insert(id, ask);
+                    }
+                    // Left out, not failing the list it is part of.
+                    _ => drop(unreadable("owner_asks", &id.to_string())),
+                }
+            }
+            Ok(asks)
         })
     }
     fn observe_mode_application(

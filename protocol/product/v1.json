@@ -2251,6 +2251,76 @@
       "required": [],
       "description": "Which of the caller's conversations to list: those not archived, unless archived ones are asked for."
     },
+    "OwnerAsk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A decision an agent asked its conversation's owner to make: one short question, two to four choices that each say what happens if picked, and the one the agent recommends with why. A client shows it as a card whose choice sends the label as the person's own message, and may post a notice for it.",
+      "properties": {
+        "askId": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "New for every ask: a notice or tab is for one ask, and a second ask in the same conversation is a new one."
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "x-utf8MaxBytes": 160,
+          "description": "The question, one line of at most 20 words."
+        },
+        "choices": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/OwnerAskChoice" },
+          "description": "The choices, in the order the agent gave them; labels differ."
+        },
+        "recommended": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Index into choices of the one the agent recommends."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "Why the agent recommends it, in one line."
+        },
+        "askedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it was asked, in Unix milliseconds."
+        }
+      },
+      "required": ["askId", "question", "choices", "recommended", "reason", "askedAtMs"]
+    },
+    "OwnerAskChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One choice an ask offers.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "x-utf8MaxBytes": 40,
+          "description": "What the choice is called; picking it sends this as the person's message."
+        },
+        "consequence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "What happens if the person picks it, in one line."
+        }
+      },
+      "required": ["label", "consequence"]
+    },
     "ConversationSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -2303,6 +2373,10 @@
           "maxLength": 13,
           "pattern": "^ch_[a-z2-7]{10}$",
           "description": "The channel the conversation was created in, one channel.list returns. Absent for a conversation in the default channel."
+        },
+        "ask": {
+          "$ref": "#/$defs/OwnerAsk",
+          "description": "The question an agent in the conversation asked its owner with ask_owner, waiting for an answer. A person's next message in the conversation is the answer and removes it; a later ask replaces it. Absent when nothing is asked."
         }
       },
       "required": [

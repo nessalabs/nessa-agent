@@ -141,6 +141,22 @@ when {
     !resource.deleted
 };
 
+// Any turn of the owner's agents may ask the owner a question (`ask_owner`),
+// one another agent started included: a coordinator woken by a thread's
+// report is who most needs to. It only asks; the owner's own next message is
+// the answer, and changes nothing else.
+@id("owner.ask_owner")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.ask_owner",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};
+
 // A turn the owner started closes a thread its own thread's agent created
 // (`close_thread` with a `threadId`). The SDK's record of the spawn names
 // that creator; a thread no agent created, or another one created, is not

@@ -102,6 +102,9 @@ pub enum AccessAction {
     /// Close a thread, from another thread's turn: `close_thread` with a
     /// `threadId`.
     CloseCreated,
+    /// Let a running agent turn ask the owner a question (`ask_owner`). It
+    /// only asks and changes nothing: a turn another agent started may too.
+    AskOwner,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -152,10 +155,11 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::AgentTools,
         Self::ReadTurns,
         Self::CloseCreated,
+        Self::AskOwner,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -185,6 +189,7 @@ impl AccessAction {
             Self::AgentTools => "conversation.agent_tools",
             Self::ReadTurns => "conversation.read_turns",
             Self::CloseCreated => "conversation.close_created",
+            Self::AskOwner => "conversation.ask_owner",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",

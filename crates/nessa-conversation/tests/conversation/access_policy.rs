@@ -277,14 +277,15 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             _ => on(&live),
         };
         let subject = match action {
-            AccessAction::AgentTools | AccessAction::ReadTurns | AccessAction::CloseCreated => {
-                AccessSubject::AgentTurn {
-                    organization: &org,
-                    principal: &owner,
-                    owner_initiated: true,
-                    conversation: "creator",
-                }
-            }
+            AccessAction::AgentTools
+            | AccessAction::ReadTurns
+            | AccessAction::AskOwner
+            | AccessAction::CloseCreated => AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated: true,
+                conversation: "creator",
+            },
             AccessAction::ReviewNotice => AccessSubject::ReviewRecipient {
                 organization: &org,
                 principal: &owner,
@@ -1653,6 +1654,46 @@ fn an_agent_started_turn_reads_turns_but_holds_no_other_agent_tool() {
         ask(AccessAction::ReadTurns, &deleted, false),
         AccessDecision::Deny(_)
     ));
+}
+
+/// Any turn of the owner's agents asks the owner a question, one another
+/// agent started included (a coordinator woken by a thread's report), and
+/// only in the owner's own conversation that is not deleted.
+#[test]
+fn any_turn_of_the_owners_asks_the_owner() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action: AccessAction::AskOwner,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    for owner_initiated in [true, false] {
+        assert_eq!(
+            allowed_by(&ask(&live, owner_initiated)),
+            Some(&["owner.ask_owner".to_owned()][..])
+        );
+    }
+    assert!(!allowed(&ask(
+        &conversation("org", "someone-else", false),
+        false
+    )));
+    assert!(!allowed(&ask(
+        &conversation("elsewhere", "owner", false),
+        true
+    )));
+    assert!(!allowed(&ask(&conversation("org", "owner", true), true)));
 }
 
 /// A turn the owner started closes only a thread its own thread created, as

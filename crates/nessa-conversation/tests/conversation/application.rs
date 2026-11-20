@@ -3007,6 +3007,25 @@ impl ConversationRepository for GatedCreateRepository {
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.thread_closed(id)
     }
+    fn ask_owner(
+        &self,
+        id: &ConversationId,
+        ask: nessa_protocol::conversation::view::OwnerAsk,
+    ) -> ConversationFuture<'_, ()> {
+        self.inner.ask_owner(id, ask)
+    }
+    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.answer_owner_ask(id)
+    }
+    fn owner_asks(
+        &self,
+        ids: Vec<ConversationId>,
+    ) -> ConversationFuture<
+        '_,
+        std::collections::HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
+    > {
+        self.inner.owner_asks(ids)
+    }
     fn observe_mode_application(
         &self,
         id: &ConversationId,

@@ -438,6 +438,15 @@
           }
         }
       },
+      "conversation.ask_owner": {
+        "appliesTo": {
+          "principalTypes": ["AgentTurn", "WebhookReader"],
+          "resourceTypes": ["Conversation"],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
       "conversation.close_created": {
         "appliesTo": {
           "principalTypes": ["AgentTurn", "WebhookReader"],

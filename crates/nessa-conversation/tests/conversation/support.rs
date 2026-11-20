@@ -194,6 +194,8 @@ pub struct MemoryRepository {
     pub records: Mutex<HashMap<ConversationId, Conversation>>,
     /// Conversations whose agent closed its thread (`close_thread`).
     pub closed_threads: Mutex<std::collections::HashSet<ConversationId>>,
+    /// What each conversation's agent asked its owner (`ask_owner`).
+    pub owner_asks: Mutex<HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>>,
     /// Taken by `open_thread` after its write, so a test can hold the
     /// opening there; `thread_opened` is told once the write is done.
     pub open_thread_gate: tokio::sync::Mutex<()>,
@@ -710,6 +712,30 @@ impl ConversationRepository for MemoryRepository {
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         let closed = self.closed_threads.lock().unwrap().contains(id);
         Box::pin(async move { Ok(closed) })
+    }
+    fn ask_owner(
+        &self,
+        id: &ConversationId,
+        ask: nessa_protocol::conversation::view::OwnerAsk,
+    ) -> ConversationFuture<'_, ()> {
+        self.owner_asks.lock().unwrap().insert(id.clone(), ask);
+        Box::pin(async { Ok(()) })
+    }
+    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.owner_asks.lock().unwrap().remove(id);
+        Box::pin(async { Ok(()) })
+    }
+    fn owner_asks(
+        &self,
+        ids: Vec<ConversationId>,
+    ) -> ConversationFuture<'_, HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>>
+    {
+        let asks = self.owner_asks.lock().unwrap();
+        let found = ids
+            .into_iter()
+            .filter_map(|id| asks.get(&id).cloned().map(|ask| (id, ask)))
+            .collect();
+        Box::pin(async move { Ok(found) })
     }
     fn requires_mode_verification(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         if self.verification_unreadable.load(Ordering::SeqCst) {

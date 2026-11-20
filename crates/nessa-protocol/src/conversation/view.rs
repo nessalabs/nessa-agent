@@ -794,6 +794,148 @@ pub struct ConversationListEntry {
     pub archived: bool,
     /// The stored channel it was created in; `None` is the default channel.
     pub channel_id: Option<String>,
+    /// The question an agent in it asked its owner with `ask_owner`, while
+    /// no person has written in it since.
+    pub ask: Option<OwnerAsk>,
+}
+
+/// Most words an [`OwnerAsk`] question holds: it is read at a glance, in a
+/// notice title and on a card.
+pub const MAX_ASK_QUESTION_WORDS: usize = 20;
+/// Most bytes of an [`OwnerAsk`] question. A notice title shows 120
+/// characters; this keeps one whole.
+pub const MAX_ASK_QUESTION_BYTES: usize = 160;
+/// Most bytes of a choice's label.
+pub const MAX_ASK_LABEL_BYTES: usize = 40;
+/// Most bytes of a choice's consequence, and of the reason for the
+/// recommendation.
+pub const MAX_ASK_LINE_BYTES: usize = 200;
+/// Fewest and most choices an ask offers.
+pub const MIN_ASK_CHOICES: usize = 2;
+pub const MAX_ASK_CHOICES: usize = 4;
+
+/// A question an agent asked the person who owns its conversation, with
+/// `ask_owner`: one short question, two to four choices that each say what
+/// happens if chosen, and the one the agent recommends, with why.
+///
+/// It waits with the conversation until a person writes in it: that message
+/// is the answer, whether it is a tapped choice or anything else they typed.
+/// A later ask in the same conversation replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAsk {
+    /// New for every ask, 32 lowercase hex digits: a notice and a tab are
+    /// for one ask, and a second ask in the same conversation is a new one.
+    pub ask_id: String,
+    pub question: String,
+    pub choices: Vec<OwnerAskChoice>,
+    /// Index into `choices` of the one the agent recommends.
+    pub recommended: u8,
+    /// Why the agent recommends it, in one line.
+    pub reason: String,
+    /// When it was asked, in Unix milliseconds.
+    pub asked_at_ms: u64,
+}
+
+/// One choice an [`OwnerAsk`] offers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskChoice {
+    pub label: String,
+    /// What happens if the person picks it, in one line.
+    pub consequence: String,
+}
+
+/// Why an ask was refused: every part has to fit on a card and in a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerAskRefusal {
+    /// The question is empty, past [`MAX_ASK_QUESTION_WORDS`] words or
+    /// [`MAX_ASK_QUESTION_BYTES`] bytes.
+    QuestionTooLong,
+    /// Fewer than [`MIN_ASK_CHOICES`] or more than [`MAX_ASK_CHOICES`]
+    /// choices, or two with the same label.
+    Choices,
+    /// A label, consequence or reason is empty or past its bound.
+    LineTooLong,
+    /// `recommended` names no choice.
+    Recommended,
+    /// A part holds a line break or another control character: each is one
+    /// line.
+    NotOneLine,
+    /// Its key is not 32 lowercase hex digits: a damaged row, never an
+    /// agent's mistake.
+    Key,
+}
+
+impl OwnerAskRefusal {
+    /// The code the agent is answered with.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::QuestionTooLong => "ask_question_too_long",
+            Self::Choices => "ask_choices",
+            Self::LineTooLong => "ask_line_too_long",
+            Self::Recommended => "ask_recommended",
+            Self::NotOneLine => "ask_not_one_line",
+            Self::Key => "invalid_request",
+        }
+    }
+}
+
+impl OwnerAsk {
+    /// Whether every part fits. Checked when it is asked and again when it
+    /// is read back, so a damaged row is never shown.
+    ///
+    /// # Errors
+    /// The first part that does not fit.
+    pub fn check(&self) -> Result<(), OwnerAskRefusal> {
+        let one_line = |text: &str| !text.chars().any(char::is_control);
+        let line = |text: &str, bytes: usize| {
+            let text = text.trim();
+            !text.is_empty() && text.len() <= bytes
+        };
+        let mut parts = vec![self.question.as_str(), self.reason.as_str()];
+        for choice in &self.choices {
+            parts.push(&choice.label);
+            parts.push(&choice.consequence);
+        }
+        if !parts.into_iter().all(one_line) {
+            return Err(OwnerAskRefusal::NotOneLine);
+        }
+        if !line(&self.question, MAX_ASK_QUESTION_BYTES)
+            || self.question.split_whitespace().count() > MAX_ASK_QUESTION_WORDS
+        {
+            return Err(OwnerAskRefusal::QuestionTooLong);
+        }
+        if !(MIN_ASK_CHOICES..=MAX_ASK_CHOICES).contains(&self.choices.len()) {
+            return Err(OwnerAskRefusal::Choices);
+        }
+        let mut labels = std::collections::HashSet::new();
+        for choice in &self.choices {
+            if !line(&choice.label, MAX_ASK_LABEL_BYTES)
+                || !line(&choice.consequence, MAX_ASK_LINE_BYTES)
+            {
+                return Err(OwnerAskRefusal::LineTooLong);
+            }
+            if !labels.insert(choice.label.trim().to_lowercase()) {
+                return Err(OwnerAskRefusal::Choices);
+            }
+        }
+        if !line(&self.reason, MAX_ASK_LINE_BYTES) {
+            return Err(OwnerAskRefusal::LineTooLong);
+        }
+        if usize::from(self.recommended) >= self.choices.len() {
+            return Err(OwnerAskRefusal::Recommended);
+        }
+        let key = self.ask_id.len() == 32
+            && self
+                .ask_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if !key {
+            return Err(OwnerAskRefusal::Key);
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

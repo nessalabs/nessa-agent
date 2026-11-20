@@ -889,6 +889,28 @@ export interface ConversationListParams {
   /** List only archived conversations when true; only unarchived ones when false or absent. */
   archived?: boolean
 }
+/** A decision an agent asked its conversation's owner to make: one short question, two to four choices that each say what happens if picked, and the one the agent recommends with why. A client shows it as a card whose choice sends the label as the person's own message, and may post a notice for it. */
+export interface OwnerAsk {
+  /** New for every ask: a notice or tab is for one ask, and a second ask in the same conversation is a new one. */
+  askId: string
+  /** The question, one line of at most 20 words. */
+  question: string
+  /** The choices, in the order the agent gave them; labels differ. */
+  choices: OwnerAskChoice[]
+  /** Index into choices of the one the agent recommends. */
+  recommended: number
+  /** Why the agent recommends it, in one line. */
+  reason: string
+  /** When it was asked, in Unix milliseconds. */
+  askedAtMs: number
+}
+/** One choice an ask offers. */
+export interface OwnerAskChoice {
+  /** What the choice is called; picking it sends this as the person's message. */
+  label: string
+  /** What happens if the person picks it, in one line. */
+  consequence: string
+}
 /** One conversation as a list row: what it is called, the last thing said in it, and when. Read from stored summaries and live state; listing never opens or resumes a provider. */
 export interface ConversationSummary {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -907,6 +929,8 @@ export interface ConversationSummary {
   archived: boolean
   /** The channel the conversation was created in, one channel.list returns. Absent for a conversation in the default channel. */
   channelId?: string
+  /** The question an agent in the conversation asked its owner with ask_owner, waiting for an answer. A person's next message in the conversation is the answer and removes it; a later ask replaces it. Absent when nothing is asked. */
+  ask?: OwnerAsk
 }
 /** Conversations the authenticated caller owns, newest first, at most 500, and whether that is all of them. */
 export interface ConversationListResult {

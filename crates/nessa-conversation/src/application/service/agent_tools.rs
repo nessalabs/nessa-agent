@@ -7,6 +7,7 @@ use crate::application::{
 };
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::OwnerAsk;
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -16,11 +17,29 @@ use tokio::sync::watch;
 /// started included.
 pub const READ_TURN_TOOL: &str = "read_turn";
 
+/// The agent tool that asks the owner a question, and so is admitted under
+/// [`AccessAction::AskOwner`] in any turn of the owner's.
+pub const ASK_OWNER_TOOL: &str = "ask_owner";
+
 /// The agent tool that, given another thread, closes it, and so is also
 /// asked under [`AccessAction::CloseCreated`] on that thread.
 pub const CLOSE_THREAD_TOOL: &str = "close_thread";
 
 impl ConversationService {
+    /// Keep the question an admitted turn asked its conversation's owner, in
+    /// place of any earlier one, until a person writes in the conversation,
+    /// dated now. The list shows it from the next read: the tool's answer is
+    /// a record that wakes every list.
+    pub async fn ask_owner(
+        &self,
+        conversation: &ConversationId,
+        mut ask: OwnerAsk,
+    ) -> Result<(), ConversationError> {
+        ask.asked_at_ms = self.inner.clock.unix_milliseconds();
+        ask.check().map_err(|_| ConversationError::InvalidInput)?;
+        self.inner.metadata.ask_owner(conversation, ask).await
+    }
+
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {
         let _ = self.inner.agent_tool_audit.set(audit);
     }
@@ -128,10 +147,10 @@ impl ConversationService {
         };
         let decision = self.inner.access_policy.evaluate(&AccessAsk {
             subject,
-            action: if tool == READ_TURN_TOOL {
-                AccessAction::ReadTurns
-            } else {
-                AccessAction::AgentTools
+            action: match tool.as_str() {
+                READ_TURN_TOOL => AccessAction::ReadTurns,
+                ASK_OWNER_TOOL => AccessAction::AskOwner,
+                _ => AccessAction::AgentTools,
             },
             resource: AccessResource::of(&record),
             held: None,

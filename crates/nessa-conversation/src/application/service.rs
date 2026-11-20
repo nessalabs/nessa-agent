@@ -51,7 +51,7 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
-pub use agent_tools::READ_TURN_TOOL;
+pub use agent_tools::{ASK_OWNER_TOOL, READ_TURN_TOOL};
 pub use channels::{
     AgentBrief, AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
     FolderRefusal,
@@ -4260,6 +4260,13 @@ impl ConversationService {
                     service.inner.metadata.open_thread(&id).await?;
                     service.refresh_closing(&id, &owner).await?;
                 }
+                // A person's new message is their answer to whatever the
+                // agent asked them (`ask_owner`), a tapped choice or not.
+                // Removed before the message is recorded, so the list that
+                // record wakes no longer shows it.
+                if !known && writer.is_person() {
+                    service.inner.metadata.answer_owner_ask(&id).await?;
+                }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new
                 // message (`an_owner_marked_as_stopping_is_handed_no_message`,
@@ -4891,9 +4898,10 @@ impl ConversationService {
             .collect();
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
+        let asks = self.inner.metadata.owner_asks(listed_ids(&owned)).await?;
         Ok((
             ConversationList {
-                conversations: list_entries(&owned, &running, &channels),
+                conversations: list_entries(&owned, &running, &channels, &asks),
                 complete,
             },
             head,
@@ -4955,8 +4963,9 @@ impl ConversationService {
             self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
+        let asks = self.inner.metadata.owner_asks(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running, &channels),
+            conversations: list_entries(&owned, &running, &channels, &asks),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -7835,6 +7844,7 @@ fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
     channels: &HashMap<ConversationId, crate::domain::ChannelId>,
+    asks: &HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
 ) -> Vec<ConversationListEntry> {
     owned
         .iter()
@@ -7855,6 +7865,7 @@ fn list_entries(
             channel_id: channels
                 .get(listed.conversation.id())
                 .map(|channel| channel.as_str().to_owned()),
+            ask: asks.get(listed.conversation.id()).cloned(),
         })
         .collect()
 }

@@ -371,6 +371,7 @@ async fn listing_shows_only_the_callers_conversations_and_opens_nothing() {
             running: false,
             archived: false,
             channel_id: None,
+            ask: None,
         }]
     );
     for ((organization, principal), expected) in [

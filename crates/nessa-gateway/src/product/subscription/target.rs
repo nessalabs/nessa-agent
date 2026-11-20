@@ -1058,6 +1058,7 @@ mod tests {
             running: false,
             archived: false,
             channel_id: None,
+            ask: None,
         }
     }
 
