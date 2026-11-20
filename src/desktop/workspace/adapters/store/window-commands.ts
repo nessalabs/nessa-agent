@@ -30,6 +30,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import type { WindowChange, WindowChangeOutcome } from "../../model/window-change"
+import { panelTabs } from "../../model/chat-context"
 import {
   closePane,
   focusPane,
@@ -101,8 +102,9 @@ export function carryOut(change: WindowChange): WorkspaceCommand<Carried> {
       case "panelTab": {
         const owner = state.panes ? sessionIn(focusedPane(state.panes)) : undefined
         if (owner === undefined) return { kind: "refused", code: "no_chat_focused" }
-        const panel = entry(state.panels, owner)
-        if (!panel?.tabs.some((tab) => sameWidget(tab, change.widget)))
+        // Only a widget: Chat context is not a tab the window publishes.
+        const { widgets } = panelTabs(owner, entry(state.panels, owner))
+        if (!widgets.some((tab) => sameWidget(tab, change.widget)))
           return { kind: "refused", code: "tab_not_found" }
         dispatch(showPanelTab({ sessionId: owner, widget: change.widget }))
         if (state.panelOpen) return outcome()

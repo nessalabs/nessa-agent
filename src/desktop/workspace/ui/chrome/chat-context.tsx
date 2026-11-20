@@ -4,14 +4,15 @@
  * its agent published (Outputs), each a section that folds from its header.
  * It only reads the chat's transcript; nothing here changes the chat.
  */
-import { useId, useState, type ReactNode } from "react"
+import { useId, type ReactNode } from "react"
 import { conversationLeasePlace } from "@nessa/client"
 import { GroupHeader } from "@nessa-ui/react/group-header"
 import { formatFileSize } from "@nessa-ui/react/file-preview"
 import { SavePublishedFile } from "../../../../conversation"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
-import { useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectTranscript } from "../../adapters/store/selectors"
+import { toggleChatContextSection } from "../../adapters/store/commands"
+import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectChatContextFolded, selectTranscript } from "../../adapters/store/selectors"
 import type { Transcript } from "../../model/transcript"
 import { useNativePlugins } from "../../../widgets"
 import { useAccessoryOpen } from "../../adapters/store/widget-hosts"
@@ -19,21 +20,12 @@ import "./chat-context.css"
 
 type SectionId = "environment" | "context" | "outputs"
 
-/**
- * The sections folded, shared by every chat's Chat context in this window, so
- * a section folded in one chat stays folded in the next.
- */
-let folded: ReadonlySet<SectionId> = new Set()
-
 export function ChatContext({ sessionId }: { sessionId: string }) {
   const transcript = useWorkspaceSelector((state) => selectTranscript(state, sessionId))
-  const [shut, setShut] = useState(folded)
-  const toggle = (id: SectionId) => {
-    const next = new Set(shut)
-    if (!next.delete(id)) next.add(id)
-    folded = next
-    setShut(next)
-  }
+  // One set for every chat, so a section folded in one stays folded in the next.
+  const shut = useWorkspaceSelector(selectChatContextFolded)
+  const dispatch = useWorkspaceDispatch()
+  const toggle = (id: SectionId) => dispatch(toggleChatContextSection({ sectionId: id }))
   const published = transcript?.published ?? []
   return (
     <section className="chat-context" aria-label="Chat context" data-chat-context>
@@ -84,12 +76,12 @@ function Section({
   id: SectionId
   label: string
   count?: number
-  shut: ReadonlySet<SectionId>
+  shut: readonly string[]
   onToggle: (id: SectionId) => void
   children: ReactNode
 }) {
   const body = useId()
-  const open = !shut.has(id)
+  const open = !shut.includes(id)
   return (
     <div className="chat-context-section" data-chat-context-section={id} data-open={open}>
       <GroupHeader
@@ -133,9 +125,10 @@ function Row({
 
 /**
  * What each widget plugin has for this chat, such as its subagents (ADR 326's
- * `SessionAccessory`): one row each, named by the plugin, that opens the
- * plugin's tab for this chat in the panel. A plugin with nothing for this
- * chat draws nothing, and its row is not shown (`chat-context.css`).
+ * `SessionAccessory`): one row each, named by the plugin, holding the
+ * plugin's own control, which opens its tab for this chat in the panel. A
+ * plugin with nothing for this chat draws nothing, and its row is not shown
+ * (`chat-context.css`).
  */
 function PluginRows({ sessionId }: { sessionId: string }) {
   const plugins = useNativePlugins()
@@ -143,13 +136,7 @@ function PluginRows({ sessionId }: { sessionId: string }) {
   return plugins.map(({ id, name, SessionAccessory }) =>
     SessionAccessory ? (
       <div key={id} className="chat-context-row chat-context-plugin" data-plugin={id}>
-        <button
-          type="button"
-          className="chat-context-name chat-context-plugin-open"
-          onClick={() => open({ plugin: id, id: sessionId }, "panel")}
-        >
-          {name}
-        </button>
+        <span className="chat-context-name">{name}</span>
         <span className="chat-context-plugin-accessory">
           <SessionAccessory sessionId={sessionId} openWidget={open} />
         </span>

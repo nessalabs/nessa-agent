@@ -39,4 +39,14 @@ describe("Chat context's place in a chat's panel", () => {
       chatContextTab("a"),
     )
   })
+
+  it("is moved first in storage when it was stored after widgets", () => {
+    const stored = { tabs: [notes, chatContextTab("a"), trail], front: trail }
+    expect(contextFirst(stored)).toEqual({
+      tabs: [chatContextTab("a"), notes, trail],
+      front: trail,
+    })
+    const already = contextFirst(stored)
+    expect(contextFirst(already)).toBe(already)
+  })
 })

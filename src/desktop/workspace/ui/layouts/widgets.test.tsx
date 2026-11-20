@@ -406,6 +406,22 @@ describe("Chat context", () => {
     await click(section("environment").querySelector("button[aria-expanded]"))
     expect(section("environment").getAttribute("data-open")).toBe("true")
   })
+
+  it("opens for the chat whose header was clicked, not the focused one", async () => {
+    const store = await render()
+    await act(async () => void store.dispatch(openBeside({ sessionId: "b" })))
+    await frames()
+    expect(layout(store).focused).not.toBe(firstPane(store))
+    await click(
+      host.querySelector(
+        `[data-pane-key="${firstPane(store)}"] [data-chat-context-button]`,
+      ),
+    )
+    expect(layout(store).focused).toBe(firstPane(store))
+    expect(panelOf(store, "a")?.front).toEqual(chatContextTab("a"))
+    expect(panelOf(store, "b")).toBeUndefined()
+    expect(showsContext()).toBe(true)
+  })
 })
 
 describe("the window", () => {
