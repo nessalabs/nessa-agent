@@ -50,6 +50,8 @@ it("offers every choice again when the gateway did not take the answer", async (
           sent.push(text)
           return new Promise((resolve) => (settle = resolve))
         }}
+        raiseAccess={() => Promise.resolve(true)}
+        working={false}
       />,
     )
   })
@@ -63,4 +65,92 @@ it("offers every choice again when the gateway did not take the answer", async (
   expect(container.querySelector("[aria-busy='true']")).toBeNull()
   act(() => choice("Ship").click())
   expect(sent).toEqual(["Wait", "Ship"])
+})
+
+const access = {
+  askId: "fedcba9876543210fedcba9876543210",
+  question: "Allow full access in this chat?",
+  choices: [
+    { label: "Approve", consequence: "Raises this chat to Full access." },
+    { label: "Not now", consequence: "Keeps this chat's access as it is." },
+  ],
+  recommended: 1,
+  reason: "The toolchain installs outside the project.",
+  askedAtMs: 1,
+  access: {
+    mode: "full" as const,
+    grants: [
+      "Agents in this chat can run any command",
+      "They won't ask you before they act",
+      "You can undo this from Access, under the message box",
+    ],
+  },
+}
+
+const button = (name: string): HTMLButtonElement => {
+  const found = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (each) => each.textContent === name,
+  )
+  if (!found) throw new Error(`no button ${name}`)
+  return found
+}
+
+it("raises the access before Approve is sent, then lists what was allowed", async () => {
+  const steps: string[] = []
+  const render = (shown: typeof access | undefined, working = false) =>
+    act(() => {
+      root.render(
+        <PanelOwnerAsk
+          ask={shown}
+          submit={(text) => {
+            steps.push(`sent ${text}`)
+            return Promise.resolve(true)
+          }}
+          raiseAccess={(mode) => {
+            steps.push(`raised ${mode}`)
+            return Promise.resolve(true)
+          }}
+          working={working}
+        />,
+      )
+    })
+  // While the agent works, Approve waits and says why.
+  render(access, true)
+  expect(container.querySelector("[data-access-request='full']")).not.toBeNull()
+  expect(button("Approve").disabled).toBe(true)
+  expect(container.textContent).toContain("once the agent stops")
+  render(access)
+  expect(container.querySelector("[data-slot=access-request-grants]")).toBeNull()
+  await act(async () => button("Approve").click())
+  expect(steps).toEqual(["raised full", "sent Approve"])
+  // The list lets the ask go; the card stays to say what was allowed.
+  render(undefined)
+  const grants = [...container.querySelectorAll("[data-slot=access-request-grants] li")]
+  expect(grants.map((item) => item.textContent)).toEqual(access.access.grants)
+  expect(container.querySelector("button")).toBeNull()
+})
+
+it("sends no Approve when the access did not change, and Not now changes nothing", async () => {
+  const steps: string[] = []
+  act(() => {
+    root.render(
+      <PanelOwnerAsk
+        ask={access}
+        submit={(text) => {
+          steps.push(`sent ${text}`)
+          return Promise.resolve(true)
+        }}
+        raiseAccess={() => {
+          steps.push("raise refused")
+          return Promise.resolve(false)
+        }}
+        working={false}
+      />,
+    )
+  })
+  await act(async () => button("Approve").click())
+  expect(steps).toEqual(["raise refused"])
+  expect(container.textContent).toContain("Access didn’t change.")
+  await act(async () => button("Not now").click())
+  expect(steps).toEqual(["raise refused", "sent Not now"])
 })

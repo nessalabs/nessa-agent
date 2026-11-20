@@ -386,6 +386,14 @@ import {
  *               recommended; tapping the other choice sends its label as
  *               the person's message, which the agent answers, and the
  *               card, the row's ask and the notice all go
+ *   accessRequest  an agent asks to raise its chat's access (`request_access`):
+ *               the row's ask is Nessa's own question and choices with the
+ *               agent's reason, and Not now is the one recommended. The red
+ *               card says them and lists nothing yet; Approve raises the chat
+ *               to Auto by the person's own access command, then sends Approve
+ *               as their message, which the agent answers; the card stays to
+ *               list the three lines of what was allowed, and the row's ask
+ *               goes. The chat is set back to Ask after
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -446,6 +454,7 @@ import {
   TRACE_PAUSE_MS,
   WATCH_CALLS,
   ASK,
+  ACCESS,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -9475,6 +9484,119 @@ const steps = {
     )
       failures.push("the list row still carries the ask the person answered")
     await noticeTakenBack(run, notice, "answered with a choice", failures)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async accessRequest(run, step, failures) {
+    const { agents } = await run.client.agents.list()
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    const naming = prompt(run, STRESS.reply, step, " access")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // Auto is what the agent asks for; a model that offers only Ask here
+    // cannot be raised, which the composer's own refusal step covers.
+    const offered =
+      agents
+        .flatMap((agent) => agent.models)
+        .find((model) => model.modelId === named?.model)
+        ?.approvalModes?.map((choice) => choice.id) ?? []
+    if (!offered.includes(ACCESS.access)) {
+      log(`accessRequest: ${named?.model} offers no ${ACCESS.access}; skipped`)
+      return
+    }
+    const title = await titleOf(run, conversationId)
+    await openStressConversation(run.page, conversationId, title)
+    const asking = prompt(run, STRESS.requestAccess, step)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, asking),
+    )
+    const { view: asked } = await settled(
+      run,
+      conversationId,
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
+      asking,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const rowAsk = async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => each.conversationId === conversationId)?.ask
+    }
+    const ask = await waitFor(rowAsk, 15_000)
+    if (!ask?.access) {
+      failures.push(`the list row carries ${JSON.stringify(ask)}, not an access request`)
+      return
+    }
+    if (
+      ask.access.mode !== ACCESS.access ||
+      ask.access.grants.length !== 3 ||
+      ask.question !== "Allow auto approval in this chat?" ||
+      ask.choices.map((each) => each.label).join("|") !== `${STRESS.approved}|Not now` ||
+      ask.recommended !== 1 ||
+      ask.reason !== ACCESS.reason
+    )
+      failures.push(`the row's access request is ${JSON.stringify(ask)}`)
+    const card = run.page.locator(`[data-access-request="${ACCESS.access}"]`)
+    if (
+      !(await card
+        .waitFor({ timeout: 15_000 })
+        .then(() => true)
+        .catch(() => false))
+    ) {
+      failures.push("the chat does not draw the red access card")
+      return
+    }
+    if (!(await card.getByText(ask.question).count()))
+      failures.push("the access card does not say Nessa's question")
+    if (!(await card.getByText(ACCESS.reason).count()))
+      failures.push("the access card does not say the agent's reason")
+    if (await card.locator("[data-slot=access-request-grants]").count())
+      failures.push("the access card lists what is allowed before it is approved")
+    if ((await run.client.conversation.read(conversationId)).approvalMode !== "ask")
+      failures.push("asking for access changed the chat's access")
+    await card.getByRole("button", { name: STRESS.approved, exact: true }).click()
+    if (!(await accessIs(run, conversationId, ACCESS.access)))
+      failures.push("Approve did not raise the chat to the access asked for")
+    await settled(
+      run,
+      conversationId,
+      new Set(asked?.messages.map((each) => each.executionId) ?? []),
+      STRESS.approved,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.approvedAccess}${STRESS.approved}`, failures)
+    const listed = card.locator("[data-slot=access-request-grants] li")
+    const lines = await waitFor(async () => {
+      const shown = await listed.allTextContents()
+      return shown.length === 3 ? shown : null
+    }, 15_000)
+    if (!lines || lines.join("|") !== ask.access.grants.join("|"))
+      failures.push(
+        `the approved card lists ${JSON.stringify(lines)}, not ${JSON.stringify(ask.access.grants)}; it says ${JSON.stringify(await card.textContent().catch(() => null))}`,
+      )
+    if (await card.getByRole("button").count())
+      failures.push("the approved card still offers a choice")
+    if (
+      await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
+        (cleared) => !cleared,
+      )
+    )
+      failures.push("the list row still carries the approved access request")
+    await run.client.conversation.setApprovalMode(conversationId, "ask")
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 

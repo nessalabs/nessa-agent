@@ -18,4 +18,17 @@ export interface OwnerAskView {
   /** Index into `choices` of the one the agent recommends. */
   recommended: number
   reason: string
+  /**
+   * Set when the agent asked to raise the chat's access (`request_access`):
+   * Nessa wrote the question and the choices, and the ask is drawn as the
+   * red access card. Its first choice is Approve: the person's own access
+   * change, then that label as their answer. Its second is Not now.
+   */
+  access?: OwnerAskAccessView
+}
+
+/** The access an agent asked for, and what approving allows, in Nessa's words. */
+export interface OwnerAskAccessView {
+  mode: "auto" | "full"
+  grants: string[]
 }

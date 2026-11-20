@@ -82,6 +82,14 @@ export interface OwnerAsk {
   /** Index into `choices` of the one the agent recommends. */
   readonly recommended: number
   readonly reason: string
+  /**
+   * Set when the agent asked to raise the session's access: the red card,
+   * whose first choice is Approve and whose words are Nessa's.
+   */
+  readonly access?: {
+    readonly mode: "auto" | "full"
+    readonly grants: readonly string[]
+  }
 }
 
 export interface SessionSummary {

@@ -282,6 +282,26 @@
           },
           "additionalAttributes": false
         }
+      },
+      "Setting": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "owner": {
+              "type": "String",
+              "required": true
+            },
+            "level": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -505,6 +525,15 @@
         "appliesTo": {
           "principalTypes": ["Person"],
           "resourceTypes": ["Channel"],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "setting.change": {
+        "appliesTo": {
+          "principalTypes": ["Person", "AgentTurn"],
+          "resourceTypes": ["Setting"],
           "context": {
             "type": "Ask"
           }

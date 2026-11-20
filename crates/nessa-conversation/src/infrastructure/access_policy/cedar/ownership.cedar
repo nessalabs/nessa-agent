@@ -256,3 +256,33 @@ when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
 };
+
+// The owner changes any of their own settings, whatever its level: on their
+// own surface the last step is always theirs.
+@id("owner.setting_change")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"setting.change",
+    resource is NessaConversation::Setting
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// A turn the owner started changes one of their settings only at the level
+// an agent may change: a reply style, a model. A setting the agent fills is
+// saved by the owner, one only the owner types is never the agent's, and
+// one that raises access waits for the owner's Approve on the red card.
+@id("agent.setting_change")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"setting.change",
+    resource is NessaConversation::Setting
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    resource.level == "agent_changes"
+};

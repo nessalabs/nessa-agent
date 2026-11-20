@@ -38,7 +38,7 @@
 //! that writes a share grant, where a delete cannot land between the
 //! question and the write.
 use super::ConversationCaller;
-use crate::domain::{Capabilities, Conversation, ConversationRefusal};
+use crate::domain::{Capabilities, Conversation, ConversationRefusal, Setting};
 use nessa_auth::domain::{Grant, MembershipRole, OrganizationId, PrincipalId, Resource};
 use std::collections::HashMap;
 
@@ -151,11 +151,14 @@ pub enum AccessAction {
     ChannelUse,
     /// Read or edit a channel's runtime settings.
     ChannelSettings,
+    /// Change one Nessa setting, as far as its level lets the subject: the
+    /// owner any, a turn the owner started only one an agent may change.
+    SettingChange,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::AgentTools,
         Self::ReadTurns,
         Self::CloseCreated,
@@ -181,6 +184,7 @@ impl AccessAction {
         Self::ChannelList,
         Self::ChannelUse,
         Self::ChannelSettings,
+        Self::SettingChange,
     ];
 
     /// The action's name, as the policy spells it.
@@ -211,6 +215,7 @@ impl AccessAction {
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",
             Self::ChannelSettings => "channel.settings",
+            Self::SettingChange => "setting.change",
         }
     }
 }
@@ -243,6 +248,13 @@ pub enum AccessResource<'a> {
     Channel {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
+    },
+    /// One of an owner's Nessa settings, with the level that decides what an
+    /// agent may do with it.
+    Setting {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+        setting: Setting,
     },
 }
 
@@ -377,6 +389,37 @@ fn answer(policy: &dyn ConversationAccessPolicyEvaluator, ask: &AccessAsk<'_>) -
             );
             Answer::Refused
         }
+    }
+}
+
+/// Whether `subject` may change one of `owner`'s settings, as its level
+/// lets it (`setting.change`): `Some(true)` allowed, `Some(false)` refused,
+/// `None` when the policy could not decide, which callers refuse too.
+pub fn setting_change(
+    policy: &dyn ConversationAccessPolicyEvaluator,
+    subject: AccessSubject<'_>,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    setting: Setting,
+) -> Option<bool> {
+    match answer(
+        policy,
+        &AccessAsk {
+            subject,
+            action: AccessAction::SettingChange,
+            resource: AccessResource::Setting {
+                organization,
+                owner,
+                setting,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        },
+    ) {
+        Answer::Allowed => Some(true),
+        Answer::Refused => Some(false),
+        Answer::Unavailable => None,
     }
 }
 

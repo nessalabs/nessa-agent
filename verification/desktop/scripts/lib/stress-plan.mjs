@@ -281,6 +281,10 @@ export const KNOBS = {
     default: 1,
     what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
   },
+  accessRequests: {
+    default: 1,
+    what: "times an agent asks to raise its chat's access (`request_access`): the red card says Nessa's question and the agent's reason, Approve raises the chat to Auto by the person's own access command before Approve is sent, and the card then lists what was allowed",
+  },
   restores: {
     default: 1,
     what: "restored conversations opened in the window: one shows its saved history, and one whose source is gone refuses a send and keeps the draft",
@@ -416,6 +420,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.styles, () => ({ kind: "style" }))
   add(knobs.coordinators, () => ({ kind: "coordinator" }))
   add(knobs.asks, () => ({ kind: "ask" }))
+  add(knobs.accessRequests, () => ({ kind: "accessRequest" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a

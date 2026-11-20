@@ -7,7 +7,7 @@ use crate::application::{
 };
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
-use nessa_protocol::conversation::view::OwnerAsk;
+use nessa_protocol::conversation::view::{OwnerAsk, RaisedAccess};
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -20,6 +20,20 @@ pub const READ_TURN_TOOL: &str = "read_turn";
 /// The agent tool that asks the owner a question, and so is admitted under
 /// [`AccessAction::AskOwner`] in any turn of the owner's.
 pub const ASK_OWNER_TOOL: &str = "ask_owner";
+
+/// The agent tool that asks the owner to raise the chat's access. It only
+/// asks, as `ask_owner` does, and so is admitted under the same action: the
+/// owner's own access command is what raises it.
+pub const REQUEST_ACCESS_TOOL: &str = "request_access";
+
+/// What became of a request for more access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccessRequestOutcome {
+    /// The owner is asked, on the red card.
+    Asked,
+    /// The chat already runs at that access or more: nothing to ask.
+    Held,
+}
 
 /// The agent tool that, given another thread, closes it, and so is also
 /// asked under [`AccessAction::CloseCreated`] on that thread.
@@ -35,13 +49,42 @@ impl ConversationService {
     pub async fn ask_owner(
         &self,
         conversation: &ConversationId,
-        mut ask: OwnerAsk,
+        ask: OwnerAsk,
     ) -> Result<(), ConversationError> {
+        self.keep_ask(conversation, ask, None).await.map(|_| ())
+    }
+
+    /// Ask the owner, as [`Self::ask_owner`] does, to raise the chat to
+    /// `access`, for the agent's one-line `reason`. Nessa writes the question
+    /// and the choices. A chat that already runs at that access or more is
+    /// not asked: its mode is read under the same lock the ask is written
+    /// under.
+    pub async fn request_access(
+        &self,
+        conversation: &ConversationId,
+        access: RaisedAccess,
+        ask_id: String,
+        reason: String,
+    ) -> Result<AccessRequestOutcome, ConversationError> {
+        self.keep_ask(conversation, access.ask(ask_id, reason), Some(access))
+            .await
+    }
+
+    async fn keep_ask(
+        &self,
+        conversation: &ConversationId,
+        mut ask: OwnerAsk,
+        raising: Option<RaisedAccess>,
+    ) -> Result<AccessRequestOutcome, ConversationError> {
         ask.asked_at_ms = self.inner.clock.unix_milliseconds();
         ask.check().map_err(|_| ConversationError::InvalidInput)?;
         let _writes = self.inner.records.summary_writes().lock(conversation).await;
         match load_conversation(self.inner.metadata.as_ref(), conversation).await? {
-            Some(record) if record.deletion().is_none() => {}
+            Some(record) if record.deletion().is_none() => {
+                if raising.is_some_and(|access| access.held_at(record.approval_mode())) {
+                    return Ok(AccessRequestOutcome::Held);
+                }
+            }
             Some(_) => return Err(ConversationError::Deleted),
             None => return Err(ConversationError::NotFound),
         }
@@ -54,7 +97,7 @@ impl ConversationService {
             )
             .await?;
         self.inner.live_changes.publish(conversation);
-        Ok(())
+        Ok(AccessRequestOutcome::Asked)
     }
 
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {
@@ -166,7 +209,7 @@ impl ConversationService {
             subject,
             action: match tool.as_str() {
                 READ_TURN_TOOL => AccessAction::ReadTurns,
-                ASK_OWNER_TOOL => AccessAction::AskOwner,
+                ASK_OWNER_TOOL | REQUEST_ACCESS_TOOL => AccessAction::AskOwner,
                 _ => AccessAction::AgentTools,
             },
             resource: AccessResource::of(&record),

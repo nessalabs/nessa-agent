@@ -835,7 +835,109 @@ pub struct OwnerAsk {
     pub reason: String,
     /// When it was asked, in Unix milliseconds.
     pub asked_at_ms: u64,
+    /// Set when the ask is an agent's request to raise the chat's access
+    /// (`request_access`): the gateway wrote the question and the choices,
+    /// and a client draws it as the red access card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<RaisedAccess>,
 }
+
+/// The access an agent asked its owner to raise a chat to: one of the
+/// approval modes above Ask. Approving is the person's own access command;
+/// the ask itself changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RaisedAccess {
+    Auto,
+    Full,
+}
+
+impl RaisedAccess {
+    /// The approval mode approving sets.
+    pub fn mode(self) -> ConversationApprovalMode {
+        match self {
+            Self::Auto => ConversationApprovalMode::Auto,
+            Self::Full => ConversationApprovalMode::Full,
+        }
+    }
+
+    /// The access asked for, when `mode` is above Ask.
+    pub fn of(mode: ConversationApprovalMode) -> Option<Self> {
+        match mode {
+            ConversationApprovalMode::Ask => None,
+            ConversationApprovalMode::Auto => Some(Self::Auto),
+            ConversationApprovalMode::Full => Some(Self::Full),
+        }
+    }
+
+    /// Whether a chat at `mode` already holds this access or more.
+    pub fn held_at(self, mode: ConversationApprovalMode) -> bool {
+        let rank = |mode| match mode {
+            ConversationApprovalMode::Ask => 0,
+            ConversationApprovalMode::Auto => 1,
+            ConversationApprovalMode::Full => 2,
+        };
+        rank(mode) >= rank(self.mode())
+    }
+
+    /// The question the card asks, in Nessa's words, never the agent's.
+    pub fn question(self) -> &'static str {
+        match self {
+            Self::Auto => "Allow auto approval in this chat?",
+            Self::Full => "Allow full access in this chat?",
+        }
+    }
+
+    /// What approving allows, one plain line each, shown once it is approved.
+    pub fn grants(self) -> [&'static str; 3] {
+        match self {
+            Self::Auto => [
+                "Agents in this chat can run most commands without asking",
+                "They still ask you before risky steps",
+                "You can undo this from Access, under the message box",
+            ],
+            Self::Full => [
+                "Agents in this chat can run any command",
+                "They won't ask you before they act",
+                "You can undo this from Access, under the message box",
+            ],
+        }
+    }
+
+    /// The ask a `request_access` call leaves for the owner: Nessa's
+    /// question, Approve and Not now, and the agent's reason. Not now is the
+    /// recommended choice, so anything that picks for the person picks the
+    /// one that changes nothing.
+    pub fn ask(self, ask_id: String, reason: String) -> OwnerAsk {
+        let raised = match self {
+            Self::Auto => "Raises this chat to Auto approval.",
+            Self::Full => "Raises this chat to Full access.",
+        };
+        OwnerAsk {
+            ask_id,
+            question: self.question().to_owned(),
+            choices: vec![
+                OwnerAskChoice {
+                    label: ACCESS_APPROVE.to_owned(),
+                    consequence: raised.to_owned(),
+                },
+                OwnerAskChoice {
+                    label: ACCESS_DECLINE.to_owned(),
+                    consequence: "Keeps this chat's access as it is.".to_owned(),
+                },
+            ],
+            recommended: 1,
+            reason,
+            asked_at_ms: 0,
+            access: Some(self),
+        }
+    }
+}
+
+/// The choice that raises the access on an access ask.
+pub const ACCESS_APPROVE: &str = "Approve";
+/// The choice that leaves it as it is.
+pub const ACCESS_DECLINE: &str = "Not now";
 
 /// One choice an [`OwnerAsk`] offers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -865,6 +967,9 @@ pub enum OwnerAskRefusal {
     /// Its key is not 32 lowercase hex digits: a damaged row, never an
     /// agent's mistake.
     Key,
+    /// It names an access to raise, but its question or choices are not the
+    /// ones Nessa writes for it: a damaged row, never an agent's mistake.
+    Access,
 }
 
 impl OwnerAskRefusal {
@@ -876,12 +981,19 @@ impl OwnerAskRefusal {
             Self::LineTooLong => "ask_line_too_long",
             Self::Recommended => "ask_recommended",
             Self::NotOneLine => "ask_not_one_line",
-            Self::Key => "invalid_request",
+            Self::Key | Self::Access => "invalid_request",
         }
     }
 }
 
 impl OwnerAsk {
+    /// Whether something other than the person may answer it for them, as a
+    /// deadline does: never an access ask, whose Approve only the person
+    /// gives.
+    pub fn auto_pickable(&self) -> bool {
+        self.access.is_none()
+    }
+
     /// Whether every part fits. Checked when it is asked and again when it
     /// is read back, so a damaged row is never shown.
     ///
@@ -933,6 +1045,15 @@ impl OwnerAsk {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
         if !key {
             return Err(OwnerAskRefusal::Key);
+        }
+        // An access ask is Nessa's own words and choices: a row that says
+        // otherwise was not written by `request_access`.
+        if let Some(access) = self.access {
+            let mut written = access.ask(self.ask_id.clone(), self.reason.clone());
+            written.asked_at_ms = self.asked_at_ms;
+            if written != *self {
+                return Err(OwnerAskRefusal::Access);
+            }
         }
         Ok(())
     }

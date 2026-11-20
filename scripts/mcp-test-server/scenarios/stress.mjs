@@ -67,6 +67,19 @@ export const STRESS = {
   ask: "stress ask owner",
   /** The person's answer to {@link ASK}: each choice's label holds it. */
   answer: "stress answer",
+  /** The agent asks to raise the chat's access (`request_access`, {@link ACCESS}). */
+  requestAccess: "stress request access",
+  /**
+   * The person's answer to {@link ACCESS}: the card's Approve, Nessa's own
+   * label, sent once the access is raised.
+   */
+  approved: "Approve",
+}
+
+/** What the `requestAccess` turn asks for, and why. */
+export const ACCESS = {
+  access: "auto",
+  reason: "The stress toolchain installs outside the project.",
 }
 
 /**
@@ -147,6 +160,8 @@ export const SAYS = {
   restored: "Restored history: ",
   asked: "Asked the owner: ",
   answered: "Answered: ",
+  requested: "Requested access: ",
+  approvedAccess: "Approved, at ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }
@@ -839,6 +854,24 @@ export function stressScenario({
       {
         when: STRESS.answer,
         steps: [{ do: "text", chunks: [SAYS.answered, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        when: STRESS.requestAccess,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "request_access",
+            arguments: ACCESS,
+            save: "requested",
+          },
+          { do: "text", chunks: [SAYS.requested, "${requested.askId}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.approved,
+        steps: [{ do: "text", chunks: [SAYS.approvedAccess, "${prompt.text}"] }, { do: "end" }],
       },
       // Closes its own thread, as an agent whose work is done is told to:
       // the agent stops once this turn ends, and the next message opens it.

@@ -8,7 +8,9 @@
 //! behaviour now that the Rust is gone.
 use super::*;
 use crate::application::{AccessAction, OwnerAccess, PairedAccess, PairedParty, PairedRefusal};
-use crate::domain::{Conversation, ConversationDeletion, ConversationRefusal};
+use crate::domain::{
+    Conversation, ConversationDeletion, ConversationRefusal, Setting, SettingLevel,
+};
 use nessa_auth::domain::{
     Action, Grant, MembershipRole, OrganizationId, PrincipalId, Resource, ResourceId,
 };
@@ -274,6 +276,11 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 }
             }
             AccessAction::CloseCreated => AccessResource::created(&live, Some("creator")),
+            AccessAction::SettingChange => AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting: Setting::Access,
+            },
             _ => on(&live),
         };
         let subject = match action {
@@ -323,6 +330,99 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             action.name()
         );
     }
+}
+
+#[test]
+fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let person = |organization, principal| AccessSubject::Person {
+        organization,
+        principal,
+    };
+    let turn = |organization, principal, owner_initiated| AccessSubject::AgentTurn {
+        organization,
+        principal,
+        owner_initiated,
+        conversation: "thread",
+    };
+    let change = |subject, setting| {
+        policy.evaluate(&AccessAsk {
+            subject,
+            action: AccessAction::SettingChange,
+            resource: AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    for setting in Setting::ALL {
+        let name = setting.as_str();
+        // The owner, on their own surface, changes every level.
+        assert_eq!(
+            allowed_by(&change(person(&org, &owner), setting)),
+            Some(&["owner.setting_change".to_owned()][..]),
+            "{name}"
+        );
+        // A turn the owner started changes only what an agent may.
+        let agent = change(turn(&org, &owner, true), setting);
+        if setting.level() == SettingLevel::AgentChanges {
+            assert_eq!(
+                allowed_by(&agent),
+                Some(&["agent.setting_change".to_owned()][..]),
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                agent,
+                AccessDecision::Deny(AccessDenial::NotPermitted),
+                "{name}"
+            );
+        }
+        // Nobody else, and no turn the owner did not start.
+        for refused in [
+            person(&org, &other),
+            person(&elsewhere, &owner),
+            turn(&org, &owner, false),
+            turn(&org, &other, true),
+            turn(&elsewhere, &owner, true),
+        ] {
+            assert!(!allowed(&change(refused, setting)), "{name} {refused:?}");
+        }
+        // The helper callers use answers the same.
+        assert_eq!(
+            crate::application::setting_change(
+                &policy,
+                turn(&org, &owner, true),
+                &org,
+                &owner,
+                setting
+            ),
+            Some(setting.level() == SettingLevel::AgentChanges),
+            "{name}"
+        );
+    }
+    // Every level has a setting, and raising access is never an agent's.
+    for level in SettingLevel::ALL {
+        assert!(
+            Setting::ALL.iter().any(|setting| setting.level() == level),
+            "{}",
+            level.as_str()
+        );
+    }
+    assert_eq!(Setting::Access.level(), SettingLevel::RaisesAccess);
+    assert_eq!(Setting::ReplyStyle.level(), SettingLevel::AgentChanges);
+    assert_eq!(Setting::VoiceKey.level(), SettingLevel::OwnerTypes);
+    assert_eq!(Setting::McpServers.level(), SettingLevel::AgentFills);
 }
 
 // One allow and one deny for each rule, by its @id.

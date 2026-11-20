@@ -777,6 +777,10 @@ export function App({
                         : undefined
                     }
                     submit={(text) => chat.answer(textContent(text))}
+                    raiseAccess={chat.raiseAccess}
+                    working={
+                      chat.active.phase !== "idle" || !!chat.active.remote?.running
+                    }
                   />
                 </>
               }

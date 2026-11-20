@@ -169,6 +169,14 @@ export function summaryFrom(
             })),
             recommended: row.ask.recommended,
             reason: row.ask.reason,
+            ...(row.ask.access
+              ? {
+                  access: {
+                    mode: row.ask.access.mode,
+                    grants: [...row.ask.access.grants],
+                  },
+                }
+              : {}),
           },
         }
       : {}),

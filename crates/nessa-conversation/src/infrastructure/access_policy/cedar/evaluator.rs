@@ -267,8 +267,8 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
     }
 }
 
-/// What is asked about, as the schema's `Conversation`, `Catalogue`, `Workspace`
-/// or `Channel`.
+/// What is asked about, as the schema's `Conversation`, `Catalogue`,
+/// `Workspace`, `Channel` or `Setting`.
 fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
     match *resource {
         AccessResource::Conversation {
@@ -322,6 +322,19 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
             [
                 ("organization", string(organization.as_str())),
                 ("owner", string(owner.as_str())),
+            ],
+        ),
+        AccessResource::Setting {
+            organization,
+            owner,
+            setting,
+        } => entity(
+            "NessaConversation::Setting",
+            setting.as_str(),
+            [
+                ("organization", string(organization.as_str())),
+                ("owner", string(owner.as_str())),
+                ("level", string(setting.level().as_str())),
             ],
         ),
     }
