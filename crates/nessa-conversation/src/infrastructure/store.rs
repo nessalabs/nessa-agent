@@ -1413,30 +1413,76 @@ impl ConversationRepository for LocalConversationStore {
         })
     }
     fn ask_owner(&self, id: &ConversationId, ask: OwnerAsk) -> ConversationFuture<'_, ()> {
-        let id = id.to_string();
+        let id = id.clone();
+        let changes = self.changes.clone();
         self.run(move |connection| {
             let ask = serde_json::to_string(&ask).map_err(|_| ConversationError::InvalidInput)?;
-            connection
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
+            if conversation.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            transaction
                 .cached_execute(
                     "INSERT INTO owner_asks (conversation_id, ask) VALUES (?1, ?2)
                      ON CONFLICT (conversation_id) DO UPDATE SET ask = excluded.ask",
-                    [id, ask],
+                    [id.to_string(), ask],
                 )
                 .map_err(failed)?;
+            // A catalogue change, as a summary is: a list that does not hold
+            // this row is told to read again, so the ask reaches it.
+            let revision = next_revision(&transaction, &conversation, false)?;
+            transaction
+                .cached_execute(
+                    "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                    params![revision, id.to_string()],
+                )
+                .map_err(failed)?;
+            transaction.commit().map_err(failed)?;
+            changes.publish(&(
+                conversation.organization().clone(),
+                conversation.owner().clone(),
+            ));
             Ok(())
         })
     }
     fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
-        let id = id.to_string();
+        let id = id.clone();
         let ask_id = ask_id.to_owned();
+        let changes = self.changes.clone();
         self.run(move |connection| {
-            connection
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(failed)?;
+            let removed = transaction
                 .cached_execute(
                     "DELETE FROM owner_asks
                      WHERE conversation_id = ?1 AND json_extract(ask, '$.askId') = ?2",
-                    [id, ask_id],
+                    [id.to_string(), ask_id],
                 )
                 .map_err(failed)?;
+            let changed_owner = match read(&transaction, &id)? {
+                Some(conversation) if removed > 0 && conversation.deletion().is_none() => {
+                    let revision = next_revision(&transaction, &conversation, false)?;
+                    transaction
+                        .cached_execute(
+                            "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
+                            params![revision, id.to_string()],
+                        )
+                        .map_err(failed)?;
+                    Some((
+                        conversation.organization().clone(),
+                        conversation.owner().clone(),
+                    ))
+                }
+                _ => None,
+            };
+            transaction.commit().map_err(failed)?;
+            if let Some(owner) = changed_owner {
+                changes.publish(&owner);
+            }
             Ok(())
         })
     }
@@ -1797,6 +1843,14 @@ impl ConversationSummaries for LocalConversationStore {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
             let conversation = read(&transaction, &id)?;
+            // What an agent asked is the conversation's content too, and goes
+            // with it.
+            transaction
+                .cached_execute(
+                    "DELETE FROM owner_asks WHERE conversation_id = ?1",
+                    [id.to_string()],
+                )
+                .map_err(failed)?;
             let removed = transaction
                 .cached_execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",

@@ -128,6 +128,22 @@ export function useConversation() {
       if (!sendDraft.rejected.match(finished)) return true
       return finished.payload === undefined
     },
+    /**
+     * Sends `content` as the person's answer to what an agent asked, and
+     * says whether the gateway took it: a refusal, local or the gateway's,
+     * and a failed send all resolve false, so the choices are offered again.
+     */
+    answer: async (content: MessageContent): Promise<boolean> => {
+      const finished = await dispatch(
+        sendDraft({
+          content,
+          id: active.id,
+          connected: gatewayAvailable,
+          steering: deliveryMode === "steer" && active.phase !== "idle",
+        }),
+      )
+      return !sendDraft.rejected.match(finished)
+    },
     /** The Messages tab was left: what its list said about earlier actions is past. */
     forgetListNotices: () => dispatch(commandErrorCleared()),
     /** Show what a Messages row stands for: its open tab, or the conversation reopened as one. */

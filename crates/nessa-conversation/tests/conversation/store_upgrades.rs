@@ -293,6 +293,17 @@ async fn a_version_10_file_gains_the_owner_asks() {
         .await
         .unwrap();
     assert!(asks.is_empty());
+    // Erasing the conversation takes what was asked with it.
+    ConversationRepository::ask_owner(&store, &id, ask.clone())
+        .await
+        .unwrap();
+    crate::application::ConversationSummaries::erase(&store, &id)
+        .await
+        .unwrap();
+    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
+        .await
+        .unwrap();
+    assert!(asks.is_empty());
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

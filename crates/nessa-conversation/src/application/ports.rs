@@ -595,8 +595,9 @@ pub trait ConversationSummaries: Send + Sync {
         id: &ConversationId,
         summary: ConversationSummary,
     ) -> ConversationFuture<'_, ()>;
-    /// Remove the conversation's summary, if it has one. Durable before it
-    /// returns; a summary that is already gone is not an error.
+    /// Remove the conversation's summary, if it has one, and what its agent
+    /// asked its owner. Durable before it returns; a summary that is already
+    /// gone is not an error.
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
 }
 

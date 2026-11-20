@@ -13,7 +13,7 @@ export function PanelOwnerAsk({
   submit,
 }: {
   ask: OwnerAskView | undefined
-  /** Sends text as the person's message; resolves whether it was taken. */
+  /** Sends text as the person's message; resolves whether the gateway took it. */
   submit: (text: string) => Promise<boolean>
 }) {
   const [sending, setSending] = React.useState<{ askId: string; label: string } | null>(

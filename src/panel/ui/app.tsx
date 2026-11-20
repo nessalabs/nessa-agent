@@ -776,7 +776,7 @@ export function App({
                         ? asks.get(chat.active.serverConversationId)?.ask
                         : undefined
                     }
-                    submit={(text) => chat.submit(textContent(text))}
+                    submit={(text) => chat.answer(textContent(text))}
                   />
                 </>
               }
