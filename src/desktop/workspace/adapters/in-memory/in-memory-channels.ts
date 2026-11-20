@@ -20,13 +20,6 @@ export interface InMemoryChannels extends ChannelSource {
   refuse(failure: ChannelFailure): void
 }
 
-/** As the gateway answers it: a channel whose coordinator is off names no main chat. */
-function shown<T extends Omit<Channel, "sectionId">>(channel: T): T {
-  if (channel.coordinatorOn !== false) return channel
-  const { coordinatorConversationId: _kept, ...off } = channel
-  return off as T
-}
-
 export function inMemoryChannels({
   add,
 }: {
@@ -52,22 +45,19 @@ export function inMemoryChannels({
       }
       const id = `sample-channel-${made.size + 1}`
       const main = `sample-coordinator-${made.size + 1}`
-      const channel = add(
-        shown({
-          id,
-          name,
-          private: false,
-          topic: "",
-          folder: draft.folder ?? `~/.nessa/channels/${id}`,
-          defaults: { model: draft.model, access: draft.access },
-          coordinatorPlacement: draft.coordinatorPlacement,
-          threadPlacement: draft.threadPlacement,
-          coordinatorConversationId: main,
-          coordinatorOn: draft.coordinator,
-        }),
-      )
-      // Kept with its main chat either way, so turning it on finds the same one.
-      made.set(requestId, { ...channel, coordinatorConversationId: main })
+      const channel = add({
+        id,
+        name,
+        private: false,
+        topic: "",
+        folder: draft.folder ?? `~/.nessa/channels/${id}`,
+        defaults: { model: draft.model, access: draft.access },
+        coordinatorPlacement: draft.coordinatorPlacement,
+        threadPlacement: draft.threadPlacement,
+        coordinatorConversationId: main,
+        coordinatorOn: draft.coordinator,
+      })
+      made.set(requestId, channel)
       return Promise.resolve(channel)
     },
     setPlacement(channelId, placement) {
@@ -82,7 +72,7 @@ export function inMemoryChannels({
             : {}),
         }
         made.set(requestId, changed)
-        return Promise.resolve(shown(changed))
+        return Promise.resolve(changed)
       }
       return Promise.reject(new ChannelCreationError("forbidden"))
     },
@@ -91,7 +81,7 @@ export function inMemoryChannels({
         if (channel.id !== channelId) continue
         const changed: Channel = { ...channel, coordinatorOn: on }
         made.set(requestId, changed)
-        return Promise.resolve(shown(changed))
+        return Promise.resolve(changed)
       }
       return Promise.reject(new ChannelCreationError("forbidden"))
     },

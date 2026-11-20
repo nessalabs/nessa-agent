@@ -127,7 +127,7 @@ describe("the flow's bounds", () => {
     expect(channel?.coordinatorConversationId).toBe("fresh-main")
   })
 
-  it("switches a made channel's coordinator and leaves its main chat out while off", async () => {
+  it("switches a made channel's coordinator and keeps its main chat while off", async () => {
     const setCoordinator = vi
       .fn()
       .mockResolvedValueOnce({
@@ -150,7 +150,7 @@ describe("the flow's bounds", () => {
       on: false,
     })
     expect(off?.coordinatorOn).toBe(false)
-    expect(off?.coordinatorConversationId).toBeUndefined()
+    expect(off?.coordinatorConversationId).toBe("main")
     const on = await source.setCoordinator?.(made.channelId, true, "req-on")
     expect(on?.coordinatorOn).toBe(true)
     expect(on?.coordinatorConversationId).toBe("main")

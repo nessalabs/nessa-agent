@@ -26,7 +26,8 @@ export interface Channel {
   readonly topic: string
   /**
    * The channel’s current main chat, replaced after confirmed erasure.
-   * Absent while its coordinator is off.
+   * Kept while its coordinator is off, so the channel can leave it out of
+   * what it opens at and still say where it runs.
    */
   readonly coordinatorConversationId?: string
   /**

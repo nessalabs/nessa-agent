@@ -348,7 +348,7 @@ pub use service::{
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal,
     HistoryGeneration, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource,
-    PendingReport, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
+    PendingReport, PinnedStart, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
     PreferenceReading, PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry,
     RecordedPreference, ReplyStyleStore, ReportRegistration, RequestedAgent, RequestedConversation,
     ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,

@@ -2,7 +2,7 @@
 //! folder is checked before agents may work in it.
 use crate::application::{
     ChannelFolders, ChannelStore, ConversationError, ConversationFuture, FolderRefusal,
-    ReplyStyleStore,
+    PinnedStart, ReplyStyleStore,
 };
 use crate::domain::{
     Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
@@ -581,50 +581,47 @@ impl ReplyStyleStore for LocalChannelStore {
         })
     }
 
-    fn pin(
-        &self,
-        conversation: &ConversationId,
-        role: StyleRole,
-        style: ReplyStyle,
-    ) -> ConversationFuture<'_, ()> {
+    fn pin(&self, conversation: &ConversationId, start: PinnedStart) -> ConversationFuture<'_, ()> {
         let conversation = conversation.to_string();
         self.run(move |connection| {
-            let (style, text) = style_columns(&style);
+            let (style, text) = style_columns(&start.style);
             connection
                 .execute(
-                    "INSERT INTO conversation_reply_styles (conversation, role, style, text) \
-                     VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
-                    params![conversation, role.as_str(), style, text],
+                    "INSERT INTO conversation_reply_styles (conversation, role, style, text, job) \
+                     VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+                    params![conversation, start.role.as_str(), style, text, start.job],
                 )
                 .map_err(failed)?;
             Ok(())
         })
     }
 
-    fn pinned(
-        &self,
-        conversation: &ConversationId,
-    ) -> ConversationFuture<'_, Option<(StyleRole, ReplyStyle)>> {
+    fn pinned(&self, conversation: &ConversationId) -> ConversationFuture<'_, Option<PinnedStart>> {
         let conversation = conversation.to_string();
         self.run(move |connection| {
             let found = connection
                 .query_row(
-                    "SELECT role, style, text FROM conversation_reply_styles WHERE conversation = ?1",
+                    "SELECT role, style, text, job FROM conversation_reply_styles WHERE conversation = ?1",
                     [conversation],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
                         ))
                     },
                 )
                 .optional()
                 .map_err(failed)?;
             found
-                .map(|(role, style, text)| {
+                .map(|(role, style, text, job)| {
                     let role = StyleRole::parse(&role).ok_or_else(|| unreadable("reply style"))?;
-                    Ok((role, style_of(&style, text)?))
+                    Ok(PinnedStart {
+                        role,
+                        style: style_of(&style, text)?,
+                        job,
+                    })
                 })
                 .transpose()
         })

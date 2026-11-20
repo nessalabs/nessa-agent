@@ -122,8 +122,7 @@ export function channelFrom(wire: WireChannel): Channel {
     private: false,
     topic: "",
     folder: wire.folder,
-    // Off, the channel is not opened at its main chat.
-    ...(wire.coordinatorConversationId && wire.coordinatorOn
+    ...(wire.coordinatorConversationId
       ? { coordinatorConversationId: wire.coordinatorConversationId }
       : {}),
     coordinatorOn: wire.coordinatorOn,

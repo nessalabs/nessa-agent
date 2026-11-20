@@ -55,6 +55,9 @@ CREATE TABLE conversation_reply_styles (
     conversation TEXT PRIMARY KEY NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
     style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
-    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096)
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096),
+    -- The job its role was told when it was created (a coordinator's), kept
+    -- as told: a conversation from before jobs has none and is told none.
+    job TEXT CHECK (job IS NULL OR (length(job) > 0 AND length(CAST(job AS BLOB)) <= 8192))
 ) STRICT, WITHOUT ROWID;
 PRAGMA user_version = 8;

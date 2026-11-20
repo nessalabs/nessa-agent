@@ -498,9 +498,7 @@ const workspaceSlice = createSlice({
       channels: state.channels.map((each) => {
         if (each.id !== payload.channel.id) return each
         const { coordinatorConversationId: _held, ...rest } = each
-        const main =
-          payload.channel.coordinatorConversationId ??
-          (payload.channel.coordinatorOn === false ? undefined : _held)
+        const main = payload.channel.coordinatorConversationId ?? _held
         return {
           ...rest,
           coordinatorPlacement: payload.channel.coordinatorPlacement,

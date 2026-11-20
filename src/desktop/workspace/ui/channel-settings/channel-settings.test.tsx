@@ -280,11 +280,8 @@ it("switches the coordinator off and on, keeping the same main chat", async () =
   const asked: boolean[] = []
   await switchShown(async (_id, on) => {
     asked.push(on)
-    const { coordinatorConversationId: _main, ...rest } = channel
     // The source lists it switched too, as the gateway's list does.
-    const switched = on
-      ? { ...channel, coordinatorOn: true }
-      : { ...rest, coordinatorOn: false }
+    const switched = { ...channel, coordinatorOn: on }
     const listed = index.channels as Channel[]
     listed[listed.findIndex((each) => each.id === channel.id)] = switched
     return switched

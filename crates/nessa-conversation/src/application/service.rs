@@ -125,7 +125,7 @@ use nessa_sdk::domain::agent_execution::{
     sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
-pub use reply_styles::ReplyStyleStore;
+pub use reply_styles::{PinnedStart, ReplyStyleStore};
 pub use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
     HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,

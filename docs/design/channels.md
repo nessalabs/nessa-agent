@@ -128,16 +128,18 @@ one at a time, so each record names the state it replaced.
 
 Off keeps the coordinator's chat and every thread. The channel still names
 its main chat (`coordinatorConversationId`) and says `coordinatorOn: false`;
-the desktop leaves the main chat out of the channel while it is off, so
-opening the channel shows its newest chat or a new one, which is an ordinary
-thread. On again, it is the same chat: nothing is retired or remade.
+the desktop keeps that id (the chat still runs where the main agent runs) but
+never opens the channel at it while off: opening the channel shows its newest
+other chat, or a new one, which is an ordinary thread. On again, it is the
+same chat: nothing is retired or remade.
 
 The coordinator is told its job (`StyleRole::job`) in Nessa's own launch
-prompt as `nessa/role`, after the channel's notes and before the style. Like
-the style, it comes from the role pinned when the conversation was created,
-so switching the coordinator off and on never changes a prompt and never
-restarts a session. A coordinator chat made before the pin existed is told no
-job.
+prompt as `nessa/role`, after the channel's notes and before the style. The
+job text is pinned with the role and style when the conversation is created
+(`conversation_reply_styles.job`) and read back as kept, never re-derived:
+switching the coordinator, rewording the job later, or upgrading a file whose
+coordinators were pinned before jobs existed (they keep `job` NULL) never
+changes a saved prompt or restarts a session.
 
 The stress step `coordinator` makes a channel with it on (its first chat is
 the coordinator, told its job), switches it off in settings (a new chat there

@@ -538,8 +538,7 @@ describe("switching the coordinator", () => {
         const changed = await kept.setCoordinator!(channelId, on, requestId)
         const at = listed.findIndex((each) => each.id === changed.id)
         if (at >= 0) {
-          const { coordinatorConversationId: _held, ...rest } = listed[at]!
-          listed[at] = { ...rest, ...changed }
+          listed[at] = { ...listed[at]!, ...changed }
         }
         return changed
       },
@@ -554,7 +553,7 @@ describe("switching the coordinator", () => {
     return { store, id, read }
   }
 
-  it("off hides the main chat and on again brings back the same one", async () => {
+  it("off keeps the main chat, and on again is the same one", async () => {
     const { store, id, read } = await made()
     const first = read()?.coordinatorConversationId
     expect(first).toBeDefined()
@@ -563,23 +562,26 @@ describe("switching the coordinator", () => {
       store.dispatch(setChannelCoordinator({ channelId: id, on: false })),
     ).resolves.toBe(true)
     expect(read()?.coordinatorOn).toBe(false)
-    expect(read()?.coordinatorConversationId).toBeUndefined()
+    expect(read()?.coordinatorConversationId).toBe(first)
     // The index read again after the switch agrees.
     await settle()
-    expect(read()?.coordinatorConversationId).toBeUndefined()
+    expect(read()?.coordinatorOn).toBe(false)
+    expect(read()?.coordinatorConversationId).toBe(first)
     await store.dispatch(setChannelCoordinator({ channelId: id, on: true }))
     await settle()
     expect(read()?.coordinatorOn).toBe(true)
     expect(read()?.coordinatorConversationId).toBe(first)
   })
 
-  it("a channel made without one names no main chat until it is turned on", async () => {
+  it("a channel made without one still names the main chat it turns on", async () => {
     const { store, id, read } = await made(false)
     expect(read()?.coordinatorOn).toBe(false)
-    expect(read()?.coordinatorConversationId).toBeUndefined()
+    const main = read()?.coordinatorConversationId
+    expect(main).toBeDefined()
     await store.dispatch(setChannelCoordinator({ channelId: id, on: true }))
     await settle()
-    expect(read()?.coordinatorConversationId).toBeDefined()
+    expect(read()?.coordinatorOn).toBe(true)
+    expect(read()?.coordinatorConversationId).toBe(main)
   })
 
   it("says it cannot where the window has no way to switch it", async () => {

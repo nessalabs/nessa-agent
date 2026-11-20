@@ -2,6 +2,7 @@
 //! answers the kept channel; a conversation is in one channel for its life;
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
+use crate::application::PinnedStart;
 use crate::conversation_test_support::absolute;
 use crate::domain::{ChannelExecution, Place, ReplyStyle, RoleStyles, StyleRole};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
@@ -384,11 +385,23 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 "cause = 'coordinator_conversation_erased'",
             )
         };
-        // A v7 file already keeps how agents talk.
+        // A v7 file already keeps how agents talk, but no job (v8).
         let styles = if version >= 7 {
             current[current.find("-- How agents talk").unwrap()
                 ..current.find("PRAGMA user_version").unwrap()]
-                .to_owned()
+                .lines()
+                .filter(|line| {
+                    let line = line.trim_start();
+                    !line.starts_with("job TEXT")
+                        && !line.starts_with("-- The job its role")
+                        && !line.starts_with("-- as told:")
+                })
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+                .replace(
+                    "<= 4096),\n) STRICT, WITHOUT ROWID",
+                    "<= 4096)\n) STRICT, WITHOUT ROWID",
+                )
         } else {
             String::new()
         };
@@ -422,6 +435,16 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 params![main.to_string(), kept.id().as_str()],
             )
             .unwrap();
+        // A v7 coordinator was pinned with no job and keeps none: telling it
+        // one now would change its saved prompt.
+        if version == 7 {
+            connection
+                .execute(
+                    "INSERT INTO conversation_reply_styles (conversation, role, style, text) VALUES (?1, 'coordinator', 'plain', NULL)",
+                    params![main.to_string()],
+                )
+                .unwrap();
+        }
         drop(connection);
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
@@ -467,7 +490,19 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 .unwrap(),
             RoleStyles::default()
         );
-        assert_eq!(store.pinned(&main).await.unwrap(), None);
+        let pinned = store.pinned(&main).await.unwrap();
+        if version == 7 {
+            assert_eq!(
+                pinned,
+                Some(PinnedStart {
+                    role: StyleRole::Coordinator,
+                    style: ReplyStyle::Plain,
+                    job: None,
+                })
+            );
+        } else {
+            assert_eq!(pinned, None);
+        }
         store.forget(&main).await.unwrap();
         assert_ne!(
             store
@@ -686,18 +721,24 @@ async fn reply_styles_are_kept_per_level_and_role_and_a_pin_is_fixed_once() {
     );
     // The first pin stays; a deleted conversation's pin goes.
     let started = conversation();
+    let first = PinnedStart {
+        role: StyleRole::Coordinator,
+        style: custom.clone(),
+        job: Some("Run the work.".to_owned()),
+    };
+    reopened.pin(&started, first.clone()).await.unwrap();
     reopened
-        .pin(&started, StyleRole::Thread, custom.clone())
+        .pin(
+            &started,
+            PinnedStart {
+                role: StyleRole::Thread,
+                style: ReplyStyle::Off,
+                job: None,
+            },
+        )
         .await
         .unwrap();
-    reopened
-        .pin(&started, StyleRole::Coordinator, ReplyStyle::Off)
-        .await
-        .unwrap();
-    assert_eq!(
-        reopened.pinned(&started).await.unwrap(),
-        Some((StyleRole::Thread, custom))
-    );
+    assert_eq!(reopened.pinned(&started).await.unwrap(), Some(first));
     reopened.forget(&started).await.unwrap();
     assert_eq!(reopened.pinned(&started).await.unwrap(), None);
 }
