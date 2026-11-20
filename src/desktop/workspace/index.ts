@@ -93,6 +93,13 @@ export {
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
 export { channelGateway } from "./adapters/gateway/channel-gateway"
 export {
+  decisionsGateway,
+  type DecisionsClient,
+} from "./adapters/gateway/decisions-gateway"
+export { sampleDecisions } from "./adapters/in-memory/sample-decisions"
+export { DecisionsProvider } from "./ui/chrome/decisions-source"
+export type { DecisionSource } from "./application/ports"
+export {
   inMemoryChannels,
   type InMemoryChannels,
 } from "./adapters/in-memory/in-memory-channels"

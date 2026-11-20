@@ -517,6 +517,10 @@ impl CompositionRoot {
             // `limits.agentIdleSeconds`; their conversations stay open (#998).
             let parking = service.clone();
             tokio::spawn(async move { parking.run_parking().await });
+            // Asks nobody answered in time are answered with their
+            // recommended choice, where the agent allowed it.
+            let picks = service.clone();
+            tokio::spawn(async move { picks.run_auto_picks().await });
             tokio::spawn(async move {
                 match service.resume_unfinished().await {
                     Ok(0) => {}

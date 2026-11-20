@@ -1,0 +1,18 @@
+/*
+ * The owner-ask card (`owner-ask-card.tsx`): the question with its summary
+ * under it, as one column of the header row the kit spreads apart.
+ */
+.conversation-owner-ask-question {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+}
+
+/* A choice's label, then its badges, spaced as one line that may wrap. */
+.conversation-owner-ask-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+}

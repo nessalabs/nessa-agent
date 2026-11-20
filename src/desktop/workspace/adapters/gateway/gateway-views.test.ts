@@ -13,6 +13,7 @@ import { messageText, shownWhole } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
   approvalId,
+  askFrom,
   handoffId,
   inputId,
   modelFor,
@@ -1835,4 +1836,53 @@ it("omits an internal turn's empty input while retaining its assistant reply", (
         ),
     ),
   ).toBe(true)
+})
+
+describe("an agent's ask", () => {
+  const plain = {
+    askId: "0123456789abcdef0123456789abcdef",
+    question: "Ship it today?",
+    choices: [
+      { label: "Ship", consequence: "It goes out today." },
+      { label: "Wait", consequence: "It waits for Monday." },
+    ],
+    recommended: 0,
+    reason: "Every check passed.",
+    askedAtMs: 7,
+  }
+
+  it("reads as the workspace keeps it, with no part the agent left out", () => {
+    const { askedAtMs: _, ...kept } = plain
+    expect(askFrom(plain)).toStrictEqual(kept)
+  })
+
+  it("keeps the summary, the auto-pick and each choice's details the agent gave", () => {
+    const detailed = {
+      ...plain,
+      summary: "The Safari export fix.",
+      autoPick: "allowed" as const,
+      choices: [
+        {
+          ...plain.choices[0]!,
+          undo: "easy" as const,
+          effort: "small" as const,
+          pros: ["Fixed today"],
+          cons: [],
+        },
+        { ...plain.choices[1]!, undo: "no" as const, cons: ["Broken all weekend"] },
+      ],
+    }
+    expect(askFrom(detailed)).toStrictEqual({
+      askId: plain.askId,
+      question: plain.question,
+      choices: [
+        { ...plain.choices[0], undo: "easy", effort: "small", pros: ["Fixed today"] },
+        { ...plain.choices[1], undo: "no", cons: ["Broken all weekend"] },
+      ],
+      recommended: 0,
+      reason: plain.reason,
+      summary: "The Safari export fix.",
+      autoPick: "allowed",
+    })
+  })
 })

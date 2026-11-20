@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 138,
+          "maxItems": 142,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2299,6 +2299,18 @@
         "access": {
           "$ref": "#/$defs/OwnerAskAccess",
           "description": "Present when the ask is an agent's request to raise the chat's access (request_access). The question and the choices are Nessa's own: Approve, which a client carries out as the person's own conversation.setApprovalMode to mode before sending the label, and Not now, the recommended one. A client draws it as the red access card, and nothing may pick for the person."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "One line under the question with what the card is about."
+        },
+        "autoPick": {
+          "type": "string",
+          "enum": ["allowed", "never"],
+          "description": "Whether the recommended choice may be picked for the person when nobody answers in time. Only allowed when that choice's undo is easy; absent is never."
         }
       },
       "required": ["askId", "question", "choices", "recommended", "reason", "askedAtMs"]
@@ -2341,9 +2353,115 @@
           "maxLength": 200,
           "x-utf8MaxBytes": 200,
           "description": "What happens if the person picks it, in one line."
+        },
+        "undo": {
+          "type": "string",
+          "enum": ["easy", "costly", "no"],
+          "description": "How hard the choice is to take back."
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["small", "medium", "large"],
+          "description": "How much work the choice is."
+        },
+        "pros": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-utf8MaxBytes": 120
+          },
+          "description": "Up to two lines for it."
+        },
+        "cons": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-utf8MaxBytes": 120
+          },
+          "description": "Up to two lines against it."
         }
       },
       "required": ["label", "consequence"]
+    },
+    "OwnerDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question an agent asked its conversation's owner with ask_owner, and what became of it: still waiting (no outcome), answered by the owner's next message, or replaced by a newer ask before anyone answered.",
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/OwnerAsk",
+          "description": "What the agent asked, as it asked it."
+        },
+        "outcome": {
+          "$ref": "#/$defs/OwnerDecisionOutcome",
+          "description": "How it stopped waiting; absent while it waits."
+        },
+        "autoPickPaused": {
+          "type": "boolean",
+          "const": true,
+          "description": "While it waits: the owner paused its auto-pick (conversation.pauseAutoPick). Absent otherwise."
+        },
+        "autoPickDueAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "While it waits: when auto-pick sends the recommended choice for the owner, in Unix milliseconds. Absent when it will not: the agent did not allow it, the owner turned auto-pick off, or paused it."
+        }
+      },
+      "required": ["ask"]
+    },
+    "OwnerDecisionState": {
+      "type": "string",
+      "enum": ["decided", "replaced"],
+      "description": "How an ask stopped waiting: decided by the owner's message, or replaced by a newer ask before anyone answered."
+    },
+    "OwnerDecisionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How an ask stopped waiting. A decided one carries the owner's message as text, and choice when that message names one; a replaced one carries by.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/OwnerDecisionState",
+          "description": "Decided or replaced."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Decided: the owner's message, trimmed and cut on a character boundary to 1024 bytes. The whole message is in the conversation."
+        },
+        "choice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Decided: index into the ask's choices of the one the message names, its label or its label then \". \" and a note. Absent when the message is the owner's own words."
+        },
+        "by": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "Replaced: the askId of the ask that took its place."
+        },
+        "auto": {
+          "type": "boolean",
+          "const": true,
+          "description": "Decided: auto-pick sent the recommended choice for the owner, because nobody answered in time. Absent when the owner answered."
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it stopped waiting, in Unix milliseconds."
+        }
+      },
+      "required": ["state", "atMs"]
     },
     "ConversationSummary": {
       "type": "object",
@@ -3111,6 +3229,97 @@
         }
       },
       "required": ["conversationId", "requestId", "title"]
+    },
+    "ConversationDecisionsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read what a conversation's agents asked its owner with ask_owner, and what became of each: the owner's alone, as the ask on a list row is.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "ConversationPauseAutoPickParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pause, or resume, auto-pick on one waiting decision: the owner's alone. A paused one waits for the owner however long it takes.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "askId": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The waiting ask."
+        },
+        "paused": {
+          "type": "boolean",
+          "description": "True pauses it, false resumes it, counting from when it was asked."
+        }
+      },
+      "required": ["conversationId", "askId", "paused"]
+    },
+    "ConversationPauseAutoPickResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether it changed: false when the ask is no longer waiting, or was already so.",
+      "properties": {
+        "applied": {
+          "type": "boolean",
+          "description": "True when the pause or resume was kept."
+        }
+      },
+      "required": ["applied"]
+    },
+    "ConversationDecisionSettingsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read how the caller's decisions behave.",
+      "properties": {}
+    },
+    "DecisionSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the caller's decisions behave, kept on the gateway for them: whether an ask the agent allowed it on (autoPick allowed, recommended choice easy to undo) is answered with its recommended choice after autoPickAfterSeconds with no answer. Until set: on, after 300 seconds.",
+      "properties": {
+        "autoPick": {
+          "type": "boolean",
+          "description": "Whether the recommended choice is picked when nobody answers in time."
+        },
+        "autoPickAfterSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "description": "How long an ask waits for an answer first, from when it was asked."
+        }
+      },
+      "required": ["autoPick", "autoPickAfterSeconds"]
+    },
+    "ConversationDecisionsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A conversation's decisions, newest first: at most 100, an older one going when a newer one is asked.",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/OwnerDecision" },
+          "description": "Newest first, by when each was asked."
+        }
+      },
+      "required": ["decisions"]
     },
     "ConversationDeleteParams": {
       "type": "object",

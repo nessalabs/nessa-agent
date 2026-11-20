@@ -12,5 +12,5 @@ pub use catalogue_identity::{
 pub use conversation_id::ConversationId;
 pub use conversation_selection::{ConversationApprovalMode, ConversationModelId};
 pub use conversation_summary::{
-    ConversationPreview, ConversationSummary, ConversationTitle, LATEST_TIME_MS,
+    ConversationPreview, ConversationSummary, ConversationTitle, SettledAsk, LATEST_TIME_MS,
 };

@@ -20,21 +20,20 @@ pub fn run() -> std::process::ExitCode {
     // protected-data command. Establish one Linux rule before any dispatch,
     // async runtime or store opens, rather than maintain a separate command list.
     #[cfg(target_os = "linux")]
-    {
-        match before(&NativeProcessMemory, run_protected) {
-            Ok(status) => status,
-            Err(reason) => {
-                tracing::error!(%reason, "required process memory protections unavailable");
-                std::process::ExitCode::FAILURE
-            }
+    let status = match before(&NativeProcessMemory, run_protected) {
+        Ok(status) => status,
+        Err(reason) => {
+            tracing::error!(%reason, "required process memory protections unavailable");
+            std::process::ExitCode::FAILURE
         }
-    }
+    };
+    // No Linux protection result is fabricated on another platform.
+    // Packaged macOS signing and other OS safeguards are independent.
     #[cfg(not(target_os = "linux"))]
-    {
-        // No Linux protection result is fabricated on another platform.
-        // Packaged macOS signing and other OS safeguards are independent.
-        run_protected()
-    }
+    let status = run_protected();
+    // What decision traces are still held go before the process does.
+    logging::shutdown();
+    status
 }
 
 fn run_protected() -> std::process::ExitCode {

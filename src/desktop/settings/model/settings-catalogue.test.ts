@@ -91,11 +91,13 @@ describe("the settings catalogue", () => {
     expect(settingsCategories.map((category) => category.id)).toEqual([
       "appearance",
       "workspace",
+      "chat",
       "connections",
       "privacy",
       "advanced",
       "about",
     ])
+    expect(tabsOf("chat").map((tab) => tab.id)).toEqual(["decisions"])
     expect(tabsOf("connections").map((tab) => tab.id)).toEqual([
       // Accounts reads the vault: Connections does not open on it.
       "integrations",
@@ -105,6 +107,16 @@ describe("the settings catalogue", () => {
     expect(tabsOf("privacy").map((tab) => tab.id)).toEqual(["access", "native-hooks"])
     // A page's title has no line under it.
     for (const category of settingsCategories) expect("dek" in category).toBe(false)
+  })
+
+  it("finds auto-pick under Chat settings › Decisions", () => {
+    expect(searchSettings("auto-pick")[0]).toMatchObject({
+      category: "chat",
+      tab: "decisions",
+      setting: "auto-pick",
+      trail: "Chat settings",
+    })
+    expect(searchSettings("pick after")[0]).toMatchObject({ setting: "auto-pick-after" })
   })
 
   it("knows a setting named like its tab, whose group needs no title on screen", () => {

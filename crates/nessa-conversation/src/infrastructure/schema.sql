@@ -239,4 +239,37 @@ CREATE TABLE closed_threads (
     conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 11;
+-- What became of every question an agent asked the owner (`ask_owner`):
+-- one row per ask, written by the summary write that asks it and settled by
+-- the one that takes it down, answered or replaced
+-- (docs/design/agent-thread-tools.md, "Decisions"). `ask` is the ask's JSON,
+-- `outcome` the JSON of how it stopped waiting, or NULL while it waits;
+-- `auto_pick_paused_at_ms` when the owner paused its auto-pick, or NULL.
+-- Read and trimmed newest first by rowid, the order the asks were written
+-- in, never by `asked_at_ms`: the wall clock can step back.
+-- Added by schema_upgrades/11.sql.
+-- The outcome bound is MAX_DECISION_OUTCOME_JSON_BYTES (nessa-protocol view.rs).
+CREATE TABLE owner_decisions (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    ask_id TEXT NOT NULL,
+    asked_at_ms INTEGER NOT NULL,
+    ask TEXT NOT NULL CHECK (length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192),
+    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 8192),
+    auto_pick_paused_at_ms INTEGER CHECK (auto_pick_paused_at_ms IS NULL OR auto_pick_paused_at_ms >= 0),
+    PRIMARY KEY (conversation_id, ask_id)
+) STRICT;
+
+-- How each owner's decisions behave: whether an ask its agent allowed it on
+-- is answered with its recommended choice after `auto_pick_after_seconds`
+-- with no answer. No row is the default, on after five minutes. The bounds
+-- are MIN/MAX_AUTO_PICK_SECONDS (nessa-protocol view.rs).
+-- Added by schema_upgrades/11.sql.
+CREATE TABLE decision_settings (
+    organization TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    auto_pick INTEGER NOT NULL CHECK (auto_pick IN (0, 1)),
+    auto_pick_after_seconds INTEGER NOT NULL CHECK (auto_pick_after_seconds BETWEEN 60 AND 86400),
+    PRIMARY KEY (organization, owner)
+) STRICT, WITHOUT ROWID;
+
+PRAGMA user_version = 12;
