@@ -2037,7 +2037,6 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     retire(service, storage, metadata).await;
 }
 
-/// Wait until the agent has run turn `execution`.
 /// Write `ask` as the one waiting in `source`, under the summary lock every
 /// other summary write takes: a reply from an earlier turn settling late
 /// then writes after it, keeping the ask, rather than over it.
@@ -2063,6 +2062,8 @@ async fn record_ask<S: crate::application::ConversationSummaries + ?Sized>(
     .unwrap();
 }
 
+/// Wait until the agent has run turn `execution`.
+#[cfg(unix)]
 async fn ran(provider: &ProviderFactory, execution: &str) {
     tokio::time::timeout(Duration::from_secs(30), async {
         while !provider
