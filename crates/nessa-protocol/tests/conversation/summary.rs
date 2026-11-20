@@ -400,8 +400,11 @@ fn an_answer_names_the_choice_it_is_and_keeps_a_bounded_text() {
 fn an_auto_pick_taken_back_waits_again_unless_something_was_asked_since() {
     let ask = asked("a", 10);
     let waiting = ConversationSummary::after_asking(None, ask.clone());
-    let picked = ConversationSummary::after_message(Some(&waiting), "Yes.", None, 20)
-        .answering(Some("a"), "Yes. Picked for you", true);
+    let picked = ConversationSummary::after_message(Some(&waiting), "Yes.", None, 20).answering(
+        Some("a"),
+        "Yes. Picked for you",
+        true,
+    );
     assert!(picked.ask().is_none());
     let back = ConversationSummary::reopening(Some(&picked), ask.clone()).unwrap();
     assert_eq!(back.ask().map(|ask| ask.ask_id.as_str()), Some("a"));
@@ -510,7 +513,10 @@ fn auto_pick_is_due_only_for_an_allowed_easy_choice_and_names_it() {
     assert_eq!(decision(&ask).auto_pick_due(on), None);
 
     let text = ask.auto_pick_text(300).unwrap();
-    assert_eq!(text, "Yes. Picked for you on “Ship it?”: no answer in 5 minutes.");
+    assert_eq!(
+        text,
+        "Yes. Picked for you on “Ship it?”: no answer in 5 minutes."
+    );
     match OwnerDecisionOutcome::answered(&ask, &text, 1) {
         OwnerDecisionOutcome::Decided { choice, .. } => assert_eq!(choice, Some(0)),
         OwnerDecisionOutcome::Replaced { .. } => panic!("a pick is decided"),

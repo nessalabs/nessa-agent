@@ -1014,6 +1014,12 @@ struct Inner {
     /// Asks auto-pick could not send, with when to try again and how many
     /// tries failed: kept here only, so a restart tries each at once.
     auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
+    /// Conversations with an auto-pick recorded and not yet sent, and
+    /// whether a person wrote there since (`auto_picks.rs`).
+    picks_in_flight: std::sync::Mutex<HashMap<ConversationId, bool>>,
+    /// Picks that never reached the agent and could not be taken back yet,
+    /// by ask: tried again on auto-pick's next look.
+    auto_pick_takebacks: std::sync::Mutex<HashMap<String, auto_picks::RecordedPick>>,
     /// One open `decision` span per waiting ask (`decision_traces.rs`).
     decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
@@ -1563,6 +1569,8 @@ impl ConversationService {
                 schedule_wakeup: Arc::new(Notify::new()),
                 auto_pick_wakeup: Notify::new(),
                 auto_pick_failures: std::sync::Mutex::default(),
+                picks_in_flight: std::sync::Mutex::default(),
+                auto_pick_takebacks: std::sync::Mutex::default(),
                 decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
@@ -4642,6 +4650,9 @@ impl ConversationService {
             // it sent it (`auto_picks.rs`), so whatever is waiting now is
             // newer, and the owner's.
             let auto = caller.surface_id == AUTO_PICK_SURFACE;
+            if !auto && writer.is_person() {
+                service.person_wrote(&id);
+            }
             let answered = if !known && !auto && writer.is_person() {
                 service
                     .waiting_ask_answered(
@@ -4736,7 +4747,7 @@ impl ConversationService {
             // the list never shows the message and the question still up.
             if !known && !matches!(writer, Writer::Internal) {
                 service
-                    .summarize_message(&id, &message, answered.as_deref(), auto)
+                    .summarize_message(&id, &message, answered.as_deref())
                     .await;
             }
             match delivery {
@@ -5096,7 +5107,6 @@ impl ConversationService {
         id: &ConversationId,
         message: &UserMessage,
         answered: Option<&str>,
-        auto: bool,
     ) {
         let at_ms = self.inner.clock.unix_milliseconds();
         let first_file = message
@@ -5107,7 +5117,7 @@ impl ConversationService {
         self.change_summary(id, |previous| {
             Some(
                 ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
-                    .answering(answered, message.text_str(), auto),
+                    .answering(answered, message.text_str(), false),
             )
         })
         .await;

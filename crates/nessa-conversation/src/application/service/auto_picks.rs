@@ -12,12 +12,13 @@
 //! newer ask may be waiting by the time the agent reads it. One that does not
 //! reach the agent is taken back.
 use super::{
-    ConversationCaller, ConversationError, ConversationService, Initiation, SubmissionMode,
-    SubmitFailure, SubmittedMessage, Writer,
+    ConversationCaller, ConversationError, ConversationService, Initiation, Reach, SubmissionMode,
+    SubmittedMessage, Writer,
 };
 use crate::application::WaitingAutoPick;
 use crate::timer::clock;
 use nessa_protocol::conversation::domain::ConversationSummary;
+use nessa_protocol::conversation::domain::{ConversationId, SettledAsk};
 use nessa_protocol::conversation::view::AUTO_PICK_SURFACE;
 use std::time::Duration;
 
@@ -32,8 +33,8 @@ const READ_RETRY: Duration = Duration::from_secs(5);
 const FIRST_RETRY_MS: u64 = 30_000;
 const LATEST_RETRY_MS: u64 = 60 * 60 * 1000;
 
-/// The action id auto-pick sends ask `ask_id`'s answer under: what lets the
-/// message settle that ask only, and lets a retry be the same message.
+/// The action id auto-pick sends ask `ask_id`'s answer under: what makes a
+/// retry the same message.
 pub(crate) fn auto_pick_action(ask_id: &str) -> String {
     format!("auto-pick-{ask_id}")
 }
@@ -60,6 +61,7 @@ impl ConversationService {
     /// One look: send each pick that is due, and say how long until the next
     /// one is.
     pub(crate) async fn pick_due(&self) -> Duration {
+        self.take_back_pending().await;
         let waiting = match self.inner.summaries.auto_picks_waiting().await {
             Ok(waiting) => waiting,
             Err(error) => {
@@ -113,12 +115,12 @@ impl ConversationService {
     /// under the summary lock the owner's answer, a newer ask and a pause
     /// are each written under, so from here an owner's message finds nothing
     /// waiting and is a message after the pick, a pause says it did not
-    /// apply, and a newer ask does not replace this one. The text it answers
-    /// with, naming the question, comes back to be sent.
+    /// apply, and a newer ask does not replace this one. What was recorded
+    /// comes back, to be sent and, should it not reach the agent, taken back.
     pub(super) async fn record_pick(
         &self,
         waiting: &WaitingAutoPick,
-    ) -> Result<Option<String>, ConversationError> {
+    ) -> Result<Option<RecordedPick>, ConversationError> {
         let ask_id = &waiting.ask.ask_id;
         let _writes = self
             .inner
@@ -126,8 +128,8 @@ impl ConversationService {
             .summary_writes()
             .lock(&waiting.conversation)
             .await;
-        let previous = self.inner.summaries.load(&waiting.conversation).await?;
-        if previous
+        let before = self.inner.summaries.load(&waiting.conversation).await?;
+        if before
             .as_ref()
             .and_then(|summary| summary.ask())
             .map(|ask| &ask.ask_id)
@@ -162,64 +164,125 @@ impl ConversationService {
             .ask
             .auto_pick_text(settings.auto_pick_after_seconds)
             .ok_or(ConversationError::InvalidInput)?;
-        let next = ConversationSummary::after_message(previous.as_ref(), &text, None, now)
+        let written = ConversationSummary::after_message(before.as_ref(), &text, None, now)
             .answering(Some(ask_id), &text, true);
-        let settled = next.settled().cloned();
+        let settled = written.settled().cloned();
         self.inner
             .summaries
-            .record(&waiting.conversation, next)
+            .record(&waiting.conversation, written.clone())
             .await?;
-        if let Some(settled) = settled {
-            self.inner
-                .decision_traces
-                .settled(&waiting.conversation, &settled);
+        // From here a person's message in this conversation says so, for a
+        // take-back not to undo what they said after it.
+        if let Ok(mut flight) = self.inner.picks_in_flight.lock() {
+            flight.insert(waiting.conversation.clone(), false);
         }
         self.inner.live_changes.publish(&waiting.conversation);
-        Ok(Some(text))
+        Ok(Some(RecordedPick {
+            waiting: waiting.clone(),
+            text,
+            before,
+            written,
+            settled,
+        }))
     }
 
-    /// The pick recorded for `waiting` never reached the agent: its ask
-    /// waits again, unless something was asked since.
-    pub(super) async fn take_back_pick(&self, waiting: &WaitingAutoPick) {
-        let _writes = self
-            .inner
-            .records
-            .summary_writes()
-            .lock(&waiting.conversation)
-            .await;
-        let previous = match self.inner.summaries.load(&waiting.conversation).await {
-            Ok(previous) => previous,
+    /// A person's message is on its way into `conversation`: a pick recorded
+    /// there and not yet sent is no longer the last word, so taking it back
+    /// leaves its ask waiting for them, not for another pick.
+    pub(super) fn person_wrote(&self, conversation: &ConversationId) {
+        if let Ok(mut flight) = self.inner.picks_in_flight.lock() {
+            if let Some(after) = flight.get_mut(conversation) {
+                *after = true;
+            }
+        }
+    }
+
+    /// `pick` never reached the agent: its ask waits again, unless
+    /// something was asked since. The list goes back to how it was before
+    /// the pick if nothing else changed it; if a person wrote since, the ask
+    /// waits for them, its auto-pick paused, so the pick does not come after
+    /// what they said. False when it could not be written, to be tried again.
+    pub(super) async fn take_back_pick(&self, pick: &RecordedPick) -> bool {
+        let conversation = &pick.waiting.conversation;
+        let _writes = self.inner.records.summary_writes().lock(conversation).await;
+        let current = match self.inner.summaries.load(conversation).await {
+            Ok(current) => current,
             Err(error) => {
-                tracing::warn!(conversation = %waiting.conversation, ?error, "an unsent auto-pick could not be taken back");
-                return;
+                tracing::warn!(%conversation, ?error, "an unsent auto-pick could not be taken back");
+                return false;
             }
         };
-        let Some(next) = ConversationSummary::reopening(previous.as_ref(), waiting.ask.clone())
-        else {
-            return;
+        let person_wrote = self.inner.picks_in_flight.lock().map_or(true, |flight| {
+            flight.get(conversation).copied().unwrap_or(false)
+        });
+        // Untouched since the pick: back to the list as it was.
+        let untouched = current.as_ref().is_some_and(|current| {
+            current.preview() == pick.written.preview()
+                && current.updated_at_ms() == pick.written.updated_at_ms()
+                && current.archived() == pick.written.archived()
+                && current.title() == pick.written.title()
+        });
+        let base = if untouched {
+            pick.before.as_ref()
+        } else {
+            current.as_ref()
         };
-        match self
+        let Some(next) = ConversationSummary::reopening(base, pick.waiting.ask.clone()) else {
+            self.pick_done(conversation);
+            return true;
+        };
+        if let Err(error) = self.inner.summaries.record(conversation, next).await {
+            tracing::warn!(%conversation, ?error, "an unsent auto-pick could not be taken back");
+            return false;
+        }
+        if person_wrote {
+            let at = self.inner.clock.unix_milliseconds();
+            if let Err(error) = self
+                .inner
+                .summaries
+                .pause_auto_pick(conversation, &pick.waiting.ask.ask_id, Some(at))
+                .await
+            {
+                tracing::warn!(%conversation, ?error, "a taken-back auto-pick could not be paused");
+            }
+        }
+        self.pick_done(conversation);
+        self.inner.live_changes.publish(conversation);
+        true
+    }
+
+    fn pick_done(&self, conversation: &ConversationId) {
+        if let Ok(mut flight) = self.inner.picks_in_flight.lock() {
+            flight.remove(conversation);
+        }
+    }
+
+    /// Take back the picks an earlier take-back could not write.
+    async fn take_back_pending(&self) {
+        let pending: Vec<RecordedPick> = self
             .inner
-            .summaries
-            .record(&waiting.conversation, next)
-            .await
-        {
-            Ok(()) => self.inner.live_changes.publish(&waiting.conversation),
-            Err(error) => {
-                tracing::warn!(conversation = %waiting.conversation, ?error, "an unsent auto-pick could not be taken back");
+            .auto_pick_takebacks
+            .lock()
+            .map(|pending| pending.values().cloned().collect())
+            .unwrap_or_default();
+        for pick in pending {
+            if self.take_back_pick(&pick).await {
+                if let Ok(mut pending) = self.inner.auto_pick_takebacks.lock() {
+                    pending.remove(&pick.waiting.ask.ask_id);
+                }
             }
         }
     }
 
     /// Answer `waiting` with its recommended choice, if it is still to be
     /// picked ([`Self::record_pick`]), and send that answer to the agent as
-    /// its owner's message. Should the agent not get it, the answer is taken
-    /// back and the ask waits again, to be tried later.
+    /// its owner's message. One the agent does not have is taken back, and
+    /// its ask waits again, to be tried later; one it may have stands.
     pub(crate) async fn auto_pick(
         &self,
         waiting: &WaitingAutoPick,
     ) -> Result<(), ConversationError> {
-        let Some(text) = self.record_pick(waiting).await? else {
+        let Some(pick) = self.record_pick(waiting).await? else {
             return Ok(());
         };
         let action = auto_pick_action(&waiting.ask.ask_id);
@@ -235,22 +298,39 @@ impl ConversationService {
                 caller,
                 action,
                 SubmittedMessage {
-                    text,
+                    text: pick.text.clone(),
                     ..Default::default()
                 },
                 SubmissionMode::Queue,
                 Writer::Person(Initiation::owner(), true),
             )
             .await;
-        match sent {
-            Ok(_) => Ok(()),
-            // The agent may have it: the answer stands.
-            Err(SubmitFailure::Asked(_) | SubmitFailure::TaskFailed { asked: true }) => Ok(()),
-            Err(failure) => {
-                self.take_back_pick(waiting).await;
-                Err(failure.into_error())
+        let failure = match sent {
+            Ok(_) => None,
+            Err(failure) if failure.reach() != Reach::NotTaken => {
+                tracing::warn!(
+                    ?failure,
+                    "auto-pick may have reached the agent; its answer stands"
+                );
+                None
+            }
+            Err(failure) => Some(failure),
+        };
+        let Some(failure) = failure else {
+            self.pick_done(&waiting.conversation);
+            if let Some(settled) = &pick.settled {
+                self.inner
+                    .decision_traces
+                    .settled(&waiting.conversation, settled);
+            }
+            return Ok(());
+        };
+        if !self.take_back_pick(&pick).await {
+            if let Ok(mut pending) = self.inner.auto_pick_takebacks.lock() {
+                pending.insert(waiting.ask.ask_id.clone(), pick);
             }
         }
+        Err(failure.into_error())
     }
 
     fn auto_pick_retry_at(&self, ask_id: &str) -> Option<u64> {
@@ -280,4 +360,17 @@ impl ConversationService {
             failures.remove(ask_id);
         }
     }
+}
+
+/// An answer auto-pick recorded, until it is sent or taken back.
+#[derive(Clone, Debug)]
+pub(crate) struct RecordedPick {
+    waiting: WaitingAutoPick,
+    text: String,
+    /// The summary before the pick, to go back to.
+    before: Option<ConversationSummary>,
+    /// The summary the pick wrote.
+    written: ConversationSummary,
+    /// The decision it settled, traced once the answer stands.
+    settled: Option<SettledAsk>,
 }

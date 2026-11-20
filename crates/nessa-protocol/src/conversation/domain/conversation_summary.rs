@@ -344,11 +344,16 @@ impl ConversationSummary {
         self.ask.as_ref()
     }
     /// After auto-pick recorded its answer to `ask` and could not send it:
-    /// `ask` waits again, as it did, and its decision with it. `None` when
-    /// something was asked since, which then waits instead.
+    /// `ask` waits again on `previous` (the summary as it is, or as it was
+    /// before the pick), and its decision with it. `None` when something
+    /// else was asked since, which then waits instead.
     pub fn reopening(previous: Option<&Self>, ask: OwnerAsk) -> Option<Self> {
         let previous = previous?;
-        if previous.ask.is_some() {
+        if previous
+            .ask
+            .as_ref()
+            .is_some_and(|waiting| waiting.ask_id != ask.ask_id)
+        {
             return None;
         }
         Some(Self {

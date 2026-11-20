@@ -2126,7 +2126,6 @@ async fn a_late_reply_cannot_write_back_a_deleted_summary() {
             &id,
             &UserMessage::text_only(PromptText::new("late").unwrap()),
             None,
-            false,
         )
         .await;
     assert_eq!(summary(&fixture, &id), None);

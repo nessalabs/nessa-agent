@@ -2037,6 +2037,23 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     retire(service, storage, metadata).await;
 }
 
+/// Wait until the agent has run turn `execution`.
+async fn ran(provider: &ProviderFactory, execution: &str) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|turn| turn == execution)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the agent never ran {execution}"));
+}
+
 /// An ask the agent allowed auto-pick on is answered with its recommended
 /// choice once its owner's wait has passed: the answer is the owner's own
 /// message, says it was picked for them, and settles that ask only. A pause
@@ -2047,7 +2064,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
     use crate::application::ConversationSummaries;
     use nessa_protocol::conversation::domain::ConversationSummary;
     use nessa_protocol::conversation::view::{
-        AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome, AUTO_PICK_SURFACE,
+        AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome,
     };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
@@ -2118,19 +2135,6 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .await
         .unwrap());
 
-    // A pick sent for another ask is a message, not this ask's answer.
-    service
-        .submit(
-            source.clone(),
-            caller_on("auto-pick-other", AUTO_PICK_SURFACE),
-            "auto-pick-other".into(),
-            message("Rename. Picked for you: no answer in 5 minutes."),
-            SubmissionMode::Queue,
-        )
-        .await
-        .unwrap();
-    assert_eq!(decision(service.clone()).await.outcome, None);
-
     service.pick_due().await;
     let picked = decision(service.clone()).await;
     assert_eq!(picked.ask.ask_id, ask.ask_id);
@@ -2144,6 +2148,8 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         picked.outcome
     );
     assert_eq!(picked.auto_pick_due_at_ms, None);
+    // And the agent was sent it, under the ask's own action.
+    ran(&provider, "auto-pick-0123456789abcdef0123456789abcdef").await;
     // Settled, it is not paused or picked again.
     assert!(!service
         .pause_auto_pick(source.clone(), caller("late-pause"), &ask.ask_id, true)
@@ -2212,7 +2218,11 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .into_iter()
         .find(|waiting| waiting.ask.ask_id == fifth.ask_id)
         .expect("the fifth ask is due");
-    assert!(service.record_pick(&due).await.unwrap().is_some());
+    let before = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap()
+        .unwrap();
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
     assert!(matches!(
         decision(service.clone()).await.outcome,
         Some(OwnerDecisionOutcome::Decided {
@@ -2226,14 +2236,39 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .pause_auto_pick(source.clone(), caller("pause-picked"), &fifth.ask_id, true)
         .await
         .unwrap());
-    service.take_back_pick(&due).await;
+    assert!(service.take_back_pick(&pick).await);
     let back = decision(service.clone()).await;
     assert_eq!(back.ask.ask_id, fifth.ask_id);
     assert_eq!(back.outcome, None);
+    assert!(!back.auto_pick_paused);
     assert_eq!(back.auto_pick_due_at_ms, Some(305_000));
+    // Nothing else changed it, so the list is as it was before the pick.
+    let listed = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(listed.preview(), before.preview());
+    assert_eq!(listed.updated_at_ms(), before.updated_at_ms());
+
+    // A person who wrote between a pick and its take-back is not overridden
+    // by the next pick: the ask waits for them, its auto-pick paused.
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
+    settled_send(&service, &source, "between", "Keep, actually").await;
+    assert!(service.take_back_pick(&pick).await);
+    let held = decision(service.clone()).await;
+    assert_eq!(held.ask.ask_id, fifth.ask_id);
+    assert_eq!(held.outcome, None);
+    assert!(held.auto_pick_paused);
+    assert!(service.record_pick(&due).await.unwrap().is_none());
+
     // Picked and sent, the owner's next message is a message after it, not
     // a second answer.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume-fifth"), &fifth.ask_id, false)
+        .await
+        .unwrap());
     service.pick_due().await;
+    ran(&provider, "auto-pick-abababababababababababababababab").await;
     settled_send(&service, &source, "after-the-pick", "Keep").await;
     let after = decision(service.clone()).await;
     assert!(
