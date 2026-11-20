@@ -33,8 +33,11 @@ const ask = {
   askedAtMs: 1,
 }
 
-const choice = (label: string) =>
-  container.querySelector<HTMLElement>(`[data-owner-ask-choice="${label}"]`)!
+const choice = (label: string): HTMLElement => {
+  const found = container.querySelector<HTMLElement>(`[data-owner-ask-choice="${label}"]`)
+  if (!found) throw new Error(`no choice ${label}`)
+  return found
+}
 
 it("offers every choice again when the gateway did not take the answer", async () => {
   const sent: string[] = []
