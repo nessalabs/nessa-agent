@@ -366,9 +366,10 @@ pub trait ConversationRepository: Send + Sync {
     /// Keep the question `id`'s agent asked its owner (`ask_owner`) in place
     /// of any earlier one. Durable before it returns.
     fn ask_owner(&self, id: &ConversationId, ask: OwnerAsk) -> ConversationFuture<'_, ()>;
-    /// A person wrote in `id`: whatever its agent asked them is answered.
-    /// Durable before it returns; nothing asked is not an error.
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// A person answered the question `ask_id` in `id`: it is removed, and a
+    /// later ask that replaced it is kept. Durable before it returns; nothing
+    /// asked, or another ask, is not an error.
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()>;
     /// The questions still waiting in these conversations. A row that no
     /// longer reads as an ask is left out, and said in the log.
     fn owner_asks(

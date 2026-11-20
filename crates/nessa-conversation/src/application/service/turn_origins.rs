@@ -141,7 +141,7 @@ impl ConversationService {
     /// usage-limit continuation or an external event was not. Its answer
     /// decides whether the message answers what an agent asked
     /// (`ask_owner`).
-    pub(super) async fn sent_by_a_person(
+    async fn sent_by_a_person(
         &self,
         thread: &ConversationId,
         execution: &str,
@@ -152,6 +152,35 @@ impl ConversationService {
             .sent_as_person(thread, execution, &caller.surface_id, initiator)
             .await?
             .is_a_person())
+    }
+
+    /// The id of the question waiting in `thread` that this message answers:
+    /// the one waiting now, when the message is the person's own
+    /// ([`Self::sent_by_a_person`]). A read that fails answers nothing and
+    /// is said in the log, so the question stays up rather than the message
+    /// being refused.
+    pub(super) async fn waiting_ask_answered(
+        &self,
+        thread: &ConversationId,
+        execution: &str,
+        caller: &ConversationCaller,
+        initiator: &Initiator,
+    ) -> Option<String> {
+        let waiting = match self.inner.metadata.owner_asks(vec![thread.clone()]).await {
+            Ok(mut asks) => asks.remove(thread)?,
+            Err(error) => {
+                tracing::warn!(%thread, ?error, "the waiting ask could not be read");
+                return None;
+            }
+        };
+        match self.sent_by_a_person(thread, execution, caller, initiator).await {
+            Ok(true) => Some(waiting.ask_id),
+            Ok(false) => None,
+            Err(error) => {
+                tracing::warn!(%thread, ?error, "who sent the message could not be read");
+                None
+            }
+        }
     }
 
     /// Read turn `execution` of `thread`, then each turn its input came from,

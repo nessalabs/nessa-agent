@@ -721,8 +721,12 @@ impl ConversationRepository for MemoryRepository {
         self.owner_asks.lock().unwrap().insert(id.clone(), ask);
         Box::pin(async { Ok(()) })
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
-        self.owner_asks.lock().unwrap().remove(id);
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
+        let mut asks = self.owner_asks.lock().unwrap();
+        if asks.get(id).is_some_and(|ask| ask.ask_id == ask_id) {
+            asks.remove(id);
+        }
+        drop(asks);
         Box::pin(async { Ok(()) })
     }
     fn owner_asks(

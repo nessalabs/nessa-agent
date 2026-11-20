@@ -278,6 +278,21 @@ async fn a_version_10_file_gains_the_owner_asks() {
         .await
         .unwrap();
     assert_eq!(asks.get(&id), Some(&ask));
+    // An answer to another ask leaves this one; its own answer removes it.
+    ConversationRepository::answer_owner_ask(&store, &id, "fedcba9876543210fedcba9876543210")
+        .await
+        .unwrap();
+    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
+        .await
+        .unwrap();
+    assert_eq!(asks.get(&id), Some(&ask));
+    ConversationRepository::answer_owner_ask(&store, &id, &ask.ask_id)
+        .await
+        .unwrap();
+    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
+        .await
+        .unwrap();
+    assert!(asks.is_empty());
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

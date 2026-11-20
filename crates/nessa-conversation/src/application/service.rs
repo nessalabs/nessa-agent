@@ -4618,6 +4618,18 @@ impl ConversationService {
                     }));
                 }
             }
+            // A person's new message is their answer to whatever the agent
+            // asked them (`ask_owner`), a tapped choice or not. A
+            // continuation or an external event sent for the person is not
+            // their answer. Read before the agent has the message, so a
+            // question it asks after it is not taken for the one answered.
+            let answered = if !known && writer.is_person() {
+                service
+                    .waiting_ask_answered(&id, &execution_id, &caller, writer.initiation().initiator())
+                    .await
+            } else {
+                None
+            };
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -4693,19 +4705,17 @@ impl ConversationService {
                 Err(error) if again => return Err(Halt::Again(error)),
                 delivery => delivery?,
             };
-            // A person's new message is their answer to whatever the agent
-            // asked them (`ask_owner`), a tapped choice or not: once the agent
-            // has it, so a message refused on the way leaves the question
-            // waiting. A continuation or an external event sent for the
-            // person is not their answer. Removed before the summary below,
-            // so the list that summary wakes no longer shows it.
-            if !known
-                && writer.is_person()
-                && service
-                    .sent_by_a_person(&id, &execution_id, &caller, writer.initiation().initiator())
-                    .await?
-            {
-                service.inner.metadata.answer_owner_ask(&id).await?;
+            // The question the message answered goes once the agent has it,
+            // so a message refused on the way leaves it waiting. Only the one
+            // that was waiting before it was sent: one the agent asked since
+            // stays. Removed before the summary below, so the list that
+            // summary wakes no longer shows it. A failure here leaves the
+            // card up and is said in the log; the message was delivered all
+            // the same, and the rest of its delivery goes on.
+            if let Some(ask_id) = answered.as_deref() {
+                if let Err(error) = service.inner.metadata.answer_owner_ask(&id, ask_id).await {
+                    tracing::warn!(%id, ?error, "the answered ask was not removed");
+                }
             }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A

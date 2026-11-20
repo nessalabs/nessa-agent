@@ -856,8 +856,8 @@ impl ConversationRepository for Unfenceable {
     ) -> ConversationFuture<'_, ()> {
         self.0.ask_owner(id, ask)
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
-        self.0.answer_owner_ask(id)
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
+        self.0.answer_owner_ask(id, ask_id)
     }
     fn owner_asks(
         &self,
@@ -1105,8 +1105,8 @@ impl ConversationRepository for Faulty {
     ) -> ConversationFuture<'_, ()> {
         self.repository.ask_owner(id, ask)
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
-        self.repository.answer_owner_ask(id)
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
+        self.repository.answer_owner_ask(id, ask_id)
     }
     fn owner_asks(
         &self,
@@ -2316,8 +2316,8 @@ impl ConversationRepository for PausingRepository {
     ) -> ConversationFuture<'_, ()> {
         self.inner.ask_owner(id, ask)
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
-        self.inner.answer_owner_ask(id)
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
+        self.inner.answer_owner_ask(id, ask_id)
     }
     fn owner_asks(
         &self,

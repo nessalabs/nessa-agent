@@ -1426,11 +1426,16 @@ impl ConversationRepository for LocalConversationStore {
             Ok(())
         })
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
         let id = id.to_string();
+        let ask_id = ask_id.to_owned();
         self.run(move |connection| {
             connection
-                .cached_execute("DELETE FROM owner_asks WHERE conversation_id = ?1", [id])
+                .cached_execute(
+                    "DELETE FROM owner_asks
+                     WHERE conversation_id = ?1 AND json_extract(ask, '$.askId') = ?2",
+                    [id, ask_id],
+                )
                 .map_err(failed)?;
             Ok(())
         })

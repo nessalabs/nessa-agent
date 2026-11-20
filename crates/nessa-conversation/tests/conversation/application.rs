@@ -3014,8 +3014,8 @@ impl ConversationRepository for GatedCreateRepository {
     ) -> ConversationFuture<'_, ()> {
         self.inner.ask_owner(id, ask)
     }
-    fn answer_owner_ask(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
-        self.inner.answer_owner_ask(id)
+    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
+        self.inner.answer_owner_ask(id, ask_id)
     }
     fn owner_asks(
         &self,
