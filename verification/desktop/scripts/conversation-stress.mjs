@@ -874,6 +874,8 @@ async function swipeColumns(run, step, message, port, code, failures) {
       }
       return walk(block)
     })
+  // The highlighter draws a block's lines only once it is in view.
+  await code.scrollIntoViewIfNeeded()
   if (!(await waitFor(async () => (await codeScroll()) !== null, 15_000)))
     failures.push("the wide code block does not scroll")
   else {
@@ -952,13 +954,27 @@ async function swipeColumns(run, step, message, port, code, failures) {
   await expect("a swipe right to open the session list again", all, 1)
   // A session row's own two-finger swipe stays the row's: left uncovers
   // its Archive and Delete, right covers them again, and no column moves.
+  // The row ends a wheel swipe after 140 ms without an event by its own
+  // clock, which a slow round trip from here would open, so each swipe
+  // goes in from the page as one burst, as session-rows.mjs sends them.
   const row = page.locator(selectorFor.sessionListRowFor(run.main.id))
   const tray = () => row.locator("xpath=..").getAttribute("data-swipe")
-  await swipe(row, 15, 0, 16)
+  const rowSwipe = async (deltaX) => {
+    await row.scrollIntoViewIfNeeded()
+    await row.hover()
+    await row.evaluate((element, deltaX) => {
+      for (let i = 0; i < 6; i += 1)
+        element.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true }),
+        )
+    }, deltaX)
+    await page.waitForTimeout(400)
+  }
+  await rowSwipe(40)
   await expect("a swipe left over a session row", all, 0)
   if (!(await waitFor(async () => (await tray()) === "open", 3_000)))
     failures.push(`a swipe left over a session row left it ${await tray()}, not open`)
-  await swipe(row, -15, 0, 16)
+  await rowSwipe(-40)
   await expect("a swipe right over an open session row", all, 0)
   if (!(await waitFor(async () => (await tray()) === null, 3_000)))
     failures.push(`a swipe right over an open session row left it ${await tray()}`)
