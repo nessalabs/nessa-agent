@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   ago,
   answerLabel,
+  answeredHead,
+  dayLabel,
+  decisionsByDay,
   decisionLine,
   left,
   stateLabel,
@@ -117,5 +120,48 @@ describe("decisions", () => {
     expect(ago(now - 49 * 60 * minute, now)).toBe("2d ago")
     // A clock that runs behind never says a time to come.
     expect(ago(now + minute, now)).toBe("just now")
+  })
+})
+
+describe("the decisions dialog's list", () => {
+  const noon = new Date(2026, 10, 20, 12, 0).getTime()
+  const at = (day: number, hour: number) => new Date(2026, 10, day, hour, 0).getTime()
+
+  it("heads each day by its name, and keeps waiting ones on top", () => {
+    expect(dayLabel(at(20, 1), noon)).toBe("Today")
+    expect(dayLabel(at(19, 23), noon)).toBe("Yesterday")
+    expect(dayLabel(at(1, 9), noon)).not.toBe("Yesterday")
+    const asked = (askId: string, atMs: number, outcome: DecisionOutcome) => ({
+      ...decision(askId, 0, outcome),
+      askedAtMs: atMs,
+    })
+    const groups = decisionsByDay(
+      [
+        asked("old-waiting", at(19, 9), { state: "waiting" }),
+        asked("today", at(20, 9), { state: "replaced", atMs: at(20, 10) }),
+        asked("yesterday", at(19, 8), { state: "replaced", atMs: at(19, 10) }),
+      ],
+      noon,
+    )
+    expect(
+      groups.map((group) => [group.day, group.decisions.map((d) => d.ask.askId)]),
+    ).toEqual([
+      ["Yesterday", ["old-waiting", "yesterday"]],
+      ["Today", ["today"]],
+    ])
+  })
+
+  it("says how an answered decision was answered", () => {
+    const by = (outcome: DecisionOutcome) => answeredHead(decision("a", 0, outcome))
+    expect(by({ state: "decided", text: "Wait", choice: 1, atMs: 0 })).toBe(
+      "You chose Wait",
+    )
+    expect(by({ state: "decided", text: "Later", atMs: 0 })).toBe(
+      "You answered in your own words",
+    )
+    expect(by({ state: "decided", text: "Ship", choice: 0, auto: true, atMs: 0 })).toBe(
+      "Auto-picked Ship",
+    )
+    expect(by({ state: "waiting" })).toBeUndefined()
   })
 })

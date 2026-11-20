@@ -128,3 +128,70 @@ export function ago(atMs: number, now: number): string {
   if (hours < 24) return `${hours}h ago`
   return `${Math.floor(hours / 24)}d ago`
 }
+
+const clock = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" })
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" })
+const monthDay = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" })
+
+function startOfDay(at: number): number {
+  const date = new Date(at)
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+}
+
+/** The time of day, as the clock says it: 07:48. */
+export function clockTime(atMs: number): string {
+  return clock.format(atMs)
+}
+
+/** The day a time falls on, as a list heads it: Today, Yesterday, Monday, Nov 3. */
+export function dayLabel(atMs: number, now: number): string {
+  const days = Math.round((startOfDay(now) - startOfDay(atMs)) / 86_400_000)
+  if (days <= 0) return "Today"
+  if (days === 1) return "Yesterday"
+  if (days < 7) return weekday.format(atMs)
+  return monthDay.format(atMs)
+}
+
+/** "Today 07:48": a day and the time on it. */
+export function dayAndTime(atMs: number, now: number): string {
+  return `${dayLabel(atMs, now)} ${clockTime(atMs)}`
+}
+
+/**
+ * Decisions under the day each was asked, keeping their order: a day's
+ * group sits where its first decision did, so waiting ones stay on top.
+ */
+export function decisionsByDay(
+  decisions: readonly Decision[],
+  now: number,
+): readonly { readonly day: string; readonly decisions: readonly Decision[] }[] {
+  const days = new Map<string, Decision[]>()
+  for (const decision of decisions) {
+    const day = dayLabel(decision.askedAtMs, now)
+    const group = days.get(day)
+    if (group) group.push(decision)
+    else days.set(day, [decision])
+  }
+  return [...days].map(([day, grouped]) => ({ day, decisions: grouped }))
+}
+
+/**
+ * The line under a decision in the dialog's list, where the day is already
+ * said above it: the answer and the time it came; a waiting one says what
+ * waits, as in Chat context.
+ */
+export function listLine(decision: Decision, now: number): string {
+  const outcome = decision.outcome
+  if (outcome.state !== "decided") return decisionLine(decision, now)
+  return `${outcome.auto ? "Auto-picked " : ""}${answerLabel(decision)} · ${clockTime(outcome.atMs)}`
+}
+
+/** The head of an answered decision's banner: what was chosen and how. */
+export function answeredHead(decision: Decision): string | undefined {
+  const outcome = decision.outcome
+  if (outcome.state !== "decided") return undefined
+  if (outcome.auto) return `Auto-picked ${answerLabel(decision)}`
+  return outcome.choice === undefined
+    ? "You answered in your own words"
+    : `You chose ${answerLabel(decision)}`
+}

@@ -216,7 +216,7 @@ describe("Decisions in Chat context", () => {
     await render(source)
     await click(section()?.querySelector('[data-decision="d3"]'))
     const detail = dialog()?.querySelector('[data-decision-detail="d3"]')
-    expect(detail?.textContent).toContain("Decided: Your own words")
+    expect(detail?.textContent).toContain("You answered in your own words")
     expect(detail?.querySelector("blockquote")?.textContent).toBe(
       "Not yet. Ask me Monday.",
     )
@@ -395,7 +395,7 @@ describe("Decisions in Chat context", () => {
     expect(section()?.textContent).toContain("Auto-picked Ship · 5m ago")
     await click(section()?.querySelector('[data-decision="auto"]'))
     const detail = () => dialog()?.querySelector('[data-decision-detail="auto"]')
-    expect(detail()?.textContent).toContain("Auto-picked: Ship")
+    expect(detail()?.textContent).toContain("Auto-picked Ship")
     expect(detail()?.textContent).toContain("No answer in time")
     // The pick's own words are not shown as something the person said.
     expect(detail()?.querySelector("blockquote")).toBeNull()
@@ -432,7 +432,7 @@ describe("Decisions in Chat context", () => {
     await render(source)
     await click(section()?.querySelector('[data-decision="auto"]'))
     const detail = dialog()?.querySelector('[data-decision-detail="auto"]')
-    expect(detail?.textContent).toContain("Auto-picked: Ship")
+    expect(detail?.textContent).toContain("Auto-picked Ship")
     expect(detail?.querySelector("[data-change-answer]")).toBeNull()
   })
 

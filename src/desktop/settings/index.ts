@@ -75,7 +75,7 @@ export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
 export { DeviceLoginsSwitch, SavedLoginsProvider } from "./ui/saved-logins"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
-export { DecisionSettingsProvider } from "./ui/decision-settings-rows"
+export { DecisionSettingsProvider, useAutoPickWords } from "./ui/decision-settings-rows"
 export {
   decisionSettingsGateway,
   type DecisionSettingsClient,

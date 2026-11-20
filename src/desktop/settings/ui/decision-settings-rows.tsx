@@ -67,6 +67,37 @@ function parse(text: string, unit: Unit): { seconds: number } | { problem: strin
   return { seconds: amount * units[unit].seconds }
 }
 
+/**
+ * Auto-pick in a few words, for the decisions dialog's foot: "Auto-pick
+ * after 5 minutes", or "Auto-pick off"; undefined until read, or with no
+ * gateway. Read once each time the dialog opens.
+ */
+export function useAutoPickWords(): string | undefined {
+  const gateway = useContext(DecisionSettingsContext)
+  const [words, setWords] = useState<string>()
+  useEffect(() => {
+    if (!gateway) return
+    let live = true
+    gateway.read().then(
+      (settings) => {
+        if (live) setWords(autoPickWords(settings))
+      },
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [gateway])
+  return words
+}
+
+function autoPickWords(settings: DecisionSettings): string {
+  if (!settings.autoPick) return "Auto-pick off"
+  const wait = split(settings.autoPickAfterSeconds)
+  const unit = wait.amount === 1 ? wait.unit.slice(0, -1) : wait.unit
+  return `Auto-pick after ${wait.amount} ${unit}`
+}
+
 type Phase =
   | { readonly kind: "reading" }
   | { readonly kind: "unread" }

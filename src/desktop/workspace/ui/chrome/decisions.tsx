@@ -18,21 +18,26 @@ import {
 } from "@nessa-ui/react/segmented-control"
 import { useNow } from "../../../../clock"
 import {
-  ago,
   answerLabel,
+  answeredHead,
+  clockTime,
+  dayAndTime,
   decisionLine,
+  decisionsByDay,
   decisionsFiltered,
   decisionsInOrder,
   decisionsShown,
   filterFor,
+  listLine,
   stateLabel,
   type Decision,
   type DecisionsFilter,
 } from "../../model/decisions"
+import { agentName, agentOf } from "../../model/workspace-index"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 import { undoLabels } from "../../../../conversation"
-import { openSettings } from "../../../settings"
+import { openSettings, useAutoPickWords } from "../../../settings"
 import { DesktopIcon } from "../../../ui/icons"
 import { sendMessage } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
@@ -129,10 +134,12 @@ const effortWords = {
 }
 
 /**
- * Every decision in the chat: the list, filtered, beside the chosen one in
- * full. It opens on the one chosen, on To decide when that one waits and on
- * All otherwise. While the chosen one is the chat's waiting ask, the answer
- * bar sits under it: auto-pick, a note, and Answer.
+ * Every decision in the chat, nearly the whole window: down the side the
+ * list, filtered and under the day each was asked, with auto-pick's setting
+ * at its foot; beside it the chosen decision in full. It opens on the one
+ * chosen, on To decide when that one waits and on All otherwise. While the
+ * chosen one is the chat's waiting ask, the answer bar sits under it:
+ * auto-pick, a note, and Answer.
  */
 function DecisionsDialog({
   sessionId,
@@ -148,9 +155,11 @@ function DecisionsDialog({
   onClose: () => void
 }) {
   const title = useWorkspaceSelector((state) => selectSession(state, sessionId)?.title)
+  const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
   const liveAsk = useWorkspaceSelector(
     (state) => selectSession(state, sessionId)?.ask?.askId,
   )
+  const autoPickWords = useAutoPickWords()
   const dispatch = useWorkspaceDispatch()
   const [selected, setSelected] = useState(openOn)
   const [filter, setFilter] = useState<DecisionsFilter>(() =>
@@ -213,10 +222,87 @@ function DecisionsDialog({
       onOpenChange={(next) => {
         if (!next) onClose()
       }}
-      size="xl"
+      size="full"
       title="Decisions"
       description={title}
       data-decisions-dialog=""
+      aside={
+        <>
+          <SegmentedControl
+            aria-label="Show"
+            variant="glass"
+            className="decisions-filter"
+            value={filter}
+            onValueChange={(value) => {
+              const chosen = filters.find((each) => each.value === value)
+              if (chosen) setFilter(chosen.value)
+            }}
+          >
+            {filters.map(({ value, label }) => (
+              <SegmentedControlOption key={value} value={value} data-filter={value}>
+                {label}
+              </SegmentedControlOption>
+            ))}
+          </SegmentedControl>
+          <div className="decisions-dialog-items">
+            {listed.length === 0 ? (
+              <p className="chat-context-none decisions-dialog-none">
+                {filter === "waiting" ? "Nothing waits on you" : "Nothing decided yet"}
+              </p>
+            ) : (
+              decisionsByDay(listed, now).map(({ day, decisions: onDay }) => (
+                <section key={day} className="decisions-dialog-day" aria-label={day}>
+                  <h3 className="decisions-day">{day}</h3>
+                  <ul className="decisions-dialog-list" aria-label="Decisions">
+                    {onDay.map((each) => (
+                      <li key={each.ask.askId} data-decision={each.ask.askId}>
+                        <button
+                          type="button"
+                          className="decisions-dialog-item"
+                          aria-current={each.ask.askId === selected || undefined}
+                          data-state={each.outcome.state}
+                          onClick={() => setSelected(each.ask.askId)}
+                        >
+                          <span
+                            className="decisions-dot"
+                            data-state={each.outcome.state}
+                          />
+                          <span className="decisions-dialog-question">
+                            {each.ask.question}
+                          </span>
+                          <span className="decisions-dialog-line">
+                            {listLine(each, now)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))
+            )}
+          </div>
+          <div className="decisions-dialog-foot">
+            <button
+              type="button"
+              className="decisions-dialog-settings"
+              data-decisions-settings=""
+              onClick={() => {
+                onClose()
+                openSettings("decisions")
+              }}
+            >
+              <DesktopIcon name="timer" size={14} aria-hidden="true" />
+              <span className="decisions-dialog-settings-words">
+                {autoPickWords ?? "Auto-pick"}
+              </span>
+              <span className="decisions-dialog-settings-go">
+                Settings
+                <DesktopIcon name="chevronRight" size={12} aria-hidden="true" />
+              </span>
+            </button>
+          </div>
+        </>
+      }
       footer={
         live ? (
           <div className="decisions-answer" data-decisions-answer="">
@@ -254,90 +340,36 @@ function DecisionsDialog({
         ) : undefined
       }
     >
-      <div className="decisions-dialog">
-        <div className="decisions-dialog-side">
-          <SegmentedControl
-            aria-label="Show"
-            value={filter}
-            onValueChange={(value) => {
-              const chosen = filters.find((each) => each.value === value)
-              if (chosen) setFilter(chosen.value)
-            }}
-          >
-            {filters.map(({ value, label }) => (
-              <SegmentedControlOption key={value} value={value} data-filter={value}>
-                {label}
-              </SegmentedControlOption>
-            ))}
-          </SegmentedControl>
-          {listed.length === 0 ? (
-            <p className="chat-context-none">
-              {filter === "waiting" ? "Nothing waits on you" : "Nothing decided yet"}
-            </p>
-          ) : (
-            <ul className="decisions-dialog-list" aria-label="Decisions">
-              {listed.map((each) => (
-                <li key={each.ask.askId} data-decision={each.ask.askId}>
-                  <button
-                    type="button"
-                    className="decisions-dialog-item"
-                    aria-current={each.ask.askId === selected || undefined}
-                    data-state={each.outcome.state}
-                    onClick={() => setSelected(each.ask.askId)}
-                  >
-                    <span className="decisions-dot" data-state={each.outcome.state} />
-                    <span className="decisions-dialog-question">{each.ask.question}</span>
-                    <span className="decisions-dialog-line">
-                      {decisionLine(each, now)}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="decisions-dialog-settings"
-            data-decisions-settings=""
-            onClick={() => {
-              onClose()
-              openSettings("decisions")
-            }}
-          >
-            <DesktopIcon name="chatSettings" size={14} aria-hidden="true" />
-            Auto-pick settings
-          </Button>
-        </div>
-        {decision ? (
-          <DecisionDetail
-            sessionId={sessionId}
-            decision={decision}
-            now={now}
-            answering={live !== undefined}
-            picked={live ? picked : null}
-            onPick={pick}
-          />
-        ) : (
-          <p className="chat-context-none decisions-dialog-empty">
-            Pick a decision to see it
-          </p>
-        )}
-      </div>
+      {decision ? (
+        <DecisionDetail
+          sessionId={sessionId}
+          decision={decision}
+          asker={model ? agentName(agentOf(model)) : undefined}
+          now={now}
+          answering={live !== undefined}
+          picked={live ? picked : null}
+          onPick={pick}
+        />
+      ) : (
+        <p className="chat-context-none decisions-dialog-empty">
+          Pick a decision to see it
+        </p>
+      )}
     </Dialog>
   )
 }
 
 /**
  * One decision in full, the expanded card: where it stands, the question
- * and its summary, each choice side by side with what it does, its pros and
- * cons, its effort and how hard it is to undo, and why the agent
- * recommends one. While it is the chat's waiting ask its choices are
- * picked here; once settled, the chosen one is marked and the rest dimmed.
+ * and its summary, how it was answered, each choice side by side with what
+ * it does, its pros and cons, its effort and how hard it is to undo, and why
+ * the agent recommends one. While it is the chat's waiting ask its choices
+ * are picked here; once settled, the chosen one is marked and the rest dimmed.
  */
 function DecisionDetail({
   sessionId,
   decision,
+  asker,
   now,
   answering,
   picked,
@@ -345,6 +377,7 @@ function DecisionDetail({
 }: {
   sessionId: string
   decision: Decision
+  asker: string | undefined
   now: number
   answering: boolean
   picked: number | null
@@ -361,10 +394,14 @@ function DecisionDetail({
         <span data-state={outcome.state} className="decisions-dialog-state">
           {stateLabel(outcome)}
         </span>
-        <span>· Asked {ago(decision.askedAtMs, now)}</span>
+        <span>
+          · Asked{asker ? ` by ${asker}` : ""} · {dayAndTime(decision.askedAtMs, now)}
+        </span>
       </p>
-      <h3 className="decisions-detail-question">{ask.question}</h3>
-      {ask.summary ? <p className="decisions-detail-summary">{ask.summary}</p> : null}
+      <header className="decisions-detail-head">
+        <h3 className="decisions-detail-question">{ask.question}</h3>
+        {ask.summary ? <p className="decisions-detail-summary">{ask.summary}</p> : null}
+      </header>
       {outcome.state === "decided" ? (
         <div
           className="decisions-detail-banner"
@@ -372,12 +409,8 @@ function DecisionDetail({
           data-decided=""
         >
           <p className="decisions-detail-banner-head">
-            {outcome.auto
-              ? `Auto-picked: ${answerLabel(decision)}`
-              : outcome.choice === undefined
-                ? "Decided: Your own words"
-                : `Decided: ${answerLabel(decision)}`}
-            <span className="decisions-dialog-line"> · {ago(outcome.atMs, now)}</span>
+            <b>{answeredHead(decision)}</b>
+            <span className="decisions-dialog-line">{dayAndTime(outcome.atMs, now)}</span>
           </p>
           {outcome.auto ? (
             <p className="decisions-dialog-line" data-auto-picked="">
@@ -393,7 +426,10 @@ function DecisionDetail({
       ) : null}
       {outcome.state === "replaced" ? (
         <div className="decisions-detail-banner" data-replaced="">
-          <p className="decisions-detail-banner-head">Not answered</p>
+          <p className="decisions-detail-banner-head">
+            <b>Not answered</b>
+            <span className="decisions-dialog-line">{clockTime(outcome.atMs)}</span>
+          </p>
           <p className="decisions-dialog-line">A newer question took its place.</p>
         </div>
       ) : null}
@@ -405,13 +441,16 @@ function DecisionDetail({
           const on = answering ? picked === index : chosen === index
           const body = (
             <>
+              <span className="decisions-choice-radio" aria-hidden="true" />
               <span className="decisions-choice-head">
                 <span className="decisions-dialog-choice">{choice.label}</span>
                 {index === ask.recommended ? (
-                  <Badge variant="secondary">Recommended</Badge>
+                  <Badge variant="secondary" className="decisions-choice-badge">
+                    Recommended
+                  </Badge>
                 ) : null}
                 {!answering && on ? (
-                  <Badge variant="outline">
+                  <Badge variant="secondary" className="decisions-choice-badge">
                     {outcome.state === "decided" && outcome.auto
                       ? "Auto-picked"
                       : "Chosen"}
@@ -421,7 +460,7 @@ function DecisionDetail({
                   <Kbd className="decisions-choice-key">{index + 1}</Kbd>
                 ) : null}
               </span>
-              <span className="decisions-dialog-line">{choice.consequence}</span>
+              <span className="decisions-choice-consequence">{choice.consequence}</span>
               {choice.pros?.length || choice.cons?.length ? (
                 <span className="decisions-choice-trade">
                   {choice.pros?.map((pro) => (
@@ -451,9 +490,7 @@ function DecisionDetail({
               key={choice.label}
               data-chosen={(!answering && on) || undefined}
               data-recommended={index === ask.recommended || undefined}
-              data-dim={
-                (outcome.state === "decided" && chosen !== undefined && !on) || undefined
-              }
+              data-dim={(outcome.state === "decided" && !on) || undefined}
             >
               {answering ? (
                 <button

@@ -155,7 +155,7 @@ export function ChangeAnswer({
   if (!open)
     return (
       <Button
-        variant="outline"
+        variant="ghost"
         size="sm"
         className="auto-pick-change"
         data-change-answer=""
@@ -182,7 +182,7 @@ export function ChangeAnswer({
         index === outcome.choice ? null : (
           <Button
             key={choice.label}
-            variant="outline"
+            variant="secondary"
             size="sm"
             disabled={sending}
             data-change-answer-choice={choice.label}
