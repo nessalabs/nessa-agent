@@ -20,6 +20,24 @@ const identity = {
 }
 
 describe("local submission evidence", () => {
+  it("sends an answer beside the draft, which keeps what was being written", () => {
+    const writing = setDraft(emptyLocalTabs(), {
+      id: "c0",
+      draft: textContent("half a thought"),
+    })
+    const answered = beginSend(writing, {
+      ...identity,
+      content: textContent("Ship"),
+      besideDraft: true,
+    })
+    expect(answered.conversations[0]!.turns.at(-1)).toMatchObject({
+      from: "user",
+      content: textContent("Ship"),
+    })
+    expect(answered.conversations[0]!.draft).toEqual(textContent("half a thought"))
+    const sent = beginSend(writing, { ...identity, content: textContent("Ship") })
+    expect(sent.conversations[0]!.draft).toEqual([])
+  })
   it("preserves exact content and permits a second queued draft", () => {
     const content = textContent("  code\n ")
     const pending = beginSend(emptyLocalTabs(), { ...identity, content })

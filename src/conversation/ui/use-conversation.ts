@@ -132,11 +132,13 @@ export function useConversation() {
      * Sends `content` as the person's answer to what an agent asked, and
      * says whether the gateway took it: a refusal, local or the gateway's,
      * and a failed send all resolve false, so the choices are offered again.
+     * Sent beside the composer's draft, which keeps its text and files.
      */
     answer: async (content: MessageContent): Promise<boolean> => {
       const finished = await dispatch(
         sendDraft({
           content,
+          besideDraft: true,
           id: active.id,
           connected: gatewayAvailable,
           steering: deliveryMode === "steer" && active.phase !== "idle",

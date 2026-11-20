@@ -33,6 +33,8 @@ export function beginSend(
     actionId: string
     mode: "queued" | "steering"
     retryTurnId?: string
+    /** Sent beside the draft, which stays as it was (`SendDraftArg.besideDraft`). */
+    besideDraft?: boolean
   },
 ): LocalTabs {
   const conv = findConversation(tabs, input.conversationId)
@@ -45,7 +47,10 @@ export function beginSend(
   const sent = new Set(
     input.content.flatMap((part) => (part.type === "file" ? [part.placementId] : [])),
   )
-  if (conv.draft.some((part) => part.type === "file" && !sent.has(part.placementId)))
+  if (
+    !input.besideDraft &&
+    conv.draft.some((part) => part.type === "file" && !sent.has(part.placementId))
+  )
     return tabs
   const sendable = messageImages(input.content)
   if (!sendable.ok) return tabs
@@ -72,7 +77,7 @@ export function beginSend(
     turns: retry
       ? conv.turns.map((turn) => (turn.id === retry.id ? userTurn : turn))
       : [...conv.turns, userTurn],
-    draft: [],
+    draft: input.besideDraft ? conv.draft : [],
     phase: "thinking",
     pending: "",
     draftTurn: undefined,
@@ -299,10 +304,11 @@ export type DraftDecline = {
 export function draftMessage(
   conv: Conversation,
   content: MessageContent,
+  besideDraft = false,
 ): MessageContent {
   return [
     ...content.filter((part) => part.type === "text" || part.type === "pasted-text"),
-    ...conv.draft.filter((part) => part.type === "file"),
+    ...(besideDraft ? [] : conv.draft.filter((part) => part.type === "file")),
   ]
 }
 
@@ -324,7 +330,12 @@ export function draftMessage(
  */
 export function declineReason(
   conv: Conversation,
-  input: { content: MessageContent; connected?: boolean; retryTurnId?: string },
+  input: {
+    content: MessageContent
+    connected?: boolean
+    retryTurnId?: string
+    besideDraft?: boolean
+  },
   canChoosePaths: boolean,
 ): DraftDecline | null {
   if (input.retryTurnId !== undefined && !refusedTurn(conv, input.retryTurnId))
@@ -354,7 +365,7 @@ export function declineReason(
       kind: "unknown-attachment",
       message: "An attachment is no longer in this draft. Attach it again.",
     }
-  const content = draftMessage(conv, input.content)
+  const content = draftMessage(conv, input.content, input.besideDraft)
   const sendable = messageImages(content)
   if (!sendable.ok)
     return {
