@@ -89,6 +89,32 @@ starting conversation's approval mode; it runs where the agent named, else
 where the channel runs its threads. A fork runs where its source runs and
 stays in its source's channel, even after the channel moved.
 
+## How agents talk
+
+Each role (the coordinator, and every other thread) has one reply style:
+Nessa's plain style, Off (no style text at all), or the person's own words
+(trimmed, at most 4 KB). A choice is made at the Nessa level (the default
+channel's settings) or for one channel; a channel with no choice follows the
+Nessa level, and a level with no choice is plain. An override replaces the
+value above it whole (`ReplyStyleSettings::effective`). Only the owner sets a
+channel's choice: `replyStyle.set` with a `channelId` is checked by Cedar's
+channel-settings action first; the Nessa level is admitted by the method's
+grant. Each change is audited as `reply_style`.
+
+The style is told in Nessa's own launch prompt (`nessa/reply-style`, after the
+channel's notes), never in the person's Claude settings, Codex config or
+`AGENTS.md`. The system prompt is part of the restoration fingerprint, so a
+changed prompt would open a new native session and lose the chat's context.
+To avoid that, a conversation's style is pinned when it is created
+(`conversation_reply_styles` in channels.sqlite3) and never follows a later
+change: new chats start with the new style, older chats keep theirs. A chat
+made before this table existed has no pin and is told no style. OpenCode
+takes no Nessa prompt, so it gets no style.
+
+The stress step `style` sets Threads' own words in the default channel's
+settings, checks a new chat is told them and the main chat keeps its plain
+style, then clears the choice.
+
 ## Changing where a channel runs
 
 A channel says where its main agent runs and where its threads run
