@@ -233,7 +233,8 @@ describe("the right panel, in both layouts", () => {
       expect(button("Expand Panel")).toBeUndefined()
       await act(async () => button("Show Panel")?.click())
       expect(panel().hasAttribute("inert")).toBe(false)
-      expect(panel().textContent).toBe("Nothing open")
+      // With nothing else open, it shows the chat in front's Chat context.
+      expect(panel().querySelector("[data-chat-context]")).not.toBeNull()
       expect(host.querySelector('[aria-label="Resize Panel"]')).not.toBeNull()
       // Maximized, it covers the workspace: what is under it is inert.
       await act(async () => button("Expand Panel")?.click())
@@ -437,7 +438,7 @@ describe("the window tells its agents the focused chat's panel", () => {
       store.dispatch(closePanelTab({ sessionId: "a", widget: app }))
     })
     expect(panelOf()).toEqual({ open: true, tabs: [], front: null })
-    expect(host.querySelector("#workspace-panel")?.textContent).toBe("Nothing open")
+    expect(host.querySelector("#workspace-panel [data-chat-context]")).not.toBeNull()
     await act(async () => root.unmount())
   })
 })

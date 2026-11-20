@@ -42,6 +42,9 @@ const desktopRoles = [
   // Window and panes
   "sidebar",
   "panelRight",
+  "chatContext",
+  // Where a chat's agent runs
+  "device",
   "sessionList",
   "splitRight",
   "splitDown",

@@ -1044,7 +1044,7 @@ async function setSideRail(page, on, failures) {
 
 /**
  * The expanded right panel is the chat in front's: its own tabs, or with
- * nothing open its note, no tab strip for the chats and no toggles for the
+ * nothing open its Chat context, no tab strip for the chats and no toggles for the
  * columns it covers. ⌘N docks it before the new session opens, so the
  * session is in front, in sight — never under the panel. The chat is
  * brought back, docked.
@@ -1053,13 +1053,9 @@ async function expandedForItsChat(run, failures) {
   const page = run.page
   if (await chatTabs(page)) failures.push("the window draws a tab strip for the chats")
   const panel = page.locator("#workspace-panel")
-  if (
-    !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
-    ((await panel.locator("[data-panel-empty]").count()) &&
-      (await panel.innerText()).trim() !== "Nothing open")
-  )
+  if (!(await panel.locator("[data-chat-context], .workspace-panel-tabs").count()))
     failures.push(
-      `the expanded panel shows neither its tabs nor its note: "${await panel.innerText()}"`,
+      `the expanded panel shows neither its tabs nor Chat context: "${await panel.innerText()}"`,
     )
   if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
     failures.push("the expanded panel's titlebar offers the sidebar it covers")
@@ -3290,7 +3286,7 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   // makes; a pointer click from the page does not reach it once two apps
   // share the pane.
   await talk.evaluate(() => document.querySelector('[data-talk="panel"]').click())
-  const tabs = () => page.locator(`${css.chatPanelTabs} [role="tab"]`)
+  const tabs = () => page.locator(css.widgetTab)
   if (!(await waitFor(async () => (await tabs().count()) === 1, 10_000))) {
     failures.push("the talk board did not open a panel tab")
     return
@@ -3336,7 +3332,7 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("the pin's panel frame was still loading when its tab left the front")
     return
   }
-  const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
+  const other = page.locator(`${css.widgetTab}[aria-selected="false"]`)
   await other.click()
   if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
     failures.push("the talk board's panel frame was still loading when the chat changed")

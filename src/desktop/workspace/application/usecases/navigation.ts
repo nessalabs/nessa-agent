@@ -163,6 +163,21 @@ export function toggleSection(
   }
 }
 
+/** Folds Chat context's section `sectionId`, or unfolds it, in every chat. */
+export function toggleChatContextSection(
+  state: WorkspaceState,
+  { sectionId }: { sectionId: string },
+): WorkspaceState {
+  const folded = state.tree.chatContextFolded.includes(sectionId)
+  return {
+    ...state,
+    tree: {
+      ...state.tree,
+      chatContextFolded: toggled(state.tree.chatContextFolded, sectionId, !folded),
+    },
+  }
+}
+
 function setChannelOpen(
   state: WorkspaceState,
   channelId: string,

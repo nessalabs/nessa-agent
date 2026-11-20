@@ -153,7 +153,7 @@ function PublishedPicture({
   )
 }
 
-function SaveButton({
+export function SaveButton({
   conversationId,
   file,
 }: {

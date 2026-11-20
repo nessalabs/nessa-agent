@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { panesOf } from "../../../split-panes/model/pane-layout"
+import { chatContextTab } from "../../model/chat-context"
 import { percents } from "../../model/shown-window"
 import { roomyGrid, shownBy, testIndex } from "../../testing"
-import { initialWorkspace, type WorkspaceState } from "../workspace-state"
+import { entry, initialWorkspace, type WorkspaceState } from "../workspace-state"
 import { closePanelTab, openWidgetInPanel, showPanelTab } from "./chat-panel"
 import { showContent, toggleSessionList, toggleSidebar } from "./navigation"
 import { createDraft, focusPane, openBeside } from "./panes"
@@ -169,6 +170,16 @@ describe("the focused chat's panel", () => {
     expect(shownWindow(one)?.panel).toEqual({ open: true, tabs: [app], front: app })
     const none = closePanelTab(one, { sessionId: "a", widget: app })
     expect(shownWindow(none)?.panel).toEqual({ open: true, tabs: [], front: null })
+  })
+
+  it("never names Chat context as a tab, and names no front while it is in front", () => {
+    const chosen = openWidgetInPanel(withTabs(), { widget: chatContextTab("a") })
+    expect(entry(chosen.panels, "a")?.tabs[0]).toEqual(chatContextTab("a"))
+    expect(shownWindow(chosen)?.panel).toEqual({
+      open: true,
+      tabs: [subagents, app],
+      front: null,
+    })
   })
 
   it("stays beside the overview and a widget over the panes", () => {

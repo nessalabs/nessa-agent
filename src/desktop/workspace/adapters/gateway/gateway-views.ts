@@ -53,6 +53,7 @@ import type {
   ApprovalOrigin,
   Message,
   MessageApp,
+  FilePart,
   Part,
   Transcript,
   TranscriptQuestion,
@@ -344,7 +345,7 @@ const carriedId = (id: string, index: number, reply: boolean) =>
 export const unreadableOverflowId = "/unreadable-more"
 
 /** A file the agent published, as the part a message shows it by. */
-function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
+function publishedPart(artifact: ConversationView["artifacts"][number]): FilePart {
   return {
     kind: "file",
     name: artifact.name,
@@ -709,6 +710,17 @@ export function transcriptFrom(
     approvals,
     revision,
     agent: view.runtime?.agent,
+    ...(view.runtime
+      ? {
+          runtime: {
+            workspace: view.runtime.workspace,
+            modelName: view.runtime.modelName,
+            contextWindowTokens: view.runtime.contextWindowTokens,
+          },
+        }
+      : {}),
+    // The view lists them oldest first; Chat context shows the newest first.
+    published: view.artifacts.map(publishedPart).reverse(),
     lease: view.lease && {
       state: view.lease.state,
       environment: view.lease.environment,

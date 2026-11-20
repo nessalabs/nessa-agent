@@ -41,7 +41,9 @@ import {
   Image,
   Info,
   LayoutPanelLeft,
+  Laptop,
   List,
+  ListCollapse,
   ListTree,
   Lock,
   Maximize2,
@@ -107,6 +109,8 @@ export const lucideIcons: DesktopIconFamily = {
 
   sidebar: lucide(PanelLeft),
   panelRight: lucide(PanelRight),
+  chatContext: lucide(ListCollapse),
+  device: lucide(Laptop),
   sessionList: lucide(List),
   splitRight: lucide(Columns2),
   splitDown: lucide(Rows2),

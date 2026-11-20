@@ -179,6 +179,8 @@ const workspaceSlice = createSlice({
       navigation.revealSession(state, payload),
     toggleSection: (state, { payload }: Payload<{ sectionId: string }>) =>
       navigation.toggleSection(state, payload),
+    toggleChatContextSection: (state, { payload }: Payload<{ sectionId: string }>) =>
+      navigation.toggleChatContextSection(state, payload),
     toggleChannel: (state, { payload }: Payload<{ channelId: string; open?: boolean }>) =>
       navigation.toggleChannel(state, payload),
     toggleShowAll: (state, { payload }: Payload<{ channelId: string }>) =>

@@ -1052,7 +1052,7 @@ async function expectPanel(page, failures) {
 }
 
 /** The panel's tabs drawn now. */
-const panelTabCount = (page) => page.locator(`${css.chatPanelTabs} [role="tab"]`).count()
+const panelTabCount = (page) => page.locator(css.widgetTab).count()
 
 /**
  * The test server's chart page, through the real proxy and the host's own
@@ -1632,7 +1632,7 @@ const checks = {
     }))
     const waiting = await panelTabCount(page)
     await until(page, ([tab, want]) => document.querySelectorAll(tab).length === want, [
-      `${css.chatPanelTabs} [role="tab"]`,
+      css.widgetTab,
       tabs - 1,
     ])
     if (said.state !== "tearing-down")

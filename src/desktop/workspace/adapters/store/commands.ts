@@ -30,6 +30,7 @@ export const {
   showOverviewGroup,
   revealSession,
   toggleSection,
+  toggleChatContextSection,
   toggleChannel,
   toggleShowAll,
   toggleSidebar,
