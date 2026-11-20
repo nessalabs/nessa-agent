@@ -49,19 +49,41 @@ test("a missing Agents word, or words under the toggle, fails", () => {
   ])
 })
 
-test("Devices leaves the corner clear and the toggle unmoved", () => {
+test("Devices keeps nessa Studio where Agents has it, and the toggle unmoved", () => {
   assert.deepEqual(
-    devicesCornerFailures("rail open, sidebar shown", null, toggle, toggle),
+    devicesCornerFailures(
+      "rail open, sidebar shown",
+      studioOpen,
+      studioOpen,
+      toggle,
+      toggle,
+    ),
     [],
   )
   assert.deepEqual(
-    devicesCornerFailures("rail open, sidebar shown", studioOpen, toggle, toggle),
+    devicesCornerFailures("rail open, sidebar shown", null, studioOpen, toggle, toggle),
+    ['rail open, sidebar shown: Devices draws no "nessa Studio"'],
+  )
+  assert.deepEqual(
+    devicesCornerFailures(
+      "rail open, sidebar shown",
+      studioClosed,
+      studioOpen,
+      toggle,
+      toggle,
+    ),
     [
-      'rail open, sidebar shown: Devices draws "nessa Studio" at [58,851,87,28]; that corner stays clear',
+      'rail open, sidebar shown: Devices draws "nessa Studio" at [46,851,87,28], not where Agents does [58,851,87,28]',
     ],
   )
   assert.deepEqual(
-    devicesCornerFailures("rail open, sidebar shown", null, [20, 851, 28, 28], toggle),
+    devicesCornerFailures(
+      "rail open, sidebar shown",
+      studioOpen,
+      studioOpen,
+      [20, 851, 28, 28],
+      toggle,
+    ),
     [
       "rail open, sidebar shown, Devices: the toggle is at [20,851,28,28], not [18,851,28,28]",
     ],
