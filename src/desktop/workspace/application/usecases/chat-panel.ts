@@ -7,6 +7,7 @@
  */
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import { isAppPluginId } from "../../../widgets/app/model/app-ref"
+import { contextFirst } from "../../model/chat-context"
 import { closeInPanel, openInPanel, showInPanel } from "../../model/chat-panel"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
 import { focusedPane } from "../../../split-panes/model/pane-layout"
@@ -64,7 +65,7 @@ export function openWidgetInPanel(
     ...shown,
     panels: {
       ...shown.panels,
-      [owner]: openInPanel(entry(shown.panels, owner), widget, app),
+      [owner]: contextFirst(openInPanel(entry(shown.panels, owner), widget, app)),
     },
     panelled:
       app && !shown.panelled.includes(key) ? [...shown.panelled, key] : shown.panelled,

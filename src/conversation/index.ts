@@ -36,7 +36,7 @@ export { usageLimitOnClientClock } from "./model"
 export { HeldFilesProvider } from "./ui/held-files"
 // Input reference tiles, also used by desktop metadata placeholders.
 export { MessageImages } from "./ui/message-images"
-export { PublishedFiles } from "./ui/published-files"
+export { PublishedFiles, SaveButton as SavePublishedFile } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
 export { shownNote } from "./adapters/gateway/notes"
 // Staging an image into a conversation: every surface that sends one uploads it here.

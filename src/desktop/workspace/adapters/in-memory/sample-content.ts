@@ -5,7 +5,14 @@
  * `sample-labs.ts`; `sample-workspace.ts` turns them into an index.
  */
 import type { ModelRef, SessionStatus } from "../../model/workspace-index"
-import type { Approval, ApprovalOption, Part } from "../../model/transcript"
+import type {
+  Approval,
+  ApprovalOption,
+  FilePart,
+  Part,
+  TranscriptLease,
+  TranscriptRuntime,
+} from "../../model/transcript"
 
 /**
  * The answers a sample review offers. The in-memory source can honour each
@@ -72,6 +79,10 @@ export interface SampleSession {
   /** What it is doing, and for how many seconds, while it runs. */
   readonly activity?: readonly [label: string, seconds: number]
   readonly approval?: Omit<Approval, "answering" | "failure">
+  /** What it runs on and the files its agent published, for Chat context. */
+  readonly runtime?: TranscriptRuntime
+  readonly lease?: TranscriptLease
+  readonly published?: readonly FilePart[]
   /** The conversation, each message with its minutes-ago. */
   readonly messages: readonly (readonly ["user" | "agent", number, readonly Part[]])[]
 }

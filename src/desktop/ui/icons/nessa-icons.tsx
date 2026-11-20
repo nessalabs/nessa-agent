@@ -98,6 +98,22 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M12 4v12" />
     </>,
   ),
+  // Chat context: a list whose first line is lit, the others quieter.
+  chatContext: drawn(
+    <>
+      <path d="M8 6.5h8.5" />
+      <path d="M8 10h6M8 13.5h7" opacity={0.55} />
+      <Dot x={4.5} y={6.5} r={1.05} />
+      <g opacity={0.55}>
+        <Dot x={4.5} y={10} r={1.05} />
+        <Dot x={4.5} y={13.5} r={1.05} />
+      </g>
+    </>,
+  ),
+  // A laptop: a screen of the window shape on its base.
+  device: drawn(
+    <path d="M4.5 5.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1V13h-11zM2.75 15.5h14.5" />,
+  ),
   sessionList: drawn(
     <>
       <path d="M8 6.5h8M8 10h8M8 13.5h5" />

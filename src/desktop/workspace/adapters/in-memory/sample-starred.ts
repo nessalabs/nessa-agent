@@ -23,6 +23,28 @@ export const starredSamples: readonly SampleSession[] = [
     now: "Capping the workspace at four panes, then wiring the drop target",
     pinned: true,
     activity: ["Editing workspace-panes.tsx", 38],
+    runtime: {
+      workspace: "/Users/sam/code/nessa-agent",
+      modelName: "Claude Opus 5",
+      contextWindowTokens: 1_000_000,
+    },
+    lease: { state: "live", environment: "here" },
+    published: [
+      {
+        kind: "file",
+        name: "split-panes-plan.md",
+        digest: "sha256:split-panes-plan",
+        mimeType: "text/markdown",
+        size: 4_210,
+      },
+      {
+        kind: "file",
+        name: "drop-target.png",
+        digest: "sha256:drop-target",
+        mimeType: "image/png",
+        size: 182_400,
+      },
+    ],
     messages: [
       [
         "user",

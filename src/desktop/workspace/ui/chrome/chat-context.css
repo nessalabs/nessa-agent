@@ -1,0 +1,108 @@
+/*
+ * Chat context (`chat-context.tsx`): the right panel's first tab. Sections
+ * fold from their headers; rows are an icon, a name that truncates, and a
+ * quiet trailing value. Tokens are the window's.
+ */
+.workspace-panel-context {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+  /* Alone, it starts below the titlebar row, as a tab's widget does. */
+  margin-top: var(--desktop-titlebar-height);
+}
+
+.workspace-panel-context[data-tabbed] {
+  margin-top: 0;
+}
+
+.chat-context {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 4px 16px 12px;
+  color: var(--foreground);
+}
+
+.chat-context-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-context-body,
+.chat-context-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-context-row {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 0 8px;
+  border-radius: var(--desktop-radius-row, 8px);
+  font: var(--nessa-text-3, 13px) / 1.3 var(--nessa-font-sans);
+}
+
+.chat-context-row:hover {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.chat-context-row > svg {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.chat-context-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-trail {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-name + .chat-context-trail {
+  max-width: 55%;
+}
+
+.chat-context-none {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--muted-foreground);
+  font: 12px var(--nessa-font-sans);
+}
+
+/* A plugin's row shows only when the plugin drew something for this chat. */
+.chat-context-plugin:has(> .chat-context-plugin-accessory:empty) {
+  display: none;
+}
+
+.chat-context-plugin-open {
+  all: unset;
+  cursor: pointer;
+  text-align: start;
+}
+
+.chat-context-plugin-open:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
