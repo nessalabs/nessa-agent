@@ -1,5 +1,5 @@
 /**
- * A two-finger sideways swipe across the chat folds or opens the window's side
+ * A two-finger sideways swipe across the chat or the side columns folds or opens the window's side
  * columns, one column per swipe. From the left edge the columns stand rail,
  * sidebar, session list. A swipe left folds the open one nearest the chat; a
  * swipe right opens the closed one nearest the window's edge, so the columns
@@ -122,8 +122,8 @@ export interface SwipeSample {
 /**
  * Where a gesture is. `tracking` adds up its travel; `scroll` is a gesture
  * that went vertical first, `skipped` one that began over something that
- * scrolls sideways itself (a wide table, a code block) or was a pinch;
- * `done` one that already toggled, the way it went. None of those three
+ * scrolls sideways itself (a wide table, a code block) or was a pinch, or
+ * that something under it claimed (a session row's swipe); `done` one that already toggled, the way it went. None of those three
  * toggles again. `moved` is one that has had an event larger than
  * `SETTLED`, and `settled` one whose events then came down to it: its
  * momentum is over. A gesture that only began small has not settled.
@@ -202,15 +202,21 @@ export function beginsGesture(state: SwipeState, sample: SwipeSample): boolean {
 /**
  * The gesture after one more wheel event. `skip` says the event is one a
  * swipe must leave alone; it is read only for an event that begins a gesture
- * (`beginsGesture`), so the whole gesture follows where it began.
+ * (`beginsGesture`), so the whole gesture follows where it began, whatever
+ * the pointer passes over after. `claimed` says something under the pointer
+ * took the event for its own gesture (a session row sliding open its
+ * actions): a gesture not yet a swipe is then that thing's, from any event,
+ * since it may claim only once the travel leans sideways.
  */
 export function swipeStep(
   state: SwipeState,
   sample: SwipeSample,
   skip: boolean,
+  claimed = false,
 ): { state: SwipeState; swiped: SwipeDirection | null } {
-  if (beginsGesture(state, sample)) {
-    if (skip)
+  const begins = beginsGesture(state, sample)
+  if (begins || (claimed && state.phase === "tracking")) {
+    if (skip || claimed)
       return {
         state: {
           phase: "skipped",

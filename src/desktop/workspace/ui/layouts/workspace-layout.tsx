@@ -200,7 +200,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                         room={railRoom}
                         toggle={onToggleRail}
                       />
-                      {shownRailItem?.studio === false ? null : <StudioCorner />}
+                      <StudioCorner />
                     </>
                   ) : null}
                   <div

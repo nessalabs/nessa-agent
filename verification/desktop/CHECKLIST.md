@@ -396,7 +396,7 @@ Experimental turns it on; the rail stands beside the workspace in
   edge, including when both side columns are closed, and a folded rail has a
   reserved slot beside "nessa Studio" in the
   sidebar footer. With the sidebar shown, Agents draws "nessa Studio" clear of
-  the toggle. Devices leaves that corner empty, and the toggle does not move.
+  the toggle. Devices draws it in the same place, and the toggle does not move.
   _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
@@ -406,9 +406,10 @@ Experimental turns it on; the rail stands beside the workspace in
   control folds and reopens the rail. A point just below the titlebar lands
   in the view, not on a workspace card or chat control.
   _Check:_ `columns.mjs --only rail-view-inert`.
-- [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
-  Studio" in the bottom-left corner (its cards run under it), and a press in
-  the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
+- [ ] **Devices keeps "nessa Studio" and its titlebar for the window**:
+  "nessa Studio" stands in the bottom-left corner as in Agents, and the page
+  fades out before the window's foot so its cards never sit under the words.
+  A press in the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
   moves the window and a double-click zooms it, as over a chat. _Check:_
   `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **A chat says where its agent runs**: the heading names This computer,
@@ -2377,6 +2378,10 @@ row.
   row.
 - [ ] **The Archive button archives without opening the row.** _Check:_
   `archive`.
+- [ ] **A row's two-finger swipe is the row's, not the columns'.** The side
+  columns fold and open from a swipe over the chat, the sidebar or the session
+  list, but one over a session row only moves the row: no column moves and no
+  haptic ticks. _Check:_ `conversation-stress` step `swipe`.
 - [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
   _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
   pane) and right-click opens the row's own menu; a swipe rests the row open,
