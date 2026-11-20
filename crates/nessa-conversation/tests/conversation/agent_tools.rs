@@ -1634,6 +1634,201 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     retire(service, storage, metadata).await;
 }
 
+/// Send `text` to `target` as the person and wait until its turn settles.
+#[cfg(unix)]
+async fn settled_send(
+    service: &ConversationService,
+    target: &ConversationId,
+    execution: &str,
+    text: &str,
+) {
+    send(service, target, execution, text).await;
+    let turn = nessa_sdk::domain::agent_execution::executions::ExecutionId::new(execution).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let live = service.resolve(target, &caller("create")).await.unwrap();
+            let settled = live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .is_some_and(|snapshot| {
+                    snapshot.invocations.into_iter().any(|record| {
+                        record.request.execution_id == turn
+                            && matches!(
+                                record.scheduling.last().map(|event| event.stage),
+                                Some(InvocationStage::Settled | InvocationStage::Cancelled)
+                            )
+                    })
+                });
+            if settled {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the earlier turn did not settle");
+}
+
+/// A thread a person's turn asked an agent to message can follow that
+/// message back to the person's own words, and the thread that created it can
+/// close it. A thread it did not create it cannot.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    // Only an agent that can resume its session is ever closed.
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let source = id();
+    opened(&service, &provider, &source).await;
+    let stranger = id();
+    opened(&service, &provider, &stranger).await;
+    // What the person said before the turn that asks for the relay.
+    for (execution, text) in [("first-turn", "first ask"), ("second-turn", "second ask")] {
+        settled_send(&service, &source, execution, text).await;
+    }
+    // Those turns' starts left the provider's start signal set; take it, so
+    // the held turn below is waited for, not one of theirs.
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let created = client
+        .call("create_thread", json!({"requestId":"origin-create"}))
+        .await;
+    assert_eq!(created["isError"], false, "{created}");
+    let worker = created["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sent = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"close yourself","requestId":"origin-send"}),
+        )
+        .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    let execution = sent["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let waited = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":execution}),
+        )
+        .await;
+    assert_eq!(
+        waited["structuredContent"]["turn"]["finished"], true,
+        "{waited}"
+    );
+
+    // The worker's turn came from the source's turn, which the person typed.
+    let read = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution}),
+        )
+        .await;
+    assert_eq!(read["isError"], false, "{read}");
+    let chain = &read["structuredContent"];
+    assert_eq!(chain["ended"], "start", "{read}");
+    assert_eq!(chain["startedBy"], "person", "{read}");
+    let turns = chain["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2, "{read}");
+    assert_eq!(turns[0]["origin"], "agent");
+    assert_eq!(turns[0]["said"], "close yourself");
+    assert_eq!(turns[0]["from"]["threadId"], source.to_string());
+    assert_eq!(turns[0]["from"]["executionId"], "source-turn");
+    assert_eq!(turns[1]["origin"], "person");
+    assert_eq!(turns[1]["threadId"], source.to_string());
+    assert_eq!(turns[1]["said"], "active");
+
+    // Asked for, the person's earlier messages in the source thread come
+    // too, oldest first; without asking, none do.
+    assert!(chain.get("earlier").is_none(), "{read}");
+    let wider = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution,"earlier":3}),
+        )
+        .await;
+    let earlier = wider["structuredContent"]["earlier"].as_array().unwrap();
+    assert_eq!(
+        earlier
+            .iter()
+            .map(|turn| turn["said"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["first ask", "second ask"],
+        "{wider}"
+    );
+    assert!(
+        earlier.iter().all(|turn| turn["origin"] == "person"),
+        "{wider}"
+    );
+    let too_many = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution,"earlier":4}),
+        )
+        .await;
+    assert_eq!(too_many["isError"], true, "{too_many}");
+
+    // A turn that is not saved is not found, and says nothing else.
+    let missing = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":"no-such-turn"}),
+        )
+        .await;
+    assert_eq!(missing["isError"], true, "{missing}");
+
+    // Only the thread this one created can be closed by it.
+    let refused = client
+        .call("close_thread", json!({"threadId":stranger.to_string()}))
+        .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["structuredContent"]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("not_your_thread")),
+        "{refused}"
+    );
+    let closed = client
+        .call("close_thread", json!({"threadId":worker}))
+        .await;
+    assert_eq!(closed["isError"], false, "{closed}");
+    assert_eq!(closed["structuredContent"]["threadId"], worker.as_str());
+    assert_eq!(closed["structuredContent"]["closing"], true);
+    let worker = ConversationId::new(worker.as_str()).unwrap();
+    assert!(
+        metadata.thread_closed(&worker).await.unwrap(),
+        "the mark was not saved"
+    );
+    assert!(!metadata.thread_closed(&stranger).await.unwrap());
+    assert!(!metadata.thread_closed(&source).await.unwrap());
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store

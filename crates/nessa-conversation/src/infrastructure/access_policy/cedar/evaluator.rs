@@ -188,6 +188,7 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
             organization,
             principal,
             owner_initiated,
+            conversation,
         } => entity(
             "NessaConversation::AgentTurn",
             principal.as_str(),
@@ -198,6 +199,7 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
                     "ownerInitiated",
                     RestrictedExpression::new_bool(owner_initiated),
                 ),
+                ("conversation", string(conversation)),
             ],
         ),
         AccessSubject::Person {
@@ -273,15 +275,22 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
             organization,
             owner,
             deleted,
-        } => entity(
-            "NessaConversation::Conversation",
-            "conversation",
-            [
+            created_by,
+        } => {
+            let mut attributes = vec![
                 ("organization", string(organization.as_str())),
                 ("owner", string(owner.as_str())),
                 ("deleted", RestrictedExpression::new_bool(deleted)),
-            ],
-        ),
+            ];
+            if let Some(created_by) = created_by {
+                attributes.push(("createdBy", string(created_by)));
+            }
+            entity(
+                "NessaConversation::Conversation",
+                "conversation",
+                attributes,
+            )
+        }
         AccessResource::Catalogue {
             organization,
             owner,

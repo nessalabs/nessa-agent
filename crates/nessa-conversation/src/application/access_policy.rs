@@ -50,6 +50,8 @@ pub enum AccessSubject<'a> {
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
         owner_initiated: bool,
+        /// The thread the turn is in.
+        conversation: &'a str,
     },
     /// A person on one of their own surfaces, by the organization and
     /// principal their session is in.
@@ -94,6 +96,12 @@ pub enum AccessSubject<'a> {
 pub enum AccessAction {
     /// Delegate the source owner's authority to its running agent turn.
     AgentTools,
+    /// Let a running agent turn read where the owner's saved turns came from
+    /// (`read_turn`). Reading only: a turn another agent started may ask it.
+    ReadTurns,
+    /// Close a thread, from another thread's turn: `close_thread` with a
+    /// `threadId`.
+    CloseCreated,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -144,8 +152,10 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::AgentTools,
+        Self::ReadTurns,
+        Self::CloseCreated,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -173,6 +183,8 @@ impl AccessAction {
     pub fn name(self) -> &'static str {
         match self {
             Self::AgentTools => "conversation.agent_tools",
+            Self::ReadTurns => "conversation.read_turns",
+            Self::CloseCreated => "conversation.close_created",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",
@@ -207,6 +219,10 @@ pub enum AccessResource<'a> {
         owner: &'a PrincipalId,
         /// Whether somebody deleted it.
         deleted: bool,
+        /// The thread whose agent created it with `create_thread`, as the
+        /// SDK's record of the spawn says; `None` when no agent did, or the
+        /// ask is not about who created it.
+        created_by: Option<&'a str>,
     },
     /// One owner's catalogue: the list of their conversations.
     Catalogue {
@@ -232,6 +248,17 @@ impl<'a> AccessResource<'a> {
             organization: conversation.organization(),
             owner: conversation.owner(),
             deleted: conversation.deletion().is_some(),
+            created_by: None,
+        }
+    }
+
+    /// `conversation` as [`Self::of`], with the thread that created it.
+    pub fn created(conversation: &'a Conversation, created_by: Option<&'a str>) -> Self {
+        Self::Conversation {
+            organization: conversation.organization(),
+            owner: conversation.owner(),
+            deleted: conversation.deletion().is_some(),
+            created_by,
         }
     }
 }

@@ -113,6 +113,11 @@ import {
  *               its agent is parked though followed (its lease ends `idle`),
  *               a read then opens it, still closed, and it is parked again;
  *               only the next message sent there starts it again
+ *   provenance  a person's request in the main chat reaches a thread its
+ *               agent creates; the thread follows the message back with
+ *               read_turn to the person's exact words and says them; the
+ *               parent's close_thread of a thread it did not create is
+ *               refused, of its own is taken, and that thread is parked
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
@@ -1536,76 +1541,80 @@ function railLayout(page) {
  * Returns what it found wrong.
  */
 function footerThroughToggle(page) {
-  return page.evaluate(async (toggleSelector) => {
-    const words = () =>
-      document.querySelector(".side-rail-studio .desktop-identity-words")
-    const name = () => document.querySelector(".split-panes-grid .workspace-pane-name")
-    const names = []
-    const toggle = document.querySelector(toggleSelector)
-    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
-    const middle = (e) => {
-      const at = e.getBoundingClientRect()
-      return at.left + at.width / 2
-    }
-    const failures = []
-    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
-    const seen = []
-    // Where the name stood before the toggle: a flight's first frame already
-    // draws the change.
-    const from = name()?.getBoundingClientRect().left
-    const started = performance.now()
-    toggle.click()
-    await new Promise((done) => {
-      const frame = () => {
-        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
-        if (name()) names.push(name().getBoundingClientRect().left)
-        if (performance.now() - started < 900) requestAnimationFrame(frame)
-        else done()
+  // The engine as Playwright launched it: every context's user agent claims
+  // Chrome on a Mac (`openPage`), so the page cannot tell WebKit by it.
+  const webkit = page.context().browser()?.browserType().name() === "webkit"
+  return page.evaluate(
+    async ([toggleSelector, webkit]) => {
+      const words = () =>
+        document.querySelector(".side-rail-studio .desktop-identity-words")
+      const name = () => document.querySelector(".split-panes-grid .workspace-pane-name")
+      const names = []
+      const toggle = document.querySelector(toggleSelector)
+      const mark = () => toggle.querySelector("svg").getBoundingClientRect()
+      const middle = (e) => {
+        const at = e.getBoundingClientRect()
+        return at.left + at.width / 2
       }
-      requestAnimationFrame(frame)
-    })
-    const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
-    if (off !== undefined)
-      failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
-      )
-    const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
-    const last = seen.at(-1)
-    if (last !== undefined && Math.abs(last - want) > 0.5)
-      failures.push(
-        `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
-      )
-    if (from === undefined || !name())
-      failures.push("no pane name in the chat's titlebar")
-    const to = names.at(-1)
-    // Chromium holds the name within half a pixel. WebKit leaves a few
-    // (0.7, 1.3 and 2.5px seen in CI, never the same frame twice): the pane,
-    // its counter-scaled bar and the name each move on their own transform,
-    // and WebKit lands their sum a little off. Riding the pane's flight, as
-    // before this check, moves the name 32px or more.
-    const webkit =
-      /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
-    const slack = webkit ? 4 : 1
-    const strayed = names.find(
-      (left) => left < Math.min(from, to) - slack || left > Math.max(from, to) + slack,
-    )
-    if (strayed !== undefined)
-      failures.push(
-        `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled (every frame: ${names.map((left) => left.toFixed(1)).join(" ")})`,
-      )
-    // Agents' icon is on screen only with the sidebar open.
-    const icon = document.querySelector(
-      '.workspace-window[data-sidebar="open"] .agents-overview-entry svg',
-    )
-    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
-      const apart = middle(toggle) - middle(icon)
-      if (Math.abs(apart) > 0.5)
+      const failures = []
+      if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+      const seen = []
+      // Where the name stood before the toggle: a flight's first frame already
+      // draws the change.
+      const from = name()?.getBoundingClientRect().left
+      const started = performance.now()
+      toggle.click()
+      await new Promise((done) => {
+        const frame = () => {
+          if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+          if (name()) names.push(name().getBoundingClientRect().left)
+          if (performance.now() - started < 900) requestAnimationFrame(frame)
+          else done()
+        }
+        requestAnimationFrame(frame)
+      })
+      const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
+      if (off !== undefined)
         failures.push(
-          `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+          `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
         )
-    }
-    return failures
-  }, css.sideRailToggle)
+      const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
+      const last = seen.at(-1)
+      if (last !== undefined && Math.abs(last - want) > 0.5)
+        failures.push(
+          `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
+        )
+      if (from === undefined || !name())
+        failures.push("no pane name in the chat's titlebar")
+      const to = names.at(-1)
+      // Chromium holds the name within half a pixel. WebKit leaves a few
+      // (0.7, 1.3 and 2.5px seen in CI, never the same frame twice): the pane,
+      // its counter-scaled bar and the name each move on their own transform,
+      // and WebKit lands their sum a little off. Riding the pane's flight, as
+      // before this check, moves the name 32px or more.
+      const slack = webkit ? 4 : 1
+      const strayed = names.find(
+        (left) => left < Math.min(from, to) - slack || left > Math.max(from, to) + slack,
+      )
+      if (strayed !== undefined)
+        failures.push(
+          `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled (every frame: ${names.map((left) => left.toFixed(1)).join(" ")})`,
+        )
+      // Agents' icon is on screen only with the sidebar open.
+      const icon = document.querySelector(
+        '.workspace-window[data-sidebar="open"] .agents-overview-entry svg',
+      )
+      if (toggle.getAttribute("aria-expanded") === "false" && icon) {
+        const apart = middle(toggle) - middle(icon)
+        if (Math.abs(apart) > 0.5)
+          failures.push(
+            `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+          )
+      }
+      return failures
+    },
+    [css.sideRailToggle, webkit],
+  )
 }
 
 /**
@@ -9317,6 +9326,78 @@ const steps = {
         },
       )
     })
+  },
+
+  async provenance(run, step, failures) {
+    // A thread the parent did not create: the parent's close of it is refused.
+    const strangerId = randomUUID()
+    await run.client.conversation.create({
+      conversationId: strangerId,
+      agent: run.stack.agent,
+    })
+    run.checked.push(strangerId)
+    const text = prompt(
+      run,
+      STRESS.provenance,
+      step,
+      ` args:${JSON.stringify({ threadId: strangerId })} :args`,
+    )
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const found = new RegExp(
+      `${SAYS.provenance}([0-9a-f-]{36}) \\| (.*?) \\| (.*?) \\| (.*)`,
+      "s",
+    ).exec(said)
+    if (!found) {
+      failures.push(
+        `the provenance turn did not say what happened: ${said.slice(0, 200)}`,
+      )
+      return
+    }
+    const [, childId, refused, closing, reply] = found
+    run.checked.push(childId)
+    // The thread read the message back to the person's exact words: the turn
+    // the check typed, not the parent agent's relay of it.
+    if (!reply.includes(`${SAYS.origin}person: ${text}`))
+      failures.push(
+        `the thread did not follow its message back to the person's words: ${reply.slice(0, 200)}`,
+      )
+    // Asked for, the person's earlier words in the main chat come with it:
+    // each the person's, none the turn the chain starts at.
+    const before = reply.split(SAYS.earlier)[1]
+    let earlier
+    try {
+      earlier = before === "${chain.earlier}" ? [] : JSON.parse(before)
+    } catch {
+      earlier = null
+    }
+    if (
+      !Array.isArray(earlier) ||
+      earlier.some((each) => each.origin !== "person" || each.said === text)
+    )
+      failures.push(
+        `the thread's read of the person's earlier words was wrong: ${before?.slice(0, 200)}`,
+      )
+    else log(`provenance earlier ${earlier.length}`)
+    if (!refused.startsWith("not_your_thread"))
+      failures.push(
+        `closing a thread the parent did not create was not refused: ${refused}`,
+      )
+    if (closing !== "true")
+      failures.push(`the parent's close of its own thread answered closing ${closing}`)
+    // The closed thread's agent is parked; the stranger, never closed, is not.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, childId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, childId)).lease
+      failures.push(
+        `the thread its parent closed was not parked: its lease is ${lease?.state ?? "missing"}`,
+      )
+    }
   },
 
   async close(run, step, failures) {
