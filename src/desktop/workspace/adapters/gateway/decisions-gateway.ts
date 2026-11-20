@@ -28,7 +28,8 @@ export function decisionsGateway({
         const { decisions } = await client.conversation.decisions(sessionId)
         return decisions.map(decisionFrom)
       } catch (error) {
-        if (error instanceof NessaRpcError && error.code === "conversation_not_found") return []
+        if (error instanceof NessaRpcError && error.code === "conversation_not_found")
+          return []
         throw error
       }
     },
