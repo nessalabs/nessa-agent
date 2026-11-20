@@ -65,9 +65,8 @@ export function ChatContext({ sessionId }: { sessionId: string }) {
           <p className="chat-context-none">Nothing published yet</p>
         ) : (
           <ul className="chat-context-rows" aria-label="Published files">
-            {published.map((file, index) => (
-              // The same file may be published twice; its place tells the two apart.
-              <li key={`${file.digest}:${index}`} className="chat-context-row">
+            {publishedKeys(published).map(({ file, key }) => (
+              <li key={key} className="chat-context-row">
                 <DesktopIcon name="file" size={16} aria-hidden="true" />
                 <span className="chat-context-name" title={file.name}>
                   {file.name}
@@ -196,6 +195,28 @@ function ContextFacts({ transcript }: { transcript: Transcript | undefined }) {
       trail={`${tokens(runtime.contextWindowTokens)} context`}
     />
   )
+}
+
+/**
+ * Each published file with a key that stays its own while the list grows.
+ * The list is newest first, so a file's place moves whenever another is
+ * published, and a row keyed by place would be a new row, dropping a save
+ * on its way. The same file published again is told apart by how many
+ * copies came before it, which a newer publication never changes.
+ */
+export function publishedKeys<T extends { name: string; digest: string }>(
+  published: readonly T[],
+): { file: T; key: string }[] {
+  const seen = new Map<string, number>()
+  const keyed: { file: T; key: string }[] = []
+  for (let index = published.length - 1; index >= 0; index -= 1) {
+    const file = published[index]
+    const identity = `${file.digest}:${file.name}`
+    const copy = seen.get(identity) ?? 0
+    seen.set(identity, copy + 1)
+    keyed.push({ file, key: `${identity}:${copy}` })
+  }
+  return keyed.reverse()
 }
 
 /** The last part of a path, which is what people call a folder by. */
