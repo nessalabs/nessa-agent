@@ -871,7 +871,10 @@ export function stressScenario({
       },
       {
         when: STRESS.approved,
-        steps: [{ do: "text", chunks: [SAYS.approvedAccess, "${prompt.text}"] }, { do: "end" }],
+        steps: [
+          { do: "text", chunks: [SAYS.approvedAccess, "${prompt.text}"] },
+          { do: "end" },
+        ],
       },
       // Closes its own thread, as an agent whose work is done is told to:
       // the agent stops once this turn ends, and the next message opens it.

@@ -1635,9 +1635,18 @@ it("keeps an agent's ask on its row, and refuses one past the schema's bounds", 
     ["a long question", { ...ask, question: "x".repeat(161) }],
     ["a key that is not one", { ...ask, askId: "ask" }],
     ["an unknown field", { ...ask, extra: true }],
-    ["an access past the modes", { ...ask, access: { mode: "ask", grants: ["a", "b", "c"] } }],
-    ["an access with two lines", { ...ask, access: { mode: "full", grants: ["a", "b"] } }],
-    ["an access with an empty line", { ...ask, access: { mode: "full", grants: ["a", "", "c"] } }],
+    [
+      "an access past the modes",
+      { ...ask, access: { mode: "ask", grants: ["a", "b", "c"] } },
+    ],
+    [
+      "an access with two lines",
+      { ...ask, access: { mode: "full", grants: ["a", "b"] } },
+    ],
+    [
+      "an access with an empty line",
+      { ...ask, access: { mode: "full", grants: ["a", "", "c"] } },
+    ],
     [
       "an access with an unknown field",
       { ...ask, access: { mode: "full", grants: ["a", "b", "c"], extra: 1 } },

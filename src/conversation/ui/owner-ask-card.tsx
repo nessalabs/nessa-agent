@@ -27,7 +27,9 @@ export function OwnerAskCard({
   failure,
   onChoose,
 }: {
-  ask: Omit<OwnerAskView, "choices" | "access"> & { choices: readonly OwnerAskChoiceView[] }
+  ask: Omit<OwnerAskView, "choices" | "access"> & {
+    choices: readonly OwnerAskChoiceView[]
+  }
   /** The label on its way, while it is. */
   sending: string | null
   /** Why the last choice was not sent, in words. */

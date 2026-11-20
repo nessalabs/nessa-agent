@@ -62,7 +62,10 @@ export function useConversation() {
      */
     raiseAccess: async (mode: ApprovalMode): Promise<boolean> => {
       const finished = await dispatch(
-        controlConversation({ id: active.id, control: { kind: "setApprovalMode", mode } }),
+        controlConversation({
+          id: active.id,
+          control: { kind: "setApprovalMode", mode },
+        }),
       )
       return !controlConversation.rejected.match(finished)
     },

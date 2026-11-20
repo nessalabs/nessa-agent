@@ -93,7 +93,10 @@ export function PanelOwnerAsk({
           if (!decline) return
           setSending({ askId: ask.askId, label: decline.label })
           setFailure(null)
-          void send(decline.label, "Not now was not sent. Press it again, or write your answer.")
+          void send(
+            decline.label,
+            "Not now was not sent. Press it again, or write your answer.",
+          )
         }}
       />
     )
