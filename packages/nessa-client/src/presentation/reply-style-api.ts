@@ -67,7 +67,9 @@ export function replyStyles(value: unknown): ReplyStyles {
   )
     throw invalid()
   return {
-    ...(Object.hasOwn(value, "channelId") ? { channelId: value.channelId as string } : {}),
+    ...(Object.hasOwn(value, "channelId")
+      ? { channelId: value.channelId as string }
+      : {}),
     nessa: roles(value.nessa),
     ...(Object.hasOwn(value, "channel") ? { channel: roles(value.channel) } : {}),
     effective: {

@@ -6,7 +6,10 @@ const answer = {
   channelId: "ch_aaaaaaaaaa",
   nessa: { thread: { mode: "custom", text: "Be brief." } },
   channel: { coordinator: { mode: "off" } },
-  effective: { coordinator: { mode: "off" }, thread: { mode: "custom", text: "Be brief." } },
+  effective: {
+    coordinator: { mode: "off" },
+    thread: { mode: "custom", text: "Be brief." },
+  },
 }
 
 function recording(reply: unknown) {
@@ -40,7 +43,10 @@ describe("replyStyle", () => {
     await api.set("coordinator", undefined, "ch_aaaaaaaaaa")
     expect(asked).toEqual([
       ["replyStyle.set", { role: "thread", mode: "custom", text: "Be brief." }],
-      ["replyStyle.set", { channelId: "ch_aaaaaaaaaa", role: "coordinator", mode: "default" }],
+      [
+        "replyStyle.set",
+        { channelId: "ch_aaaaaaaaaa", role: "coordinator", mode: "default" },
+      ],
     ])
   })
 
@@ -49,14 +55,27 @@ describe("replyStyle", () => {
       { nessa: {} },
       { nessa: {}, effective: { coordinator: plain } },
       { nessa: { owner: plain }, effective: { coordinator: plain, thread: plain } },
-      { nessa: {}, effective: { coordinator: { mode: "plain", text: "x" }, thread: plain } },
-      { nessa: {}, effective: { coordinator: { mode: "custom" }, thread: plain } },
-      { nessa: {}, effective: { coordinator: { mode: "custom", text: "" }, thread: plain } },
       {
         nessa: {},
-        effective: { coordinator: { mode: "custom", text: "é".repeat(2049) }, thread: plain },
+        effective: { coordinator: { mode: "plain", text: "x" }, thread: plain },
       },
-      { channelId: "ch_aaaaaaaaaa", nessa: {}, effective: { coordinator: plain, thread: plain } },
+      { nessa: {}, effective: { coordinator: { mode: "custom" }, thread: plain } },
+      {
+        nessa: {},
+        effective: { coordinator: { mode: "custom", text: "" }, thread: plain },
+      },
+      {
+        nessa: {},
+        effective: {
+          coordinator: { mode: "custom", text: "é".repeat(2049) },
+          thread: plain,
+        },
+      },
+      {
+        channelId: "ch_aaaaaaaaaa",
+        nessa: {},
+        effective: { coordinator: plain, thread: plain },
+      },
       { nessa: {}, channel: {}, effective: { coordinator: plain, thread: plain } },
     ])
       expect(() => replyStyles(bad)).toThrow("Invalid reply styles")
