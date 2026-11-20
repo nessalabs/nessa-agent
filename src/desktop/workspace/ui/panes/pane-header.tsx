@@ -27,9 +27,10 @@ import {
 } from "../../../model/header-image"
 
 /**
- * A pane's title bar: the session's mark, title and state, the button to
- * its Chat context (`ChatContextButton`, where what each widget plugin draws
- * for the session now lives), then its "…" menu and ×. At the top of a conversation the heading below already says it all,
+ * A pane's title bar: the session's mark, title and state, the button that
+ * shows its Chat context beside the chat (`ChatContextButton`, where what
+ * each widget plugin draws for the session now lives), then its "…" menu
+ * and ×. At the top of a conversation the heading below already says it all,
  * so the name shows only once the heading has scrolled away; a new session's
  * home speaks for itself when alone, and says "New session" beside others. With one pane the bar moves the window; with more
  * it carries the pane to another place. The × keeps its room when there is
@@ -40,11 +41,14 @@ export const PaneHeader = memo(function PaneHeader({
   sessionId,
   multi,
   titleShown,
+  context,
 }: {
   pane: PaneKey
   sessionId: string
   multi: boolean
   titleShown: boolean
+  /** Chat context's column in this pane: whether it shows, its id, and its toggle. */
+  context: { shown: boolean; id: string; onToggle: () => void }
 }) {
   // Why a picture chosen from this pane's menu was not taken, said briefly in
   // its header: the menu that asked is gone by the time the file dialog answers.
@@ -114,7 +118,11 @@ export const PaneHeader = memo(function PaneHeader({
           }
           actions={
             <>
-              <ChatContextButton sessionId={sessionId} />
+              <ChatContextButton
+                shown={context.shown}
+                controls={context.id}
+                onToggle={context.onToggle}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <IconButton

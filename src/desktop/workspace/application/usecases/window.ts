@@ -15,7 +15,6 @@
  * ```
  */
 import { focusedPane } from "../../../split-panes/model/pane-layout"
-import { isChatContextTab, panelTabs } from "../../model/chat-context"
 import { paneItemOf } from "../../model/pane-item"
 import {
   percents,
@@ -89,20 +88,15 @@ export function shownWindow(state: WorkspaceState): ShownWindow | null {
 }
 
 /**
- * The focused chat's panel: its widgets, as `panelTabs` draws them, and the
- * one in front. Chat context is the panel's own and not a widget, so it is
- * never a tab here: `front` is null while it is in front. No focused session
- * has no tabs either. `open` is the layout's, not the chat's.
+ * The focused chat's panel. No focused session, or a chat with no panel,
+ * has no tabs and no front. `open` is the layout's, not the chat's.
  */
 function shownPanel(state: WorkspaceState): ShownPanel {
   const sessionId = state.panes ? sessionIn(focusedPane(state.panes)) : undefined
-  if (!sessionId) return { open: state.panelOpen, tabs: [], front: null }
-  const { widgets, front } = panelTabs(sessionId, entry(state.panels, sessionId))
-  return {
-    open: state.panelOpen,
-    tabs: widgets,
-    front: isChatContextTab(front) ? null : front,
-  }
+  const panel = sessionId ? entry(state.panels, sessionId) : undefined
+  return panel
+    ? { open: state.panelOpen, tabs: panel.tabs, front: panel.front }
+    : { open: state.panelOpen, tabs: [], front: null }
 }
 
 /** A pane's item as shown: a session not started yet is a draft, any other a conversation. */

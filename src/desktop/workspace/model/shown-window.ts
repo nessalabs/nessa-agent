@@ -39,10 +39,9 @@ export interface ShownColumn {
 export interface ShownPanel {
   /** Whether the panel is drawn. Closed, its tabs are not on screen. */
   readonly open: boolean
-  /** That chat's widget tabs, in the order they were opened. Empty when it
-   * has none. Chat context, the panel's own first tab, is not among them. */
+  /** That chat's tabs, in the order they were opened. Empty when it has none. */
   readonly tabs: readonly WidgetRef[]
-  /** The tab in front: one of `tabs`, or none while Chat context is in front. */
+  /** The tab in front: one of `tabs`, or none when there are none. */
   readonly front: WidgetRef | null
 }
 

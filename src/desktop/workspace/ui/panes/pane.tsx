@@ -1,4 +1,12 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { sendMessage } from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
@@ -19,6 +27,7 @@ import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
 import { Conversation, PaneHome } from "./conversation"
 import { PaneHeader } from "./pane-header"
+import { ChatContext } from "../chrome/chat-context"
 import { useFilledAfterFirstPaint } from "./use-filled-after-first-paint"
 import { usePaneFocus } from "./use-pane-focus"
 
@@ -33,6 +42,11 @@ import { usePaneFocus } from "./use-pane-focus"
  * lands by zone: a side splits, the middle opens in place or swaps. Sending a
  * new session's first message replaces its home with the conversation; the
  * workspace's focus owner follows the removed field.
+ *
+ * Its header's Chat context button shows everything about the chat in a
+ * column on the pane's right, inside the chat's own space, beside the
+ * conversation. It is this pane's: it stays as the pane shows another chat,
+ * and shows that chat's.
  */
 export const Pane = memo(function Pane({
   placement,
@@ -63,6 +77,16 @@ export const Pane = memo(function Pane({
   const listed = sessionTitle !== undefined
   const showHome = useShownDraft(id, liveSession, listed)
   const [headingVisible, setHeadingVisible] = useState(false)
+  const [contextShown, setContextShown] = useState(false)
+  const contextId = useId()
+  const context = useMemo(
+    () => ({
+      shown: contextShown,
+      id: contextId,
+      onToggle: () => setContextShown((shown) => !shown),
+    }),
+    [contextShown, contextId],
+  )
   const filled = useFilledAfterFirstPaint()
 
   const homeRef = useRef<HTMLDivElement>(null)
@@ -125,8 +149,13 @@ export const Pane = memo(function Pane({
         sessionId={id}
         multi={multi}
         titleShown={listed && !headingVisible}
+        context={context}
       />
-      <div className="workspace-pane-body" data-split-through>
+      <div
+        className="workspace-pane-body"
+        data-split-through
+        data-context={(contextShown && filled && listed && !showHome) || undefined}
+      >
         {!filled ? null : showHome ? (
           <div
             key={`home-${id}`}
@@ -145,6 +174,15 @@ export const Pane = memo(function Pane({
             arrival={arrival}
             onArrivalDone={finishArrival}
           />
+        ) : null}
+        {contextShown && filled && listed && !showHome ? (
+          <aside
+            id={contextId}
+            className="workspace-pane-context"
+            aria-label="Chat context"
+          >
+            <ChatContext sessionId={id} />
+          </aside>
         ) : null}
       </div>
     </article>

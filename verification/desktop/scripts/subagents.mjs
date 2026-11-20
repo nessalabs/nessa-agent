@@ -61,8 +61,8 @@ Checks, per engine and layout (--only <names> to pick):
            scrolled up; Escape returns to the list (the panel's next Escape
            changes nothing; the window's returns to the panes)
   narrow   the list fits the panel of a narrow, short window; the
-           conversation's header's Chat context button opens Chat context,
-           whose Subagents row shows its subagents, the busiest first, and
+           conversation's header's Chat context button shows Chat context
+           in the conversation's pane, whose Subagents row shows its subagents, the busiest first, and
            whose stack opens their tab; the title, the button and the menu
            stay inside the header, and the title keeps a positive width. A production
            Chromium run fails when the stack click's longest frame exceeds the
@@ -485,7 +485,7 @@ const checks = {
     await need(page, `${css.chatContext} ${css.subagentStack}`, "the Subagents row")
     const context = await headerFit(page)
     assertStack(context, failures)
-    await shot(page, label, `context-${label.engine}.png`, css.panel)
+    await shot(page, label, `context-${label.engine}.png`, css.focusedPane)
     const measured = await opensNoPane(
       page,
       () => measureOpening(page, label, () => page.locator(css.subagentStack).click()),

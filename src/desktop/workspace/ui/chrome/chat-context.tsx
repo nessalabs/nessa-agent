@@ -1,8 +1,9 @@
 /**
- * Chat context: the right panel's first tab, for the chat in front. What it
- * runs on (Environment), the model and its window (Context), what its agents
- * asked the person (Decisions, `decisions.tsx`), and the files its agent
- * published (Outputs), each a section that folds from its header.
+ * Chat context: a column on a chat pane's right, shown from its header
+ * (`Pane`). What the chat runs on (Environment), the model and its window
+ * (Context), what its agents asked the person (Decisions, `decisions.tsx`),
+ * and the files its agent published (Outputs), each a section that folds
+ * from its header.
  * It only reads the chat's transcript; nothing here changes the chat.
  */
 import { useId, type ReactNode } from "react"
