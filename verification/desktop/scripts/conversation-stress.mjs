@@ -11147,6 +11147,7 @@ const steps = {
     await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
+    await codeBlocksShowTheirCode(message, failures)
     await codeStaysDark(run.page, message, failures)
   },
 
@@ -11170,6 +11171,10 @@ const steps = {
         failures.push("the wide table to swipe over was not drawn")
         return
       }
+      // The wide code block must have drawn its line before a swipe over it
+      // can say anything about who took the swipe.
+      await codeBlocksShowTheirCode(message, failures)
+      if (failures.length) return
       await setSideRail(page, true, failures)
       if (failures.length) return
       try {
@@ -12250,6 +12255,65 @@ async function welcomedAtOnce(page, failures) {
  * its boxes' fills. The page's appearance is put back after, whatever the
  * check found.
  */
+/**
+ * The code each fenced block in a `table` answer holds, in order, read from
+ * the lines the scripted agent streams (`CODE_LINES`): Mermaid is a diagram,
+ * not a block.
+ */
+function fencedCode() {
+  const fences = []
+  let open = null
+  for (const line of CODE_LINES) {
+    if (line.startsWith("```")) {
+      if (open === null) open = { language: line.slice(3), lines: [] }
+      else {
+        if (open.language !== "mermaid") fences.push(open.lines.join("\n"))
+        open = null
+      }
+    } else if (open !== null) open.lines.push(line)
+  }
+  return fences
+}
+
+/**
+ * Every code block in the answer shows its own code and takes room. The
+ * highlighter draws its lines inside a shadow root, so a block whose engine
+ * never drew stays an empty, zero-height `<pre>` that every check reading
+ * the block's box or colour would pass.
+ */
+async function codeBlocksShowTheirCode(message, failures) {
+  const want = fencedCode()
+  const read = () =>
+    message.evaluate((element) =>
+      [...element.querySelectorAll('[data-slot="code-block"]')].map((block) => ({
+        text: [...block.querySelectorAll("*")]
+          .map((each) => each.shadowRoot?.textContent ?? "")
+          .join(""),
+        height: block.getBoundingClientRect().height,
+      })),
+    )
+  const shows = (blocks) =>
+    blocks.length === want.length &&
+    blocks.every(
+      (block, index) =>
+        block.height > 0 &&
+        want[index].split("\n").every((line) => block.text.includes(line)),
+    )
+  if (await waitFor(async () => shows(await read()), 20_000)) return
+  const blocks = await read()
+  if (blocks.length !== want.length)
+    failures.push(`the answer has ${blocks.length} code blocks, not ${want.length}`)
+  for (const [index, block] of blocks.entries()) {
+    const missing = (want[index] ?? "")
+      .split("\n")
+      .filter((line) => !block.text.includes(line))
+    if (missing.length > 0 || block.height <= 0)
+      failures.push(
+        `code block ${index + 1} does not show its code (${Math.round(block.height)} px high, missing ${JSON.stringify(missing)})`,
+      )
+  }
+}
+
 async function codeStaysDark(page, message, failures) {
   // The first block, with its one short line; the second is the wide one.
   const blocks = message.locator('[data-slot="code-block"]')
