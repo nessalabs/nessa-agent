@@ -5,7 +5,7 @@ CREATE TABLE owner_decisions (
     ask_id TEXT NOT NULL,
     asked_at_ms INTEGER NOT NULL,
     ask TEXT NOT NULL CHECK (length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192),
-    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 4096),
+    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 8192),
     PRIMARY KEY (conversation_id, ask_id)
 ) STRICT;
 INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)

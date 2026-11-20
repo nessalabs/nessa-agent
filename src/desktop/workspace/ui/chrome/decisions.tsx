@@ -42,17 +42,28 @@ export function DecisionRows({
 }) {
   const now = useNow(60_000)
   const [opened, setOpened] = useState<{ askId: string | null } | null>(null)
-  const decisions =
-    read.state === "read" || read.state === "reading" ? read.decisions : undefined
-  if (!decisions) {
-    return (
-      <p className="chat-context-none">
-        {read.state === "failed" ? "Decisions could not be read" : "Reading decisions"}
+  if (read.state === "none") return null
+  const decisions = read.decisions
+  // Said beside the rows it could not refresh, or in their place before any.
+  const failed =
+    read.state === "failed" ? (
+      <p className="chat-context-none" data-decisions-failed="">
+        {decisions ? "Could not refresh" : "Decisions could not be read"}
+        {" · "}
+        <Button
+          variant="link"
+          size="sm"
+          className="chat-context-retry"
+          onClick={read.retry}
+        >
+          Try again
+        </Button>
       </p>
-    )
-  }
+    ) : null
+  if (!decisions) return failed ?? <p className="chat-context-none">Reading decisions</p>
   const ordered = decisionsInOrder(decisions)
-  if (ordered.length === 0) return <p className="chat-context-none">Nothing asked yet</p>
+  if (ordered.length === 0)
+    return failed ?? <p className="chat-context-none">Nothing asked yet</p>
   const shown = ordered.slice(0, decisionsShown)
   const more = ordered.length - shown.length
   return (
@@ -83,6 +94,7 @@ export function DecisionRows({
       >
         {more > 0 ? `${more} more · See all` : "See all"}
       </Button>
+      {failed}
       {opened ? (
         <DecisionsDialog
           sessionId={sessionId}

@@ -31,10 +31,7 @@ export function ChatContext({ sessionId }: { sessionId: string }) {
   const toggle = (id: SectionId) => dispatch(toggleChatContextSection({ sectionId: id }))
   const published = transcript?.published ?? []
   const decisions = useDecisions(sessionId)
-  const asked =
-    decisions.state === "read" || decisions.state === "reading"
-      ? decisions.decisions?.length
-      : undefined
+  const asked = decisions.state === "none" ? undefined : decisions.decisions?.length
   return (
     <section className="chat-context" aria-label="Chat context" data-chat-context>
       <Section id="environment" label="Environment" shut={shut} onToggle={toggle}>
@@ -53,7 +50,8 @@ export function ChatContext({ sessionId }: { sessionId: string }) {
           shut={shut}
           onToggle={toggle}
         >
-          <DecisionRows sessionId={sessionId} read={decisions} />
+          {/* Keyed by chat: an open dialog belongs to the chat it opened for. */}
+          <DecisionRows key={sessionId} sessionId={sessionId} read={decisions} />
         </Section>
       )}
       <Section

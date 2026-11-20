@@ -6332,7 +6332,7 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => ProductLane::Controls,
             ProductMethod::ConversationUnarchive => ProductLane::Controls,
             ProductMethod::ConversationRename => ProductLane::Controls,
-            ProductMethod::ConversationDecisions => ProductLane::Controls,
+            ProductMethod::ConversationDecisions => ProductLane::Requests,
             ProductMethod::ConversationDelete => ProductLane::Deletions,
             ProductMethod::ConversationReorder => ProductLane::Controls,
             ProductMethod::ArtifactRead => ProductLane::ArtifactReads,

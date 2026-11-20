@@ -1686,28 +1686,15 @@ fn to_json(value: &impl serde::Serialize) -> Result<String, ConversationError> {
 
 /// Keep in `id`'s decisions what `summary` asks and settles, in the
 /// transaction that records it: the ask it waits on, as a decision still
-/// waiting, and the ask it took down, with how. Only the newest
-/// [`MAX_DECISIONS_KEPT`] are kept.
+/// waiting, and the ask it took down, with how. The settled one is written
+/// first, so the order rows are written in is the order they were asked in:
+/// decisions are listed and trimmed by it (`rowid`), never by the wall clock,
+/// which can step back. Only the newest [`MAX_DECISIONS_KEPT`] are kept.
 fn record_decisions(
     transaction: &rusqlite::Transaction<'_>,
     id: &ConversationId,
     summary: &ConversationSummary,
 ) -> Result<(), ConversationError> {
-    if let Some(ask) = summary.ask() {
-        transaction
-            .cached_execute(
-                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
-                 VALUES (?1, ?2, ?3, ?4, NULL)
-                 ON CONFLICT (conversation_id, ask_id) DO NOTHING",
-                params![
-                    id.to_string(),
-                    ask.ask_id,
-                    stored_time(ask.asked_at_ms)?,
-                    to_json(ask)?,
-                ],
-            )
-            .map_err(failed)?;
-    }
     if let Some(settled) = summary.settled() {
         // The ask is written with it, so an ask asked before decisions were
         // kept is settled too.
@@ -1727,12 +1714,27 @@ fn record_decisions(
             )
             .map_err(failed)?;
     }
+    if let Some(ask) = summary.ask() {
+        transaction
+            .cached_execute(
+                "INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask, outcome)
+                 VALUES (?1, ?2, ?3, ?4, NULL)
+                 ON CONFLICT (conversation_id, ask_id) DO NOTHING",
+                params![
+                    id.to_string(),
+                    ask.ask_id,
+                    stored_time(ask.asked_at_ms)?,
+                    to_json(ask)?,
+                ],
+            )
+            .map_err(failed)?;
+    }
     if summary.ask().is_some() || summary.settled().is_some() {
         transaction
             .cached_execute(
                 "DELETE FROM owner_decisions WHERE conversation_id = ?1 AND ask_id NOT IN (
                      SELECT ask_id FROM owner_decisions WHERE conversation_id = ?1
-                     ORDER BY asked_at_ms DESC, rowid DESC LIMIT ?2)",
+                     ORDER BY rowid DESC LIMIT ?2)",
                 params![id.to_string(), MAX_DECISIONS_KEPT as i64],
             )
             .map_err(failed)?;
@@ -1827,7 +1829,7 @@ impl ConversationSummaries for LocalConversationStore {
             let mut statement = connection
                 .prepare_cached(
                     "SELECT ask, outcome FROM owner_decisions WHERE conversation_id = ?1
-                     ORDER BY asked_at_ms DESC, rowid DESC LIMIT ?2",
+                     ORDER BY rowid DESC LIMIT ?2",
                 )
                 .map_err(failed)?;
             let rows = statement

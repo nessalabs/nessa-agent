@@ -150,7 +150,7 @@
     "conversation.decisions": {
       "params": "ConversationDecisionsParams",
       "grant": "conversation.write",
-      "lane": "controls"
+      "lane": "requests"
     },
     "conversation.delete": {
       "params": "ConversationDeleteParams",

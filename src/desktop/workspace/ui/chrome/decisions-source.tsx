@@ -4,7 +4,14 @@
  * (`main.tsx`); tests supply their own, and a window with none shows no
  * Decisions section.
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react"
 import type { DecisionSource } from "../../application/ports"
 import type { Decision } from "../../model/decisions"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
@@ -26,47 +33,71 @@ export function DecisionsProvider({
   )
 }
 
+/**
+ * Where a chat's decisions stand. `decisions` is the last list read for
+ * this chat, kept while the next read is on its way and after one fails, so
+ * the rows and an open dialog stay put; `retry` asks again.
+ */
 export type DecisionsRead =
   | { readonly state: "none" }
-  | { readonly state: "reading"; readonly decisions?: readonly Decision[] }
-  | { readonly state: "read"; readonly decisions: readonly Decision[] }
-  | { readonly state: "failed" }
+  | {
+      readonly state: "reading" | "read" | "failed"
+      readonly decisions?: readonly Decision[]
+      readonly retry: () => void
+    }
+
+type Held = {
+  readonly sessionId: string
+  readonly state: "reading" | "read" | "failed"
+  readonly decisions?: readonly Decision[]
+}
 
 /**
- * A chat's decisions, read again whenever its list row's ask changes: a new
- * ask replaces the last, and the person's answer settles it. What was read
- * last stays shown while the next read is on its way.
+ * A chat's decisions, read again whenever its list row's ask changes (a new
+ * ask replaces the last, and the person's answer settles it), and when
+ * asked to retry. A read for another chat is never shown for this one.
  */
 export function useDecisions(sessionId: string): DecisionsRead {
   const source = useContext(DecisionsContext)
   const askId = useWorkspaceSelector(
     (state) => selectSession(state, sessionId)?.ask?.askId,
   )
-  const [read, setRead] = useState<DecisionsRead & { sessionId?: string }>({
-    state: "none",
-  })
+  const [attempt, setAttempt] = useState(0)
+  const [held, setHeld] = useState<Held | null>(null)
   useEffect(() => {
     if (!source) return
     let current = true
-    setRead((last) =>
-      last.state === "read" && last.sessionId === sessionId
-        ? { state: "reading", decisions: last.decisions, sessionId }
-        : { state: "reading", sessionId },
+    setHeld((last) =>
+      last?.sessionId === sessionId
+        ? { ...last, state: "reading" }
+        : { sessionId, state: "reading" },
     )
     source.decisions(sessionId).then(
       (decisions) => {
-        if (current) setRead({ state: "read", decisions, sessionId })
+        if (current) setHeld({ sessionId, state: "read", decisions })
       },
       (error: unknown) => {
         console.error("Reading a chat's decisions failed", error)
-        if (current) setRead({ state: "failed", sessionId })
+        if (current)
+          setHeld((last) => ({
+            sessionId,
+            state: "failed",
+            ...(last?.sessionId === sessionId && last.decisions
+              ? { decisions: last.decisions }
+              : {}),
+          }))
       },
     )
     return () => {
       current = false
     }
-  }, [source, sessionId, askId])
+  }, [source, sessionId, askId, attempt])
+  const retry = useCallback(() => setAttempt((count) => count + 1), [])
   if (!source) return { state: "none" }
-  // A read for another chat is never shown for this one.
-  return read.sessionId === sessionId ? read : { state: "reading" }
+  if (held?.sessionId !== sessionId) return { state: "reading", retry }
+  return {
+    state: held.state,
+    ...(held.decisions ? { decisions: held.decisions } : {}),
+    retry,
+  }
 }

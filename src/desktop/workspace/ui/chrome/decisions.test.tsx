@@ -255,7 +255,29 @@ describe("Decisions in Chat context", () => {
     await settle()
     await frames()
     expect(reads).toEqual(["a", "a"])
+    // The rows read before stay, the dialog with them, and Try again reads again.
+    expect(rows()).toEqual(["d3", "d2", "d1"])
+    expect(section()?.textContent).toContain("Could not refresh")
+    answer = settled.slice(0, 2)
+    await click(section()?.querySelector("[data-decisions-failed] button"))
+    await settle()
+    await frames()
+    expect(reads).toEqual(["a", "a", "a"])
+    expect(rows()).toEqual(["d2", "d1"])
+    expect(section()?.querySelector("[data-decisions-failed]")).toBeNull()
+  })
+
+  it("says when the first read fails, and reads again on Try again", async () => {
+    let answer: readonly Decision[] | Error = new Error("offline")
+    const { source, reads } = decisionsOf(() => answer)
+    await render(source)
     expect(section()?.textContent).toContain("Decisions could not be read")
+    answer = settled
+    await click(section()?.querySelector("[data-decisions-failed] button"))
+    await settle()
+    await frames()
+    expect(reads).toEqual(["a", "a"])
+    expect(rows()).toEqual(["d3", "d2", "d1"])
   })
 
   it("is not there beside no source of decisions", async () => {

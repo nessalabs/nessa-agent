@@ -939,6 +939,11 @@ impl OwnerAsk {
 }
 /// Most bytes of an answer a decision keeps: the person's message, cut on a
 /// character boundary. The whole message is in the conversation.
+/// The most a decision's outcome takes as JSON, the bound the metadata store
+/// holds its `owner_decisions.outcome` column to. An answer of
+/// [`MAX_DECISION_ANSWER_BYTES`] can take six times that once escaped (a
+/// control character is written `\u00XX`), and still fits.
+pub const MAX_DECISION_OUTCOME_JSON_BYTES: usize = 8192;
 pub const MAX_DECISION_ANSWER_BYTES: usize = 1024;
 /// Most decisions a conversation keeps, newest first; an older one goes when
 /// a newer one is asked.

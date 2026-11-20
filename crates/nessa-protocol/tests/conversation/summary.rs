@@ -1,6 +1,8 @@
 //! A conversation's summary rules, tested without storage, a runtime, or an agent.
 use super::{ConversationPreview, ConversationSummary, ConversationTitle};
-use crate::conversation::view::{OwnerDecisionOutcome, MAX_DECISION_ANSWER_BYTES};
+use crate::conversation::view::{
+    OwnerDecisionOutcome, MAX_DECISION_ANSWER_BYTES, MAX_DECISION_OUTCOME_JSON_BYTES,
+};
 
 fn preview(text: &str) -> Option<String> {
     ConversationPreview::from_text(text).map(|preview| preview.as_str().to_owned())
@@ -365,4 +367,17 @@ fn an_answer_names_the_choice_it_is_and_keeps_a_bounded_text() {
         }
         OwnerDecisionOutcome::Replaced { .. } => panic!("an answer is decided"),
     }
+}
+
+#[test]
+fn an_answer_of_control_characters_still_fits_where_decisions_are_kept() {
+    let ask = asked("a", 10);
+    let worst = "\u{1}".repeat(MAX_DECISION_ANSWER_BYTES * 2);
+    let outcome = OwnerDecisionOutcome::answered(&ask, &worst, u64::MAX);
+    let json = serde_json::to_string(&outcome).unwrap();
+    assert!(
+        json.len() <= MAX_DECISION_OUTCOME_JSON_BYTES,
+        "{} bytes",
+        json.len()
+    );
 }

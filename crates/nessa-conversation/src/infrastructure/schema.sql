@@ -247,12 +247,13 @@ CREATE TABLE closed_threads (
 -- Read newest first: by when it was asked, then by rowid, the order the
 -- asks were written in, for asks made in the same millisecond.
 -- Added by schema_upgrades/11.sql.
+-- The outcome bound is MAX_DECISION_OUTCOME_JSON_BYTES (nessa-protocol view.rs).
 CREATE TABLE owner_decisions (
     conversation_id TEXT NOT NULL REFERENCES conversations (id),
     ask_id TEXT NOT NULL,
     asked_at_ms INTEGER NOT NULL,
     ask TEXT NOT NULL CHECK (length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192),
-    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 4096),
+    outcome TEXT CHECK (outcome IS NULL OR length(CAST(outcome AS BLOB)) BETWEEN 2 AND 8192),
     PRIMARY KEY (conversation_id, ask_id)
 ) STRICT;
 
