@@ -6,7 +6,7 @@ use super::super::super::{
 use super::*;
 use crate::application::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture, ReportRegistration,
-    ThreadReport, ThreadReportStore, ThreadTurn, EVENT_SURFACE_PREFIX,
+    ThreadReport, ThreadReportStore, ThreadTurn,
 };
 use crate::infrastructure::LocalThreadReports;
 #[cfg(unix)]
@@ -1840,6 +1840,7 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
 #[cfg(unix)]
 #[tokio::test]
 async fn an_ask_waits_on_the_list_until_the_person_writes() {
+    use crate::application::EVENT_SURFACE_PREFIX;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
