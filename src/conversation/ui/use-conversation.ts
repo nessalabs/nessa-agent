@@ -58,10 +58,10 @@ export function useConversation() {
       dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
     /**
      * Raises the active conversation to `mode` for an access request the
-     * person approved, and says whether the gateway took it. The same command
-     * the access picker sends.
+     * person approved, and says what became of it. The same command the
+     * access picker sends.
      */
-    raiseAccess: (mode: ApprovalMode): Promise<boolean> =>
+    raiseAccess: (mode: ApprovalMode): Promise<"taken" | "changing" | "refused"> =>
       dispatch(raiseAccess({ id: active.id, mode })).unwrap(),
     setUsageLimitAutoContinue: (enabled: boolean) =>
       dispatch(setUsageLimitAutoContinue(enabled)).unwrap(),

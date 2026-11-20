@@ -17,7 +17,7 @@ import { entry } from "../../application/workspace-state"
  * `AccessRequestHost`'s, the same as the panel's: Approve raises the
  * session's access by the person's own access command, the same as the
  * composer's shield, and answers once the source's conversation says the
- * session runs at it.
+ * session runs at it, every fact here as its owner states it.
  */
 export function OwnerAsk({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
@@ -30,15 +30,17 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
     const access = entry(state.workspace.transcripts, sessionId)?.access
     return access && access.changing === undefined ? access.mode : undefined
   })
-  // Where the session's access is headed: the person's choice while it is on
-  // its way, or the source's mode once a choice was refused.
-  const heading = useWorkspaceSelector((state) => {
+  // Where a change on its way is headed: the source's own, or the person's
+  // choice held for a turn's end or asked of the source. A taken choice is
+  // not one: the source has it, and its conversation says where it landed.
+  const underway = useWorkspaceSelector((state) => {
     const choice = entry(state.workspace.accessChoices, sessionId)
-    const source = entry(state.workspace.transcripts, sessionId)?.access
-    if (choice?.state === "refused") return source?.mode
-    if (choice && choice.state !== "chosen") return choice.mode
-    return source?.changing
+    if (choice?.state === "pending" || choice?.state === "changing") return choice.mode
+    return entry(state.workspace.transcripts, sessionId)?.access?.changing
   })
+  const revision = useWorkspaceSelector(
+    (state) => entry(state.workspace.transcripts, sessionId)?.revision,
+  )
   const [sending, setSending] = useState<{ askId: string; label: string } | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   // A new ask starts with nothing on its way.
@@ -56,8 +58,9 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
       <AccessRequestHost
         ask={ask}
         runsAt={runsAt}
-        heading={heading}
+        underway={underway}
         working={working}
+        revision={revision}
         raise={(mode) =>
           dispatch(chooseAccess({ sessionId, mode, initiator: "person" })).then(
             (outcome) =>

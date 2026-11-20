@@ -783,7 +783,8 @@ export function App({
                         ? chat.active.remote.approvalMode
                         : undefined
                     }
-                    heading={chat.active.remote?.approvalModeChange?.requestedMode}
+                    underway={chat.active.remote?.approvalModeChange?.requestedMode}
+                    revision={chat.active.revision}
                     working={
                       chat.active.phase !== "idle" || !!chat.active.remote?.running
                     }

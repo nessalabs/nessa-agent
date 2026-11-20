@@ -50,7 +50,7 @@ it("offers every choice again when the gateway did not take the answer", async (
           sent.push(text)
           return new Promise((resolve) => (settle = resolve))
         }}
-        raiseAccess={() => Promise.resolve(true)}
+        raiseAccess={() => Promise.resolve("taken")}
         access="ask"
         working={false}
       />,
@@ -112,7 +112,7 @@ it("sends Approve only once the chat runs at the access asked for", async () => 
           }}
           raiseAccess={(raised) => {
             steps.push(`raised ${raised}`)
-            return Promise.resolve(true)
+            return Promise.resolve("taken")
           }}
           access={mode}
           working={working}
@@ -151,7 +151,7 @@ it("sends no Approve when the ask left before the access changed", async () => {
             steps.push(`sent ${text}`)
             return Promise.resolve(true)
           }}
-          raiseAccess={() => Promise.resolve(true)}
+          raiseAccess={() => Promise.resolve("taken")}
           access={mode}
           working={false}
         />,
@@ -177,7 +177,7 @@ it("sends no Approve when the access did not change, and Not now changes nothing
         }}
         raiseAccess={() => {
           steps.push("raise refused")
-          return Promise.resolve(false)
+          return Promise.resolve("refused")
         }}
         access="ask"
         working={false}

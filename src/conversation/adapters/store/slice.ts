@@ -770,23 +770,26 @@ export const controlConversation = createAsyncThunk<
 )
 /**
  * Raises a conversation's access for an access request the person approved,
- * and says whether the gateway took the change. `controlConversation` lets a
- * control go without a word when the conversation is not begun or another
- * control is on its way; that is "not taken" here, never a quiet yes, since
- * the person's Approve is sent only after the access really changed.
+ * and says what became of it: `taken` by the gateway, `changing` when another
+ * control is on its way (`controlConversation` would let this one go without
+ * a word), or `refused`, the conversation not begun or the gateway saying no.
+ * Never a quiet yes: the person's Approve is sent only after the access
+ * really changed.
  */
 export const raiseAccess = createAsyncThunk<
-  boolean,
+  "taken" | "changing" | "refused",
   { id: string; mode: ApprovalMode },
   ThunkConfig
 >("conversation/raiseAccess", async ({ id, mode }, { dispatch, getState }) => {
   const current = getState().conversation.conversations.find((item) => item.id === id)
-  if (!current?.serverConversationId || current.controlPending) return false
+  if (!current?.serverConversationId) return "refused"
+  if (current.controlPending) return "changing"
   const finished = await dispatch(
     controlConversation({ id, control: { kind: "setApprovalMode", mode } }),
   )
-  return !controlConversation.rejected.match(finished)
+  return controlConversation.rejected.match(finished) ? "refused" : "taken"
 })
+
 function capturedTurn(turns: readonly Turn[]): string | undefined {
   const running = [...turns]
     .reverse()

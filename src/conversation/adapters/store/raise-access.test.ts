@@ -27,7 +27,7 @@ it("does not call a change taken when it was never asked for", async () => {
   )
   // Not begun: nothing to change yet.
   expect(await store.dispatch(raiseAccess({ id: "c0", mode: "full" })).unwrap()).toBe(
-    false,
+    "refused",
   )
   await store.dispatch(sendDraft({ content: textContent("hello") }))
   const first = store.dispatch(raiseAccess({ id: "c0", mode: "full" }))
@@ -35,10 +35,10 @@ it("does not call a change taken when it was never asked for", async () => {
   await Promise.resolve()
   // Another control is on its way, so this one is let go, and says so.
   expect(await store.dispatch(raiseAccess({ id: "c0", mode: "auto" })).unwrap()).toBe(
-    false,
+    "changing",
   )
   await new Promise((resolve) => setTimeout(resolve, 0))
   finish()
-  expect(await first.unwrap()).toBe(true)
+  expect(await first.unwrap()).toBe("taken")
   expect(asked).toEqual(["full"])
 })

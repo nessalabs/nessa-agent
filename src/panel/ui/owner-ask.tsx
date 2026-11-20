@@ -11,28 +11,32 @@ import { AccessRequestHost, OwnerAskCard, type OwnerAskView } from "../../conver
  * An agent's request for more access is the red card, whose round is
  * `AccessRequestHost`'s, the same as the desktop window's: Approve raises
  * the conversation's access by the access picker's own command
- * (`raiseAccess`) and answers once the conversation runs at it (`access`).
+ * (`raiseAccess`) and answers once the conversation's view says it runs at
+ * it, every fact here as the view states it.
  */
 export function PanelOwnerAsk({
   ask,
   submit,
   raiseAccess,
   access,
-  heading,
+  underway,
+  revision,
   working,
 }: {
   ask: OwnerAskView | undefined
   /** Sends text as the person's message; resolves whether the gateway took it. */
   submit: (text: string) => Promise<boolean>
-  /** Raises the conversation's access; resolves whether the gateway took it. */
-  raiseAccess: (mode: "auto" | "full") => Promise<boolean>
+  /** Raises the conversation's access, and says what became of it. */
+  raiseAccess: (mode: "auto" | "full") => Promise<"taken" | "changing" | "refused">
   /**
    * The access the conversation runs at, as its view last said it; absent
    * while a change is on its way and not yet in effect.
    */
   access: "ask" | "auto" | "full" | undefined
-  /** The access a change on its way asks for, if any. */
-  heading?: "ask" | "auto" | "full" | undefined
+  /** Where a change on its way is headed, as the view says, if one is. */
+  underway?: "ask" | "auto" | "full" | undefined
+  /** The view's revision: a different one is a newer view. */
+  revision?: string | undefined
   /** The agent is at work, so access cannot change yet. */
   working: boolean
 }) {
@@ -50,9 +54,10 @@ export function PanelOwnerAsk({
       <AccessRequestHost
         ask={ask}
         runsAt={access}
-        heading={heading}
+        underway={underway}
         working={working}
-        raise={(mode) => raiseAccess(mode).then((taken) => (taken ? "taken" : "refused"))}
+        revision={revision}
+        raise={raiseAccess}
         answer={(text) => submit(text).catch(() => false)}
       />
       {ask && !ask.access ? (

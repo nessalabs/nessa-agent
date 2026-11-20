@@ -36,8 +36,8 @@ export {
   AccessRequestCard,
   AccessRequestHost,
   isAccessRequest,
-  type RaiseOutcome,
 } from "./ui/access-request-card"
+export type { RaiseOutcome } from "./model/access-approval"
 export { useOwnerAsks } from "./ui/use-owner-asks"
 export type { OwnerAskAccessView, OwnerAskView } from "./model/owner-ask"
 export { usageLimitOnClientClock } from "./model"

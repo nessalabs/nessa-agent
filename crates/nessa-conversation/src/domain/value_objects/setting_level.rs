@@ -22,8 +22,10 @@ pub enum SettingLevel {
     /// Only the owner types it, and the agent never sees it: an API key, a
     /// token, a sign-in.
     OwnerTypes,
-    /// It raises what agents may do: nothing changes until the owner
-    /// approves it on the red card. Full access, sharing, linking a device.
+    /// It raises what agents may do, so an agent never changes it: full
+    /// access, sharing, linking a device. Of these only a chat's access can
+    /// be asked for today, on the red card (`request_access`), and the
+    /// owner's own access command is what changes it.
     RaisesAccess,
 }
 
@@ -47,8 +49,10 @@ impl SettingLevel {
     }
 }
 
-/// Every setting the gateway keeps, named by what it is to the owner, not by
-/// the method that changes it.
+/// The settings the gateway keeps, named by what it is to the owner, not by
+/// the method that changes it. A new setting method is not tied to this list
+/// by the compiler: whoever adds one adds its setting here, and the match in
+/// [`Setting::level`] then makes them give it a level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Setting {
     /// How agents talk, at any level (`replyStyle.set`).

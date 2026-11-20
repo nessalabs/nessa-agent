@@ -2,7 +2,8 @@
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { AccessRequestHost, type RaiseOutcome } from "./access-request-card"
+import type { RaiseOutcome } from "../model/access-approval"
+import { AccessRequestHost } from "./access-request-card"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -59,21 +60,24 @@ function host(raised: RaiseOutcome = "taken") {
   const draw = ({
     ask,
     runsAt,
-    heading,
+    underway,
     working = false,
+    revision = 1,
   }: {
     ask: Shown
     runsAt: Mode | undefined
-    heading?: Mode
+    underway?: Mode
     working?: boolean
+    revision?: number
   }) =>
     act(() =>
       root.render(
         <AccessRequestHost
           ask={ask}
           runsAt={runsAt}
-          heading={heading}
+          underway={underway}
           working={working}
+          revision={revision}
           raise={() => Promise.resolve(raised)}
           answer={(text) => {
             sent.push(text)
@@ -94,57 +98,98 @@ const button = (name: string): HTMLButtonElement => {
   return found
 }
 
+/** Approves `access` at revision 1, Ask, and lets the answer go at Full. */
+async function approved() {
+  const round = host()
+  round.draw({ ask: access, runsAt: "ask" })
+  await act(async () => button("Approve").click())
+  round.draw({ ask: access, runsAt: "full", revision: 2 })
+  await round.answer(true)
+  return round
+}
+
 it("keeps the card through the answer, even as the list lets the ask go", async () => {
   const { sent, draw, answer } = host()
   draw({ ask: access, runsAt: "ask" })
   await act(async () => button("Approve").click())
-  draw({ ask: access, runsAt: "full" })
+  draw({ ask: access, runsAt: "full", revision: 2 })
   expect(sent).toEqual(["Approve"])
   const drawn = card()
   // The answer's own write takes the ask off the row before the send returns.
-  draw({ ask: undefined, runsAt: "full" })
+  draw({ ask: undefined, runsAt: "full", revision: 3 })
   expect(card()).toBe(drawn)
-  expect(card()?.dataset.state).toBe("approved")
   await answer(true)
   expect(card()).toBe(drawn)
+  expect(card()?.dataset.state).toBe("approved")
 })
 
-it("lets the approved card go when another ask comes, and when access is lowered", async () => {
-  const { draw, answer } = host()
+it("sends nothing when the ask leaves in the same look the access arrives", async () => {
+  const { sent, draw } = host()
   draw({ ask: access, runsAt: "ask" })
   await act(async () => button("Approve").click())
-  draw({ ask: access, runsAt: "full" })
-  await answer(true)
-  draw({ ask: undefined, runsAt: "full" })
-  expect(card()?.dataset.state).toBe("approved")
-  // A later ordinary question: its own card's, and the red one is gone for good.
-  draw({ ask: question, runsAt: "full" })
+  draw({ ask: undefined, runsAt: "full", revision: 2 })
+  expect(sent).toEqual([])
   expect(card()).toBeNull()
-  draw({ ask: undefined, runsAt: "full" })
-  expect(card()).toBeNull()
-
+  // Nor as the answer to an ask that replaced it.
   const again = host()
   again.draw({ ask: access, runsAt: "ask" })
   await act(async () => button("Approve").click())
-  again.draw({ ask: access, runsAt: "full" })
-  await again.answer(true)
-  again.draw({ ask: undefined, runsAt: "ask" })
+  again.draw({ ask: question, runsAt: "full", revision: 2 })
+  expect(again.sent).toEqual([])
+})
+
+it("lets the approved card go for good when another ask comes", async () => {
+  const { draw } = await approved()
+  draw({ ask: undefined, runsAt: "full", revision: 3 })
+  expect(card()?.dataset.state).toBe("approved")
+  draw({ ask: question, runsAt: "full", revision: 4 })
+  expect(card()).toBeNull()
+  draw({ ask: undefined, runsAt: "full", revision: 5 })
   expect(card()).toBeNull()
 })
 
-it("ends the wait when the access is headed somewhere else, and offers Approve again", async () => {
-  const { sent, draw } = host("pending")
-  draw({ ask: access, runsAt: "ask", heading: undefined })
+it("lets the approved card go for good when the access is lowered, raised or not again", async () => {
+  const { draw } = await approved()
+  draw({ ask: undefined, runsAt: "ask", revision: 3 })
+  expect(card()).toBeNull()
+  draw({ ask: undefined, runsAt: "full", revision: 4 })
+  expect(card()).toBeNull()
+})
+
+it("waits through an old view, then ends when a newer one settles elsewhere", async () => {
+  const { sent, draw } = host()
+  draw({ ask: access, runsAt: "ask", revision: 7 })
   await act(async () => button("Approve").click())
-  draw({ ask: access, runsAt: "ask", heading: "full", working: true })
+  // The view the raise was taken at still says Ask: not a reason to end.
+  draw({ ask: access, runsAt: "ask", revision: 7 })
   expect(card()?.dataset.state).toBe("approving")
-  // Waiting for the turn to end is not a reason Approve can't be pressed.
-  expect(container.textContent).not.toContain("once the agent stops")
-  // The person picked Auto in the composer since.
-  draw({ ask: access, runsAt: "ask", heading: "auto", working: true })
+  expect(container.textContent).toContain("Waiting for the access to change.")
+  // A newer view settles at Auto, with no change said to be on its way.
+  draw({ ask: access, runsAt: "auto", revision: 8 })
   expect(card()?.dataset.state).toBe("asking")
   expect(container.textContent).toContain("Access didn’t change to this.")
   expect(sent).toEqual([])
+})
+
+it("waits for the turn's end, and ends when the change on its way is to another access", async () => {
+  const { sent, draw } = host("pending")
+  draw({ ask: access, runsAt: "ask" })
+  await act(async () => button("Approve").click())
+  draw({ ask: access, runsAt: "ask", underway: "full", working: true, revision: 2 })
+  expect(card()?.dataset.state).toBe("approving")
+  expect(container.textContent).toContain("Access changes when the agent stops.")
+  expect(container.textContent).not.toContain("You can approve")
+  draw({ ask: access, runsAt: "ask", underway: "auto", working: true, revision: 3 })
+  expect(card()?.dataset.state).toBe("asking")
+  expect(container.textContent).toContain("Access didn’t change to this.")
+  expect(sent).toEqual([])
+})
+
+it("says another change is on its way, rather than a refusal", async () => {
+  const { draw } = host("changing")
+  draw({ ask: access, runsAt: "ask" })
+  await act(async () => button("Approve").click())
+  expect(container.textContent).toContain("Access is still changing.")
 })
 
 it("sends Not now as the answer, and changes nothing", async () => {

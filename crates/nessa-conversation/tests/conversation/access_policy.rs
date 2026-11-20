@@ -426,6 +426,50 @@ fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
     assert_eq!(Setting::McpServers.level(), SettingLevel::AgentFills);
 }
 
+/// `ALL` lists each setting and level once, in order. The matches below
+/// have no default arm, so a new variant does not compile until it is given
+/// a place here, and a place past the end of `ALL` fails the length check.
+#[test]
+fn every_setting_and_level_is_listed_once() {
+    let place = |setting: Setting| match setting {
+        Setting::ReplyStyle => 0,
+        Setting::Model => 1,
+        Setting::UsageLimitAutoContinue => 2,
+        Setting::McpServers => 3,
+        Setting::ChannelCoordinator => 4,
+        Setting::ChannelPlacement => 5,
+        Setting::Devices => 6,
+        Setting::CloudRuntime => 7,
+        Setting::VoiceKey => 8,
+        Setting::GitHub => 9,
+        Setting::Credentials => 10,
+        Setting::McpSignIn => 11,
+        Setting::Access => 12,
+        Setting::PermissionRules => 13,
+        Setting::AppTrust => 14,
+        Setting::Shares => 15,
+        Setting::Linking => 16,
+        Setting::AgentHooks => 17,
+    };
+    for (at, setting) in Setting::ALL.into_iter().enumerate() {
+        assert_eq!(place(setting), at, "{}", setting.as_str());
+    }
+    assert_eq!(place(Setting::AgentHooks) + 1, Setting::ALL.len());
+    let level_place = |level: SettingLevel| match level {
+        SettingLevel::AgentChanges => 0,
+        SettingLevel::AgentFills => 1,
+        SettingLevel::OwnerTypes => 2,
+        SettingLevel::RaisesAccess => 3,
+    };
+    for (at, level) in SettingLevel::ALL.into_iter().enumerate() {
+        assert_eq!(level_place(level), at, "{}", level.as_str());
+    }
+    assert_eq!(
+        level_place(SettingLevel::RaisesAccess) + 1,
+        SettingLevel::ALL.len()
+    );
+}
+
 // One allow and one deny for each rule, by its @id.
 
 #[test]
