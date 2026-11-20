@@ -1,6 +1,7 @@
 /**
  * The sample workspace's decisions: a few settled ones for the split-panes
- * chat, so Chat context and the decisions dialog have rows to show. Every
+ * chat, newest first as the gateway lists them, so Chat context and the
+ * decisions dialog have rows to show. Every
  * other sample chat has none. Times are minutes before the window opened.
  */
 import type { DecisionSource } from "../../application/ports"
@@ -35,26 +36,6 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
       },
       {
         ask: {
-          askId: "split-panes-sizes",
-          question: "Should pane sizes be kept per channel?",
-          choices: [
-            {
-              label: "Per channel",
-              consequence: "Each channel opens with its own layout.",
-            },
-            {
-              label: "One for all",
-              consequence: "Every channel shares the last layout.",
-            },
-          ],
-          recommended: 0,
-          reason: "Channels are used for different work.",
-        },
-        askedAtMs: at(58),
-        outcome: { state: "replaced", atMs: at(52) },
-      },
-      {
-        ask: {
           askId: "split-panes-drop",
           question: "Where should a dragged chat land?",
           choices: [
@@ -74,6 +55,26 @@ export function sampleDecisions({ now }: { now: () => number }): DecisionSource 
           choice: 0,
           atMs: at(47),
         },
+      },
+      {
+        ask: {
+          askId: "split-panes-sizes",
+          question: "Should pane sizes be kept per channel?",
+          choices: [
+            {
+              label: "Per channel",
+              consequence: "Each channel opens with its own layout.",
+            },
+            {
+              label: "One for all",
+              consequence: "Every channel shares the last layout.",
+            },
+          ],
+          recommended: 0,
+          reason: "Channels are used for different work.",
+        },
+        askedAtMs: at(58),
+        outcome: { state: "replaced", atMs: at(52) },
       },
       {
         ask: {

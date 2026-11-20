@@ -428,6 +428,55 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
         .is_empty());
 }
 
+/// The worst answer a decision keeps, a message of control characters that
+/// JSON writes six bytes each, is still taken by the store with the summary;
+/// and a newer ask is listed first even when the clock stepped back, since
+/// decisions are listed in the order they were written.
+#[tokio::test]
+async fn a_control_character_answer_is_kept_and_a_newer_ask_leads_whatever_its_clock() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::domain::ConversationSummary;
+    use nessa_protocol::conversation::view::{OwnerDecisionOutcome, MAX_DECISION_ANSWER_BYTES};
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    let store = LocalConversationStore::open(&path).unwrap();
+    let kept = ConversationSummaries::load(&store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let first = ask("0123456789abcdef0123456789abcdef", 9000);
+    let asked = ConversationSummary::after_asking(Some(&kept), first.clone());
+    ConversationSummaries::record(&store, &id, asked.clone())
+        .await
+        .unwrap();
+    let worst = "\u{1}".repeat(MAX_DECISION_ANSWER_BYTES * 2);
+    let answered = ConversationSummary::after_message(Some(&asked), &worst, None, 9500)
+        .answering(Some(&first.ask_id), &worst);
+    ConversationSummaries::record(&store, &id, answered.clone())
+        .await
+        .unwrap();
+    // Asked by a clock that stepped back.
+    let second = ask("fedcba9876543210fedcba9876543210", 1000);
+    ConversationSummaries::record(
+        &store,
+        &id,
+        ConversationSummary::after_asking(Some(&answered), second.clone()),
+    )
+    .await
+    .unwrap();
+    let decisions = ConversationSummaries::decisions(&store, &id).await.unwrap();
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(decisions[0].ask, second);
+    assert_eq!(decisions[1].ask, first);
+    match &decisions[1].outcome {
+        Some(OwnerDecisionOutcome::Decided { text, .. }) => {
+            assert!(!text.is_empty() && text.len() <= MAX_DECISION_ANSWER_BYTES);
+        }
+        other => panic!("the answer is kept as decided, not {other:?}"),
+    }
+}
+
 /// A file a step cannot apply to is refused and left at its version: here a
 /// version 6 file that already has a table version 7 adds.
 #[test]

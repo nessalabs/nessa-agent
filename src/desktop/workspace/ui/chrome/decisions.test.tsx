@@ -88,14 +88,15 @@ function decision(askId: string, askedAt: number, outcome: DecisionOutcome): Dec
   return { ask: ask(askId), askedAtMs: askedAt * minute, outcome }
 }
 
+/** Newest first, as the gateway lists them. */
 const settled: readonly Decision[] = [
-  decision("d1", 60, { state: "decided", text: "Ship", choice: 0, atMs: 61 * minute }),
-  decision("d2", 70, { state: "replaced", atMs: 75 * minute }),
   decision("d3", 75, {
     state: "decided",
     text: "Not yet. Ask me Monday.",
     atMs: 80 * minute,
   }),
+  decision("d2", 70, { state: "replaced", atMs: 75 * minute }),
+  decision("d1", 60, { state: "decided", text: "Ship", choice: 0, atMs: 61 * minute }),
   decision("d4", 50, { state: "decided", text: "Wait", choice: 1, atMs: 52 * minute }),
 ]
 
@@ -258,7 +259,7 @@ describe("Decisions in Chat context", () => {
     // The rows read before stay, the dialog with them, and Try again reads again.
     expect(rows()).toEqual(["d3", "d2", "d1"])
     expect(section()?.textContent).toContain("Could not refresh")
-    answer = settled.slice(0, 2)
+    answer = settled.slice(1, 3)
     await click(section()?.querySelector("[data-decisions-failed] button"))
     await settle()
     await frames()

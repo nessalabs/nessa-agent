@@ -32,13 +32,15 @@ export type DecisionsFilter = "waiting" | "all" | "decided"
 /** How many decisions Chat context lists before "See all". */
 export const decisionsShown = 3
 
-/** Waiting first, then newest first: the order every list of decisions uses. */
+/**
+ * Waiting first, then as the gateway listed them: newest first, in the
+ * order they were asked, which a clock that stepped back cannot reorder.
+ */
 export function decisionsInOrder(decisions: readonly Decision[]): readonly Decision[] {
-  return [...decisions].sort(
-    (a, b) =>
-      Number(b.outcome.state === "waiting") - Number(a.outcome.state === "waiting") ||
-      b.askedAtMs - a.askedAtMs,
-  )
+  return [
+    ...decisions.filter((decision) => decision.outcome.state === "waiting"),
+    ...decisions.filter((decision) => decision.outcome.state !== "waiting"),
+  ]
 }
 
 /** The decisions a filter keeps; "decided" also keeps the replaced ones, which are settled too. */

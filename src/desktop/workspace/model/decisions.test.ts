@@ -45,14 +45,15 @@ const ownWords = decision("o", 80, {
 const replaced = decision("r", 85, { state: "replaced", atMs: 90 * minute })
 
 describe("decisions", () => {
-  it("list what waits first, then newest first", () => {
+  it("list what waits first, then in the gateway's order, whatever their clocks say", () => {
+    // Newest first as the gateway lists them; the oldest was asked by a clock ahead.
+    const clockAhead = decision("c", 99, { state: "replaced", atMs: 99 * minute })
     expect(
-      decisionsInOrder([ownWords, decided, replaced, waiting]).map(
+      decisionsInOrder([decided, replaced, waiting, ownWords, clockAhead]).map(
         (each) => each.ask.askId,
       ),
-    ).toEqual(["w", "d", "r", "o"])
+    ).toEqual(["w", "d", "r", "o", "c"])
   })
-
   it("filter To decide to what waits, and Decided to everything settled, replaced too", () => {
     const all = [waiting, decided, replaced, ownWords]
     expect(decisionsFiltered(all, "waiting")).toEqual([waiting])
