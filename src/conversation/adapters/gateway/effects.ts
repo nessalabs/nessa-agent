@@ -31,6 +31,7 @@ import {
 import { heldFileReader } from "./held-files"
 import { stageImage } from "./stage-image"
 import { shownNote } from "./notes"
+import { sharedListFollows } from "./shared-list-follow"
 
 export { BUSY_RETRY_DELAYS_MS } from "./stage-image"
 
@@ -583,7 +584,7 @@ export function gatewayEffects(
           throw readFailure(error)
         })
     },
-    followList(archived, follower) {
+    followList: sharedListFollows((archived, follower) => {
       let stopped = false
       let token = {}
       let giveUp: AbortController | undefined
@@ -635,7 +636,7 @@ export function gatewayEffects(
         stopped = true
         giveUp?.abort()
       }
-    },
+    }),
     follow(conversationId, follower) {
       let stopped = false
       // The open whose frames apply: anything an earlier open brings is dropped.
