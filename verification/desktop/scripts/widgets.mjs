@@ -173,7 +173,7 @@ async function openTrailPanel(page, failures) {
         tabs: [...document.querySelectorAll(tab)].map((e) => e.getAttribute("title")),
       }
     },
-    [css.panel, css.pane, `${css.chatPanelTabs} [role="tab"]`],
+    [css.panel, css.pane, css.widgetTab],
   )
   const after = await paneCount(page)
   if (after !== before)
