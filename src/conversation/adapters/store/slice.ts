@@ -877,6 +877,16 @@ const conversationSlice = createSlice({
     ) {
       return gateway.openListed(state, action.payload)
     },
+    /**
+     * A conversation an agent asked the person something in, opened as a tab
+     * at the end without being shown: whatever is in front stays there.
+     */
+    openAsked(
+      state,
+      action: PayloadAction<{ serverConversationId: string; title: string | null }>,
+    ) {
+      return gateway.openListed(state, action.payload, { activate: false })
+    },
     closeConversation(state, action: PayloadAction<string>) {
       return gateway.closeConversation(state, action.payload)
     },
@@ -1046,6 +1056,7 @@ export const {
   openConversation,
   chooseModel,
   openListed,
+  openAsked,
   closeConversation,
   bindConversation,
   conversationReady,

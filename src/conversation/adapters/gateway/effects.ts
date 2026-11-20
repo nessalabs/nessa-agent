@@ -575,6 +575,7 @@ export function gatewayEffects(
             updatedAtMs: row.updatedAtMs,
             running: row.running,
             archived: row.archived,
+            ...(row.ask ? { ask: row.ask } : {}),
           })),
           complete,
         }))

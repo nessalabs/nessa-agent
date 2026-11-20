@@ -5,6 +5,7 @@ import type {
   ConversationMessageStatusResult,
   ConversationObserveResult,
   ConversationSummary,
+  OwnerAsk,
   ConversationView,
   ConversationEarlier,
   ConversationPermission,
@@ -1475,6 +1476,7 @@ function summaryRow(
     "running",
     "archived",
     "channelId",
+    "ask",
   ])
   const conversationId = identity(row, "conversationId")
   if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
@@ -1499,10 +1501,50 @@ function summaryRow(
     running: row.running as boolean,
     archived: row.archived as boolean,
     ...(Object.hasOwn(row, "channelId") ? { channelId: row.channelId as string } : {}),
+    ...(Object.hasOwn(row, "ask") ? { ask: ownerAsk(row.ask) } : {}),
   }
 }
 
 const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
+
+/**
+ * A decision an agent asked the owner, held to the schema's bounds: a short
+ * question, two to four choices with distinct labels, the index of the one
+ * recommended, and a one-line reason.
+ */
+function ownerAsk(value: unknown): OwnerAsk {
+  const ask = record(value)
+  exact(ask, ["askId", "question", "choices", "recommended", "reason", "askedAtMs"])
+  const askId = text(ask, "askId", 32, false)
+  if (!/^[0-9a-f]{32}$/.test(askId)) throw new Error("Invalid conversation askId")
+  const choices = items(ask, "choices", 4).map((choice) => {
+    exact(choice, ["label", "consequence"])
+    return {
+      label: text(choice, "label", 40, false),
+      consequence: text(choice, "consequence", 200, false),
+    }
+  })
+  if (
+    choices.length < 2 ||
+    new Set(choices.map((choice) => choice.label)).size !== choices.length
+  )
+    throw new Error("Invalid conversation choices")
+  const recommended = ask.recommended
+  if (
+    !Number.isSafeInteger(recommended) ||
+    (recommended as number) < 0 ||
+    (recommended as number) >= choices.length
+  )
+    throw new Error("Invalid conversation recommended")
+  return {
+    askId,
+    question: text(ask, "question", 160, false),
+    choices,
+    recommended: recommended as number,
+    reason: text(ask, "reason", 200, false),
+    askedAtMs: time(ask, "askedAtMs"),
+  }
+}
 
 /**
  * The caller's conversations as the gateway listed them. Each row is checked

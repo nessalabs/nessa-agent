@@ -63,6 +63,28 @@ export const STRESS = {
   channel: "stress channel",
   restore: "stress restore",
   huddle: "stress huddle",
+  /** The agent asks its owner one decision (`ask_owner`, {@link ASK}). */
+  ask: "stress ask owner",
+  /** The person's answer to {@link ASK}: each choice's label holds it. */
+  answer: "stress answer",
+}
+
+/**
+ * The decision the `ask` turn asks its owner. Its labels hold
+ * `STRESS.answer`, so a tapped choice, sent as the person's message, is
+ * answered by its own turn.
+ */
+export const ASK = {
+  question: "Ship the stress fix today?",
+  choices: [
+    { label: `${STRESS.answer} ship`, consequence: "The fix goes out this afternoon." },
+    {
+      label: `${STRESS.answer} wait`,
+      consequence: "It waits for Monday's full test run.",
+    },
+  ],
+  recommended: 0,
+  reason: "Every check passed on the branch.",
 }
 
 /**
@@ -123,6 +145,8 @@ export const SAYS = {
   carried: "Carried on by ",
   channel: "Working in: ",
   restored: "Restored history: ",
+  asked: "Asked the owner: ",
+  answered: "Answered: ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }
@@ -795,6 +819,26 @@ export function stressScenario({
           { do: "text", chunks: [SAYS.delegated, "${thread.threadId}"] },
           { do: "end" },
         ],
+      },
+      // Asks its owner one decision and ends its turn: the answer comes as
+      // the person's next message, which its own turn answers.
+      {
+        when: STRESS.ask,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "ask_owner",
+            arguments: ASK,
+            save: "asked",
+          },
+          { do: "text", chunks: [SAYS.asked, "${asked.askId}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.answer,
+        steps: [{ do: "text", chunks: [SAYS.answered, "${prompt.text}"] }, { do: "end" }],
       },
       // Closes its own thread, as an agent whose work is done is told to:
       // the agent stops once this turn ends, and the next message opens it.

@@ -24,6 +24,7 @@ import {
   replyId,
   reviewOf,
   runningModel,
+  sameSummary,
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
@@ -1071,6 +1072,44 @@ describe("a list row as a summary", () => {
       summaryFrom(row("a", { running: true }), { model, waitingOnPerson: true }).status,
     ).toBe("needs-you")
     expect(summaryFrom(row("a"), { model, waitingOnPerson: false }).status).toBe("idle")
+  })
+
+  it("waits on the person while an agent's ask is on its row, followed or not", () => {
+    const model = { provider: "anthropic", modelId: "claude-opus-5" }
+    const ask = {
+      askId: "0123456789abcdef0123456789abcdef",
+      question: "Ship it?",
+      choices: [
+        { label: "Ship", consequence: "It goes out." },
+        { label: "Wait", consequence: "It waits." },
+      ],
+      recommended: 0,
+      reason: "Checks passed.",
+      askedAtMs: 5,
+    }
+    const said = summaryFrom(row("a", { running: true, ask }), {
+      model,
+      waitingOnPerson: false,
+    })
+    expect(said.status).toBe("needs-you")
+    expect(said.ask).toEqual({
+      askId: ask.askId,
+      question: "Ship it?",
+      choices: ask.choices,
+      recommended: 0,
+      reason: "Checks passed.",
+    })
+    // The same ask says nothing new; a new one does.
+    const again = summaryFrom(row("a", { running: true, ask }), {
+      model,
+      waitingOnPerson: false,
+    })
+    expect(sameSummary(said, again)).toBe(true)
+    const next = summaryFrom(
+      row("a", { running: true, ask: { ...ask, askId: "f".repeat(32) } }),
+      { model, waitingOnPerson: false },
+    )
+    expect(sameSummary(said, next)).toBe(false)
   })
 })
 

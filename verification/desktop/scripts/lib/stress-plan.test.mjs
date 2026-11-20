@@ -214,6 +214,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         touchIds: "0",
         styles: "0",
         coordinators: "0",
+        asks: "0",
         awaits: "0",
         closes: "0",
         provenances: "0",

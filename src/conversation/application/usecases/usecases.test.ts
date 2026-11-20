@@ -192,4 +192,16 @@ describe("openListed", () => {
     const opened = openListed(emptyLocalTabs(), { ...listed, title: null })
     expect(opened.conversations.at(-1)!.title).toBe(UNTITLED)
   })
+
+  it("opened without showing it, adds the tab and leaves the one in front", () => {
+    const start = emptyLocalTabs()
+    const asked = openListed(start, listed, { activate: false })
+    expect(asked.activeId).toBe(start.activeId)
+    expect(asked.conversations.at(-1)).toMatchObject({
+      serverConversationId: listed.serverConversationId,
+      serverReady: true,
+    })
+    // Already open somewhere: nothing changes, not even which tab is in front.
+    expect(openListed(asked, listed, { activate: false })).toBe(asked)
+  })
 })

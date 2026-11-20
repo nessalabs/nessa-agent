@@ -17,6 +17,58 @@ export interface WaitingReview {
   readonly tool: string
   /** The conversation's title as the gateway lists it (the push's `title`), when it has one. */
   readonly conversationTitle?: string
+  /**
+   * The agent's question, when this is a decision it asked the owner
+   * (`ask_owner`) and not a tool's review: the notice says the question.
+   */
+  readonly question?: string
+}
+
+/** What an ask's notice is named by in place of a permission. */
+const ASK_NOTICE = "owner-ask"
+
+/**
+ * A decision an agent asked the owner, as a notice names it: under its own
+ * key, so a new ask in the same conversation is a new notice and the one it
+ * replaced is taken back.
+ */
+export function waitingAsk(
+  conversationId: string,
+  ask: { readonly askId: string; readonly question: string },
+  title: string | null | undefined,
+): WaitingReview {
+  const named = title?.trim()
+  return {
+    conversationId,
+    executionId: ask.askId,
+    permissionId: ASK_NOTICE,
+    tool: "ask_owner",
+    question: ask.question,
+    ...(named ? { conversationTitle: named } : {}),
+  }
+}
+
+/**
+ * One notice set from what the gateway pushes for reviews and what its list
+ * rows say is asked: each source replaces only its own part, and the whole
+ * set goes on to the notices.
+ */
+export function mergedNotices(apply: (notices: readonly WaitingReview[]) => void): {
+  reviews: (reviews: readonly WaitingReview[]) => void
+  asks: (asks: readonly WaitingReview[]) => void
+} {
+  let reviews: readonly WaitingReview[] = []
+  let asks: readonly WaitingReview[] = []
+  return {
+    reviews(next) {
+      reviews = next
+      apply([...reviews, ...asks])
+    },
+    asks(next) {
+      asks = next
+      apply([...reviews, ...asks])
+    },
+  }
 }
 
 /** Show a review, and close the notice when it is no longer waiting. */
@@ -149,12 +201,15 @@ export function waitingReviewNotices(notifier: ReviewNotifier): {
 let readConversationTitle: (conversationId: string) => string | null = () => null
 let showWaitingReviewsNow: (() => void) | undefined
 
-/** What a notice says: the tool, and the conversation by title or id. */
+/**
+ * What a notice says: the agent's question, or the tool that needs a
+ * decision, and the conversation by title or id.
+ */
 function noticeText(review: WaitingReview): { title: string; body: string } {
   const name =
     review.conversationTitle ?? readConversationTitle(review.conversationId)?.trim()
   return {
-    title: `${review.tool} needs a decision`,
+    title: review.question ?? `${review.tool} needs a decision`,
     body: name ? name : review.conversationId,
   }
 }

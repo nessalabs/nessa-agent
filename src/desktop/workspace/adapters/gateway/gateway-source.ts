@@ -172,7 +172,7 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { waitingReviews, type WaitingReview } from "./review-notices"
+import { waitingAsk, waitingReviews, type WaitingReview } from "./review-notices"
 import {
   gapOf,
   leading,
@@ -458,6 +458,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly apps?: GatewayViewObserver
   /** The reviews still waiting, each time the gateway says so. An empty list means none. */
   readonly onReviewWaiting?: (reviews: readonly WaitingReview[]) => void
+  /**
+   * The decisions agents asked the owner (`ask_owner`) that the list says
+   * are still waiting, each time that set changes. An empty list means none.
+   */
+  readonly onAsksWaiting?: (asks: readonly WaitingReview[]) => void
   /** Reads a message's images back to upload them; without it, a message with images is refused. */
   readonly imageBytes?: ImageBytes
 }): GatewaySource<C> {
@@ -921,6 +926,28 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (result.complete)
       for (const sessionId of summaries.keys())
         if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
+    noteAsks()
+  }
+
+  // The asks last told, by key, so the same set is not told twice.
+  let toldAsks = ""
+  /**
+   * Tells the decisions the list says are asked. The list row is the one
+   * place an ask is kept: a person's message removes it, and the next list
+   * frame says so.
+   */
+  const noteAsks = (): void => {
+    const asks: WaitingReview[] = []
+    for (const [sessionId, row] of rows)
+      if (row.ask && !takenOut(sessionId))
+        asks.push(waitingAsk(sessionId, row.ask, row.title))
+    const key = asks
+      .map((ask) => `${ask.conversationId}\u0000${ask.executionId}`)
+      .sort()
+      .join("\n")
+    if (key === toldAsks) return
+    toldAsks = key
+    options.onAsksWaiting?.(asks)
   }
 
   /**

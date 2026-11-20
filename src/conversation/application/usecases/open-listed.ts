@@ -17,11 +17,15 @@ import { UNTITLED } from "../queries/roster"
 export function openListed(
   tabs: LocalTabs,
   listed: { serverConversationId: string; title: string | null },
+  { activate = true }: { activate?: boolean } = {},
 ): LocalTabs {
   const open = tabs.conversations.find(
     (item) => item.serverConversationId === listed.serverConversationId,
   )
-  if (open) return { ...tabs, activeId: open.id }
+  // Opened without being shown (`activate: false`, an agent asking the
+  // person something): the tab is added at the end and whatever the person
+  // is looking at stays in front, so nothing is taken from them.
+  if (open) return activate ? { ...tabs, activeId: open.id } : tabs
   const next = takeConversationId(tabs)
   const reopened = conversation(next.id)
   return {
@@ -35,6 +39,6 @@ export function openListed(
         serverReady: true,
       },
     ],
-    activeId: next.id,
+    activeId: activate ? next.id : tabs.activeId,
   }
 }
