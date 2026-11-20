@@ -164,10 +164,11 @@ function RoleRow({
   const [selection, setSelection] = useState<Selection>()
   const [text, setText] = useState("")
   const field = useId()
+  const savedText = own?.mode === "custom" ? (own.text ?? "") : ""
   useEffect(() => {
     setSelection(saved)
-    setText(own?.mode === "custom" ? (own.text ?? "") : "")
-  }, [saved, own?.text])
+    setText(savedText)
+  }, [saved, savedText])
   const options: { id: Selection; label: string }[] = [
     ...(channel ? [{ id: "default" as const, label: "Same as Nessa" }] : []),
     { id: "plain", label: "Plain" },
