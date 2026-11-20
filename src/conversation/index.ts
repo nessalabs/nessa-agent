@@ -34,6 +34,7 @@ export { UsageLimitCard } from "./ui/usage-limit-card"
 export { OwnerAskCard } from "./ui/owner-ask-card"
 export { useOwnerAsks } from "./ui/use-owner-asks"
 export type { OwnerAskView } from "./model/owner-ask"
+export { undoLabels } from "./model/owner-ask"
 export { usageLimitOnClientClock } from "./model"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.

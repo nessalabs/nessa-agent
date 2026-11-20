@@ -225,22 +225,74 @@ describe("Decisions in Chat context", () => {
     expect(picked?.textContent).toContain("Ship")
   })
 
-  it("answers the chat's waiting ask from the dialog with the transcript's own card", async () => {
+  it("answers the chat's waiting ask from the expanded card, with a note", async () => {
     const fake = fakeSource()
-    const { source } = decisionsOf(() => [decision("live", 90, { state: "waiting" })])
+    const detailed: Decision = {
+      ask: {
+        ...ask("live"),
+        summary: "The fix is reviewed.",
+        choices: [
+          {
+            label: "Ship",
+            consequence: "Goes out today.",
+            undo: "easy",
+            effort: "small",
+            pros: ["Fixed today"],
+          },
+          {
+            label: "Wait",
+            consequence: "Goes out Monday.",
+            undo: "costly",
+            cons: ["Users wait"],
+          },
+        ],
+      },
+      askedAtMs: 90 * minute,
+      outcome: { state: "waiting" },
+    }
+    const { source } = decisionsOf(() => [detailed])
     const store = await render(source, fake)
     const summary = selectSession(store.getState(), "a")
     if (!summary) throw new Error("no session a")
     await act(async () =>
       fake.emit({
         kind: "session",
-        session: { ...summary, ask: ask("live"), revision: summary.revision + 1 },
+        session: { ...summary, ask: detailed.ask, revision: summary.revision + 1 },
       }),
     )
     await settle()
     await frames()
     await click(section()?.querySelector('[data-decision="live"]'))
-    expect(dialog()?.querySelector('[data-owner-ask="live"]')).not.toBeNull()
+    const detail = dialog()?.querySelector('[data-decision-detail="live"]')
+    expect(detail?.querySelector("h3")?.textContent).toBe("Question live?")
+    expect(detail?.textContent).toContain("The fix is reviewed.")
+    expect(detail?.textContent).toContain("Fixed today")
+    expect(detail?.textContent).toContain("Users wait")
+    expect(detail?.textContent).toContain("Small effort")
+    expect(detail?.querySelector('[data-undo="costly"]')?.textContent).toBe(
+      "Costly to undo",
+    )
+    expect(detail?.textContent).toContain("Why Ship")
+    const send = () => document.querySelector<HTMLButtonElement>("[data-decisions-send]")
+    expect(send()?.textContent).toBe("Pick a choice")
+    expect(send()?.disabled).toBe(true)
+    await click(detail?.querySelector('[data-decisions-pick="1"]'))
+    expect(send()?.textContent).toBe("Answer: Wait")
+    const note = document.querySelector<HTMLInputElement>("[data-decisions-note]")
+    if (!note) throw new Error("no note")
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set
+      set?.call(note, "Monday is fine")
+      note.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await click(send())
+    await settle()
+    const sent = fake.calls.filter(([method]) => method === "send")
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.[1]).toMatchObject({ sessionId: "a", text: "Wait. Monday is fine" })
   })
 
   it("reads again when the chat's ask changes, and says so when a read fails", async () => {
