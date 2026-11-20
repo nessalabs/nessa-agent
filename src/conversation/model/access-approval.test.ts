@@ -18,7 +18,8 @@ const look = (facts: Partial<ApprovalSnapshot> = {}): ApprovalSnapshot => ({
 })
 const raising: Approval = { state: "raising", ask, mode: "full" }
 const waiting: Approval = { state: "waiting", ask, mode: "full", takenAt: 1 }
-const sending: Approval = { state: "sending", ask, mode: "full" }
+const due: Approval = { state: "due", ask, mode: "full" }
+const answering: Approval = { state: "answering", ask, mode: "full" }
 const approved: Approval = { state: "approved", ask, mode: "full" }
 const ended: Approval = { state: "ended", ask, mode: "full", ending: "refused" }
 const snapshot = (approval: Approval, facts: Partial<ApprovalSnapshot> = {}) =>
@@ -42,7 +43,7 @@ describe("raising", () => {
         outcome: "taken",
         snapshot: look({ runsAt: "full", revision: 2 }),
       }),
-    ).toEqual(sending)
+    ).toEqual(due)
     // Held for a turn's end: waits through it.
     expect(
       stepApproval(raising, {
@@ -90,8 +91,21 @@ describe("waiting", () => {
       ending: "changed-elsewhere",
     })
   })
-  it("sends once the chat runs at the access", () => {
-    expect(snapshot(waiting, { runsAt: "full", revision: 2 })).toEqual(sending)
+  it("comes due once the chat runs at the access or more", () => {
+    expect(snapshot(waiting, { runsAt: "full", revision: 2 })).toEqual(due)
+    const forAuto: Approval = { ...waiting, mode: "auto" }
+    expect(snapshot(forAuto, { runsAt: "full", revision: 2 })).toEqual({
+      state: "due",
+      ask,
+      mode: "auto",
+    })
+  })
+  it("waits while the access is not known and no change is named", () => {
+    expect(snapshot(waiting, { runsAt: undefined, revision: 5 })).toBe(waiting)
+  })
+  it("ends when a change on its way is to less, but waits for one to more", () => {
+    const forAuto: Approval = { ...waiting, mode: "auto" }
+    expect(snapshot(forAuto, { underway: "full" })).toBe(forAuto)
   })
   it("waits through the raise's own view, and ends on a newer one elsewhere", () => {
     expect(snapshot(waiting, { runsAt: "ask", revision: 1 })).toBe(waiting)
@@ -102,13 +116,27 @@ describe("waiting", () => {
   })
 })
 
-describe("sending", () => {
+describe("due", () => {
+  it("goes, sending nothing, when the ask leaves before a card starts the answer", () => {
+    expect(snapshot(due, { askId: undefined, runsAt: "full" })).toBeUndefined()
+    expect(snapshot(due, { askId: "b", runsAt: "full" })).toBeUndefined()
+  })
+  it("stays due on any other look, and answers once a card starts it", () => {
+    expect(snapshot(due, { runsAt: "ask", revision: 9 })).toBe(due)
+    expect(stepApproval(due, { kind: "answering" })).toEqual(answering)
+  })
+  it("takes no answer it never started", () => {
+    expect(stepApproval(due, { kind: "answered", sent: true })).toBe(due)
+  })
+})
+
+describe("answering", () => {
   it("keeps on whatever a look says: the ask leaving is its own answer", () => {
-    expect(snapshot(sending, { askId: undefined, runsAt: "ask" })).toBe(sending)
+    expect(snapshot(answering, { askId: undefined, runsAt: "ask" })).toBe(answering)
   })
   it("is approved once sent, and ends when not", () => {
-    expect(stepApproval(sending, { kind: "answered", sent: true })).toEqual(approved)
-    expect(stepApproval(sending, { kind: "answered", sent: false })).toMatchObject({
+    expect(stepApproval(answering, { kind: "answered", sent: true })).toEqual(approved)
+    expect(stepApproval(answering, { kind: "answered", sent: false })).toMatchObject({
       state: "ended",
       ending: "not-sent",
     })

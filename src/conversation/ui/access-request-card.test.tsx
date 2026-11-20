@@ -33,7 +33,7 @@ const access = {
   recommended: 1,
   reason: "The toolchain installs outside the project.",
   access: {
-    mode: "full" as const,
+    mode: "full" as "auto" | "full",
     grants: [
       "Agents in this chat can run any command",
       "They won't ask you before they act",
@@ -58,6 +58,7 @@ type Shown = typeof access | typeof question | undefined
 /** A host as either window is: the props it is drawn with, and what it sent. */
 function host(raised: RaiseOutcome = "taken") {
   const sent: string[] = []
+  const raises: Mode[] = []
   let answered: (sent: boolean) => void = () => {}
   const draw = ({
     ask,
@@ -81,7 +82,20 @@ function host(raised: RaiseOutcome = "taken") {
           underway={underway}
           working={working}
           revision={revision}
-          raise={() => Promise.resolve(raised)}
+          raise={async (mode) => {
+            raises.push(mode)
+            // A command held for the turn's end is seen as a change on its way
+            // before the window says how the command went, as both windows do.
+            if (raised === "pending")
+              await draw({
+                ask,
+                runsAt: "ask",
+                underway: mode,
+                working: true,
+                revision: 2,
+              })
+            return raised
+          }}
           answer={(text) => {
             sent.push(text)
             return new Promise((resolve) => (answered = resolve))
@@ -89,7 +103,12 @@ function host(raised: RaiseOutcome = "taken") {
         />,
       ),
     )
-  return { sent, draw, answer: (ok: boolean) => act(async () => answered(ok)) }
+  return {
+    sent,
+    raises,
+    draw,
+    answer: (ok: boolean) => act(async () => answered(ok)),
+  }
 }
 
 const card = () => container.querySelector<HTMLElement>("[data-access-request]")
@@ -246,5 +265,13 @@ it("keeps a waiting Approve when the card leaves the screen and comes back", asy
   act(() => root.render(<></>))
   // Back, once the turn ended and the chat runs at Full.
   draw({ ask: access, runsAt: "full", revision: 3 })
+  expect(sent).toEqual(["Approve"])
+})
+
+it("sends no command when the chat already runs at the access or more", async () => {
+  const { sent, raises, draw } = host()
+  draw({ ask: { ...access, access: { ...access.access, mode: "auto" } }, runsAt: "full" })
+  await act(async () => button("Approve").click())
+  expect(raises).toEqual([])
   expect(sent).toEqual(["Approve"])
 })

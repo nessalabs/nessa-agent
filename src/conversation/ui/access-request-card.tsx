@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { sendChatAnswer, stepChatApproval, useChatApproval } from "./access-approvals"
 import {
+  atLeast,
   type ApprovalEvent,
   type AccessMode,
   type ApprovalEnding,
@@ -123,8 +124,8 @@ export function AccessRequestHost<Ask extends AccessAsk>({
       snapshot: { askId, runsAt, underway, working, revision },
     })
   }, [chat, askId, runsAt, underway, working, revision])
-  // The answer goes once per record that reaches sending, from whichever
-  // card draws it.
+  // The answer goes once per record that comes due, from whichever card
+  // draws it.
   useEffect(() => {
     sendChatAnswer(chat, answer)
     // `answer` is this render's; only the record starts it.
@@ -150,7 +151,7 @@ export function AccessRequestHost<Ask extends AccessAsk>({
         ? working
           ? "Access changes when the agent stops."
           : "Waiting for the access to change."
-        : approval?.state === "sending"
+        : approval?.state === "due" || approval?.state === "answering"
           ? "Sending your answer…"
           : state === "asking" && working
             ? "You can approve once the agent stops."
@@ -172,6 +173,9 @@ export function AccessRequestHost<Ask extends AccessAsk>({
         dispatch({ kind: "approve", ask: shown, mode })
         const raised = (outcome: RaiseOutcome) =>
           dispatch({ kind: "raised", outcome, snapshot: latest.current })
+        // Approve never lowers the chat's access: one already there or above
+        // sends no command.
+        if (atLeast(latest.current.runsAt, mode)) return raised("taken")
         raise(mode).then(raised, () => raised("refused"))
       }}
       onDecline={() => {

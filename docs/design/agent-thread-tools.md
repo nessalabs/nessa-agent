@@ -134,22 +134,28 @@ row). The window keeps the record, not the card
 screen while the access waits for a turn's end finds it again. Each window states the chat's facts as their owners say them, and each
 look at them is judged whole, the ask first: the ask on the list row, the
 access the conversation runs at, where a change on its way is headed, a turn
-at work, and the view's revision.
+at work, and the view's revision. "At" an access means that access or more
+(Full is more than Auto, Auto than Ask), as the gateway's `held_at` counts
+it: Approve never lowers the chat's access, and a chat already there sends
+no command.
 
 | State | Event | Next |
 | --- | --- | --- |
+| (none) | Approve, chat already at the access | raising, then raised taken, no command |
 | raising | the access command is taken, or held for the turn's end | waiting, at this view, then that same look judged as waiting is |
 | raising | another change is on its way, or it is refused | ended, saying which |
-| raising, waiting, ended | the row's ask is not this one (in any look, the raise's own too) | gone, nothing sent |
-| waiting | a change on its way to this access, or a turn at work | waiting |
-| waiting | a change on its way to another access | ended: didn't change |
-| waiting | runs at this access | sending |
-| waiting | runs at another, in the view of the raise | waiting |
-| waiting | runs at another, in a newer view | ended: didn't change |
-| sending | anything (the ask leaving is this answer landing) | sending |
-| sending | the answer went / did not | approved / ended: not sent |
+| raising, waiting, due, ended | the row's ask is not this one (in any look, the raise's own too) | gone, nothing sent |
+| waiting | a change on its way to at least this access, or a turn at work | waiting |
+| waiting | a change on its way to less | ended: didn't change |
+| waiting | runs at this access | due |
+| waiting | access not known, no change named | waiting |
+| waiting | runs at less, in the view of the raise | waiting |
+| waiting | runs at less, in a newer view | ended: didn't change |
+| due | a card starts the answer | answering |
+| answering | anything (the ask leaving is this answer landing) | answering |
+| answering | the answer went / did not | approved / ended: not sent |
 | approved | no ask, or this one, at this access | approved |
-| approved | another ask, or runs at another access | gone |
+| approved | another ask, or runs at less | gone |
 | ended | Approve again | raising |
 
 ```mermaid

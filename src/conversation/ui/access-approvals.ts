@@ -46,13 +46,15 @@ export function useChatApproval<Ask extends { readonly askId: string }>(
 }
 
 /**
- * Sends `chat`'s answer with `answer` if its record is sending and no answer
- * is already on its way, and moves the record when it lands.
+ * Sends `chat`'s answer with `answer` if its record is due and no answer is
+ * already on its way: the record moves to answering first, so the ask
+ * leaving the list while the answer lands is read as that answer.
  */
 export function sendChatAnswer(chat: string, answer: (text: string) => Promise<boolean>) {
   const record = records.get(chat)
-  if (record?.state !== "sending" || answering.has(chat)) return
+  if (record?.state !== "due" || answering.has(chat)) return
   answering.add(chat)
+  stepChatApproval(chat, { kind: "answering" })
   const label = (record.ask as { choices?: readonly { label: string }[] }).choices?.[0]
     ?.label
   const done = (sent: boolean) => {
