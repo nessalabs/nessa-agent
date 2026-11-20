@@ -2038,6 +2038,31 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
 }
 
 /// Wait until the agent has run turn `execution`.
+/// Write `ask` as the one waiting in `source`, under the summary lock every
+/// other summary write takes: a reply from an earlier turn settling late
+/// then writes after it, keeping the ask, rather than over it.
+#[cfg(unix)]
+async fn record_ask<S: crate::application::ConversationSummaries + ?Sized>(
+    service: &ConversationService,
+    metadata: &S,
+    source: &ConversationId,
+    ask: &nessa_protocol::conversation::view::OwnerAsk,
+) {
+    use crate::application::ConversationSummaries;
+    let _writes = service.inner.records.summary_writes().lock(source).await;
+    let kept = ConversationSummaries::load(metadata, source).await.unwrap();
+    ConversationSummaries::record(
+        metadata,
+        source,
+        nessa_protocol::conversation::domain::ConversationSummary::after_asking(
+            kept.as_ref(),
+            ask.clone(),
+        ),
+    )
+    .await
+    .unwrap();
+}
+
 async fn ran(provider: &ProviderFactory, execution: &str) {
     tokio::time::timeout(Duration::from_secs(30), async {
         while !provider
@@ -2062,7 +2087,6 @@ async fn ran(provider: &ProviderFactory, execution: &str) {
 #[tokio::test]
 async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
     use crate::application::ConversationSummaries;
-    use nessa_protocol::conversation::domain::ConversationSummary;
     use nessa_protocol::conversation::view::{
         AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome,
     };
@@ -2096,16 +2120,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         summary: None,
         auto_pick: Some(AutoPick::Allowed),
     };
-    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
-        .await
-        .unwrap();
-    ConversationSummaries::record(
-        metadata.as_ref(),
-        &source,
-        ConversationSummary::after_asking(kept.as_ref(), ask.clone()),
-    )
-    .await
-    .unwrap();
+    record_ask(&service, metadata.as_ref(), &source, &ask).await;
     let decision = |service: ConversationService| {
         let source = source.clone();
         async move {
@@ -2164,16 +2179,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         asked_at_ms: 2_000,
         ..ask.clone()
     };
-    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
-        .await
-        .unwrap();
-    ConversationSummaries::record(
-        metadata.as_ref(),
-        &source,
-        ConversationSummary::after_asking(kept.as_ref(), later.clone()),
-    )
-    .await
-    .unwrap();
+    record_ask(&service, metadata.as_ref(), &source, &later).await;
     let stale = ConversationSummaries::auto_picks_waiting(metadata.as_ref())
         .await
         .unwrap()
@@ -2203,16 +2209,7 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         asked_at_ms: 5_000,
         ..ask.clone()
     };
-    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
-        .await
-        .unwrap();
-    ConversationSummaries::record(
-        metadata.as_ref(),
-        &source,
-        ConversationSummary::after_asking(kept.as_ref(), fifth.clone()),
-    )
-    .await
-    .unwrap();
+    record_ask(&service, metadata.as_ref(), &source, &fifth).await;
     let due = ConversationSummaries::auto_picks_waiting(metadata.as_ref())
         .await
         .unwrap()
