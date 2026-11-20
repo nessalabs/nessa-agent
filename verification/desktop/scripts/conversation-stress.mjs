@@ -2547,7 +2547,7 @@ async function pickModel(page, picker, model) {
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource, dropped, model },
+  { name, folder, refusedFolder, notes, resource, dropped, model, coordinator = true },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -2638,6 +2638,11 @@ async function makeChannel(
       await workerLocation.selectOption("local")
     }
   }
+  // On unless asked off; either way it can be switched later in settings.
+  const coordinatorChoice = flow.locator("[data-new-channel-coordinator]")
+  if ((await coordinatorChoice.inputValue()) !== "on")
+    failures.push("a new channel's coordinator is not on until it is turned off")
+  if (!coordinator) await coordinatorChoice.selectOption("off")
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
   await page.keyboard.press(keys.enter)
@@ -2699,6 +2704,10 @@ async function makeChannel(
   const { channels } = await run.client.channels.list()
   const listed = channels.find((channel) => channel.name === name)
   if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  if (listed && listed.coordinatorOn !== coordinator)
+    failures.push(
+      `the channel ${name} was made with its coordinator ${listed.coordinatorOn ? "on" : "off"}`,
+    )
   if (
     listed &&
     (listed.coordinatorPlacement !== "local" ||
@@ -9425,6 +9434,178 @@ const steps = {
       failures.push(
         `clearing the Threads style read back ${JSON.stringify(reset.nessa.thread)}`,
       )
+  },
+
+  /**
+   * A channel's coordinator, switched in its settings at any time. Made with
+   * it on, the channel's first chat is its coordinator, and (said only in
+   * Claude's reply) it is told its job. Off, the channel keeps that chat but
+   * no longer opens at it: a new chat there is an ordinary thread, told no
+   * job. On again, it is the same coordinator chat. A channel made with it
+   * off says so, and still names the main chat it would have.
+   */
+  async coordinator(run, step, failures) {
+    const told = run.stack.agent === "claude"
+    const job = "You are this channel's coordinator."
+    const replyTo = (view, text) =>
+      (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text)
+        .join("")
+    const listedNow = async (channelId) =>
+      (await run.client.channels.list()).channels.find(
+        (each) => each.channelId === channelId,
+      )
+    const dialog = run.page.locator(css.channelSettingsDialog)
+    const close = async () => {
+      for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+        await run.page.keyboard.press(keys.escape)
+        await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+      }
+    }
+    const switchTo = async (made, on) => {
+      try {
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText(made.name, { exact: true })
+          .first()
+          .hover({ timeout: 15_000 })
+        await run.page
+          .locator(
+            `${css.channelSettingsOpen}[data-channel-settings-open="${made.channelId}"]`,
+          )
+          .click({ timeout: 10_000 })
+        const control = dialog.locator(`[data-channel-coordinator="${made.channelId}"]`)
+        await control
+          .locator("[data-choice-trigger]:enabled")
+          .waitFor({ timeout: 10_000 })
+        await pickChoice(run.page, control, on ? "on" : "off")
+        const shown = await waitFor(
+          async () => (await control.getAttribute("data-coordinator-on")) === String(on),
+          10_000,
+        )
+        if (!shown)
+          failures.push(
+            `the channel settings never showed the coordinator ${on ? "on" : "off"}`,
+          )
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(
+              run.evidence,
+              `coordinator-${run.engine}-${on ? "on" : "off"}.png`,
+            ),
+          })
+      } finally {
+        await close()
+      }
+      const now = await waitFor(async () => {
+        const listed = await listedNow(made.channelId)
+        return listed?.coordinatorOn === on ? listed : null
+      }, 10_000)
+      if (!now)
+        failures.push(`the gateway never listed the coordinator ${on ? "on" : "off"}`)
+      else if (now.coordinatorConversationId !== made.coordinatorConversationId)
+        failures.push(
+          `switching the coordinator ${on ? "on" : "off"} changed its chat from ${made.coordinatorConversationId} to ${now.coordinatorConversationId}`,
+        )
+      return now
+    }
+    try {
+      const made = await makeChannel(run, failures, {
+        name: `stress-coord-r${step.index}-s${run.knobs.seed}`,
+      })
+      if (made) {
+        // Made with it on, the channel opens at its coordinator's chat.
+        const first = await talkInChannel(run, step, made, failures)
+        if (first && first !== made.coordinatorConversationId)
+          failures.push(
+            `the first chat in a channel with a coordinator is ${first}, not its coordinator ${made.coordinatorConversationId}`,
+          )
+        if (first && told) {
+          const view = await run.client.conversation.read(first)
+          const reply = (view?.messages ?? [])
+            .flatMap((each) => each.parts ?? [])
+            .filter((part) => part.kind === "text")
+            .map((part) => part.text)
+            .join("")
+          if (!reply.includes(job))
+            failures.push(
+              `the coordinator was not told its job: ${fold(reply.slice(0, 300))}`,
+            )
+        }
+        // Off: a new chat in the channel is an ordinary thread, told no job.
+        if (await switchTo(made, false)) {
+          const text = prompt(run, STRESS.channel, step, " without a coordinator")
+          await run.page.keyboard.press(keys.newSession)
+          const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+          await home.locator(css.field).waitFor({ timeout: 15_000 })
+          await home.locator(css.field).fill(text)
+          await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+          const thread = await waitFor(
+            () => selectedStressConversation(run.page, text),
+            30_000,
+          )
+          if (!thread)
+            failures.push("the chat started with the coordinator off was never listed")
+          else {
+            run.checked.push(thread)
+            if (thread === made.coordinatorConversationId)
+              failures.push(
+                "a new chat with the coordinator off opened the coordinator's chat",
+              )
+            const { view } = await settled(
+              run,
+              thread,
+              new Set(),
+              text,
+              "completed",
+              failures,
+            )
+            const { conversations } = await run.client.conversation.list({})
+            const summary = conversations.find((each) => each.conversationId === thread)
+            if (summary?.channelId !== made.channelId)
+              failures.push(
+                `the chat started with the coordinator off is in ${summary?.channelId ?? "no channel"}`,
+              )
+            if (told && replyTo(view, text).includes(job))
+              failures.push(
+                "a thread started with the coordinator off was told the coordinator's job",
+              )
+          }
+          // On again: the same coordinator chat, which still answers.
+          if (await switchTo(made, true)) {
+            await openStressConversation(run.page, made.coordinatorConversationId)
+            const again = prompt(run, STRESS.channel, step, " coordinator again")
+            const seen = await send(run, made.coordinatorConversationId, again, failures)
+            await settled(
+              run,
+              made.coordinatorConversationId,
+              seen,
+              again,
+              "completed",
+              failures,
+            )
+          }
+        }
+      }
+      // Made with it off: it says so and still names the chat it would have.
+      const quiet = await makeChannel(run, failures, {
+        name: `stress-quiet-r${step.index}-s${run.knobs.seed}`,
+        coordinator: false,
+      })
+      if (quiet && !quiet.coordinatorConversationId)
+        failures.push(
+          "a channel made without a coordinator names no main chat to turn on",
+        )
+    } finally {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async huddle(run, step, failures) {

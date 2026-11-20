@@ -6,6 +6,7 @@ import type {
   Channel,
   ChannelCreateParams,
   ChannelListResult,
+  ChannelSetCoordinatorParams,
   ChannelSetPlacementParams,
 } from "../generated/product.js"
 
@@ -38,6 +39,12 @@ export type ChannelApi = {
    * the old one stays in the channel as an ordinary thread.
    */
   setPlacement(params: ChannelSetPlacementParams): Promise<Channel>
+  /**
+   * Turn a made channel's coordinator on or off. Off keeps its main
+   * conversation and threads; on again, the same `coordinatorConversationId`
+   * is its coordinator.
+   */
+  setCoordinator(params: ChannelSetCoordinatorParams): Promise<Channel>
 }
 
 export function createChannelApi(session: RpcRequester): ChannelApi {
@@ -53,6 +60,12 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
       if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
         throw new Error("Invalid channel placement response")
       return channel(answer.channel, "Invalid channel placement response")
+    },
+    setCoordinator: async (params) => {
+      const answer = await session.request(ProductMethod.ChannelSetCoordinator, params)
+      if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
+        throw new Error("Invalid channel coordinator response")
+      return channel(answer.channel, "Invalid channel coordinator response")
     },
     list: async () => {
       const channels: Channel[] = []
@@ -124,6 +137,7 @@ const CHANNEL_KEYS = [
   "approvalMode",
   "createdAtMs",
   "coordinatorConversationId",
+  "coordinatorOn",
   "coordinatorPlacement",
   "threadPlacement",
 ] as const
@@ -136,6 +150,7 @@ function channel(value: unknown, invalid: string): Channel {
   const nullableText = (field: unknown) => field === null || typeof field === "string"
   if (
     !nullableText(value.coordinatorConversationId) ||
+    typeof value.coordinatorOn !== "boolean" ||
     !isPlace(value.coordinatorPlacement) ||
     !isPlace(value.threadPlacement) ||
     typeof value.channelId !== "string" ||
@@ -161,6 +176,7 @@ function channel(value: unknown, invalid: string): Channel {
     approvalMode: value.approvalMode as ApprovalMode,
     createdAtMs: value.createdAtMs as number,
     coordinatorConversationId: value.coordinatorConversationId as string | null,
+    coordinatorOn: value.coordinatorOn,
     coordinatorPlacement: value.coordinatorPlacement as string,
     threadPlacement: value.threadPlacement as string,
   }

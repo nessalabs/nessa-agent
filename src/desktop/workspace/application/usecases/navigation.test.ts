@@ -105,6 +105,32 @@ describe("opening a channel from the sidebar", () => {
     expect(opened.drafts.replacement.channelId).toBe("empty")
   })
 
+  it("with its coordinator off, opens its newest other chat, or a new one, never the coordinator's", () => {
+    const base = loaded()
+    const off = (coordinatorConversationId: string, id: string) => ({
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === id
+          ? { ...channel, coordinatorConversationId, coordinatorOn: false }
+          : channel,
+      ),
+    })
+    // The coordinator is the newest chat: the next newest opens.
+    const newer = openChannel(off("d", "gateway"), {
+      channelId: "gateway",
+      draftId: "fresh",
+    })
+    expect(shown(newer)).not.toContain("d")
+    expect(shown(newer)).toHaveLength(1)
+    // The coordinator is the channel's only chat: a new one opens.
+    const only = openChannel(off("replacement", "empty"), {
+      channelId: "empty",
+      draftId: "fresh",
+    })
+    expect(shown(only)).toEqual(["fresh"])
+    expect(only.drafts.fresh.channelId).toBe("empty")
+  })
+
   it("opens its newest session in place, and discloses it", () => {
     const state = openChannel(loaded(), { channelId: "gateway" })
     expect(shown(state)).toEqual(["d"])

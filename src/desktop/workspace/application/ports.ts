@@ -429,6 +429,12 @@ export interface ChannelSource {
     placement: ChannelPlacement,
     requestId: string,
   ): Promise<Channel>
+  /**
+   * Turn a made channel's coordinator on or off. Off keeps its chat and
+   * threads; on again answers the same main conversation id. Absent where
+   * channels cannot be changed.
+   */
+  setCoordinator?(channelId: string, on: boolean, requestId: string): Promise<Channel>
 }
 
 /** Where a channel's main agent and its new threads run. */

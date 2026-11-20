@@ -273,6 +273,10 @@ export const KNOBS = {
     default: 1,
     what: "times Threads are given the person's own words in the default channel's settings (saved only on Save): a new chat is told them, the main chat keeps the plain style it began with, and the choice is cleared after",
   },
+  coordinators: {
+    default: 1,
+    what: "times a channel is made with its coordinator on (the first chat is its coordinator, told its job), switched off in its settings (a new chat there is an ordinary thread), and on again (the same coordinator chat); and one is made with it off",
+  },
   restores: {
     default: 1,
     what: "restored conversations opened in the window: one shows its saved history, and one whose source is gone refuses a send and keeps the draft",
@@ -406,6 +410,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.provenances, () => ({ kind: "provenance" }))
   add(knobs.touchIds, () => ({ kind: "touchId" }))
   add(knobs.styles, () => ({ kind: "style" }))
+  add(knobs.coordinators, () => ({ kind: "coordinator" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a

@@ -50,4 +50,11 @@ impl ChannelStore for ChannelLookup {
     ) -> ConversationFuture<'_, Option<Channel>> {
         panic!("lookup fixture cannot write")
     }
+    fn set_coordinator_on(
+        &self,
+        _: &ChannelId,
+        _: bool,
+    ) -> ConversationFuture<'_, Option<Channel>> {
+        panic!("lookup fixture cannot write")
+    }
 }

@@ -193,6 +193,27 @@ export function setChannelPlacement({
 }
 
 /**
+ * Turns a made channel's coordinator on or off, from its settings. The index
+ * takes the answer at once and is read again so every list agrees. Answers
+ * whether it was changed; a refusal throws its `ChannelCreationError`.
+ */
+export function setChannelCoordinator({
+  channelId,
+  on,
+}: {
+  channelId: string
+  on: boolean
+}): WorkspaceCommand<Promise<boolean>> {
+  return async (dispatch, _getState, { channels, newId }) => {
+    if (!channels?.setCoordinator) return false
+    const channel = await channels.setCoordinator(channelId, on, newId())
+    dispatch(channelPlaced({ channel }))
+    void dispatch(loadWorkspace())
+    return true
+  }
+}
+
+/**
  * Makes the channel from the draft as the store holds it now. Made, it joins
  * the index and opens, and the index is read again so the source lists it
  * too. Refused, the flow says why at the step it is about. With a drop still

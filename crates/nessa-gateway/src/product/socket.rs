@@ -2061,7 +2061,8 @@ async fn dispatch_authorized(
         }
         ProductMethod::ChannelCreate
         | ProductMethod::ChannelList
-        | ProductMethod::ChannelSetPlacement => {
+        | ProductMethod::ChannelSetPlacement
+        | ProductMethod::ChannelSetCoordinator => {
             super::channel::dispatch(state, session, frame).await
         }
         ProductMethod::AppsTrusted | ProductMethod::AppsUntrust => {

@@ -125,7 +125,7 @@ use nessa_sdk::domain::agent_execution::{
     sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
-pub use reply_styles::ReplyStyleStore;
+pub use reply_styles::{PinnedStart, ReplyStyleStore};
 pub use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
     HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
@@ -993,6 +993,8 @@ struct Inner {
     channels: channels::ChannelBinding,
     /// How agents talk; unbound, no agent is told a style.
     reply_styles: reply_styles::ReplyStyleBinding,
+    /// Held across a channel coordinator switch's read, audit and write.
+    channel_switches: tokio::sync::Mutex<()>,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
     /// What each credential was issued to, for telling which device sent a
@@ -1543,6 +1545,7 @@ impl ConversationService {
                 background_tasks: OnceLock::new(),
                 channels: Default::default(),
                 reply_styles: Default::default(),
+                channel_switches: tokio::sync::Mutex::new(()),
                 scheduled_messages: OnceLock::new(),
                 credential_devices: OnceLock::new(),
                 preference_policy: OnceLock::new(),
@@ -1726,6 +1729,7 @@ impl ConversationService {
             place: channel
                 .as_ref()
                 .map(|channel| AgentPlace::of(channel, place_asked.is_remote())),
+            job: None,
             style: None,
         };
         let configured = match model.as_deref() {

@@ -44,6 +44,7 @@ export function inMemoryChannels({
         return Promise.reject(new ChannelCreationError(failure))
       }
       const id = `sample-channel-${made.size + 1}`
+      const main = `sample-coordinator-${made.size + 1}`
       const channel = add({
         id,
         name,
@@ -53,7 +54,8 @@ export function inMemoryChannels({
         defaults: { model: draft.model, access: draft.access },
         coordinatorPlacement: draft.coordinatorPlacement,
         threadPlacement: draft.threadPlacement,
-        coordinatorConversationId: `sample-coordinator-${made.size + 1}`,
+        coordinatorConversationId: main,
+        coordinatorOn: draft.coordinator,
       })
       made.set(requestId, channel)
       return Promise.resolve(channel)
@@ -69,6 +71,15 @@ export function inMemoryChannels({
             ? { coordinatorConversationId: `${channel.coordinatorConversationId}-moved` }
             : {}),
         }
+        made.set(requestId, changed)
+        return Promise.resolve(changed)
+      }
+      return Promise.reject(new ChannelCreationError("forbidden"))
+    },
+    setCoordinator(channelId, on) {
+      for (const [requestId, channel] of made) {
+        if (channel.id !== channelId) continue
+        const changed: Channel = { ...channel, coordinatorOn: on }
         made.set(requestId, changed)
         return Promise.resolve(changed)
       }
