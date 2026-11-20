@@ -100,6 +100,26 @@ it("leaves a gesture to what scrolls sideways under it", () => {
   expect(swiped).toEqual([])
 })
 
+it("leaves a gesture to what scrolls sideways inside a shadow root", () => {
+  render()
+  // A highlighted code block draws its lines in a shadow root: the wheel's
+  // target outside it is only the root's host, which never scrolls.
+  const block = document.createElement("div")
+  host.querySelector("#words")?.after(block)
+  const scroller = document.createElement("pre")
+  scroller.style.overflowX = "auto"
+  Object.defineProperty(scroller, "scrollWidth", { value: 900 })
+  Object.defineProperty(scroller, "clientWidth", { value: 300 })
+  const line = document.createElement("span")
+  scroller.append(line)
+  block.attachShadow({ mode: "open" }).append(scroller)
+  for (let i = 0; i < 8; i += 1)
+    line.dispatchEvent(
+      new WheelEvent("wheel", { deltaX: 15, bubbles: true, composed: true }),
+    )
+  expect(swiped).toEqual([])
+})
+
 it("reads nothing while turned off", () => {
   render(false)
   wheel("words", 15)

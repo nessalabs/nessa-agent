@@ -21,12 +21,16 @@ export const SWIPE_SURFACE = ".workspace-chat"
 const LINE = 16
 
 /**
- * Whether anything from `target` up to `surface` can scroll sideways: wider
- * than its box and set to scroll, or an input holding more than it shows.
+ * Whether anything on the wheel's `path` before `surface` can scroll
+ * sideways: wider than its box and set to scroll, or an input holding more
+ * than it shows. The path is the event's composed one, so a scroller inside a
+ * shadow root counts: a highlighted code block draws its lines in one, and
+ * the event's own target there is only the root's host, which never scrolls.
  */
-export function scrollsSideways(target: Element, surface: Element): boolean {
-  for (let at: Element | null = target; at && at !== surface; at = at.parentElement) {
-    if (at.scrollWidth <= at.clientWidth + 1) continue
+export function scrollsSideways(path: readonly EventTarget[], surface: Element): boolean {
+  for (const at of path) {
+    if (at === surface) return false
+    if (!(at instanceof Element) || at.scrollWidth <= at.clientWidth + 1) continue
     if (at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement) return true
     const overflow = getComputedStyle(at).overflowX
     if (overflow === "auto" || overflow === "scroll") return true
@@ -80,7 +84,7 @@ export function useSideSwipe(
           event.ctrlKey ||
           event.shiftKey ||
           target.closest("[inert]") !== null ||
-          scrollsSideways(target, surface))
+          scrollsSideways(event.composedPath(), surface))
       const next = swipeStep(state, sample, skip)
       state = next.state
       if (next.swiped) latest.current(next.swiped)
