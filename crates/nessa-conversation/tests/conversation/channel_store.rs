@@ -336,12 +336,17 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         let path = private.join("channels.sqlite3");
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
+        // No older file can turn its coordinator off (v8). Dropped by line,
+        // so a checkout with CRLF line endings (Windows) drops it too.
         let tables = current[..current.find("-- A replacement is recorded").unwrap()]
-            // No older file can turn its coordinator off (v8).
-            .replace(
-                "    -- Whether its coordinator is on; off keeps its main conversation.\n    coordinator_on INTEGER NOT NULL DEFAULT 1 CHECK (coordinator_on IN (0, 1)),\n",
-                "",
-            );
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                !line.starts_with("coordinator_on ")
+                    && !line.starts_with("-- Whether its coordinator is on")
+            })
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
         // Before one named computer (v6), a channel held a kind of place only.
         // A v6 file is today's tables without how agents talk (v7).
         let tables = if version >= 6 {
