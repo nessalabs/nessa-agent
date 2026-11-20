@@ -4625,7 +4625,12 @@ impl ConversationService {
             // question it asks after it is not taken for the one answered.
             let answered = if !known && writer.is_person() {
                 service
-                    .waiting_ask_answered(&id, &execution_id, &caller, writer.initiation().initiator())
+                    .waiting_ask_answered(
+                        &id,
+                        &execution_id,
+                        &caller,
+                        writer.initiation().initiator(),
+                    )
                     .await
             } else {
                 None

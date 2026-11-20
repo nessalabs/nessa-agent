@@ -173,7 +173,10 @@ impl ConversationService {
                 return None;
             }
         };
-        match self.sent_by_a_person(thread, execution, caller, initiator).await {
+        match self
+            .sent_by_a_person(thread, execution, caller, initiator)
+            .await
+        {
             Ok(true) => Some(waiting.ask_id),
             Ok(false) => None,
             Err(error) => {
