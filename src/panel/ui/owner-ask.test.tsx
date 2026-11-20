@@ -51,6 +51,7 @@ it("offers every choice again when the gateway did not take the answer", async (
           return new Promise((resolve) => (settle = resolve))
         }}
         raiseAccess={() => Promise.resolve(true)}
+        access="ask"
         working={false}
       />,
     )
@@ -95,9 +96,12 @@ const button = (name: string): HTMLButtonElement => {
   return found
 }
 
-it("raises the access before Approve is sent, then lists what was allowed", async () => {
+it("sends Approve only once the chat runs at the access asked for", async () => {
   const steps: string[] = []
-  const render = (shown: typeof access | undefined, working = false) =>
+  const render = (
+    shown: typeof access | undefined,
+    { working = false, mode }: { working?: boolean; mode?: "ask" | "full" } = {},
+  ) =>
     act(() => {
       root.render(
         <PanelOwnerAsk
@@ -106,28 +110,59 @@ it("raises the access before Approve is sent, then lists what was allowed", asyn
             steps.push(`sent ${text}`)
             return Promise.resolve(true)
           }}
-          raiseAccess={(mode) => {
-            steps.push(`raised ${mode}`)
+          raiseAccess={(raised) => {
+            steps.push(`raised ${raised}`)
             return Promise.resolve(true)
           }}
+          access={mode}
           working={working}
         />,
       )
     })
   // While the agent works, Approve waits and says why.
-  render(access, true)
+  render(access, { working: true, mode: "ask" })
   expect(container.querySelector("[data-access-request='full']")).not.toBeNull()
-  expect(button("Approve").disabled).toBe(true)
+  expect(button("Approve").getAttribute("aria-disabled")).toBe("true")
   expect(container.textContent).toContain("once the agent stops")
-  render(access)
+  render(access, { mode: "ask" })
   expect(container.querySelector("[data-slot=access-request-grants]")).toBeNull()
   await act(async () => button("Approve").click())
+  // The gateway took the change, but the chat does not run at it yet.
+  expect(steps).toEqual(["raised full"])
+  render(access)
+  expect(steps).toEqual(["raised full"])
+  await act(async () => render(access, { mode: "full" }))
   expect(steps).toEqual(["raised full", "sent Approve"])
   // The list lets the ask go; the card stays to say what was allowed.
-  render(undefined)
+  render(undefined, { mode: "full" })
   const grants = [...container.querySelectorAll("[data-slot=access-request-grants] li")]
   expect(grants.map((item) => item.textContent)).toEqual(access.access.grants)
   expect(container.querySelector("button")).toBeNull()
+})
+
+it("sends no Approve when the ask left before the access changed", async () => {
+  const steps: string[] = []
+  const render = (shown: typeof access | undefined, mode: "ask" | "full") =>
+    act(() => {
+      root.render(
+        <PanelOwnerAsk
+          ask={shown}
+          submit={(text) => {
+            steps.push(`sent ${text}`)
+            return Promise.resolve(true)
+          }}
+          raiseAccess={() => Promise.resolve(true)}
+          access={mode}
+          working={false}
+        />,
+      )
+    })
+  render(access, "ask")
+  await act(async () => button("Approve").click())
+  // The person answered in words; then the access arrives.
+  render(undefined, "ask")
+  await act(async () => render(undefined, "full"))
+  expect(steps).toEqual([])
 })
 
 it("sends no Approve when the access did not change, and Not now changes nothing", async () => {
@@ -144,6 +179,7 @@ it("sends no Approve when the access did not change, and Not now changes nothing
           steps.push("raise refused")
           return Promise.resolve(false)
         }}
+        access="ask"
         working={false}
       />,
     )

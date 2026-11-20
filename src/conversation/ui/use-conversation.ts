@@ -23,6 +23,7 @@ import {
   setDraft,
   setSelection,
   controlConversation,
+  raiseAccess,
   setUsageLimitAutoContinue,
   stopGenerating,
   followConversation,
@@ -60,15 +61,8 @@ export function useConversation() {
      * person approved, and says whether the gateway took it. The same command
      * the access picker sends.
      */
-    raiseAccess: async (mode: ApprovalMode): Promise<boolean> => {
-      const finished = await dispatch(
-        controlConversation({
-          id: active.id,
-          control: { kind: "setApprovalMode", mode },
-        }),
-      )
-      return !controlConversation.rejected.match(finished)
-    },
+    raiseAccess: (mode: ApprovalMode): Promise<boolean> =>
+      dispatch(raiseAccess({ id: active.id, mode })).unwrap(),
     setUsageLimitAutoContinue: (enabled: boolean) =>
       dispatch(setUsageLimitAutoContinue(enabled)).unwrap(),
     setSelection: (id: string, selection: ConversationSelection) =>

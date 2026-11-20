@@ -8,6 +8,7 @@ import { chooseAccess, sendMessage } from "../../adapters/store/commands"
 import { modelChanging } from "../../adapters/store/model-commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectAtWork, selectSession } from "../../adapters/store/selectors"
+import { entry } from "../../application/workspace-state"
 import type { OwnerAsk as Ask } from "../../model/workspace-index"
 
 /**
@@ -19,18 +20,29 @@ import type { OwnerAsk as Ask } from "../../model/workspace-index"
  *
  * An agent's request for more access is the red card. Approve raises the
  * session's access by the person's own access command, the same as the
- * composer's shield, and only then sends Approve as their answer; the card
- * stays, listing what was allowed, after the list lets the ask go. While the
- * agent is at work Approve waits, since access changes only between turns.
+ * composer's shield, and sends Approve as their answer only once the
+ * source's conversation says the session runs at that access, the end state
+ * and not the command's reply: a choice held for the end of a turn is not a
+ * change yet. The card stays, listing what was allowed, after the list lets
+ * the ask go. While the agent is at work Approve waits, since access changes
+ * only between turns.
  */
 export function OwnerAsk({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
   const ask = useWorkspaceSelector((state) => selectSession(state, sessionId)?.ask)
   const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
   // A message waits while the session's access is still changing, as the
-  // composer's does; Approve's answer is sent once it has settled.
+  // composer's does; Approve's answer is sent once it has settled at the
+  // access asked for.
   const settling = useWorkspaceSelector((state) =>
     modelChanging(state.workspace, sessionId),
+  )
+  const runsAt = useWorkspaceSelector((state) => {
+    const access = entry(state.workspace.transcripts, sessionId)?.access
+    return access && access.changing === undefined ? access.mode : undefined
+  })
+  const refused = useWorkspaceSelector(
+    (state) => entry(state.workspace.accessChoices, sessionId)?.state === "refused",
   )
   const [sending, setSending] = useState<{ askId: string; label: string } | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -43,6 +55,7 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     setSending(null)
     setFailure(null)
+    setDue(null)
   }, [askId])
   const answer = (label: string, notSent: string) =>
     dispatch(sendMessage({ sessionId, text: label, initiator: "person" })).then(
@@ -57,8 +70,17 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
         return false
       },
     )
+  const raised = due && isAccessRequest(due.ask) ? due.ask.access.mode : undefined
   useEffect(() => {
-    if (!due || settling) return
+    if (!due) return
+    if (refused) {
+      // The change held for the turn's end was refused when it was asked.
+      setDue(null)
+      setSending(null)
+      setFailure("Access didn’t change. Press Approve again, or write your answer.")
+      return
+    }
+    if (settling || working || raised === undefined || runsAt !== raised) return
     setDue(null)
     void answer(
       due.label,
@@ -66,9 +88,9 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
     ).then((sent) => {
       if (sent) setApproved(due.ask)
     })
-    // `answer` is this render's; only the due answer and the settling start it.
+    // `answer` is this render's; only the due answer and the access start it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [due, settling])
+  }, [due, refused, settling, working, raised, runsAt])
   if (approved && isAccessRequest(approved) && (!ask || ask.askId === approved.askId))
     return (
       <AccessRequestCard
@@ -99,11 +121,13 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
           ).then((outcome) => {
             // Taken now, or held for the end of a turn that began first:
             // either way the person's access command stands, and the answer
-            // goes after it.
+            // waits until the session runs at it.
             if (outcome !== "taken" && outcome !== "pending") {
               setSending(null)
               setFailure(
-                "Access didn’t change. Press Approve again, or write your answer.",
+                outcome === "changing"
+                  ? "Access is still changing. Press Approve once it settles."
+                  : "Access didn’t change. Press Approve again, or write your answer.",
               )
               return
             }

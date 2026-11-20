@@ -778,6 +778,11 @@ export function App({
                     }
                     submit={(text) => chat.answer(textContent(text))}
                     raiseAccess={chat.raiseAccess}
+                    access={
+                      chat.active.remote && !chat.active.remote.approvalModeChange
+                        ? chat.active.remote.approvalMode
+                        : undefined
+                    }
                     working={
                       chat.active.phase !== "idle" || !!chat.active.remote?.running
                     }

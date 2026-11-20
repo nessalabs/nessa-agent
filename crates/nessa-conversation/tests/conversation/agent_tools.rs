@@ -2088,7 +2088,7 @@ async fn an_access_request_is_nessas_card_with_the_agents_reason() {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].tool, "request_access");
         assert!(records[0].allowed);
-        assert_eq!(records[0].policies, ["owner.ask_owner"]);
+        assert_eq!(records[0].policies, ["owner.request_access"]);
     }
     let kept = row(service.clone()).await.expect("the row carries the ask");
     assert_eq!(

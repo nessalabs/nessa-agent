@@ -105,6 +105,11 @@ pub enum AccessAction {
     /// Let a running agent turn ask the owner a question (`ask_owner`). It
     /// only asks and changes nothing: a turn another agent started may too.
     AskOwner,
+    /// Let a running agent turn ask the owner to raise the conversation's
+    /// access (`request_access`), the red card. Only a turn the owner
+    /// started: an agent nobody asked to work never puts Nessa's own words
+    /// "Allow full access" in front of the owner.
+    RequestAccess,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -158,11 +163,12 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::AgentTools,
         Self::ReadTurns,
         Self::CloseCreated,
         Self::AskOwner,
+        Self::RequestAccess,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -194,6 +200,7 @@ impl AccessAction {
             Self::ReadTurns => "conversation.read_turns",
             Self::CloseCreated => "conversation.close_created",
             Self::AskOwner => "conversation.ask_owner",
+            Self::RequestAccess => "conversation.request_access",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",
@@ -393,34 +400,28 @@ fn answer(policy: &dyn ConversationAccessPolicyEvaluator, ask: &AccessAsk<'_>) -
 }
 
 /// Whether `subject` may change one of `owner`'s settings, as its level
-/// lets it (`setting.change`): `Some(true)` allowed, `Some(false)` refused,
-/// `None` when the policy could not decide, which callers refuse too.
+/// lets it (`setting.change`): the policy's decision whole, so an allow
+/// names the rule that allowed it and a refusal says why, for the caller's
+/// audit record.
 pub fn setting_change(
     policy: &dyn ConversationAccessPolicyEvaluator,
     subject: AccessSubject<'_>,
     organization: &OrganizationId,
     owner: &PrincipalId,
     setting: Setting,
-) -> Option<bool> {
-    match answer(
-        policy,
-        &AccessAsk {
-            subject,
-            action: AccessAction::SettingChange,
-            resource: AccessResource::Setting {
-                organization,
-                owner,
-                setting,
-            },
-            held: None,
-            request: RequestShape::default(),
-            target: None,
+) -> AccessDecision {
+    policy.evaluate(&AccessAsk {
+        subject,
+        action: AccessAction::SettingChange,
+        resource: AccessResource::Setting {
+            organization,
+            owner,
+            setting,
         },
-    ) {
-        Answer::Allowed => Some(true),
-        Answer::Refused => Some(false),
-        Answer::Unavailable => None,
-    }
+        held: None,
+        request: RequestShape::default(),
+        target: None,
+    })
 }
 
 /// Whether a person may take an owner's action on a conversation, as the

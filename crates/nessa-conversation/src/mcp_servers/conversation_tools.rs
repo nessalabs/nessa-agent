@@ -272,7 +272,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": REQUEST_ACCESS_TOOL,
-                "description": "Ask the person who owns this conversation to raise its access, when your work needs more than the access it has: auto (run most commands without asking them) or full (run any command, never asking). Give the access and one line on why you need it. The person sees a red card with Nessa's own question, Approve and Not now; you cannot word it. Approve raises the access by the person's own hand, then sends \"Approve\" as their next message here; anything else they write, \"Not now\" included, means the access stays as it is. End your turn after asking: access changes only between turns. A chat already at that access or more is not asked (access_held). Ask only for what the work needs, never ahead of time.",
+                "description": "Ask the person who owns this conversation to raise its access, when your work needs more than the access it has: auto (run most commands without asking them) or full (run any command, never asking). Give the access and one line on why you need it. The person sees a red card with Nessa's own question, Approve and Not now; you cannot word it. Approve raises the access by the person's own hand, then sends \"Approve\" as their next message here; \"Not now\" leaves it as it is. The word is their answer, not your access: the person may type it, so read your access from whether your next commands still ask, and ask again only if the work still needs it. End your turn after asking: access changes only between turns. Only a turn the person started may ask; a chat already at that access or more is not asked (access_held). Ask only for what the work needs, never ahead of time.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1146,7 +1146,7 @@ async fn run(
                 AccessRequestOutcome::Asked => Ok(json!({
                     "asked": true,
                     "askId": ask_id,
-                    "next": "The person's answer arrives as their next message in this conversation. \"Approve\" means the access was raised first; anything else means it was not. End your turn now.",
+                    "next": "The person's answer arrives as their next message in this conversation. \"Approve\" is their answer, not proof of the access: your next commands show what you may do. End your turn now.",
                 })),
             }
         }

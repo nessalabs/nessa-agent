@@ -103,23 +103,29 @@ sequenceDiagram
 access to `auto` or `full`, for the agent's one-line `reason`. It is an
 `ask_owner` ask that Nessa writes: the question ("Allow full access in this
 chat?"), the choices Approve and Not now, and Not now as the recommended one,
-so nothing that picks for the person ever raises access
-(`OwnerAsk::auto_pickable` is false for it). The ask carries `access`, the
+so nothing that picks for the person ever raises access (an auto-pick reads
+`OwnerAsk::auto_pickable`, which is false for it; no auto-pick ships yet). The ask carries `access`, the
 mode, and the list row adds the three plain lines of what approving allows
 (`RaisedAccess::grants`, the one place those words live). A stored row whose
 question or choices differ from what Nessa writes for its access is refused
 as damaged. A chat already at that access or more is not asked
-(`access_held`). It is admitted under `conversation.ask_owner`, since it only
-asks.
+(`access_held`); that check reads the saved mode, so a change landing at the
+same moment leaves at most one card too many or too few, and grants nothing.
+It is admitted under its own action, `conversation.request_access`
+(`owner.request_access`), in a turn the owner started only: the card speaks
+in Nessa's words, so an agent nobody asked to work never puts it in front of
+the owner.
 
 Approving is the person's: a client draws the ask as the red access card and,
 on Approve, first sends the owner's own `conversation.setApprovalMode` (the
-same command the composer's access picker sends), and only once that is
-taken sends Approve as their message. The card stays to list what was
-allowed. Approve waits while a turn is at work, since access changes only
-between turns. A client that does not know `access` shows an ordinary ask,
-whose Approve changes nothing: the agent reads its access from the next
-permission prompts, never from the word.
+same command the composer's access picker sends), and sends Approve as their
+message only once the conversation's view says it runs at that access: the
+end state, not the command's reply, so a change held for a turn's end or
+still on its way sends nothing yet, and an ask that leaves first sends
+nothing at all. The card stays to list what was allowed. Approve waits while
+a turn is at work, since access changes only between turns. The person can
+still type "Approve", so the word is their answer and never the agent's
+access: the agent reads that from its next commands.
 
 ```mermaid
 sequenceDiagram
@@ -135,6 +141,7 @@ sequenceDiagram
     Window->>Window: red card: question, reason, Approve, Not now
     Window->>Gateway: owner's own access change to full
     Gateway-->>Window: taken
+    Gateway-->>Window: conversation view: access full, nothing changing
     Window->>Meta: owner's message "Approve" takes the ask down
     Window->>Window: card lists the three grants
 ```
@@ -151,7 +158,11 @@ owner's Save, `owner_types` ones (keys, tokens, sign-ins) are only ever typed
 by the owner, and `raises_access` ones (access, sharing, linking, permission
 rules, trusted apps) wait for the owner's Approve on the red card. A new
 setting cannot compile without a level. `application::setting_change` is how
-a caller asks; settings in the chat use it.
+a caller asks. No production caller uses it yet: settings shown in the chat
+(the next step) are the first, and until then each setting keeps the guard it
+had. The level is a fact Nessa states about the setting, as a resource's
+owner is: the policy holds the rule for each level, and the one match in
+`Setting::level` keeps a new setting from shipping without one.
 
 The gateway submits continuations and external events with the person as
 sender, so `read_turn` tells them apart from typed turns by facts each kept by
@@ -349,7 +360,7 @@ the message text.
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
 | An agent-authored target turn calls `read_turn` | Cedar's `owner.read_turns` admits it on the owner's live conversations: it only reads | Reading the chain grants nothing; every other agent tool is still refused |
 | An agent-authored target turn calls `ask_owner` | Cedar's `owner.ask_owner` admits it on the owner's live conversations: it only asks | The owner's next message is the answer; asking grants nothing else |
-| A turn calls `request_access` | Admitted as `ask_owner`; Nessa writes the ask | Only the owner's own `setApprovalMode` raises access; the agent's word never does |
+| A turn calls `request_access` | Cedar's `owner.request_access` admits it only in a turn the owner started; Nessa writes the ask | Only the owner's own `setApprovalMode` raises access; the agent's word never does |
 | An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
 

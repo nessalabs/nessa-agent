@@ -22,8 +22,9 @@ pub const READ_TURN_TOOL: &str = "read_turn";
 pub const ASK_OWNER_TOOL: &str = "ask_owner";
 
 /// The agent tool that asks the owner to raise the chat's access. It only
-/// asks, as `ask_owner` does, and so is admitted under the same action: the
-/// owner's own access command is what raises it.
+/// asks, as `ask_owner` does, and the owner's own access command is what
+/// raises it; it is admitted under [`AccessAction::RequestAccess`], in a
+/// turn the owner started only.
 pub const REQUEST_ACCESS_TOOL: &str = "request_access";
 
 /// What became of a request for more access.
@@ -56,9 +57,11 @@ impl ConversationService {
 
     /// Ask the owner, as [`Self::ask_owner`] does, to raise the chat to
     /// `access`, for the agent's one-line `reason`. Nessa writes the question
-    /// and the choices. A chat that already runs at that access or more is
-    /// not asked: its mode is read under the same lock the ask is written
-    /// under.
+    /// and the choices. A chat whose saved mode is already that access or
+    /// more is not asked. That read is a courtesy, not a guard: the mode
+    /// changes under its own lock, so a change landing at the same moment
+    /// leaves at most one card too many or too few. Asking never raises the
+    /// access, so neither grants anything.
     pub async fn request_access(
         &self,
         conversation: &ConversationId,
@@ -209,7 +212,8 @@ impl ConversationService {
             subject,
             action: match tool.as_str() {
                 READ_TURN_TOOL => AccessAction::ReadTurns,
-                ASK_OWNER_TOOL | REQUEST_ACCESS_TOOL => AccessAction::AskOwner,
+                ASK_OWNER_TOOL => AccessAction::AskOwner,
+                REQUEST_ACCESS_TOOL => AccessAction::RequestAccess,
                 _ => AccessAction::AgentTools,
             },
             resource: AccessResource::of(&record),

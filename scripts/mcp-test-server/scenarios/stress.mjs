@@ -161,7 +161,7 @@ export const SAYS = {
   asked: "Asked the owner: ",
   answered: "Answered: ",
   requested: "Requested access: ",
-  approvedAccess: "Approved, at ",
+  approvedAccess: "The person answered the access request: ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }

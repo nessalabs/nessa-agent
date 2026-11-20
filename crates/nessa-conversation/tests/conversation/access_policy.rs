@@ -287,6 +287,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             AccessAction::AgentTools
             | AccessAction::ReadTurns
             | AccessAction::AskOwner
+            | AccessAction::RequestAccess
             | AccessAction::CloseCreated => AccessSubject::AgentTurn {
                 organization: &org,
                 principal: &owner,
@@ -398,7 +399,7 @@ fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
         ] {
             assert!(!allowed(&change(refused, setting)), "{name} {refused:?}");
         }
-        // The helper callers use answers the same.
+        // The helper callers use answers the same, rule and all.
         assert_eq!(
             crate::application::setting_change(
                 &policy,
@@ -407,7 +408,7 @@ fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
                 &owner,
                 setting
             ),
-            Some(setting.level() == SettingLevel::AgentChanges),
+            agent,
             "{name}"
         );
     }
@@ -1788,6 +1789,45 @@ fn any_turn_of_the_owners_asks_the_owner() {
     assert!(!allowed(&ask(
         &conversation("org", "someone-else", false),
         false
+    )));
+    assert!(!allowed(&ask(
+        &conversation("elsewhere", "owner", false),
+        true
+    )));
+    assert!(!allowed(&ask(&conversation("org", "owner", true), true)));
+}
+
+/// Only a turn the owner started asks to raise the owner's access, and only
+/// in the owner's own conversation that is not deleted: a turn another agent
+/// started may ask a question, never put the red card in front of the owner.
+#[test]
+fn only_a_turn_the_owner_started_asks_to_raise_access() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action: AccessAction::RequestAccess,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&ask(&live, true)),
+        Some(&["owner.request_access".to_owned()][..])
+    );
+    assert!(!allowed(&ask(&live, false)));
+    assert!(!allowed(&ask(
+        &conversation("org", "someone-else", false),
+        true
     )));
     assert!(!allowed(&ask(
         &conversation("elsewhere", "owner", false),

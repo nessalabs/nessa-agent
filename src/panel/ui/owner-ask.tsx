@@ -15,13 +15,16 @@ import {
  *
  * An agent's request for more access is the red card: Approve raises the
  * conversation's access first (`raiseAccess`, the access picker's own
- * command), then sends Approve as the answer, and the card stays to list
- * what was allowed. While the agent is at work (`working`) Approve waits.
+ * command), and sends Approve as the answer only once the conversation says
+ * it runs at the access asked for (`access`), the end state and not the
+ * command's reply. The card then stays to list what was allowed. While the
+ * agent is at work (`working`) Approve waits.
  */
 export function PanelOwnerAsk({
   ask,
   submit,
   raiseAccess,
+  access,
   working,
 }: {
   ask: OwnerAskView | undefined
@@ -29,6 +32,11 @@ export function PanelOwnerAsk({
   submit: (text: string) => Promise<boolean>
   /** Raises the conversation's access; resolves whether the gateway took it. */
   raiseAccess: (mode: "auto" | "full") => Promise<boolean>
+  /**
+   * The access the conversation runs at, as its view last said it; absent
+   * while a change is on its way and not yet in effect.
+   */
+  access: "ask" | "auto" | "full" | undefined
   /** The agent is at work, so access cannot change yet. */
   working: boolean
 }) {
@@ -37,10 +45,14 @@ export function PanelOwnerAsk({
   )
   const [failure, setFailure] = React.useState<string | null>(null)
   const [approved, setApproved] = React.useState<OwnerAskView | null>(null)
+  // Approve's answer, due once the conversation runs at the access it raised.
+  const [due, setDue] = React.useState<{ ask: OwnerAskView; label: string } | null>(null)
   const askId = ask?.askId
+  // A new ask, or none, starts with nothing on its way.
   React.useEffect(() => {
     setSending(null)
     setFailure(null)
+    setDue(null)
   }, [askId])
   const send = (label: string, notSent: string): Promise<boolean> => {
     const failed = () => {
@@ -50,6 +62,19 @@ export function PanelOwnerAsk({
     }
     return submit(label).then((taken) => taken || failed(), failed)
   }
+  const raised = due?.ask.access?.mode
+  React.useEffect(() => {
+    if (!due || working || raised === undefined || access !== raised) return
+    setDue(null)
+    void send(
+      due.label,
+      "Access changed, but your answer was not sent. Write it to the agent.",
+    ).then((sent) => {
+      if (sent) setApproved(due.ask)
+    })
+    // `send` is this render's; only the due answer and the access start it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [due, working, raised, access])
   if (approved && isAccessRequest(approved) && (!ask || ask.askId === approved.askId))
     return (
       <AccessRequestCard
@@ -79,14 +104,9 @@ export function PanelOwnerAsk({
             setSending(null)
             setFailure("Access didn’t change. Press Approve again, or write your answer.")
           }
-          raiseAccess(ask.access.mode).then((raised) => {
-            if (!raised) return refused()
-            void send(
-              approve.label,
-              "Access changed, but your answer was not sent. Write it to the agent.",
-            ).then((sent) => {
-              if (sent) setApproved(ask)
-            })
+          raiseAccess(ask.access.mode).then((taken) => {
+            if (!taken) return refused()
+            setDue({ ask, label: approve.label })
           }, refused)
         }}
         onDecline={() => {
