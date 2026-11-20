@@ -1075,7 +1075,13 @@ relay. Conversation application admission derives the actor from the live source
 turn, Cedar decides owner delegation, and target commands retain their existing
 durable receipts and permission handling. Observation polls an independent
 committed reader and never opens an Agent. The ownership and ordering table is
-[agent thread tools](design/agent-thread-tools.md). `read_window` tells an
+[agent thread tools](design/agent-thread-tools.md). `ask_owner` asks the
+person one decision (a short question, two to four choices with what each
+does, a recommendation and why): it is kept on the conversation's summary
+until the owner's next message there, whose summary write takes it down, and
+every list row the owner reads carries it,
+so each window posts a notice and draws a card, and the floating panel adds a
+tab with a dot without bringing it forward. `read_window` tells an
 agent what the person's desktop window shows, which pane is its own, and
 whether the focused chat's right panel is open and which widget tab is in
 front, from what the window last published over `workspace.publish`.

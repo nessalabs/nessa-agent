@@ -51,7 +51,7 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
-pub use agent_tools::READ_TURN_TOOL;
+pub use agent_tools::{ASK_OWNER_TOOL, READ_TURN_TOOL};
 pub use channels::{
     AgentBrief, AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
     FolderRefusal,
@@ -4618,6 +4618,24 @@ impl ConversationService {
                     }));
                 }
             }
+            // The owner's new message is their answer to whatever the agent
+            // asked them (`ask_owner`), a tapped choice or not. Someone it is
+            // shared with, a continuation, or an external event sent for the
+            // owner does not answer it. Read before the agent has the
+            // message, so a question it asks after it is not taken for the
+            // one answered; taken down with the message's summary below.
+            let answered = if !known && writer.is_person() {
+                service
+                    .waiting_ask_answered(
+                        &id,
+                        &execution_id,
+                        &caller,
+                        writer.initiation().initiator(),
+                    )
+                    .await
+            } else {
+                None
+            };
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -4696,8 +4714,12 @@ impl ConversationService {
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
+            // The same write takes down the question the message answered:
+            // the list never shows the message and the question still up.
             if !known && !matches!(writer, Writer::Internal) {
-                service.summarize_message(&id, &message).await;
+                service
+                    .summarize_message(&id, &message, answered.as_deref())
+                    .await;
             }
             match delivery {
                 SubmissionDelivery::Queued(receipt) => {
@@ -4893,7 +4915,7 @@ impl ConversationService {
         let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok((
             ConversationList {
-                conversations: list_entries(&owned, &running, &channels),
+                conversations: list_entries(&owned, &running, &channels, reader),
                 complete,
             },
             head,
@@ -4956,7 +4978,7 @@ impl ConversationService {
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running, &channels),
+            conversations: list_entries(&owned, &running, &channels, reader),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -5051,7 +5073,12 @@ impl ConversationService {
         running
     }
     /// Record in the conversation's summary that `message` was accepted.
-    async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
+    async fn summarize_message(
+        &self,
+        id: &ConversationId,
+        message: &UserMessage,
+        answered: Option<&str>,
+    ) {
         let at_ms = self.inner.clock.unix_milliseconds();
         let first_file = message
             .files()
@@ -5059,12 +5086,10 @@ impl ConversationService {
             .map(LinkedFile::name)
             .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
-            Some(ConversationSummary::after_message(
-                previous,
-                message.text_str(),
-                first_file,
-                at_ms,
-            ))
+            Some(
+                ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
+                    .answering(answered),
+            )
         })
         .await;
     }
@@ -7835,7 +7860,12 @@ fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
     channels: &HashMap<ConversationId, crate::domain::ChannelId>,
+    reader: &Reader,
 ) -> Vec<ConversationListEntry> {
+    // An agent asks its owner: a device a conversation is shared with sees
+    // the conversation, not the question
+    // (`a_shared_reader_neither_sees_nor_answers_the_owners_ask`).
+    let owners = !matches!(reader, Reader::PairedDevice { .. });
     owned
         .iter()
         .map(|listed| ConversationListEntry {
@@ -7855,6 +7885,7 @@ fn list_entries(
             channel_id: channels
                 .get(listed.conversation.id())
                 .map(|channel| channel.as_str().to_owned()),
+            ask: owners.then(|| listed.summary.ask().cloned()).flatten(),
         })
         .collect()
 }

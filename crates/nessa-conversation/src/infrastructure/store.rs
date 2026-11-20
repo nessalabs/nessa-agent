@@ -44,6 +44,7 @@ use nessa_protocol::conversation::domain::{
     ConversationId, ConversationModelId, ConversationPreview, ConversationSummary,
     ConversationTitle,
 };
+use nessa_protocol::conversation::view::OwnerAsk;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sync::replication::catalogue::{
     validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
@@ -124,11 +125,12 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 4] = [
+static UPGRADES: [Upgrade; 5] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
     Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
+    Upgrade::new(10, include_str!("schema_upgrades/10.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -659,6 +661,7 @@ struct StoredSummary {
     preview: Option<String>,
     updated_at_ms: i64,
     archived: bool,
+    ask: Option<String>,
 }
 impl StoredSummary {
     /// Held to the same bounds as one written here: a time a list cannot
@@ -674,7 +677,22 @@ impl StoredSummary {
             .map(|preview| ConversationPreview::new(&preview))
             .transpose()
             .ok()?;
-        ConversationSummary::new(title, preview, time(self.updated_at_ms)?, self.archived).ok()
+        // An ask that cannot be read is left off rather than making the
+        // conversation's whole summary unreadable: the list still shows it.
+        let ask = self
+            .ask
+            .and_then(|ask| match serde_json::from_str::<OwnerAsk>(&ask) {
+                Ok(ask) if ask.check().is_ok() => Some(ask),
+                _ => {
+                    tracing::warn!("a stored ask could not be read; left off its summary");
+                    None
+                }
+            });
+        Some(
+            ConversationSummary::new(title, preview, time(self.updated_at_ms)?, self.archived)
+                .ok()?
+                .with_ask(ask),
+        )
     }
 }
 
@@ -1676,6 +1694,7 @@ impl ConversationSummaries for LocalConversationStore {
                             preview: row.get(1)?,
                             updated_at_ms: row.get(2)?,
                             archived: row.get(3)?,
+                            ask: row.get(4)?,
                         })
                     },
                 )
@@ -1698,6 +1717,11 @@ impl ConversationSummaries for LocalConversationStore {
         let id = id.clone();
         let changes = self.changes.clone();
         self.run(move |connection| {
+            let ask = summary
+                .ask()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| ConversationError::InvalidInput)?;
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
             if conversation.deletion().is_some() {
@@ -1706,19 +1730,21 @@ impl ConversationSummaries for LocalConversationStore {
             let revision = next_revision(&transaction, &conversation, false)?;
             transaction
                 .cached_execute(
-                    "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived, ask)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT (conversation_id) DO UPDATE SET
                          title = excluded.title,
                          preview = excluded.preview,
                          updated_at_ms = excluded.updated_at_ms,
-                         archived = excluded.archived",
+                         archived = excluded.archived,
+                         ask = excluded.ask",
                     params![
                         id.to_string(),
                         summary.title().map(ConversationTitle::as_str),
                         summary.preview().map(ConversationPreview::as_str),
                         stored_time(summary.updated_at_ms())?,
                         summary.archived(),
+                        ask,
                     ],
                 )
                 .map_err(failed)?;
@@ -1858,6 +1884,7 @@ impl ConversationListing for LocalConversationStore {
                         preview: row.get(10)?,
                         updated_at_ms: row.get(11)?,
                         archived: row.get(12)?,
+                        ask: row.get(13)?,
                     })
                 })();
                 let conversation = cells(conversation)?;
@@ -1872,7 +1899,7 @@ impl ConversationListing for LocalConversationStore {
                     (Some(conversation), Some(summary)) => {
                         listed.conversations.push(ListedConversation {
                             held: share_grants::stored_capabilities(
-                                row.get(13).map_err(failed)?,
+                                row.get(14).map_err(failed)?,
                                 &conversation.id().to_string(),
                             )?,
                             conversation,
@@ -2228,6 +2255,7 @@ impl ConversationCatalogue for LocalConversationStore {
                                 preview: row.get(1)?,
                                 updated_at_ms: row.get(2)?,
                                 archived: row.get(3)?,
+                                ask: row.get(4)?,
                             })
                         },
                     )

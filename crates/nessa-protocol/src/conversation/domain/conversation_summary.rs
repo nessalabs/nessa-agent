@@ -1,3 +1,5 @@
+use crate::conversation::view::OwnerAsk;
+
 /// What a conversation is called in a list of conversations.
 ///
 /// Derived from the first message a person sends, and then kept: a later
@@ -112,6 +114,11 @@ pub struct ConversationSummary {
     preview: Option<ConversationPreview>,
     updated_at_ms: u64,
     archived: bool,
+    /// What an agent asked the owner and is waiting on. It lives on the
+    /// summary so that the one write that records the owner's next message
+    /// also takes it down, and so that it goes wherever the summary goes:
+    /// listed, archived, erased.
+    ask: Option<OwnerAsk>,
 }
 /// The latest time a conversation's times may hold, in Unix milliseconds:
 /// the largest integer a JSON number carries exactly, which is what a list
@@ -140,7 +147,13 @@ impl ConversationSummary {
             preview,
             updated_at_ms,
             archived,
+            ask: None,
         })
+    }
+    /// This summary with `ask` waiting on it, as read back from storage.
+    #[must_use]
+    pub fn with_ask(self, ask: Option<OwnerAsk>) -> Self {
+        Self { ask, ..self }
     }
     /// After a person's message was accepted. The title is taken only if the
     /// conversation has none yet; the preview is the message, or
@@ -170,6 +183,30 @@ impl ConversationSummary {
             ),
             updated_at_ms: later(previous, at_ms),
             archived: false,
+            ask: previous.and_then(|summary| summary.ask.clone()),
+        }
+    }
+    /// The same summary once a message answering ask `ask_id` is recorded
+    /// on it: that ask goes, and one asked since it stays
+    /// (`an_ask_goes_only_with_the_message_that_answers_it`).
+    #[must_use]
+    pub fn answering(mut self, ask_id: Option<&str>) -> Self {
+        if ask_id.is_some() && self.ask.as_ref().map(|ask| ask.ask_id.as_str()) == ask_id {
+            self.ask = None;
+        }
+        self
+    }
+    /// After an agent asked the owner `ask`, in place of any earlier ask.
+    /// It is something new for the owner, so like a message it moves the
+    /// conversation to the top of the list and out of the archive, where
+    /// nobody would see it (`an_ask_lifts_its_conversation_to_the_top_of_the_list`).
+    pub fn after_asking(previous: Option<&Self>, ask: OwnerAsk) -> Self {
+        Self {
+            title: previous.and_then(|summary| summary.title.clone()),
+            preview: previous.and_then(|summary| summary.preview.clone()),
+            updated_at_ms: later(previous, ask.asked_at_ms),
+            archived: false,
+            ask: Some(ask),
         }
     }
     /// After the agent replied, or `None` when the reply said nothing a
@@ -183,6 +220,7 @@ impl ConversationSummary {
             preview: Some(ConversationPreview::from_text(reply)?),
             updated_at_ms: later(previous, at_ms),
             archived: previous.is_some_and(|summary| summary.archived),
+            ask: previous.and_then(|summary| summary.ask.clone()),
         })
     }
     /// After somebody archived the conversation, or unarchived it. Nothing
@@ -219,6 +257,8 @@ impl ConversationSummary {
             preview: source.preview.clone(),
             updated_at_ms: at_ms.min(LATEST_TIME_MS),
             archived: false,
+            // Asked of the source's owner, in the source.
+            ask: None,
         }
     }
     pub fn title(&self) -> Option<&ConversationTitle> {
@@ -234,6 +274,10 @@ impl ConversationSummary {
     /// in it since.
     pub fn archived(&self) -> bool {
         self.archived
+    }
+    /// What an agent asked the owner and is still waiting on.
+    pub fn ask(&self) -> Option<&OwnerAsk> {
+        self.ask.as_ref()
     }
 }
 

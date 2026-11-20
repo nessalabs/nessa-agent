@@ -136,6 +136,39 @@ pub enum ChainEnd {
 }
 
 impl ConversationService {
+    /// The id of the question waiting in `thread` that this message answers:
+    /// the one waiting now, when the message is the owner's own, read as
+    /// `read_turn` will read its saved turn. A usage-limit continuation, an
+    /// external event, or someone the thread is shared with does not answer
+    /// it. A read that fails answers nothing and is said in the log, so the
+    /// question stays up rather than the message being refused.
+    pub(super) async fn waiting_ask_answered(
+        &self,
+        thread: &ConversationId,
+        execution: &str,
+        caller: &ConversationCaller,
+        initiator: &Initiator,
+    ) -> Option<String> {
+        let waiting = match self.inner.summaries.load(thread).await {
+            Ok(summary) => summary?.ask()?.ask_id.clone(),
+            Err(error) => {
+                tracing::warn!(%thread, ?error, "the waiting ask could not be read");
+                return None;
+            }
+        };
+        match Origins::new(self)
+            .sent_as_person(thread, execution, &caller.surface_id, initiator)
+            .await
+        {
+            Ok(TurnOrigin::Person { .. }) => Some(waiting),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(%thread, ?error, "who sent the message could not be read");
+                None
+            }
+        }
+    }
+
     /// Read turn `execution` of `thread`, then each turn its input came from,
     /// until one whose input nobody relayed. Every thread read is checked
     /// against `caller` as a `conversation.read` would be; the first one it
@@ -316,13 +349,31 @@ impl<'a> Origins<'a> {
             MessageSender::Internal => return Ok(TurnOrigin::Internal),
             MessageSender::Person => {}
         }
-        let execution = record.request.execution_id.as_str();
+        self.sent_as_person(
+            thread,
+            record.request.execution_id.as_str(),
+            record.actor.surface_id(),
+            record.initiation.initiator(),
+        )
+        .await
+    }
+
+    /// How a turn sent with the person as its sender arrived: a usage-limit
+    /// continuation, an external event, or the person (or a grant) on a
+    /// device. Read from the facts saved at admission, which a submission
+    /// also has before it is saved.
+    async fn sent_as_person(
+        &mut self,
+        thread: &ConversationId,
+        execution: &str,
+        surface: &str,
+        initiator: &Initiator,
+    ) -> Result<TurnOrigin, ConversationError> {
         if let Some(store) = self.service.scheduled_messages() {
             if let Some(causal) = store.continued_from(&thread.to_string(), execution).await? {
                 return Ok(TurnOrigin::Continued { execution: causal });
             }
         }
-        let surface = record.actor.surface_id();
         let device = self.device(surface).await?;
         if device == Device::Unknown {
             if let Some(source) = surface.strip_prefix(EVENT_SURFACE_PREFIX) {
@@ -331,7 +382,7 @@ impl<'a> Origins<'a> {
                 });
             }
         }
-        Ok(match record.initiation.initiator() {
+        Ok(match initiator {
             Initiator::Grant(grant) => TurnOrigin::Grant {
                 grant: grant.grant().to_owned(),
                 device,

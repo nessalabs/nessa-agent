@@ -1606,6 +1606,39 @@ it("keeps the channel a listed conversation is in, and refuses one the schema ca
   }
 })
 
+it("keeps an agent's ask on its row, and refuses one past the schema's bounds", async () => {
+  const ask = {
+    askId: "0123456789abcdef0123456789abcdef",
+    question: "Ship the Safari fix?",
+    choices: [
+      { label: "Ship", consequence: "It goes out today." },
+      { label: "Wait", consequence: "It waits for Monday." },
+    ],
+    recommended: 0,
+    reason: "Every check passed.",
+    askedAtMs: 5,
+  }
+  const listing = (row: object) =>
+    createConversationApi(
+      {
+        request: vi.fn().mockResolvedValue({ conversations: [row], complete: true }),
+      },
+      () => "id",
+    )
+  expect((await listing({ ...summary, ask }).list()).conversations).toEqual([
+    { ...summary, ask },
+  ])
+  for (const [name, bad] of [
+    ["one choice", { ...ask, choices: [ask.choices[0]] }],
+    ["the same label twice", { ...ask, choices: [ask.choices[0], ask.choices[0]] }],
+    ["a recommendation past the choices", { ...ask, recommended: 2 }],
+    ["a long question", { ...ask, question: "x".repeat(161) }],
+    ["a key that is not one", { ...ask, askId: "ask" }],
+    ["an unknown field", { ...ask, extra: true }],
+  ] as const)
+    await expect(listing({ ...summary, ask: bad }).list(), name).rejects.toThrow()
+})
+
 const observeCursor = {
   incarnation: "a".repeat(32),
   boundary: "9",

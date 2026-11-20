@@ -52,6 +52,7 @@ import {
   bindWaitingReviewNotices,
   browserReviewNotifier,
   hostReviewNotices,
+  mergedNotices,
   openReviewEvent,
   waitingReviewNotices,
   type HostNotices,
@@ -381,10 +382,15 @@ type WindowGatewayClient = GatewayClient &
     readonly attachments: AttachmentApi
   }
 
-/** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
-function reviewWaiting(
-  host: HostNotices | undefined,
-): (reviews: readonly WaitingReview[]) => void {
+/**
+ * Notices for reviews that are waiting, replaced by each snapshot the gateway
+ * sends, and for decisions agents asked, replaced by each list that changes
+ * them: one set of notices.
+ */
+function reviewWaiting(host: HostNotices | undefined): {
+  reviews: (reviews: readonly WaitingReview[]) => void
+  asks: (asks: readonly WaitingReview[]) => void
+} {
   const notices = host
     ? hostReviewNotices(host)
     : waitingReviewNotices(
@@ -393,7 +399,7 @@ function reviewWaiting(
         }),
       )
   bindWaitingReviewNotices(notices.showWaiting)
-  return notices.apply
+  return mergedNotices(notices.apply)
 }
 
 /**
@@ -410,19 +416,23 @@ function gatewayWorkspace(
   apps: AppsOptions | undefined,
   reviewNotices: HostNotices | undefined,
 ): GatewaySource<WindowGatewayClient> {
-  const onReviewWaiting = reviewWaiting(reviewNotices)
+  const waiting = reviewWaiting(reviewNotices)
+  const onReviewWaiting = waiting.reviews
+  const onAsksWaiting = waiting.asks
   // A pasted image's bytes are behind its object URL; Web Crypto names them.
   const imageBytes: ImageBytes = {
     bytes: async (url) => (await fetch(url)).blob(),
     digest: sha256Digest,
   }
-  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting, imageBytes })
+  if (!apps)
+    return gatewaySource({ connect, clock, onReviewWaiting, onAsksWaiting, imageBytes })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
     onReviewWaiting,
+    onAsksWaiting,
     imageBytes,
     apps: gatewayApps({
       registry,

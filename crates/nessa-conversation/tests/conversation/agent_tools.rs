@@ -1831,6 +1831,181 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
     retire(service, storage, metadata).await;
 }
 
+/// An agent asks its owner a question: it is admitted and audited under its
+/// own action, the list row carries it until the person writes in the
+/// conversation, and a later ask replaces it, out of the archive. A device
+/// the chat is shared with does not see it. A message refused on its way,
+/// or an external event sent for the person, answers nothing. An ask past its bounds is
+/// refused with what to fix, before it is admitted or audited.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_ask_waits_on_the_list_until_the_person_writes() {
+    use crate::application::EVENT_SURFACE_PREFIX;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    let audit = Arc::new(Audit::default());
+    service.bind_agent_tool_audit(audit.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "first ask").await;
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let asking = |question: &str| {
+        json!({
+            "question": question,
+            "choices": [
+                {"label": "Ship", "consequence": "The fix goes out today."},
+                {"label": "Wait", "consequence": "It waits for Monday's tests."},
+            ],
+            "recommended": 0,
+            "reason": "Every check passed.",
+        })
+    };
+    let listed_id = source.to_string();
+    let row = |service: ConversationService| {
+        let listed_id = listed_id.clone();
+        async move {
+            let listed = service.list(caller("list"), false).await.unwrap();
+            listed
+                .conversations
+                .into_iter()
+                .find(|row| row.conversation_id == listed_id)
+                .unwrap()
+                .ask
+        }
+    };
+
+    // Too long is refused with what to fix, and nothing is admitted.
+    let too_long = client.call("ask_owner", asking(&"word ".repeat(30))).await;
+    assert_eq!(too_long["isError"], true, "{too_long}");
+    assert_eq!(
+        too_long["structuredContent"]["error"],
+        "ask_question_too_long"
+    );
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(row(service.clone()).await, None);
+
+    let asked = client
+        .call("ask_owner", asking("Ship the Safari fix today?"))
+        .await;
+    assert_eq!(asked["isError"], false, "{asked}");
+    let first = asked["structuredContent"]["askId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "ask_owner");
+        assert!(records[0].allowed);
+        assert_eq!(records[0].policies, ["owner.ask_owner"]);
+    }
+    let kept = row(service.clone()).await.expect("the row carries the ask");
+    assert_eq!(kept.ask_id, first);
+    assert_eq!(kept.question, "Ship the Safari fix today?");
+    assert_eq!(kept.choices.len(), 2);
+    assert_eq!(kept.recommended, 0);
+    assert!(kept.asked_at_ms > 0);
+
+    // A later ask replaces it, and brings an archived chat back to the list
+    // the owner reads, dated when it was asked, so it is never out of sight.
+    assert!(service
+        .archive(source.clone(), caller("archive"), true)
+        .await
+        .unwrap());
+    let again = client
+        .call("ask_owner", asking("Ship it after lunch?"))
+        .await;
+    assert_eq!(again["isError"], false, "{again}");
+    let replaced = row(service.clone()).await.unwrap();
+    assert_ne!(replaced.ask_id, first);
+    assert_eq!(replaced.question, "Ship it after lunch?");
+    let listed = service.list(caller("list"), false).await.unwrap();
+    let lifted = listed
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .unwrap();
+    assert!(!lifted.archived);
+    assert!(lifted.updated_at_ms >= replaced.asked_at_ms);
+
+    // A device the chat is shared with lists the chat, not the question:
+    // an agent asks its owner.
+    crate::conversation_test_support::grant_as(
+        metadata.as_ref(),
+        &source,
+        "receiver",
+        crate::domain::ShareAccess::new(crate::domain::Capabilities::read(), None).unwrap(),
+    )
+    .await;
+    let (shared, _) = service
+        .list_for(
+            caller("shared-list"),
+            false,
+            &crate::application::Reader::PairedDevice {
+                receiver_id: "receiver".into(),
+            },
+            &caller("shared-list").principal_id,
+            Some(crate::conversation_test_support::access_policy_ref()),
+        )
+        .await
+        .unwrap();
+    let seen = shared
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .expect("the shared chat is listed");
+    assert_eq!(seen.ask, None);
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    // A message refused on its way never reached the agent, so it answered
+    // nothing: the question still waits.
+    assert!(service
+        .submit(
+            source.clone(),
+            caller("refused-turn"),
+            "refused-turn".into(),
+            image_message("image/png", 16),
+            SubmissionMode::Queue,
+        )
+        .await
+        .is_err());
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
+    // An external event the gateway sends for the person is not their
+    // answer either.
+    service
+        .submit(
+            source.clone(),
+            caller_on("event-turn", &format!("{EVENT_SURFACE_PREFIX}hook")),
+            "event-turn".into(),
+            message("A push landed."),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
+    // The person's next message is the answer: the ask is gone.
+    settled_send(&service, &source, "answer-turn", "Ship").await;
+    assert_eq!(row(service.clone()).await, None);
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store

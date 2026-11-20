@@ -377,6 +377,15 @@ import {
  *               call; once it ends, the reply shows and no run does, while
  *               the gateway still keeps every call. Compact outlasts a
  *               reload; Detailed, chosen again, draws the folded run
+ *   ask         an agent asks its owner one decision (`ask_owner`) in a
+ *               conversation the window does not show: the list row carries
+ *               it, the row waits on the person, and the host's notice says
+ *               the question and names the conversation, all without the
+ *               window leaving the conversation it shows. Opening the
+ *               notice brings up its card, with each choice and the one
+ *               recommended; tapping the other choice sends its label as
+ *               the person's message, which the agent answers, and the
+ *               card, the row's ask and the notice all go
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -436,6 +445,7 @@ import {
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
+  ASK,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -9320,6 +9330,152 @@ const steps = {
       "completed",
       failures,
     )
+  },
+
+  async ask(run, step, failures) {
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    // Named by a first turn, so the notice has a title to say.
+    const naming = prompt(run, STRESS.reply, step, " ask")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    const shown = await run.page
+      .locator(`${selectorFor.sessionListRowFor(run.main.id)}[aria-selected=true]`)
+      .count()
+    const asking = prompt(run, STRESS.ask, step)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, asking),
+    )
+    const { view: asked } = await settled(
+      run,
+      conversationId,
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
+      asking,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const rowAsk = async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => each.conversationId === conversationId)?.ask
+    }
+    const ask = await waitFor(rowAsk, 15_000)
+    if (!ask) {
+      failures.push("the list row does not carry the agent's ask")
+      return
+    }
+    if (
+      ask.question !== ASK.question ||
+      ask.choices.map((each) => each.label).join("|") !==
+        ASK.choices.map((each) => each.label).join("|") ||
+      ask.recommended !== ASK.recommended ||
+      ask.reason !== ASK.reason
+    )
+      failures.push(`the row's ask is ${JSON.stringify(ask)}, not what the agent asked`)
+    // The row waits on the person, though the window does not follow it.
+    const waiting = await run.page
+      .locator(
+        `.workspace-list [data-list-group="needs-you"] [data-session-row="${conversationId}"]`,
+      )
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!waiting)
+      failures.push("the asked conversation's row does not wait on the person")
+    const notice = await waitFor(async () => {
+      const notices = await hostNotices(run.page)
+      return (
+        notices?.up.find(
+          (each) =>
+            each.conversationId === conversationId &&
+            each.executionId === ask.askId &&
+            each.permissionId === "owner-ask",
+        ) ?? null
+      )
+    }, 30_000)
+    if (!notice) {
+      failures.push("no notice was posted for the agent's ask")
+      return
+    }
+    if (notice.title !== ASK.question)
+      failures.push(
+        `the ask's notice says ${JSON.stringify(notice.title)}, not the question`,
+      )
+    if (notice.body !== title)
+      failures.push(
+        `the ask's notice names ${JSON.stringify(notice.body)}, not the conversation ${JSON.stringify(title)}`,
+      )
+    // Nothing was taken from the person: the window shows what it showed.
+    const still = await run.page
+      .locator(`${selectorFor.sessionListRowFor(run.main.id)}[aria-selected=true]`)
+      .count()
+    if (still !== shown)
+      failures.push("the window left the conversation it showed when the agent asked")
+    const listening = await run.page.evaluate(
+      (id) => window.__fakeHostOpenNotice?.(id) ?? 0,
+      conversationId,
+    )
+    if (listening !== 1)
+      failures.push(`${listening} windows listened for an opened notice, not 1`)
+    const card = run.page.locator(`[data-owner-ask="${ask.askId}"]`)
+    const drawn = await card
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!drawn) {
+      failures.push("opening the ask's notice did not bring up its card")
+      return
+    }
+    const recommended = card.locator(
+      `[data-owner-ask-choice="${ASK.choices[ASK.recommended].label}"] [data-owner-ask-recommended]`,
+    )
+    if (
+      (await card.locator("[data-owner-ask-recommended]").count()) !== 1 ||
+      !(await recommended.count())
+    )
+      failures.push("the card does not mark the one recommended choice")
+    if (!(await card.getByText(ASK.reason, { exact: false }).count()))
+      failures.push("the card does not say why that choice is recommended")
+    for (const choice of ASK.choices)
+      if (!(await card.getByText(choice.consequence).count()))
+        failures.push(`the card does not say what ${JSON.stringify(choice.label)} does`)
+    // The person picks the other choice: its label goes as their message.
+    const other = ASK.choices.find((_, index) => index !== ASK.recommended).label
+    await card.locator(`[data-owner-ask-choice="${other}"]`).click()
+    await settled(
+      run,
+      conversationId,
+      new Set(asked?.messages.map((each) => each.executionId) ?? []),
+      other,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.answered}${other}`, failures)
+    const gone = await card
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!gone) failures.push("the ask's card stayed after the person answered")
+    if (
+      await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
+        (cleared) => !cleared,
+      )
+    )
+      failures.push("the list row still carries the ask the person answered")
+    await noticeTakenBack(run, notice, "answered with a choice", failures)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async park(run, step, failures) {

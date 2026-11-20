@@ -63,6 +63,27 @@ export interface ModelRef {
   readonly modelId: string
 }
 
+/** One choice an {@link OwnerAsk} offers, and what happens if it is picked. */
+export interface OwnerAskChoice {
+  readonly label: string
+  readonly consequence: string
+}
+
+/**
+ * A decision an agent asked the person: a short question, two to four
+ * choices, and the one the agent recommends with why. Answered by the
+ * person's next message in the session, a choice's label or anything else.
+ */
+export interface OwnerAsk {
+  /** New for every ask: a later ask in the same session is a new one. */
+  readonly askId: string
+  readonly question: string
+  readonly choices: readonly OwnerAskChoice[]
+  /** Index into `choices` of the one the agent recommends. */
+  readonly recommended: number
+  readonly reason: string
+}
+
 export interface SessionSummary {
   readonly id: string
   readonly channelId: string
@@ -88,6 +109,11 @@ export interface SessionSummary {
   readonly now?: string
   readonly pinned: boolean
   readonly unread: boolean
+  /**
+   * The decision an agent in it asked the person (`ask_owner`), while they
+   * have not written in it since: the session waits on them.
+   */
+  readonly ask?: OwnerAsk
   /** The source's count of changes to this summary; see `revision.ts`. */
   readonly revision: number
 }

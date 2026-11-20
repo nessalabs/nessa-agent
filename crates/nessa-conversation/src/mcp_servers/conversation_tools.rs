@@ -7,8 +7,8 @@ use crate::application::{
     WindowControlError, WindowControlVia, WindowReading, WindowTarget, MAX_EVENT_READERS,
 };
 use crate::application::{
-    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, MAX_EARLIER_TURNS, MAX_TURN_HOPS,
-    READ_TURN_TOOL,
+    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL, MAX_EARLIER_TURNS,
+    MAX_TURN_HOPS, READ_TURN_TOOL,
 };
 use crate::domain::{
     OpenPlace, PaneContent, WidgetRef, WindowAction, WindowPanel, WindowShowing, WindowSide,
@@ -18,6 +18,10 @@ use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServe
 use crate::timer::clock;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::{
+    OwnerAsk, OwnerAskChoice, MAX_ASK_CHOICES, MAX_ASK_LABEL_BYTES, MAX_ASK_LINE_BYTES,
+    MAX_ASK_QUESTION_BYTES, MAX_ASK_QUESTION_WORDS, MIN_ASK_CHOICES,
+};
 use nessa_sdk::application::agent_execution::{
     commands::{
         CreationFailure, CreationStage, MutationFailure, MutationOutcome, MutationReceipt,
@@ -236,6 +240,35 @@ impl BuiltInServer for ConversationTools {
                     "additionalProperties": false,
                 },
                 "annotations": {"readOnlyHint": true, "openWorldHint": false},
+            }),
+            json!({
+                "name": ASK_OWNER_TOOL,
+                "description": format!("Ask the person who owns this conversation to make one decision you cannot make for them. Give one short question (at most {MAX_ASK_QUESTION_WORDS} words; about twelve reads best), {MIN_ASK_CHOICES} to {MAX_ASK_CHOICES} choices, each a short label and one line on what happens if they pick it, the index of the choice you recommend, and one line on why. Every part is one line, and anything longer is refused (ask_question_too_long, ask_line_too_long, ask_choices, ask_recommended, ask_not_one_line): say it shorter and ask again. The person gets a notice, and the question shows as a card in this conversation wherever they look. Their answer arrives as their next message here, a tapped choice or anything else they type, so end your turn after asking. Asking again replaces the earlier question. Use it only for a choice that is theirs to make, never to report progress."),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_QUESTION_BYTES},
+                        "choices": {
+                            "type": "array",
+                            "minItems": MIN_ASK_CHOICES,
+                            "maxItems": MAX_ASK_CHOICES,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LABEL_BYTES},
+                                    "consequence": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "What happens if the person picks it, in one line."},
+                                },
+                                "required": ["label", "consequence"],
+                                "additionalProperties": false,
+                            },
+                        },
+                        "recommended": {"type": "integer", "minimum": 0, "maximum": MAX_ASK_CHOICES - 1, "description": "Index into choices of the one you recommend."},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "Why you recommend it, in one line."},
+                    },
+                    "required": ["question", "choices", "recommended", "reason"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
             }),
             json!({
                 "name": "close_thread",
@@ -461,6 +494,44 @@ struct ReadTurn {
     execution_id: String,
     #[serde(default, deserialize_with = "supplied")]
     earlier: Option<usize>,
+}
+/// `ask_owner`: one decision for the owner.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Ask {
+    question: String,
+    choices: Vec<AskChoice>,
+    recommended: u8,
+    reason: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AskChoice {
+    label: String,
+    consequence: String,
+}
+impl Ask {
+    /// The ask as it is kept, under a key new to it. Its time is the
+    /// service's to stamp.
+    fn kept(self) -> Result<OwnerAsk, String> {
+        let ask = OwnerAsk {
+            ask_id: uuid::Uuid::new_v4().simple().to_string(),
+            question: self.question.trim().to_owned(),
+            choices: self
+                .choices
+                .into_iter()
+                .map(|choice| OwnerAskChoice {
+                    label: choice.label.trim().to_owned(),
+                    consequence: choice.consequence.trim().to_owned(),
+                })
+                .collect(),
+            recommended: self.recommended,
+            reason: self.reason.trim().to_owned(),
+            asked_at_ms: 0,
+        };
+        ask.check().map_err(|refusal| refusal.code().to_owned())?;
+        Ok(ask)
+    }
 }
 /// `close_thread`: the calling agent's own thread, or one it created.
 #[derive(Deserialize)]
@@ -977,6 +1048,36 @@ async fn run(
                 .await
                 .map_err(code)?;
             Ok(turn_chain(&chain))
+        }
+        ASK_OWNER_TOOL => {
+            // Every part is checked before admission, so a refused ask
+            // writes no audit record, as an off-schema one does not.
+            let ask = parse::<Ask>(arguments)?.kept()?;
+            let action = identity(&source, &call, "ask-owner");
+            let source = service
+                .admit_agent_tool(
+                    source,
+                    call.clone(),
+                    tool,
+                    None,
+                    AgentToolRequest {
+                        logical: call,
+                        command: action,
+                    },
+                    stop,
+                )
+                .await
+                .map_err(code)?;
+            let id = ask.ask_id.clone();
+            service
+                .ask_owner(source.conversation(), ask)
+                .await
+                .map_err(code)?;
+            Ok(json!({
+                "asked": true,
+                "askId": id,
+                "next": "The person's answer arrives as their next message in this conversation. End your turn now.",
+            }))
         }
         "close_thread" => {
             let args: Close = parse(arguments)?;
@@ -1860,6 +1961,7 @@ mod tests {
                 "focus_pane" | "close_pane" => parse::<Pane>(arguments).map(|_| ()),
                 "close_thread" => parse::<Close>(arguments).map(|_| ()),
                 "read_turn" => parse::<ReadTurn>(arguments).map(|_| ()),
+                "ask_owner" => parse::<Ask>(arguments).map(|_| ()),
                 _ => panic!("uncovered published tool: {tool}"),
             }
         }
@@ -1871,6 +1973,22 @@ mod tests {
                 Some("string") => json!("valid"),
                 Some("boolean") => json!(true),
                 Some("integer") => shape.get("minimum").cloned().unwrap_or(json!(0)),
+                Some("array") => Value::Array(
+                    (0..shape["minItems"].as_u64().unwrap_or(1))
+                        .map(|_| example(&shape["items"]))
+                        .collect(),
+                ),
+                Some("object") => Value::Object(
+                    shape["required"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|field| {
+                            let field = field.as_str().unwrap();
+                            (field.to_owned(), example(&shape["properties"][field]))
+                        })
+                        .collect(),
+                ),
                 _ => panic!("uncovered published scalar: {shape}"),
             }
         }
@@ -1957,6 +2075,75 @@ mod tests {
         );
     }
 
+    /// An ask is one short question, two to four distinct one-line choices
+    /// and a recommendation with why; anything else is refused with a code
+    /// that says what to shorten, before it is admitted.
+    #[test]
+    fn an_ask_is_short_or_refused_with_what_to_fix() {
+        let ask = |question: &str, labels: &[&str], recommended: u8, reason: &str| {
+            parse::<Ask>(json!({
+                "question": question,
+                "choices": labels
+                    .iter()
+                    .map(|label| json!({"label": label, "consequence": "Then that happens."}))
+                    .collect::<Vec<_>>(),
+                "recommended": recommended,
+                "reason": reason,
+            }))
+            .unwrap()
+            .kept()
+        };
+        let kept = ask(
+            "  Ship the fix to Safari today?  ",
+            &["Ship", "Wait"],
+            0,
+            "It passed.",
+        )
+        .unwrap();
+        assert_eq!(kept.question, "Ship the fix to Safari today?");
+        assert_eq!(kept.ask_id.len(), 32);
+        let words = "word ".repeat(MAX_ASK_QUESTION_WORDS + 1);
+        let refused = |result: Result<OwnerAsk, String>| result.unwrap_err();
+        assert_eq!(
+            refused(ask(&words, &["A", "B"], 0, "r")),
+            "ask_question_too_long"
+        );
+        assert_eq!(
+            refused(ask("", &["A", "B"], 0, "r")),
+            "ask_question_too_long"
+        );
+        assert_eq!(refused(ask("Which?", &["A"], 0, "r")), "ask_choices");
+        assert_eq!(
+            refused(ask("Which?", &["A", "B", "C", "D", "E"], 0, "r")),
+            "ask_choices"
+        );
+        assert_eq!(
+            refused(ask("Which?", &["Same", "same"], 0, "r")),
+            "ask_choices"
+        );
+        assert_eq!(
+            refused(ask("Which?", &["A", "B"], 2, "r")),
+            "ask_recommended"
+        );
+        assert_eq!(
+            refused(ask("Which?", &["A", "B"], 0, &"long ".repeat(50))),
+            "ask_line_too_long"
+        );
+        assert_eq!(
+            refused(ask(
+                "Which?",
+                &[&"x".repeat(MAX_ASK_LABEL_BYTES + 1), "B"],
+                0,
+                "r"
+            )),
+            "ask_line_too_long"
+        );
+        assert_eq!(
+            refused(ask("Which\nnow?", &["A", "B"], 0, "r")),
+            "ask_not_one_line"
+        );
+    }
+
     #[test]
     fn tool_schemas_and_parsing_expose_no_source_authority_or_permission_bypass() {
         let tools = ConversationTools::new().tools();
@@ -1977,6 +2164,7 @@ mod tests {
                 "focus_pane",
                 "close_pane",
                 "read_turn",
+                "ask_owner",
                 "close_thread"
             ]
         );

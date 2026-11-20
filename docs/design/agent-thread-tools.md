@@ -43,6 +43,62 @@ says its `origin` (`person`, `grant`, `agent`, `resumed`, `continued`, `event`,
 `app`, `internal`) and what it `said`, exactly as saved; `startedBy` names the
 origin the chain starts at.
 
+`ask_owner {question, choices, recommended, reason}` asks the person who
+owns the conversation to make one decision. The question is one line of at
+most 20 words; there are two to four choices, each a short label and one line
+on what happens if picked; `recommended` is the index of the one the agent
+would pick and `reason` says why in one line. Anything longer, a line break,
+two labels alike or a recommendation past the choices is refused before
+admission with a code that says what to fix (`ask_question_too_long`,
+`ask_line_too_long`, `ask_choices`, `ask_recommended`, `ask_not_one_line`),
+so a refused ask writes no audit record.
+
+The ask is kept on the conversation's summary (`summaries.ask`; a later ask
+replaces it) and nowhere else, written as every summary is, under the
+summary lock a delete erases it under. Every list row of that conversation
+the owner reads carries it as `ask`, which is how each window and the
+floating panel learn of it, followed or not; a device the conversation is
+shared with lists the conversation without it. Asking moves the conversation
+to the top of the list and out of the archive, so it is never past the
+list's bound or out of sight. The owner's next message in the conversation
+is the answer, a tapped choice or anything they type. The ask waiting when
+the message is sent is the one it answers, and the summary write that
+records the message also takes the ask down: the list never shows the
+message with the question still up, and one the agent asks after it stays.
+A message refused on its way writes no summary and answers nothing, and
+neither does a message from someone the conversation is shared with, a
+usage-limit continuation or an external event the gateway sends for the
+owner: whether a message is the owner's own is read from the same saved
+facts `read_turn` reads. Known limits: a queued answer the owner later
+removes still took the ask down, and a tapped choice still waiting to send
+when the agent asks again answers the newer ask. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
+any turn of the owner's agents on their own live conversation, one another
+agent started included: a coordinator woken by a thread's report is who most
+needs to ask. Asking changes nothing else.
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Tools as nessa-agents
+    participant Meta as metadata summaries.ask
+    participant List as list subscription
+    participant Window as desktop window
+    participant Panel as floating panel
+    participant Host as system notices
+    Agent->>Tools: ask_owner {question, choices, recommended, reason}
+    Tools->>Tools: check bounds (refused before admission)
+    Tools->>Meta: keep ask on the summary (replaces any earlier one; top of list, unarchived)
+    Tools-->>Agent: {asked, askId}: end your turn
+    Note over List: the tool result commits a record and wakes every list
+    List->>Window: row.ask
+    List->>Panel: row.ask
+    Window->>Host: notice titled with the question (review notice path)
+    Panel->>Panel: tab added at the end with a dot, not shown
+    Window->>Window: card with choices in the chat
+    Window->>Meta: owner's message (a tapped label): its summary write takes the ask down
+    List->>Window: row without ask: card and notice go
+```
+
 The gateway submits continuations and external events with the person as
 sender, so `read_turn` tells them apart from typed turns by facts each kept by
 one owner and never changed after admission:
@@ -238,6 +294,7 @@ the message text.
 | Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
 | An agent-authored target turn calls `read_turn` | Cedar's `owner.read_turns` admits it on the owner's live conversations: it only reads | Reading the chain grants nothing; every other agent tool is still refused |
+| An agent-authored target turn calls `ask_owner` | Cedar's `owner.ask_owner` admits it on the owner's live conversations: it only asks | The owner's next message is the answer; asking grants nothing else |
 | An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
 

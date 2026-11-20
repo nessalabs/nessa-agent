@@ -229,7 +229,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 1,
-                expected: 10
+                expected: 11
             }
         ))
     ));
@@ -258,7 +258,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 2,
-                expected: 10
+                expected: 11
             }
         ))
     ));
@@ -1187,7 +1187,7 @@ fn many(path: &Path, owner: &str, count: usize) {
             .unwrap();
         transaction
             .execute(
-                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0)",
+                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0, NULL)",
                 params![id, 10 + n as i64],
             )
             .unwrap();
@@ -2088,7 +2088,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     }
     connection
         .execute(
-            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0)",
+            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0, NULL)",
             params![
                 second.to_string(),
                 "😀".repeat(ConversationTitle::MAX_CHARS),
@@ -2791,7 +2791,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 4,
-                expected: 10
+                expected: 11
             }
         ))
     ));
@@ -2830,7 +2830,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 5,
-                expected: 10
+                expected: 11
             }
         ))
     ));

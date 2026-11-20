@@ -149,12 +149,29 @@ export function summaryFrom(
     channelId: channelIdFrom(row.channelId),
     title: row.title ?? "",
     model: context.model,
-    status: context.waitingOnPerson ? "needs-you" : row.running ? "running" : "idle",
+    // An ask waits on the person whether or not the window follows it: the
+    // row says so, unlike a review, which only a followed view shows.
+    status:
+      context.waitingOnPerson || row.ask ? "needs-you" : row.running ? "running" : "idle",
     startedAt: row.createdAtMs,
     updatedAt: row.updatedAtMs,
     preview: row.preview ?? "",
     pinned: false,
     unread: false,
+    ...(row.ask
+      ? {
+          ask: {
+            askId: row.ask.askId,
+            question: row.ask.question,
+            choices: row.ask.choices.map(({ label, consequence }) => ({
+              label,
+              consequence,
+            })),
+            recommended: row.ask.recommended,
+            reason: row.ask.reason,
+          },
+        }
+      : {}),
   }
 }
 
@@ -178,6 +195,8 @@ const sameField: {
   now: Object.is,
   pinned: Object.is,
   unread: Object.is,
+  // An ask is never changed in place: a new one has a new id.
+  ask: (a, b) => a?.askId === b?.askId,
 }
 
 /** Whether two summaries say the same, revisions aside. */

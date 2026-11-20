@@ -194,6 +194,7 @@ pub struct MemoryRepository {
     pub records: Mutex<HashMap<ConversationId, Conversation>>,
     /// Conversations whose agent closed its thread (`close_thread`).
     pub closed_threads: Mutex<std::collections::HashSet<ConversationId>>,
+    /// What each conversation's agent asked its owner (`ask_owner`).
     /// Taken by `open_thread` after its write, so a test can hold the
     /// opening there; `thread_opened` is told once the write is done.
     pub open_thread_gate: tokio::sync::Mutex<()>,

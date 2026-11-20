@@ -41,8 +41,8 @@ use nessa_protocol::product::generated::{
     ConversationSetModelParams, ConversationSetModelResult,
     ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
     ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
-    ConversationView as WireConversationView, ModelChangeEffect, PermissionRule,
-    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationView as WireConversationView, ModelChangeEffect, OwnerAsk, OwnerAskChoice,
+    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -1682,9 +1682,29 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
                 running: entry.running,
                 archived: entry.archived,
                 channel_id: entry.channel_id,
+                ask: entry.ask.map(wire_ask),
             })
             .collect(),
         complete: listed.complete,
+    }
+}
+
+/// An agent's question to the owner as a list row carries it.
+fn wire_ask(ask: nessa_protocol::conversation::view::OwnerAsk) -> OwnerAsk {
+    OwnerAsk {
+        ask_id: ask.ask_id,
+        question: ask.question,
+        choices: ask
+            .choices
+            .into_iter()
+            .map(|choice| OwnerAskChoice {
+                label: choice.label,
+                consequence: choice.consequence,
+            })
+            .collect(),
+        recommended: u64::from(ask.recommended),
+        reason: ask.reason,
+        asked_at_ms: ask.asked_at_ms,
     }
 }
 
@@ -1713,6 +1733,7 @@ fn observe_result(observed: ConversationObservation) -> ConversationObserveResul
                 running: entry.running,
                 archived: entry.archived,
                 channel_id: entry.channel_id,
+                ask: entry.ask.map(wire_ask),
             })
             .collect(),
         complete: observed.complete,

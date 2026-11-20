@@ -277,6 +277,10 @@ export const KNOBS = {
     default: 1,
     what: "times a channel is made with its coordinator on (the first chat is its coordinator, told its job), switched off in its settings (a new chat there is an ordinary thread), and on again (the same coordinator chat); and one is made with it off",
   },
+  asks: {
+    default: 1,
+    what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
+  },
   restores: {
     default: 1,
     what: "restored conversations opened in the window: one shows its saved history, and one whose source is gone refuses a send and keeps the draft",
@@ -411,6 +415,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.touchIds, () => ({ kind: "touchId" }))
   add(knobs.styles, () => ({ kind: "style" }))
   add(knobs.coordinators, () => ({ kind: "coordinator" }))
+  add(knobs.asks, () => ({ kind: "ask" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
