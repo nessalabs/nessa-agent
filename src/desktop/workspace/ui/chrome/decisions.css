@@ -243,14 +243,9 @@ li[data-dim] > .decisions-choice {
   gap: calc(var(--spacing) * 2);
 }
 
+/* The kit's Kbd, pushed to the head's end. */
 .decisions-choice-key {
   margin-inline-start: auto;
-  padding: 0 calc(var(--spacing) * 1.25);
-  border: 1px solid var(--border);
-  border-radius: calc(var(--radius) * 0.5);
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: var(--text-xs);
 }
 
 .decisions-choice-trade {

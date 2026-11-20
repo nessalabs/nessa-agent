@@ -2149,6 +2149,45 @@ async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
         .pause_auto_pick(source.clone(), caller("late-pause"), &ask.ask_id, true)
         .await
         .unwrap());
+
+    // A pick read as due, whose ask the owner answered before it was sent,
+    // sends nothing: the owner's answer stands and the agent gets only it.
+    let later = OwnerAsk {
+        ask_id: "fedcba9876543210fedcba9876543210".into(),
+        asked_at_ms: 2_000,
+        ..ask.clone()
+    };
+    let kept = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap();
+    ConversationSummaries::record(
+        metadata.as_ref(),
+        &source,
+        ConversationSummary::after_asking(kept.as_ref(), later.clone()),
+    )
+    .await
+    .unwrap();
+    let stale = ConversationSummaries::auto_picks_waiting(metadata.as_ref())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|waiting| waiting.ask.ask_id == later.ask_id)
+        .expect("the later ask is due");
+    settled_send(&service, &source, "owner-answer", "Keep").await;
+    let sent = provider.executions.lock().unwrap().len();
+    service.auto_pick(&stale).await.unwrap();
+    assert_eq!(provider.executions.lock().unwrap().len(), sent);
+    let answered = decision(service.clone()).await;
+    assert_eq!(answered.ask.ask_id, later.ask_id);
+    assert!(
+        matches!(
+            &answered.outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(1), auto: false, .. })
+                if text == "Keep"
+        ),
+        "{:?}",
+        answered.outcome
+    );
     retire(service, storage, metadata).await;
 }
 

@@ -102,8 +102,77 @@ impl ConversationService {
         next
     }
 
-    /// Send `waiting`'s recommended choice as its owner's answer.
-    async fn auto_pick(&self, waiting: &WaitingAutoPick) -> Result<(), ConversationError> {
+    /// Whether `waiting` is still to be picked now: still the ask waiting in
+    /// its conversation, not paused, and due under its owner's settings as
+    /// they are now. What `pick_due` read may be stale by the time a slow
+    /// send before it is done, so this is asked again under the summary lock
+    /// an answer, a newer ask and a pause are each written under. On yes the
+    /// ask is marked sending until [`Sending`] drops, and a pause in that
+    /// time is refused, since the answer goes anyway.
+    async fn claim(
+        &self,
+        waiting: &WaitingAutoPick,
+    ) -> Result<Option<Sending<'_>>, ConversationError> {
+        let ask_id = &waiting.ask.ask_id;
+        let _writes = self
+            .inner
+            .records
+            .summary_writes()
+            .lock(&waiting.conversation)
+            .await;
+        let still = self
+            .inner
+            .summaries
+            .decisions(&waiting.conversation)
+            .await?
+            .into_iter()
+            .any(|decision| {
+                &decision.ask.ask_id == ask_id
+                    && decision.outcome.is_none()
+                    && !decision.auto_pick_paused
+            });
+        if !still {
+            return Ok(None);
+        }
+        let settings = self
+            .inner
+            .summaries
+            .decision_settings(&waiting.organization, &waiting.owner)
+            .await?;
+        let due = waiting
+            .ask
+            .asked_at_ms
+            .saturating_add(u64::from(settings.auto_pick_after_seconds).saturating_mul(1000));
+        if !settings.auto_pick || due > self.inner.clock.unix_milliseconds() {
+            return Ok(None);
+        }
+        let Ok(mut sending) = self.inner.auto_picks_sending.lock() else {
+            return Ok(None);
+        };
+        sending.insert(ask_id.clone());
+        Ok(Some(Sending {
+            service: self,
+            ask_id: ask_id.clone(),
+        }))
+    }
+
+    /// Whether auto-pick is sending the answer to `ask_id` now.
+    pub(super) fn auto_pick_sending(&self, ask_id: &str) -> bool {
+        self.inner
+            .auto_picks_sending
+            .lock()
+            .map_or(true, |sending| sending.contains(ask_id))
+    }
+
+    /// Send `waiting`'s recommended choice as its owner's answer, if it is
+    /// still to be picked ([`Self::claim`]); nothing to send is done.
+    pub(crate) async fn auto_pick(
+        &self,
+        waiting: &WaitingAutoPick,
+    ) -> Result<(), ConversationError> {
+        let Some(_sending) = self.claim(waiting).await? else {
+            return Ok(());
+        };
         let text = waiting
             .ask
             .auto_pick_text(waiting.settings.auto_pick_after_seconds)
@@ -154,6 +223,20 @@ impl ConversationService {
     fn auto_pick_settled(&self, ask_id: &str) {
         if let Ok(mut failures) = self.inner.auto_pick_failures.lock() {
             failures.remove(ask_id);
+        }
+    }
+}
+
+/// An ask auto-pick is sending the answer to, until dropped.
+struct Sending<'a> {
+    service: &'a ConversationService,
+    ask_id: String,
+}
+
+impl Drop for Sending<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut sending) = self.service.inner.auto_picks_sending.lock() {
+            sending.remove(&self.ask_id);
         }
     }
 }

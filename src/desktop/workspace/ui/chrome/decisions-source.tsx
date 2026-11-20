@@ -26,7 +26,8 @@ type Held = {
  * One read of a chat's decisions shared by everything that shows them
  * (Chat context, the dialog, the transcript card's auto-pick line), so a
  * chat is asked once per change, not once per place it is drawn. A chat is
- * read when the first of them appears, when its ask changes, and on retry;
+ * read when the first of them appears, when its ask changes, on retry, and
+ * all at once when the person's decision settings change;
  * only the newest read for a chat may show what it got.
  */
 class DecisionReads {
@@ -64,6 +65,11 @@ class DecisionReads {
 
   retry(sessionId: string) {
     this.read(sessionId, this.asked.get(sessionId))
+  }
+
+  /** Read every chat something shows again: what the person's settings decide changed. */
+  refresh = () => {
+    for (const sessionId of this.watching.keys()) this.retry(sessionId)
   }
 
   private read(sessionId: string, askId: string | undefined) {
@@ -106,6 +112,16 @@ export function DecisionsProvider({
 }) {
   const reads = useMemo(() => (source ? new DecisionReads(source) : null), [source])
   return <DecisionsContext.Provider value={reads}>{children}</DecisionsContext.Provider>
+}
+
+const nothingToRefresh = () => {}
+
+/**
+ * Reads every shown chat's decisions again: for Settings to call once the
+ * person's decision settings are saved, since they move every countdown.
+ */
+export function useRefreshDecisions(): () => void {
+  return useContext(DecisionsContext)?.refresh ?? nothingToRefresh
 }
 
 /** The window's decisions source, for what a decision's controls change. */

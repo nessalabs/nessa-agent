@@ -418,6 +418,50 @@ describe("Decisions in Chat context", () => {
     )
   })
 
+  it("offers no Change my answer while a newer ask waits, since it would answer that one", async () => {
+    const { source } = decisionsOf(() => [
+      decision("next", 97, { state: "waiting" }),
+      decision("auto", 90, {
+        state: "decided",
+        text: "Ship. Picked for you: no answer in 5 minutes.",
+        choice: 0,
+        auto: true,
+        atMs: 95 * minute,
+      }),
+    ])
+    await render(source)
+    await click(section()?.querySelector('[data-decision="auto"]'))
+    const detail = dialog()?.querySelector('[data-decision-detail="auto"]')
+    expect(detail?.textContent).toContain("Auto-picked: Ship")
+    expect(detail?.querySelector("[data-change-answer]")).toBeNull()
+  })
+
+  it("reads again when a due pick has not landed a few seconds past its time", async () => {
+    const fake = fakeSource()
+    const { source, reads } = decisionsOf(() => [
+      {
+        ...decision("live", 90, { state: "waiting" }),
+        autoPick: { state: "due", atMs: now - 10_000 },
+      },
+    ])
+    const store = await render(source, fake)
+    const summary = selectSession(store.getState(), "a")
+    if (!summary) throw new Error("no session a")
+    const before = reads.length
+    await act(async () =>
+      fake.emit({
+        kind: "session",
+        session: { ...summary, ask: ask("live"), revision: summary.revision + 1 },
+      }),
+    )
+    await settle()
+    await frames()
+    const line = host.querySelector('[data-owner-ask="live"] [data-auto-pick-line]')
+    expect(line?.textContent).toContain("Picking Ship…")
+    // One for the ask's change, one because the pick is late.
+    expect(reads.length).toBeGreaterThanOrEqual(before + 2)
+  })
+
   it("is not there beside no source of decisions", async () => {
     const store = testStore(fakeSource())
     await store.dispatch(loadWorkspace())

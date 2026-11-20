@@ -12,6 +12,7 @@ import {
 import type { DecisionSettings } from "@nessa/client"
 import type { DecisionSettingsGateway } from "../adapters/decision-settings-gateway"
 import { setting } from "../model/settings-catalogue"
+import { useRefreshDecisions } from "../../workspace/ui/chrome/decisions-source"
 import { Choice, Group, ItemRow, Toggle } from "./settings-controls"
 
 /**
@@ -84,6 +85,8 @@ export function DecisionSettingsRows() {
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   const problemId = useId()
+  // Every countdown on screen follows these settings: read them again once saved.
+  const refreshDecisions = useRefreshDecisions()
   // Only the newest read or save may show what it got.
   const revision = useRef(0)
   const mounted = useRef(true)
@@ -129,9 +132,11 @@ export function DecisionSettingsRows() {
     setPhase({ kind: "ready", settings: next, saving: true })
     gateway.set(next).then(
       (kept) => {
+        refreshDecisions()
         if (current === revision.current) show(kept)
       },
       () => {
+        refreshDecisions()
         if (current !== revision.current) return
         // A lost answer may still have been kept: read what is in effect.
         setFailed(true)

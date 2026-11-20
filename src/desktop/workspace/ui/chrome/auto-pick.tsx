@@ -5,7 +5,7 @@
  * gateway owns the deadline and the pick (`conversation.decisions`,
  * `conversation.pauseAutoPick`); this only says it and asks for a pause.
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { useNow } from "../../../../clock"
 import { left, type Decision } from "../../model/decisions"
@@ -49,7 +49,7 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
     >
       <DesktopIcon name="timer" size={14} aria-hidden="true" />
       {pick.state === "due" ? (
-        <Countdown label={label} atMs={pick.atMs} />
+        <Countdown label={label} atMs={pick.atMs} onLate={read.retry} />
       ) : (
         <span>Auto-pick paused</span>
       )}
@@ -78,9 +78,28 @@ export function AutoPickLine({ sessionId, askId }: { sessionId: string; askId: s
   )
 }
 
+/**
+ * How long a due pick may stay unsent on screen before the decisions are
+ * read again: the gateway may have picked, or the person's settings or a
+ * pause from elsewhere moved it.
+ */
+const LATE_MS = 5000
+
 /** Ticks each second only while there is a pick to count down to. */
-function Countdown({ label, atMs }: { label: string; atMs: number }) {
+function Countdown({
+  label,
+  atMs,
+  onLate,
+}: {
+  label: string
+  atMs: number
+  onLate: () => void
+}) {
   const now = useNow(1000)
+  const late = now >= atMs + LATE_MS
+  useEffect(() => {
+    if (late) onLate()
+  }, [late, onLate])
   if (now >= atMs) return <span>Picking {label}…</span>
   return (
     <span>
@@ -105,12 +124,21 @@ export function ChangeAnswer({
   decision: Decision
 }) {
   const dispatch = useWorkspaceDispatch()
+  const read = useDecisions(sessionId)
   const [open, setOpen] = useState(false)
   const [sent, setSent] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [failed, setFailed] = useState(false)
   const outcome = decision.outcome
   if (outcome.state !== "decided" || !outcome.auto) return null
+  // Any message from the person answers the ask waiting now, so with a newer
+  // one waiting a change would be taken for its answer: answer that instead.
+  const newer =
+    read.state !== "none" &&
+    read.decisions?.some(
+      (each) => each.outcome.state === "waiting" && each.ask.askId !== decision.ask.askId,
+    )
+  if (newer && sent === null) return null
   if (sent !== null)
     return (
       <p className="auto-pick-changed" role="status" data-change-answer-sent={sent}>

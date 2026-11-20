@@ -214,8 +214,17 @@ impl ConversationSummary {
         if ask_id.is_some() && self.ask.as_ref().map(|ask| ask.ask_id.as_str()) == ask_id {
             if let Some(ask) = self.ask.take() {
                 let mut outcome = OwnerDecisionOutcome::answered(&ask, text, self.updated_at_ms);
-                if let OwnerDecisionOutcome::Decided { auto: picked, .. } = &mut outcome {
+                if let OwnerDecisionOutcome::Decided {
+                    auto: picked,
+                    choice,
+                    ..
+                } = &mut outcome
+                {
                     *picked = auto;
+                    // Auto-pick sends the recommended choice and nothing else.
+                    if auto {
+                        *choice = Some(ask.recommended);
+                    }
                 }
                 self.settled = Some(SettledAsk { ask, outcome });
             }

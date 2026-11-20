@@ -29,7 +29,7 @@ const MOST_OPEN: usize = 1024;
 /// The open `decision` spans, by ask.
 #[derive(Default)]
 pub(crate) struct DecisionTraces {
-    open: Mutex<HashMap<String, Span>>,
+    open: Mutex<HashMap<String, (ConversationId, Span)>>,
 }
 
 /// What a decision ended as, the way the traces say it.
@@ -106,7 +106,7 @@ impl DecisionTraces {
         span.in_scope(|| tracing::info!(target: DECISION_TARGET, "asked"));
         if let Ok(mut open) = self.open.lock() {
             if open.len() < MOST_OPEN || open.contains_key(&ask.ask_id) {
-                open.insert(ask.ask_id.clone(), span);
+                open.insert(ask.ask_id.clone(), (conversation.clone(), span));
             }
         }
     }
@@ -115,7 +115,7 @@ impl DecisionTraces {
     /// `auto_pick_resumed`.
     pub(crate) fn event(&self, ask_id: &str, event: &'static str) {
         let Ok(open) = self.open.lock() else { return };
-        if let Some(span) = open.get(ask_id) {
+        if let Some((_, span)) = open.get(ask_id) {
             span.in_scope(|| tracing::info!(target: DECISION_TARGET, event, "decision event"));
         }
     }
@@ -126,7 +126,8 @@ impl DecisionTraces {
             .open
             .lock()
             .ok()
-            .and_then(|mut open| open.remove(&settled.ask.ask_id));
+            .and_then(|mut open| open.remove(&settled.ask.ask_id))
+            .map(|(_, span)| span);
         let span = held.unwrap_or_else(|| {
             let span = span(conversation, &settled.ask);
             span.record("decision.reopened", true);
@@ -149,7 +150,12 @@ impl DecisionTraces {
                         .choices
                         .get(usize::from(*index))
                         .map_or("", |choice| choice.label.trim());
-                    span.record("decision.with_note", text.trim() != label);
+                    // Auto-pick's own words after the label are no note.
+                    let auto = matches!(
+                        settled.outcome,
+                        OwnerDecisionOutcome::Decided { auto: true, .. }
+                    );
+                    span.record("decision.with_note", !auto && text.trim() != label);
                 }
                 *at_ms
             }
@@ -166,6 +172,14 @@ impl DecisionTraces {
                 "settled"
             );
         });
+    }
+
+    /// `conversation` was deleted: its decisions will never settle, so their
+    /// spans end here, unsettled, and stop holding a place.
+    pub(crate) fn erased(&self, conversation: &ConversationId) {
+        if let Ok(mut open) = self.open.lock() {
+            open.retain(|_, (of, _)| of != conversation);
+        }
     }
 
     #[cfg(test)]
@@ -253,6 +267,16 @@ mod tests {
                 },
             );
             assert_eq!(traces.open_count(), 0);
+            // A deleted conversation's waiting decisions stop holding a place.
+            traces.asked(
+                &conversation,
+                None,
+                &ask("00112233445566778899aabbccddeeff"),
+                None,
+            );
+            assert_eq!(traces.open_count(), 1);
+            traces.erased(&conversation);
+            assert_eq!(traces.open_count(), 0);
             // Asked before a restart: nothing open, so it is opened now.
             traces.settled(
                 &conversation,
@@ -269,12 +293,14 @@ mod tests {
         });
         let text = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
         let closes: Vec<&str> = text.lines().filter(|line| line.contains("close")).collect();
-        assert_eq!(closes.len(), 2, "{text}");
+        // The erased one closes unsettled, between the two.
+        assert_eq!(closes.len(), 3, "{text}");
+        assert!(!closes[1].contains("decision.outcome"), "{}", closes[1]);
         for wanted in [
             "decision.outcome=\"auto_picked\"",
             "decision.picked_index=0",
             "decision.picked_recommended=true",
-            "decision.with_note=true",
+            "decision.with_note=false",
             "decision.time_to_answer_ms=300000",
             "decision.auto_pick.allowed=true",
             "decision.auto_pick.on=true",
@@ -292,7 +318,7 @@ mod tests {
             "decision.with_note=false",
             "decision.time_to_answer_ms=3000",
         ] {
-            assert!(closes[1].contains(wanted), "{wanted} in {}", closes[1]);
+            assert!(closes[2].contains(wanted), "{wanted} in {}", closes[2]);
         }
         for private in ["private", "Rename", "Keep", "Picked for you"] {
             assert!(!text.contains(private), "{private} in {text}");

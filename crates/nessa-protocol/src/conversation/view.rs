@@ -1177,13 +1177,24 @@ impl OwnerDecisionOutcome {
     /// `ask` answered by a message saying `text` at `at_ms`.
     pub fn answered(ask: &OwnerAsk, text: &str, at_ms: u64) -> Self {
         let said = text.trim();
-        let choice = ask.choices.iter().position(|choice| {
-            let label = choice.label.trim();
-            said.eq_ignore_ascii_case(label)
-                || said
-                    .get(..label.len())
-                    .is_some_and(|start| start.eq_ignore_ascii_case(label))
-                    && said[label.len()..].starts_with(". ")
+        // The label said in full, else the longest one the text opens with
+        // and goes on from: "Keep. Then delete" is not "Keep" said with a note.
+        let exact = ask
+            .choices
+            .iter()
+            .position(|choice| said.eq_ignore_ascii_case(choice.label.trim()));
+        let choice = exact.or_else(|| {
+            ask.choices
+                .iter()
+                .enumerate()
+                .filter(|(_, choice)| {
+                    let label = choice.label.trim();
+                    said.get(..label.len())
+                        .is_some_and(|start| start.eq_ignore_ascii_case(label))
+                        && said[label.len()..].starts_with(". ")
+                })
+                .max_by_key(|(_, choice)| choice.label.trim().len())
+                .map(|(index, _)| index)
         });
         let mut end = said.len().min(MAX_DECISION_ANSWER_BYTES);
         while !said.is_char_boundary(end) {

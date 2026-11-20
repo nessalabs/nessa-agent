@@ -11,6 +11,7 @@ import { Badge } from "@nessa-ui/react/badge"
 import { Button } from "@nessa-ui/react/button"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { Input } from "@nessa-ui/react/input"
+import { Kbd } from "@nessa-ui/react/kbd"
 import {
   SegmentedControl,
   SegmentedControlOption,
@@ -417,7 +418,7 @@ function DecisionDetail({
                   </Badge>
                 ) : null}
                 {answering ? (
-                  <kbd className="decisions-choice-key">{index + 1}</kbd>
+                  <Kbd className="decisions-choice-key">{index + 1}</Kbd>
                 ) : null}
               </span>
               <span className="decisions-dialog-line">{choice.consequence}</span>

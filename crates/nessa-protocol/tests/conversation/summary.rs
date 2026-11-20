@@ -378,6 +378,14 @@ fn an_answer_names_the_choice_it_is_and_keeps_a_bounded_text() {
     assert_eq!(choice(answer("No. Not this week.")), Some(1));
     assert_eq!(choice(answer("Nope")), None);
     assert_eq!(choice(answer("Not now")), None);
+    // One label opening another: the longer one said is that one.
+    let mut nested = asked("b", 10);
+    nested.choices[0].label = "Keep".into();
+    nested.choices[1].label = "Keep. Then delete".into();
+    let said = |text: &str| choice(OwnerDecisionOutcome::answered(&nested, text, 5));
+    assert_eq!(said("Keep. Then delete"), Some(1));
+    assert_eq!(said("Keep. Then delete. Today."), Some(1));
+    assert_eq!(said("Keep. For now."), Some(0));
     let long = "é".repeat(MAX_DECISION_ANSWER_BYTES);
     match answer(&long) {
         OwnerDecisionOutcome::Decided { text, .. } => {

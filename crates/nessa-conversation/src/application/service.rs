@@ -1015,6 +1015,9 @@ struct Inner {
     /// Asks auto-pick could not send, with when to try again and how many
     /// tries failed: kept here only, so a restart tries each at once.
     auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
+    /// Asks auto-pick claimed and is sending the answer to: a pause from the
+    /// claim on is refused, since the answer goes anyway (`auto_picks.rs`).
+    auto_picks_sending: std::sync::Mutex<std::collections::HashSet<String>>,
     /// One open `decision` span per waiting ask (`decision_traces.rs`).
     decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
@@ -1564,6 +1567,7 @@ impl ConversationService {
                 schedule_wakeup: Arc::new(Notify::new()),
                 auto_pick_wakeup: Notify::new(),
                 auto_pick_failures: std::sync::Mutex::default(),
+                auto_picks_sending: std::sync::Mutex::default(),
                 decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
@@ -4639,7 +4643,10 @@ impl ConversationService {
             // owner does not answer it. Read before the agent has the
             // message, so a question it asks after it is not taken for the
             // one answered; taken down with the message's summary below.
-            let answered = if !known && writer.is_person() {
+            let auto = caller.surface_id == AUTO_PICK_SURFACE;
+            // A retried auto-pick the agent already had still settles its
+            // ask, should the first try not have written that down.
+            let answered = if (!known || auto) && writer.is_person() {
                 service
                     .waiting_ask_answered(
                         &id,
@@ -4654,7 +4661,6 @@ impl ConversationService {
             // Auto-pick answers only the ask it was sent for: one that a newer
             // ask replaced as it was sent stays as it is, and the newer one
             // waits for the owner.
-            let auto = caller.surface_id == AUTO_PICK_SURFACE;
             let answered =
                 answered.filter(|answered| !auto || auto_pick_action(answered) == caller.action_id);
             let delivery = match (mode, notes) {
@@ -4740,6 +4746,14 @@ impl ConversationService {
             if !known && !matches!(writer, Writer::Internal) {
                 service
                     .summarize_message(&id, &message, answered.as_deref(), auto)
+                    .await;
+            } else if let (true, Some(ask)) = (known && auto, answered.as_deref()) {
+                service
+                    .change_summary(&id, |previous| {
+                        previous
+                            .cloned()
+                            .map(|summary| summary.answering(Some(ask), message.text_str(), true))
+                    })
                     .await;
             }
             match delivery {
@@ -6382,6 +6396,7 @@ impl ConversationService {
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
+            self.inner.decision_traces.erased(&id);
             // Where it ran goes with its history; failing to forget it is
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {
