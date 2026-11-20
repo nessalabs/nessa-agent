@@ -1134,3 +1134,54 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
         "a read reports the failed opening"
     );
 }
+
+/// A chat already at the access asked for, or more, is not asked: the
+/// request is `Held`, decided before any card is written. This fixture's agent offers
+/// Auto, which the agent-tools fixture's does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_access_request_for_access_the_chat_has_is_not_asked() {
+    use crate::application::AccessRequestOutcome;
+    use nessa_protocol::conversation::view::RaisedAccess;
+    let fixture = Fixture::new(DELETION_BUDGETS.stop).await;
+    let live = fixture.live().await;
+    fixture.wait_until_idle(&live).await;
+    fixture
+        .service
+        .set_approval_mode(
+            fixture.id.clone(),
+            caller("mode-auto"),
+            ConversationApprovalMode::Auto,
+        )
+        .await
+        .unwrap();
+    let ask = |n: u8| format!("{n:032x}");
+    assert_eq!(
+        fixture
+            .service
+            .request_access(
+                &fixture.id,
+                RaisedAccess::Auto,
+                ask(1),
+                "Installs tools.".into()
+            )
+            .await
+            .unwrap(),
+        AccessRequestOutcome::Held
+    );
+    // More than it has is still asked.
+    assert_eq!(
+        fixture
+            .service
+            .request_access(
+                &fixture.id,
+                RaisedAccess::Full,
+                ask(2),
+                "Installs tools.".into()
+            )
+            .await
+            .unwrap(),
+        AccessRequestOutcome::Asked
+    );
+    drop(live);
+    fixture.service.shutdown().await.unwrap();
+}

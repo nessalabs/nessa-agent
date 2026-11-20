@@ -771,12 +771,24 @@ export function App({
                       after the conversation's own notice. */}
                   <PanelOwnerAsk
                     key={`ask:${chat.active.id}`}
+                    chat={chat.active.id}
                     ask={
                       chat.active.serverConversationId
                         ? asks.get(chat.active.serverConversationId)?.ask
                         : undefined
                     }
                     submit={(text) => chat.answer(textContent(text))}
+                    raiseAccess={chat.raiseAccess}
+                    access={
+                      chat.active.remote && !chat.active.remote.approvalModeChange
+                        ? chat.active.remote.approvalMode
+                        : undefined
+                    }
+                    underway={chat.active.remote?.approvalModeChange?.requestedMode}
+                    revision={chat.active.revision}
+                    working={
+                      chat.active.phase !== "idle" || !!chat.active.remote?.running
+                    }
                   />
                 </>
               }

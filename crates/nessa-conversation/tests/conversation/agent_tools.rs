@@ -2006,6 +2006,147 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     retire(service, storage, metadata).await;
 }
 
+/// An agent asks its owner to raise the chat's access: the ask is admitted
+/// under `owner.request_access` and audited, and Nessa writes it, the agent
+/// giving only the access and why. A reason that is not one line is refused
+/// before admission. (A chat already at that access or more is not asked;
+/// this fixture's agent runs only at Ask, so that rule is
+/// `RaisedAccess::held_at`'s test, in nessa-protocol.)
+#[cfg(unix)]
+#[tokio::test]
+async fn an_access_request_is_nessas_card_with_the_agents_reason() {
+    use nessa_protocol::conversation::view::{RaisedAccess, ACCESS_APPROVE, ACCESS_DECLINE};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    let audit = Arc::new(Audit::default());
+    service.bind_agent_tool_audit(audit.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "set up the toolchain").await;
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let listed_id = source.to_string();
+    let row = |service: ConversationService| {
+        let listed_id = listed_id.clone();
+        async move {
+            let listed = service.list(caller("list"), false).await.unwrap();
+            listed
+                .conversations
+                .into_iter()
+                .find(|row| row.conversation_id == listed_id)
+                .unwrap()
+                .ask
+        }
+    };
+
+    // The agent words only the reason; a question of its own is off-schema.
+    let worded = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"Installs tools.","question":"Please?"}),
+        )
+        .await;
+    assert_eq!(worded["isError"], true, "{worded}");
+    let two_lines = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"Installs tools.\nAnd more."}),
+        )
+        .await;
+    assert_eq!(two_lines["isError"], true, "{two_lines}");
+    assert_eq!(two_lines["structuredContent"]["error"], "ask_not_one_line");
+    let asking_less = client
+        .call(
+            "request_access",
+            json!({"access":"ask","reason":"Nothing."}),
+        )
+        .await;
+    assert_eq!(asking_less["isError"], true, "{asking_less}");
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(row(service.clone()).await, None);
+
+    let asked = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"The toolchain installs outside the project."}),
+        )
+        .await;
+    assert_eq!(asked["isError"], false, "{asked}");
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "request_access");
+        assert!(records[0].allowed);
+        assert_eq!(records[0].policies, ["owner.request_access"]);
+    }
+    let kept = row(service.clone()).await.expect("the row carries the ask");
+    assert_eq!(
+        kept.ask_id,
+        asked["structuredContent"]["askId"].as_str().unwrap()
+    );
+    assert_eq!(kept.access, Some(RaisedAccess::Full));
+    assert_eq!(kept.question, "Allow full access in this chat?");
+    assert_eq!(
+        kept.choices
+            .iter()
+            .map(|choice| choice.label.as_str())
+            .collect::<Vec<_>>(),
+        [ACCESS_APPROVE, ACCESS_DECLINE]
+    );
+    // Not now is recommended, and nothing may pick for the person.
+    assert_eq!(kept.recommended, 1);
+    assert!(!kept.auto_pickable());
+    assert_eq!(kept.reason, "The toolchain installs outside the project.");
+    assert!(kept.check().is_ok());
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    // The person's next message answers it, whatever it says.
+    settled_send(&service, &source, "answer-turn", ACCESS_DECLINE).await;
+    assert_eq!(row(service.clone()).await, None);
+
+    // Another chat at ask is asked for auto too. (Which access holds which
+    // is RaisedAccess::held_at's, tested with the ask's words; this fixture's
+    // agent runs only at ask.)
+    let asking = id();
+    service
+        .create(
+            asking.clone(),
+            caller("create-asking"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .request_access(
+                &asking,
+                RaisedAccess::Auto,
+                "b".repeat(32),
+                "Needs it.".into()
+            )
+            .await
+            .unwrap(),
+        crate::application::AccessRequestOutcome::Asked
+    );
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store

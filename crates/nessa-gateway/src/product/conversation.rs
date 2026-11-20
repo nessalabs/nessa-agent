@@ -41,8 +41,8 @@ use nessa_protocol::product::generated::{
     ConversationSetModelParams, ConversationSetModelResult,
     ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
     ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
-    ConversationView as WireConversationView, ModelChangeEffect, OwnerAsk, OwnerAskChoice,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationView as WireConversationView, ModelChangeEffect, OwnerAsk, OwnerAskAccess,
+    OwnerAskChoice, PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -1705,6 +1705,10 @@ fn wire_ask(ask: nessa_protocol::conversation::view::OwnerAsk) -> OwnerAsk {
         recommended: u64::from(ask.recommended),
         reason: ask.reason,
         asked_at_ms: ask.asked_at_ms,
+        access: ask.access.map(|access| OwnerAskAccess {
+            mode: access.mode().as_str().to_owned(),
+            grants: access.grants().map(str::to_owned).to_vec(),
+        }),
     }
 }
 

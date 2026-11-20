@@ -386,6 +386,15 @@ import {
  *               recommended; tapping the other choice sends its label as
  *               the person's message, which the agent answers, and the
  *               card, the row's ask and the notice all go
+ *   accessRequest  an agent asks to raise its chat's access (`request_access`):
+ *               the row's ask is Nessa's own question and choices with the
+ *               agent's reason, and Not now is the one recommended. The red
+ *               card says them and lists nothing yet; Approve raises the chat
+ *               to Auto by the person's own access command, and the agent's
+ *               turn on their Approve begins at a different permission mode
+ *               than the asking turn ran at (each turn says its own); the card stays to
+ *               list the three lines of what was allowed, and the row's ask
+ *               goes. The chat is set back to Ask after
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -446,6 +455,7 @@ import {
   TRACE_PAUSE_MS,
   WATCH_CALLS,
   ASK,
+  ACCESS,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -2204,6 +2214,120 @@ async function pickAccess(page, mode) {
     10_000,
   )
   if (!restored) throw new Error("the access menu did not restore focus to its control")
+}
+
+/**
+ * The session's own permission mode a scenario turn says it ran at
+ * (`SAYS.ranAt`), fixed when the turn began; undefined when it said none.
+ */
+function ranAt(turn) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  const at = said.lastIndexOf(SAYS.ranAt)
+  return at < 0 ? undefined : said.slice(at + SAYS.ranAt.length).trim()
+}
+
+/**
+ * The red card's whole round, once the chat's agent offers {@link ACCESS}:
+ * the agent asks, the card says Nessa's words, Approve raises the access and
+ * only then answers, and the card lists what was allowed.
+ */
+async function approveAccess(run, step, conversationId, named, failures) {
+  const title = await titleOf(run, conversationId)
+  await openStressConversation(run.page, conversationId, title)
+  const asking = prompt(run, STRESS.requestAccess, step)
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, asking),
+  )
+  const { view: asked, turn: askingTurn } = await settled(
+    run,
+    conversationId,
+    new Set(named?.messages.map((each) => each.executionId) ?? []),
+    asking,
+    "completed",
+    failures,
+  )
+  if (failures.length) return
+  const rowAsk = async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.find((each) => each.conversationId === conversationId)?.ask
+  }
+  const ask = await waitFor(rowAsk, 15_000)
+  if (!ask?.access) {
+    failures.push(`the list row carries ${JSON.stringify(ask)}, not an access request`)
+    return
+  }
+  if (
+    ask.access.mode !== ACCESS.access ||
+    ask.access.grants.length !== 3 ||
+    ask.question !== "Allow auto approval in this chat?" ||
+    ask.choices.map((each) => each.label).join("|") !== `${STRESS.approved}|Not now` ||
+    ask.recommended !== 1 ||
+    ask.reason !== ACCESS.reason
+  )
+    failures.push(`the row's access request is ${JSON.stringify(ask)}`)
+  const card = run.page.locator(`[data-access-request="${ACCESS.access}"]`)
+  if (
+    !(await card
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false))
+  ) {
+    failures.push("the chat does not draw the red access card")
+    return
+  }
+  if (!(await card.getByText(ask.question).count()))
+    failures.push("the access card does not say Nessa's question")
+  if (!(await card.getByText(ACCESS.reason).count()))
+    failures.push("the access card does not say the agent's reason")
+  if (await card.locator("[data-slot=access-request-grants]").count())
+    failures.push("the access card lists what is allowed before it is approved")
+  if ((await run.client.conversation.read(conversationId)).approvalMode !== "ask")
+    failures.push("asking for access changed the chat's access")
+  await card.getByRole("button", { name: STRESS.approved, exact: true }).click()
+  if (!(await accessIs(run, conversationId, ACCESS.access)))
+    failures.push("Approve did not raise the chat to the access asked for")
+  const { turn: answered } = await settled(
+    run,
+    conversationId,
+    new Set(asked?.messages.map((each) => each.executionId) ?? []),
+    STRESS.approved,
+    "completed",
+    failures,
+  )
+  // The agent's session says the permission mode each turn began at: the
+  // Approve turn must begin at the raised one, not the Ask the asking turn
+  // ran at. That is fixed when the answer went, whenever it is read.
+  const before = ranAt(askingTurn)
+  const after = ranAt(answered)
+  if (!before || !after)
+    failures.push(
+      `the scenario did not say the mode its turns ran at (${before}, ${after})`,
+    )
+  else if (after === before)
+    failures.push(
+      `the Approve turn ran at ${after}, the mode the chat asked at: the answer went before the access changed`,
+    )
+  await expectShown(run.page, `${SAYS.approvedAccess}${STRESS.approved}`, failures)
+  const listed = card.locator("[data-slot=access-request-grants] li")
+  const lines = await waitFor(async () => {
+    const shown = await listed.allTextContents()
+    return shown.length === 3 ? shown : null
+  }, 15_000)
+  if (!lines || lines.join("|") !== ask.access.grants.join("|"))
+    failures.push(
+      `the approved card lists ${JSON.stringify(lines)}, not ${JSON.stringify(ask.access.grants)}; it says ${JSON.stringify(await card.textContent().catch(() => null))}`,
+    )
+  if (await card.getByRole("button").count())
+    failures.push("the approved card still offers a choice")
+  if (
+    await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
+      (cleared) => !cleared,
+    )
+  )
+    failures.push("the list row still carries the approved access request")
 }
 
 /** Waits for the gateway to say the conversation runs at `mode`. */
@@ -9476,6 +9600,47 @@ const steps = {
       failures.push("the list row still carries the ask the person answered")
     await noticeTakenBack(run, notice, "answered with a choice", failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async accessRequest(run, step, failures) {
+    const { agents } = await run.client.agents.list()
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    const naming = prompt(run, STRESS.reply, step, " access")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // Auto is what the agent asks for. The stress stack's agent offers it;
+    // one that does not would check nothing here, so that is a failure, not
+    // a pass.
+    const offered =
+      agents
+        .flatMap((agent) => agent.models)
+        .find((model) => model.modelId === named?.model)
+        ?.approvalModes?.map((choice) => choice.id) ?? []
+    if (!offered.includes(ACCESS.access)) {
+      failures.push(
+        `${named?.model} offers no ${ACCESS.access}, so the access request was not checked`,
+      )
+      return
+    }
+    try {
+      await approveAccess(run, step, conversationId, named, failures)
+    } finally {
+      // Leave the chat as other steps expect it, however this one ended.
+      await run.client.conversation.setApprovalMode(conversationId, "ask").catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
   },
 
   async park(run, step, failures) {

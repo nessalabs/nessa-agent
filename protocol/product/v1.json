@@ -2295,9 +2295,33 @@
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "When it was asked, in Unix milliseconds."
+        },
+        "access": {
+          "$ref": "#/$defs/OwnerAskAccess",
+          "description": "Present when the ask is an agent's request to raise the chat's access (request_access). The question and the choices are Nessa's own: Approve, which a client carries out as the person's own conversation.setApprovalMode to mode before sending the label, and Not now, the recommended one. A client draws it as the red access card, and nothing may pick for the person."
         }
       },
       "required": ["askId", "question", "choices", "recommended", "reason", "askedAtMs"]
+    },
+    "OwnerAskAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The access an agent asked to raise a chat to, and what approving allows.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["auto", "full"],
+          "description": "The approval mode approving sets."
+        },
+        "grants": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200, "x-utf8MaxBytes": 200 },
+          "description": "What approving allows, one plain line each, in Nessa's words; shown once the person approves."
+        }
+      },
+      "required": ["mode", "grants"]
     },
     "OwnerAskChoice": {
       "type": "object",

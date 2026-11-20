@@ -275,6 +275,7 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
         recommended: 0,
         reason: "It is ready.".into(),
         asked_at_ms: 3000,
+        access: None,
     };
     let asked = nessa_protocol::conversation::domain::ConversationSummary::after_asking(
         Some(&kept),

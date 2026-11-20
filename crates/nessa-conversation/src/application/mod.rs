@@ -228,9 +228,9 @@ pub use window_control_audit::{
 mod workspace_windows;
 pub use crate::domain::ReceiverBinding;
 pub use access_policy::{
-    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
-    RequestShape, ShareTarget,
+    setting_change, AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource,
+    AccessSubject, ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty,
+    PairedRefusal, RequestShape, ShareTarget,
 };
 pub use catalogue::{
     CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,
@@ -343,6 +343,10 @@ pub use service::{
     ThreadEvent,
 };
 pub use service::{
+    AccessRequestOutcome, ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL,
+    EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL, REQUEST_ACCESS_TOOL,
+};
+pub use service::{
     AgentBrief, AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing,
     ChannelStore, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
@@ -355,10 +359,6 @@ pub use service::{
     ScheduledMessageStore, SelectionChange, SelectionRequest, SubmissionMode, ThreadReport,
     ThreadReportStore, ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS,
     MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
-};
-pub use service::{
-    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL, EVENT_SURFACE_PREFIX,
-    MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL,
 };
 pub use service::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,

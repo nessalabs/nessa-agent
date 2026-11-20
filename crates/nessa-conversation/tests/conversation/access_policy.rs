@@ -8,7 +8,9 @@
 //! behaviour now that the Rust is gone.
 use super::*;
 use crate::application::{AccessAction, OwnerAccess, PairedAccess, PairedParty, PairedRefusal};
-use crate::domain::{Conversation, ConversationDeletion, ConversationRefusal};
+use crate::domain::{
+    Conversation, ConversationDeletion, ConversationRefusal, Setting, SettingLevel,
+};
 use nessa_auth::domain::{
     Action, Grant, MembershipRole, OrganizationId, PrincipalId, Resource, ResourceId,
 };
@@ -274,12 +276,18 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 }
             }
             AccessAction::CloseCreated => AccessResource::created(&live, Some("creator")),
+            AccessAction::SettingChange => AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting: Setting::Access,
+            },
             _ => on(&live),
         };
         let subject = match action {
             AccessAction::AgentTools
             | AccessAction::ReadTurns
             | AccessAction::AskOwner
+            | AccessAction::RequestAccess
             | AccessAction::CloseCreated => AccessSubject::AgentTurn {
                 organization: &org,
                 principal: &owner,
@@ -323,6 +331,143 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             action.name()
         );
     }
+}
+
+#[test]
+fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let person = |organization, principal| AccessSubject::Person {
+        organization,
+        principal,
+    };
+    let turn = |organization, principal, owner_initiated| AccessSubject::AgentTurn {
+        organization,
+        principal,
+        owner_initiated,
+        conversation: "thread",
+    };
+    let change = |subject, setting| {
+        policy.evaluate(&AccessAsk {
+            subject,
+            action: AccessAction::SettingChange,
+            resource: AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    for setting in Setting::ALL {
+        let name = setting.as_str();
+        // The owner, on their own surface, changes every level.
+        assert_eq!(
+            allowed_by(&change(person(&org, &owner), setting)),
+            Some(&["owner.setting_change".to_owned()][..]),
+            "{name}"
+        );
+        // A turn the owner started changes only what an agent may.
+        let agent = change(turn(&org, &owner, true), setting);
+        if setting.level() == SettingLevel::AgentChanges {
+            assert_eq!(
+                allowed_by(&agent),
+                Some(&["agent.setting_change".to_owned()][..]),
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                agent,
+                AccessDecision::Deny(AccessDenial::NotPermitted),
+                "{name}"
+            );
+        }
+        // Nobody else, and no turn the owner did not start.
+        for refused in [
+            person(&org, &other),
+            person(&elsewhere, &owner),
+            turn(&org, &owner, false),
+            turn(&org, &other, true),
+            turn(&elsewhere, &owner, true),
+        ] {
+            assert!(!allowed(&change(refused, setting)), "{name} {refused:?}");
+        }
+        // The helper callers use answers the same, rule and all.
+        assert_eq!(
+            crate::application::setting_change(
+                &policy,
+                turn(&org, &owner, true),
+                &org,
+                &owner,
+                setting
+            ),
+            agent,
+            "{name}"
+        );
+    }
+    // Every level has a setting, and raising access is never an agent's.
+    for level in SettingLevel::ALL {
+        assert!(
+            Setting::ALL.iter().any(|setting| setting.level() == level),
+            "{}",
+            level.as_str()
+        );
+    }
+    assert_eq!(Setting::Access.level(), SettingLevel::RaisesAccess);
+    assert_eq!(Setting::ReplyStyle.level(), SettingLevel::AgentChanges);
+    assert_eq!(Setting::VoiceKey.level(), SettingLevel::OwnerTypes);
+    assert_eq!(Setting::McpServers.level(), SettingLevel::AgentFills);
+}
+
+/// `ALL` lists each setting and level once, in order. The matches below
+/// have no default arm, so a new variant does not compile until it is given
+/// a place here, and a place past the end of `ALL` fails the length check.
+#[test]
+fn every_setting_and_level_is_listed_once() {
+    let place = |setting: Setting| match setting {
+        Setting::ReplyStyle => 0,
+        Setting::Model => 1,
+        Setting::UsageLimitAutoContinue => 2,
+        Setting::McpServers => 3,
+        Setting::ChannelCoordinator => 4,
+        Setting::ChannelPlacement => 5,
+        Setting::Devices => 6,
+        Setting::CloudRuntime => 7,
+        Setting::VoiceKey => 8,
+        Setting::GitHub => 9,
+        Setting::Credentials => 10,
+        Setting::McpSignIn => 11,
+        Setting::Access => 12,
+        Setting::PermissionRules => 13,
+        Setting::AppTrust => 14,
+        Setting::Shares => 15,
+        Setting::Linking => 16,
+        Setting::AgentHooks => 17,
+    };
+    for (at, setting) in Setting::ALL.into_iter().enumerate() {
+        assert_eq!(place(setting), at, "{}", setting.as_str());
+    }
+    assert_eq!(place(Setting::AgentHooks) + 1, Setting::ALL.len());
+    let level_place = |level: SettingLevel| match level {
+        SettingLevel::AgentChanges => 0,
+        SettingLevel::AgentFills => 1,
+        SettingLevel::OwnerTypes => 2,
+        SettingLevel::RaisesAccess => 3,
+    };
+    for (at, level) in SettingLevel::ALL.into_iter().enumerate() {
+        assert_eq!(level_place(level), at, "{}", level.as_str());
+    }
+    assert_eq!(
+        level_place(SettingLevel::RaisesAccess) + 1,
+        SettingLevel::ALL.len()
+    );
 }
 
 // One allow and one deny for each rule, by its @id.
@@ -1688,6 +1833,45 @@ fn any_turn_of_the_owners_asks_the_owner() {
     assert!(!allowed(&ask(
         &conversation("org", "someone-else", false),
         false
+    )));
+    assert!(!allowed(&ask(
+        &conversation("elsewhere", "owner", false),
+        true
+    )));
+    assert!(!allowed(&ask(&conversation("org", "owner", true), true)));
+}
+
+/// Only a turn the owner started asks to raise the owner's access, and only
+/// in the owner's own conversation that is not deleted: a turn another agent
+/// started may ask a question, never put the red card in front of the owner.
+#[test]
+fn only_a_turn_the_owner_started_asks_to_raise_access() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action: AccessAction::RequestAccess,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&ask(&live, true)),
+        Some(&["owner.request_access".to_owned()][..])
+    );
+    assert!(!allowed(&ask(&live, false)));
+    assert!(!allowed(&ask(
+        &conversation("org", "someone-else", false),
+        true
     )));
     assert!(!allowed(&ask(
         &conversation("elsewhere", "owner", false),

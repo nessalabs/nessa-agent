@@ -903,6 +903,15 @@ export interface OwnerAsk {
   reason: string
   /** When it was asked, in Unix milliseconds. */
   askedAtMs: number
+  /** Present when the ask is an agent's request to raise the chat's access (request_access). The question and the choices are Nessa's own: Approve, which a client carries out as the person's own conversation.setApprovalMode to mode before sending the label, and Not now, the recommended one. A client draws it as the red access card, and nothing may pick for the person. */
+  access?: OwnerAskAccess
+}
+/** The access an agent asked to raise a chat to, and what approving allows. */
+export interface OwnerAskAccess {
+  /** The approval mode approving sets. */
+  mode: "auto" | "full"
+  /** What approving allows, one plain line each, in Nessa's words; shown once the person approves. */
+  grants: string[]
 }
 /** One choice an ask offers. */
 export interface OwnerAskChoice {

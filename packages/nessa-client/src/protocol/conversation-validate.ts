@@ -1510,11 +1510,20 @@ const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
 /**
  * A decision an agent asked the owner, held to the schema's bounds: a short
  * question, two to four choices with distinct labels, the index of the one
- * recommended, and a one-line reason.
+ * recommended, and a one-line reason. An access request also names the mode
+ * it would raise the chat to and the three lines of what that allows.
  */
 function ownerAsk(value: unknown): OwnerAsk {
   const ask = record(value)
-  exact(ask, ["askId", "question", "choices", "recommended", "reason", "askedAtMs"])
+  exact(ask, [
+    "askId",
+    "question",
+    "choices",
+    "recommended",
+    "reason",
+    "askedAtMs",
+    "access",
+  ])
   const askId = text(ask, "askId", 32, false)
   if (!/^[0-9a-f]{32}$/.test(askId)) throw new Error("Invalid conversation askId")
   const choices = items(ask, "choices", 4).map((choice) => {
@@ -1543,7 +1552,21 @@ function ownerAsk(value: unknown): OwnerAsk {
     recommended: recommended as number,
     reason: text(ask, "reason", 200, false),
     askedAtMs: time(ask, "askedAtMs"),
+    ...(ask.access === undefined ? {} : { access: askAccess(ask.access) }),
   }
+}
+
+/** What an access request would raise the chat to, and what that allows. */
+function askAccess(value: unknown): NonNullable<OwnerAsk["access"]> {
+  const access = record(value)
+  exact(access, ["mode", "grants"])
+  const mode = access.mode
+  if (mode !== "auto" && mode !== "full") throw new Error("Invalid conversation access")
+  const listed = access.grants
+  if (!Array.isArray(listed) || listed.length !== 3)
+    throw new Error("Invalid conversation access")
+  const grants = listed.map((grant) => text({ grant }, "grant", 200, false))
+  return { mode, grants }
 }
 
 /**

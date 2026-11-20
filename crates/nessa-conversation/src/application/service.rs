@@ -51,7 +51,7 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
-pub use agent_tools::{ASK_OWNER_TOOL, READ_TURN_TOOL};
+pub use agent_tools::{AccessRequestOutcome, ASK_OWNER_TOOL, READ_TURN_TOOL, REQUEST_ACCESS_TOOL};
 pub use channels::{
     AgentBrief, AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
     FolderRefusal,

@@ -38,7 +38,7 @@
 //! that writes a share grant, where a delete cannot land between the
 //! question and the write.
 use super::ConversationCaller;
-use crate::domain::{Capabilities, Conversation, ConversationRefusal};
+use crate::domain::{Capabilities, Conversation, ConversationRefusal, Setting};
 use nessa_auth::domain::{Grant, MembershipRole, OrganizationId, PrincipalId, Resource};
 use std::collections::HashMap;
 
@@ -105,6 +105,11 @@ pub enum AccessAction {
     /// Let a running agent turn ask the owner a question (`ask_owner`). It
     /// only asks and changes nothing: a turn another agent started may too.
     AskOwner,
+    /// Let a running agent turn ask the owner to raise the conversation's
+    /// access (`request_access`), the red card. Only a turn the owner
+    /// started: an agent nobody asked to work never puts Nessa's own words
+    /// "Allow full access" in front of the owner.
+    RequestAccess,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -151,15 +156,19 @@ pub enum AccessAction {
     ChannelUse,
     /// Read or edit a channel's runtime settings.
     ChannelSettings,
+    /// Change one Nessa setting, as far as its level lets the subject: the
+    /// owner any, a turn the owner started only one an agent may change.
+    SettingChange,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 27] = [
         Self::AgentTools,
         Self::ReadTurns,
         Self::CloseCreated,
         Self::AskOwner,
+        Self::RequestAccess,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -181,6 +190,7 @@ impl AccessAction {
         Self::ChannelList,
         Self::ChannelUse,
         Self::ChannelSettings,
+        Self::SettingChange,
     ];
 
     /// The action's name, as the policy spells it.
@@ -190,6 +200,7 @@ impl AccessAction {
             Self::ReadTurns => "conversation.read_turns",
             Self::CloseCreated => "conversation.close_created",
             Self::AskOwner => "conversation.ask_owner",
+            Self::RequestAccess => "conversation.request_access",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",
@@ -211,6 +222,7 @@ impl AccessAction {
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",
             Self::ChannelSettings => "channel.settings",
+            Self::SettingChange => "setting.change",
         }
     }
 }
@@ -243,6 +255,13 @@ pub enum AccessResource<'a> {
     Channel {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
+    },
+    /// One of an owner's Nessa settings, with the level that decides what an
+    /// agent may do with it.
+    Setting {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+        setting: Setting,
     },
 }
 
@@ -378,6 +397,31 @@ fn answer(policy: &dyn ConversationAccessPolicyEvaluator, ask: &AccessAsk<'_>) -
             Answer::Refused
         }
     }
+}
+
+/// Whether `subject` may change one of `owner`'s settings, as its level
+/// lets it (`setting.change`): the policy's decision whole, so an allow
+/// names the rule that allowed it and a refusal says why, for the caller's
+/// audit record.
+pub fn setting_change(
+    policy: &dyn ConversationAccessPolicyEvaluator,
+    subject: AccessSubject<'_>,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    setting: Setting,
+) -> AccessDecision {
+    policy.evaluate(&AccessAsk {
+        subject,
+        action: AccessAction::SettingChange,
+        resource: AccessResource::Setting {
+            organization,
+            owner,
+            setting,
+        },
+        held: None,
+        request: RequestShape::default(),
+        target: None,
+    })
 }
 
 /// Whether a person may take an owner's action on a conversation, as the

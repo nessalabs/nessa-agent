@@ -265,6 +265,7 @@ fn asked(ask_id: &str, at_ms: u64) -> crate::conversation::view::OwnerAsk {
         recommended: 0,
         reason: "It is ready.".into(),
         asked_at_ms: at_ms,
+        access: None,
     }
 }
 
@@ -299,4 +300,40 @@ fn an_ask_goes_only_with_the_message_that_answers_it() {
     let answered =
         ConversationSummary::after_message(Some(&asking), "Yes", None, 30).answering(Some("a"));
     assert!(answered.ask().is_none());
+}
+
+#[test]
+fn an_access_ask_holds_only_the_words_nessa_writes_for_it() {
+    use crate::conversation::domain::ConversationApprovalMode;
+    use crate::conversation::view::{OwnerAskRefusal, RaisedAccess};
+    let ask = |access: RaisedAccess| {
+        let mut ask = access.ask("a".repeat(32), "The toolchain needs it.".into());
+        ask.asked_at_ms = 5;
+        ask
+    };
+    for access in [RaisedAccess::Auto, RaisedAccess::Full] {
+        assert_eq!(ask(access).check(), Ok(()));
+        assert!(!ask(access).auto_pickable());
+        // A row whose question or choices were changed is not Nessa's card.
+        let mut reworded = ask(access);
+        reworded.question = "Can I have a treat?".into();
+        assert_eq!(reworded.check(), Err(OwnerAskRefusal::Access));
+        let mut recommending = ask(access);
+        recommending.recommended = 0;
+        assert_eq!(recommending.check(), Err(OwnerAskRefusal::Access));
+        assert_eq!(RaisedAccess::of(access.mode()), Some(access));
+        assert!(access.held_at(ConversationApprovalMode::Full));
+        assert!(!access.held_at(ConversationApprovalMode::Ask));
+    }
+    assert!(RaisedAccess::Auto.held_at(ConversationApprovalMode::Auto));
+    assert!(!RaisedAccess::Full.held_at(ConversationApprovalMode::Auto));
+    assert_eq!(RaisedAccess::of(ConversationApprovalMode::Ask), None);
+    // An ordinary ask may be picked for the person.
+    assert!(asked("b".repeat(32).as_str(), 1).auto_pickable());
+    // The wire form names the access in lower case, and an ask without one
+    // reads as before.
+    let wire = serde_json::to_value(ask(RaisedAccess::Full)).unwrap();
+    assert_eq!(wire["access"], "full");
+    let plain = serde_json::to_value(asked("c".repeat(32).as_str(), 1)).unwrap();
+    assert!(plain.get("access").is_none());
 }

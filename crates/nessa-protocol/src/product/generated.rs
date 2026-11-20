@@ -921,6 +921,14 @@ pub struct OwnerAsk {
     pub recommended: u64,
     pub reason: String,
     pub asked_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<OwnerAskAccess>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskAccess {
+    pub mode: String,
+    pub grants: Vec<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

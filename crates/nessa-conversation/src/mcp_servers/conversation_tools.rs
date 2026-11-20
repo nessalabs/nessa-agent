@@ -7,8 +7,8 @@ use crate::application::{
     WindowControlError, WindowControlVia, WindowReading, WindowTarget, MAX_EVENT_READERS,
 };
 use crate::application::{
-    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL, MAX_EARLIER_TURNS,
-    MAX_TURN_HOPS, READ_TURN_TOOL,
+    AccessRequestOutcome, ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL,
+    MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL, REQUEST_ACCESS_TOOL,
 };
 use crate::domain::{
     OpenPlace, PaneContent, WidgetRef, WindowAction, WindowPanel, WindowShowing, WindowSide,
@@ -19,8 +19,8 @@ use crate::timer::clock;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::view::{
-    OwnerAsk, OwnerAskChoice, MAX_ASK_CHOICES, MAX_ASK_LABEL_BYTES, MAX_ASK_LINE_BYTES,
-    MAX_ASK_QUESTION_BYTES, MAX_ASK_QUESTION_WORDS, MIN_ASK_CHOICES,
+    OwnerAsk, OwnerAskChoice, RaisedAccess, MAX_ASK_CHOICES, MAX_ASK_LABEL_BYTES,
+    MAX_ASK_LINE_BYTES, MAX_ASK_QUESTION_BYTES, MAX_ASK_QUESTION_WORDS, MIN_ASK_CHOICES,
 };
 use nessa_sdk::application::agent_execution::{
     commands::{
@@ -266,6 +266,20 @@ impl BuiltInServer for ConversationTools {
                         "reason": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "Why you recommend it, in one line."},
                     },
                     "required": ["question", "choices", "recommended", "reason"],
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
+            }),
+            json!({
+                "name": REQUEST_ACCESS_TOOL,
+                "description": "Ask the person who owns this conversation to raise its access, when your work needs more than the access it has: auto (run most commands without asking them) or full (run any command, never asking). Give the access and one line on why you need it. The person sees a red card with Nessa's own question, Approve and Not now; you cannot word it. Approve raises the access by the person's own hand, then sends \"Approve\" as their next message here; \"Not now\" leaves it as it is. The word is their answer, not your access: the person may type it, so read your access from whether your next commands still ask, and ask again only if the work still needs it. End your turn after asking: access changes only between turns. Only a turn the person started may ask; a chat already at that access or more is not asked (access_held). Ask only for what the work needs, never ahead of time.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "access": {"type": "string", "enum": ["auto", "full"]},
+                        "reason": {"type": "string", "minLength": 1, "maxLength": MAX_ASK_LINE_BYTES, "description": "Why the work needs it, in one line."},
+                    },
+                    "required": ["access", "reason"],
                     "additionalProperties": false,
                 },
                 "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
@@ -528,9 +542,36 @@ impl Ask {
             recommended: self.recommended,
             reason: self.reason.trim().to_owned(),
             asked_at_ms: 0,
+            access: None,
         };
         ask.check().map_err(|refusal| refusal.code().to_owned())?;
         Ok(ask)
+    }
+}
+/// `request_access`: raise the chat's access, by the owner's hand.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RequestAccess {
+    /// Read as its published name, never serde's map form of an enum.
+    access: String,
+    reason: String,
+}
+impl RequestAccess {
+    /// The ask as it is kept, under a key new to it, refused as `ask_owner`
+    /// refuses a reason that is not one short line.
+    fn kept(self) -> Result<(RaisedAccess, String, String), String> {
+        let access = match self.access.as_str() {
+            "auto" => RaisedAccess::Auto,
+            "full" => RaisedAccess::Full,
+            _ => return Err("invalid_request".into()),
+        };
+        let ask_id = uuid::Uuid::new_v4().simple().to_string();
+        let reason = self.reason.trim().to_owned();
+        access
+            .ask(ask_id.clone(), reason.clone())
+            .check()
+            .map_err(|refusal| refusal.code().to_owned())?;
+        Ok((access, ask_id, reason))
     }
 }
 /// `close_thread`: the calling agent's own thread, or one it created.
@@ -1078,6 +1119,36 @@ async fn run(
                 "askId": id,
                 "next": "The person's answer arrives as their next message in this conversation. End your turn now.",
             }))
+        }
+        REQUEST_ACCESS_TOOL => {
+            let (access, ask_id, reason) = parse::<RequestAccess>(arguments)?.kept()?;
+            let action = identity(&source, &call, "request-access");
+            let source = service
+                .admit_agent_tool(
+                    source,
+                    call.clone(),
+                    tool,
+                    None,
+                    AgentToolRequest {
+                        logical: call,
+                        command: action,
+                    },
+                    stop,
+                )
+                .await
+                .map_err(code)?;
+            match service
+                .request_access(source.conversation(), access, ask_id.clone(), reason)
+                .await
+                .map_err(code)?
+            {
+                AccessRequestOutcome::Held => Err("access_held".to_owned()),
+                AccessRequestOutcome::Asked => Ok(json!({
+                    "asked": true,
+                    "askId": ask_id,
+                    "next": "The person's answer arrives as their next message in this conversation. \"Approve\" is their answer, not proof of the access: your next commands show what you may do. End your turn now.",
+                })),
+            }
         }
         "close_thread" => {
             let args: Close = parse(arguments)?;
@@ -1962,6 +2033,7 @@ mod tests {
                 "close_thread" => parse::<Close>(arguments).map(|_| ()),
                 "read_turn" => parse::<ReadTurn>(arguments).map(|_| ()),
                 "ask_owner" => parse::<Ask>(arguments).map(|_| ()),
+                "request_access" => parse::<RequestAccess>(arguments)?.kept().map(|_| ()),
                 _ => panic!("uncovered published tool: {tool}"),
             }
         }
@@ -2165,6 +2237,7 @@ mod tests {
                 "close_pane",
                 "read_turn",
                 "ask_owner",
+                "request_access",
                 "close_thread"
             ]
         );

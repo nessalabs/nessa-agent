@@ -69,6 +69,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("touchId"), knobs.touchIds)
   assert.equal(count("style"), knobs.styles)
   assert.equal(count("coordinator"), knobs.coordinators)
+  assert.equal(count("accessRequest"), knobs.accessRequests)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("peer"), knobs.peers)
@@ -214,6 +215,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         touchIds: "0",
         styles: "0",
         coordinators: "0",
+        accessRequests: "0",
         asks: "0",
         awaits: "0",
         closes: "0",

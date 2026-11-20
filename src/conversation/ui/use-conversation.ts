@@ -23,6 +23,7 @@ import {
   setDraft,
   setSelection,
   controlConversation,
+  raiseAccess,
   setUsageLimitAutoContinue,
   stopGenerating,
   followConversation,
@@ -55,6 +56,13 @@ export function useConversation() {
   return {
     setApprovalMode: (id: string, mode: ApprovalMode) =>
       dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
+    /**
+     * Raises the active conversation to `mode` for an access request the
+     * person approved, and says what became of it. The same command the
+     * access picker sends.
+     */
+    raiseAccess: (mode: ApprovalMode): Promise<"taken" | "changing" | "refused"> =>
+      dispatch(raiseAccess({ id: active.id, mode })).unwrap(),
     setUsageLimitAutoContinue: (enabled: boolean) =>
       dispatch(setUsageLimitAutoContinue(enabled)).unwrap(),
     setSelection: (id: string, selection: ConversationSelection) =>
