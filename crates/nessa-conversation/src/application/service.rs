@@ -151,7 +151,8 @@ pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };
 pub use turn_origins::{
-    ChainEnd, TurnChain, TurnOrigin, TurnReading, MAX_EARLIER_TURNS, MAX_TURN_HOPS,
+    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS,
+    MAX_TURN_HOPS,
 };
 pub use workspace_windows::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
@@ -994,6 +995,9 @@ struct Inner {
     reply_styles: reply_styles::ReplyStyleBinding,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// What each credential was issued to, for telling which device sent a
+    /// turn. Unbound reads every device as unknown.
+    credential_devices: OnceLock<Arc<dyn nessa_auth::application::pairing::CredentialDeviceSource>>,
     /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
     preference_policy:
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
@@ -1540,6 +1544,7 @@ impl ConversationService {
                 channels: Default::default(),
                 reply_styles: Default::default(),
                 scheduled_messages: OnceLock::new(),
+                credential_devices: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
                 reconcile_retry_owed: std::sync::Mutex::default(),

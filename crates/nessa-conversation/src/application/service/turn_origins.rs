@@ -11,14 +11,33 @@
 //!
 //! ```text
 //! child turn ──sender: agent {thread A, turn 7}──▶ A's turn 7
-//!   A's turn 7 ──sender: person, owner──▶ ends: { origin: "person", said }
+//!   A's turn 7 ──scheduled store: continues turn 5──▶ A's turn 5
+//!   A's turn 5 ──sender: person, credential c──▶ ends: { origin: "person", device: phone }
 //! ```
+//!
+//! A turn the gateway submits for the person also says "person" as its
+//! sender, so three more saved facts tell those apart, each kept by its one
+//! owner and never changed after the turn is admitted:
+//!
+//! - The scheduled-message store minted the turn's execution id for a
+//!   usage-limit continuation: it continues the turn the store names.
+//! - The turn's surface is [`EVENT_SURFACE_PREFIX`] and an event source: the
+//!   gateway admitted an external event. A credential is asked first, so a
+//!   credential is never read as an event.
+//! - Otherwise the surface is the credential the person signed in with, and
+//!   the credential registry says what it was issued to: their phone, a token
+//!   on a computer, or another device.
 use super::{ConversationCaller, ConversationError, ConversationService};
+use nessa_auth::{
+    application::pairing::{CredentialDevice, CredentialDeviceSource},
+    domain::CredentialId,
+};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::sessions::InvocationRecord,
     domain::agent_execution::{executions::Initiator, prompts::MessageSender},
 };
+use std::{collections::HashMap, sync::Arc};
 
 /// The most turns one read follows. A relay chain longer than this is
 /// answered as cut, with the turns read so far.
@@ -27,19 +46,57 @@ pub const MAX_TURN_HOPS: usize = 8;
 /// The most earlier messages of the person one read adds for context.
 pub const MAX_EARLIER_TURNS: usize = 3;
 
+/// The surface every turn the gateway admits for an external event is saved
+/// with, followed by the event source's id. The gateway writes it; nothing a
+/// person or an agent sends can choose a surface.
+pub const EVENT_SURFACE_PREFIX: &str = "event:";
+
+/// Which device a person's turn was sent from, as the credential registry
+/// says the credential it was sent with was issued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Device {
+    /// The owner's phone, paired for read and write.
+    Phone,
+    /// A token this gateway wrote on the computer it runs on: the desktop
+    /// app or the command line.
+    Computer,
+    /// Another of the owner's paired devices.
+    PairedDevice,
+    /// A peer gateway.
+    Peer,
+    /// The registry has no such credential, or none is bound.
+    Unknown,
+}
+
+impl From<CredentialDevice> for Device {
+    fn from(device: CredentialDevice) -> Self {
+        match device {
+            CredentialDevice::Phone => Self::Phone,
+            CredentialDevice::Token => Self::Computer,
+            CredentialDevice::PairedDevice => Self::PairedDevice,
+            CredentialDevice::Peer => Self::Peer,
+        }
+    }
+}
+
 /// How one turn's input arrived, as its saved record says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnOrigin {
-    /// The conversation's owner sent it from one of their own surfaces.
-    Person,
+    /// The conversation's owner sent it themselves, from this device.
+    Person { device: Device },
     /// Someone the conversation is shared with sent it, under this grant.
-    Grant(String),
+    Grant { grant: String, device: Device },
     /// An agent sent it from the turn this links to. A thread's report back to
     /// its sender links to the reporting thread's turn.
     Agent { thread: String, execution: String },
     /// The turn picks up the one this links to, in the same thread, after a
     /// restart or a provider failure.
     Resumed { execution: String },
+    /// The gateway sent it after a usage limit, to continue the turn this
+    /// links to in the same thread.
+    Continued { execution: String },
+    /// The gateway admitted it for an external event from this source.
+    Event { source: String },
     /// An app sent it on the person's behalf, from this tool call.
     App { server: String, tool: String },
     /// The gateway wrote it itself, such as a background command's outcome.
@@ -107,27 +164,38 @@ impl ConversationService {
             end,
             earlier: Vec::new(),
         };
+        let mut origins = Origins::new(self);
         while let Some((thread, execution)) = next.take() {
             if chain.len() == MAX_TURN_HOPS {
                 return Ok(ended(chain, ChainEnd::Cut));
             }
-            let (history, at) = match self.saved_turns(caller, &thread, &execution).await {
+            let found = match self.saved_turns(caller, &thread, &execution).await {
+                Ok((history, at)) => origins
+                    .of(&thread, &history[at])
+                    .await
+                    .map(|origin| (history, at, origin)),
+                Err(error) => Err(error),
+            };
+            let (history, at, origin) = match found {
                 Ok(found) => found,
                 Err(error) if chain.is_empty() => return Err(error),
                 Err(_) => return Ok(ended(chain, ChainEnd::Unreadable)),
             };
             let record = &history[at];
-            let origin = origin(record);
             next = match &origin {
                 TurnOrigin::Agent { thread, execution } => ConversationId::new(thread.as_str())
                     .ok()
                     .map(|thread| (thread, execution.clone())),
-                TurnOrigin::Resumed { execution } => Some((thread.clone(), execution.clone())),
+                TurnOrigin::Resumed { execution } | TurnOrigin::Continued { execution } => {
+                    Some((thread.clone(), execution.clone()))
+                }
                 _ => None,
             };
             let relayed = matches!(
                 origin,
-                TurnOrigin::Agent { .. } | TurnOrigin::Resumed { .. }
+                TurnOrigin::Agent { .. }
+                    | TurnOrigin::Resumed { .. }
+                    | TurnOrigin::Continued { .. }
             );
             chain.push(TurnReading {
                 thread: thread.clone(),
@@ -139,12 +207,11 @@ impl ConversationService {
                 return Ok(ended(chain, ChainEnd::Unreadable));
             }
             if !relayed {
-                let person = matches!(
-                    chain.last().map(|turn| &turn.origin),
-                    Some(TurnOrigin::Person | TurnOrigin::Grant(_))
-                );
+                let person = chain.last().is_some_and(|turn| turn.origin.is_a_person());
                 let earlier = if person {
-                    earlier_said(&thread, &history[..at], earlier.min(MAX_EARLIER_TURNS))
+                    origins
+                        .earlier_said(&thread, &history[..at], earlier.min(MAX_EARLIER_TURNS))
+                        .await?
                 } else {
                     Vec::new()
                 };
@@ -196,60 +263,150 @@ impl ConversationService {
     }
 }
 
-/// The person's messages in `before` (a thread's turns before the one a chain
-/// starts at, oldest first): the last `most`, and the thread's first, oldest
-/// first. Only what a person sent counts; relays, apps and the gateway's own
-/// inputs are not what the person said.
-fn earlier_said(
-    thread: &ConversationId,
-    before: &[InvocationRecord],
-    most: usize,
-) -> Vec<TurnReading> {
-    if most == 0 {
-        return Vec::new();
+impl TurnOrigin {
+    /// A person sent it: the owner, or someone it is shared with.
+    pub fn is_a_person(&self) -> bool {
+        matches!(self, Self::Person { .. } | Self::Grant { .. })
     }
-    let people: Vec<TurnReading> = before
-        .iter()
-        .filter_map(|record| {
-            let origin = origin(record);
-            matches!(origin, TurnOrigin::Person | TurnOrigin::Grant(_)).then(|| TurnReading {
-                thread: thread.clone(),
-                execution: record.request.execution_id.as_str().to_owned(),
-                origin,
-                said: record.request.user_message.text_str().to_owned(),
-            })
-        })
-        .collect();
-    let last = people.len().saturating_sub(most);
-    let mut said = Vec::new();
-    if last > 0 {
-        said.push(people[0].clone());
-    }
-    said.extend(people[last..].iter().cloned());
-    said
 }
 
-/// How `record`'s input arrived. The sender is the one saved fact for this;
-/// a resumption's source turn is the SDK's own saved link.
-fn origin(record: &InvocationRecord) -> TurnOrigin {
-    if let Some(source) = &record.resumed_from {
-        return TurnOrigin::Resumed {
-            execution: source.as_str().to_owned(),
-        };
+/// Reads turn origins for one `read_turn`, asking the credential registry
+/// once per credential.
+struct Origins<'a> {
+    service: &'a ConversationService,
+    devices: Option<Arc<dyn CredentialDeviceSource>>,
+    known: HashMap<String, Device>,
+}
+
+impl<'a> Origins<'a> {
+    fn new(service: &'a ConversationService) -> Self {
+        Self {
+            service,
+            devices: service.credential_devices(),
+            known: HashMap::new(),
+        }
     }
-    match record.request.user_message.sender() {
-        MessageSender::Agent(source) => TurnOrigin::Agent {
-            thread: source.conversation().to_owned(),
-            execution: source.execution().as_str().to_owned(),
-        },
-        MessageSender::App(app) => TurnOrigin::App {
-            server: app.tool().server().to_owned(),
-            tool: app.tool().tool().to_owned(),
-        },
-        MessageSender::Internal => TurnOrigin::Internal,
-        MessageSender::Person => match record.initiation.initiator() {
-            Initiator::Grant(grant) => TurnOrigin::Grant(grant.grant().to_owned()),
-            _ => TurnOrigin::Person,
-        },
+
+    /// How `record`'s input arrived. A resumption's source turn is the SDK's
+    /// own saved link; the sender says who sent the rest; a turn sent as the
+    /// person is told apart as the module documentation says.
+    async fn of(
+        &mut self,
+        thread: &ConversationId,
+        record: &InvocationRecord,
+    ) -> Result<TurnOrigin, ConversationError> {
+        if let Some(source) = &record.resumed_from {
+            return Ok(TurnOrigin::Resumed {
+                execution: source.as_str().to_owned(),
+            });
+        }
+        match record.request.user_message.sender() {
+            MessageSender::Agent(source) => {
+                return Ok(TurnOrigin::Agent {
+                    thread: source.conversation().to_owned(),
+                    execution: source.execution().as_str().to_owned(),
+                })
+            }
+            MessageSender::App(app) => {
+                return Ok(TurnOrigin::App {
+                    server: app.tool().server().to_owned(),
+                    tool: app.tool().tool().to_owned(),
+                })
+            }
+            MessageSender::Internal => return Ok(TurnOrigin::Internal),
+            MessageSender::Person => {}
+        }
+        let execution = record.request.execution_id.as_str();
+        if let Some(store) = self.service.scheduled_messages() {
+            if let Some(causal) = store.continued_from(&thread.to_string(), execution).await? {
+                return Ok(TurnOrigin::Continued { execution: causal });
+            }
+        }
+        let surface = record.actor.surface_id();
+        let device = self.device(surface).await?;
+        if device == Device::Unknown {
+            if let Some(source) = surface.strip_prefix(EVENT_SURFACE_PREFIX) {
+                return Ok(TurnOrigin::Event {
+                    source: source.to_owned(),
+                });
+            }
+        }
+        Ok(match record.initiation.initiator() {
+            Initiator::Grant(grant) => TurnOrigin::Grant {
+                grant: grant.grant().to_owned(),
+                device,
+            },
+            _ => TurnOrigin::Person { device },
+        })
+    }
+
+    /// What the credential `surface` names was issued to.
+    async fn device(&mut self, surface: &str) -> Result<Device, ConversationError> {
+        if let Some(device) = self.known.get(surface) {
+            return Ok(*device);
+        }
+        let device = match (&self.devices, CredentialId::new(surface)) {
+            (Some(devices), Ok(credential)) => devices
+                .credential_device(&credential)
+                .await
+                .map_err(|_| ConversationError::Unavailable)?
+                .map_or(Device::Unknown, Device::from),
+            _ => Device::Unknown,
+        };
+        self.known.insert(surface.to_owned(), device);
+        Ok(device)
+    }
+
+    /// The person's messages in `before` (a thread's turns before the one a
+    /// chain starts at, oldest first): the last `most`, and the thread's
+    /// first, oldest first. Only what a person sent counts; relays,
+    /// continuations, events, apps and the gateway's own inputs are not what
+    /// the person said.
+    async fn earlier_said(
+        &mut self,
+        thread: &ConversationId,
+        before: &[InvocationRecord],
+        most: usize,
+    ) -> Result<Vec<TurnReading>, ConversationError> {
+        if most == 0 {
+            return Ok(Vec::new());
+        }
+        let mut last = Vec::new();
+        let mut index = before.len();
+        while index > 0 && last.len() < most {
+            index -= 1;
+            if let Some(reading) = self.person_said(thread, &before[index]).await? {
+                last.push(reading);
+            }
+        }
+        last.reverse();
+        let mut said = Vec::new();
+        for record in &before[..index] {
+            if let Some(first) = self.person_said(thread, record).await? {
+                said.push(first);
+                break;
+            }
+        }
+        said.extend(last);
+        Ok(said)
+    }
+
+    async fn person_said(
+        &mut self,
+        thread: &ConversationId,
+        record: &InvocationRecord,
+    ) -> Result<Option<TurnReading>, ConversationError> {
+        if record.resumed_from.is_some()
+            || !matches!(record.request.user_message.sender(), MessageSender::Person)
+        {
+            return Ok(None);
+        }
+        let origin = self.of(thread, record).await?;
+        Ok(origin.is_a_person().then(|| TurnReading {
+            thread: thread.clone(),
+            execution: record.request.execution_id.as_str().to_owned(),
+            origin,
+            said: record.request.user_message.text_str().to_owned(),
+        }))
     }
 }

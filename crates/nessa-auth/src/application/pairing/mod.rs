@@ -6,6 +6,8 @@
 //! ```
 #![deny(missing_docs)]
 mod admission;
+mod credential_device;
+pub use credential_device::{CredentialDevice, CredentialDeviceSource};
 mod owner_phone_adoption;
 mod owner_phone_private;
 pub use owner_phone_adoption::{

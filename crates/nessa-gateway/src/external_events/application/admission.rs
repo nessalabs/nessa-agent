@@ -1,6 +1,7 @@
 use super::super::domain::EventId;
 use crate::conversation::application::{
     ConversationCaller, ConversationError, ConversationService, SubmissionMode, SubmittedMessage,
+    EVENT_SURFACE_PREFIX,
 };
 use nessa_auth::{
     application::{
@@ -97,7 +98,7 @@ impl EventBinding {
         let caller = ConversationCaller {
             organization_id: context.organization_id().clone(),
             principal_id: context.principal_id().clone(),
-            surface_id: format!("event:{}", self.id.as_str()),
+            surface_id: format!("{EVENT_SURFACE_PREFIX}{}", self.id.as_str()),
             action_id: request,
         };
         let submitted = self

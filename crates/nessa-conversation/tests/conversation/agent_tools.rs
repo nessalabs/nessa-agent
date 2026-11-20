@@ -1757,6 +1757,8 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
     assert_eq!(turns[1]["origin"], "person");
     assert_eq!(turns[1]["threadId"], source.to_string());
     assert_eq!(turns[1]["said"], "active");
+    // No credential registry is bound here, so the device is not known.
+    assert_eq!(turns[1]["device"], "unknown");
 
     // Asked for, the person's earlier messages in the source thread come
     // too, oldest first; without asking, none do.
