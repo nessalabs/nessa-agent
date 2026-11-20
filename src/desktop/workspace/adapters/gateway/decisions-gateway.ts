@@ -2,9 +2,11 @@
  * The `DecisionSource` over the window's gateway client:
  * `client.conversation.decisions`, which the client has already checked
  * against the schema (`conversationDecisions`), read into the model's words.
- * A session's id is its conversation's (`gateway-source.ts`).
+ * A session's id is its conversation's (`gateway-source.ts`). A
+ * conversation the gateway does not hold, one not started yet or one
+ * deleted, has asked nothing: its decisions are none, not a failed read.
  */
-import type { ConversationApi, OwnerDecision } from "@nessa/client"
+import { NessaRpcError, type ConversationApi, type OwnerDecision } from "@nessa/client"
 import type { DecisionSource } from "../../application/ports"
 import type { Decision, DecisionOutcome } from "../../model/decisions"
 import { askFrom } from "./gateway-views"
@@ -21,8 +23,14 @@ export function decisionsGateway({
 }): DecisionSource {
   return {
     async decisions(sessionId) {
-      const { decisions } = await (await connected()).conversation.decisions(sessionId)
-      return decisions.map(decisionFrom)
+      const client = await connected()
+      try {
+        const { decisions } = await client.conversation.decisions(sessionId)
+        return decisions.map(decisionFrom)
+      } catch (error) {
+        if (error instanceof NessaRpcError && error.code === "conversation_not_found") return []
+        throw error
+      }
     },
     async pauseAutoPick(sessionId, askId, paused) {
       return (await connected()).conversation.pauseAutoPick(sessionId, askId, paused)
