@@ -247,3 +247,56 @@ fn a_renamed_title_sticks_through_later_messages() {
     assert_eq!(talked.title().unwrap().as_str(), "Lisbon in May");
     assert_eq!(talked.preview().unwrap().as_str(), "And Porto?");
 }
+
+fn asked(ask_id: &str, at_ms: u64) -> crate::conversation::view::OwnerAsk {
+    crate::conversation::view::OwnerAsk {
+        ask_id: ask_id.into(),
+        question: "Ship it?".into(),
+        choices: vec![
+            crate::conversation::view::OwnerAskChoice {
+                label: "Yes".into(),
+                consequence: "It ships.".into(),
+            },
+            crate::conversation::view::OwnerAskChoice {
+                label: "No".into(),
+                consequence: "It waits.".into(),
+            },
+        ],
+        recommended: 0,
+        reason: "It is ready.".into(),
+        asked_at_ms: at_ms,
+    }
+}
+
+#[test]
+fn an_ask_lifts_its_conversation_to_the_top_of_the_list() {
+    let said =
+        ConversationSummary::after_message(None, "Plan the trip", None, 10).after_archiving(true);
+    let asking = ConversationSummary::after_asking(Some(&said), asked("a", 40));
+    assert!(!asking.archived());
+    assert_eq!(asking.updated_at_ms(), 40);
+    assert_eq!(asking.title(), said.title());
+    assert_eq!(asking.preview(), said.preview());
+    assert_eq!(asking.ask().map(|ask| ask.ask_id.as_str()), Some("a"));
+    // What else happens to the summary keeps the ask; a fork does not.
+    let replied = ConversationSummary::after_reply(Some(&asking), "Done.", 50).unwrap();
+    assert!(replied.ask().is_some());
+    assert!(replied.after_archiving(true).ask().is_some());
+    assert!(ConversationSummary::after_forking(&asking, 60)
+        .ask()
+        .is_none());
+}
+
+#[test]
+fn an_ask_goes_only_with_the_message_that_answers_it() {
+    let asking = ConversationSummary::after_asking(None, asked("a", 10));
+    // A message that answers nothing, or answers an earlier ask, keeps it.
+    let kept = ConversationSummary::after_message(Some(&asking), "hm", None, 20).answering(None);
+    assert!(kept.ask().is_some());
+    let stale = ConversationSummary::after_message(Some(&asking), "hm", None, 20)
+        .answering(Some("earlier"));
+    assert!(stale.ask().is_some());
+    let answered =
+        ConversationSummary::after_message(Some(&asking), "Yes", None, 30).answering(Some("a"));
+    assert!(answered.ask().is_none());
+}

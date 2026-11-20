@@ -1833,7 +1833,8 @@ async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() 
 
 /// An agent asks its owner a question: it is admitted and audited under its
 /// own action, the list row carries it until the person writes in the
-/// conversation, and a later ask replaces it. A message refused on its way,
+/// conversation, and a later ask replaces it, out of the archive. A device
+/// the chat is shared with does not see it. A message refused on its way,
 /// or an external event sent for the person, answers nothing. An ask past its bounds is
 /// refused with what to fix, before it is admitted or audited.
 #[cfg(unix)]
@@ -1918,7 +1919,12 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     assert_eq!(kept.recommended, 0);
     assert!(kept.asked_at_ms > 0);
 
-    // A later ask replaces it.
+    // A later ask replaces it, and brings an archived chat back to the list
+    // the owner reads, dated when it was asked, so it is never out of sight.
+    assert!(service
+        .archive(source.clone(), caller("archive"), true)
+        .await
+        .unwrap());
     let again = client
         .call("ask_owner", asking("Ship it after lunch?"))
         .await;
@@ -1926,6 +1932,42 @@ async fn an_ask_waits_on_the_list_until_the_person_writes() {
     let replaced = row(service.clone()).await.unwrap();
     assert_ne!(replaced.ask_id, first);
     assert_eq!(replaced.question, "Ship it after lunch?");
+    let listed = service.list(caller("list"), false).await.unwrap();
+    let lifted = listed
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .unwrap();
+    assert!(!lifted.archived);
+    assert!(lifted.updated_at_ms >= replaced.asked_at_ms);
+
+    // A device the chat is shared with lists the chat, not the question:
+    // an agent asks its owner.
+    crate::conversation_test_support::grant_as(
+        metadata.as_ref(),
+        &source,
+        "receiver",
+        crate::domain::ShareAccess::new(crate::domain::Capabilities::read(), None).unwrap(),
+    )
+    .await;
+    let (shared, _) = service
+        .list_for(
+            caller("shared-list"),
+            false,
+            &crate::application::Reader::PairedDevice {
+                receiver_id: "receiver".into(),
+            },
+            &caller("shared-list").principal_id,
+            Some(crate::conversation_test_support::access_policy_ref()),
+        )
+        .await
+        .unwrap();
+    let seen = shared
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .expect("the shared chat is listed");
+    assert_eq!(seen.ask, None);
 
     drop(client);
     drop(grant);

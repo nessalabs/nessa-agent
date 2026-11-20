@@ -1,8 +1,8 @@
 //! A metadata file an older build wrote is brought forward at open and keeps
 //! its rows: version 6 (before `unfinished_turns`), version 7 with or
 //! without `model_requests`, which #975 added without raising the version,
-//! version 8 (before `agent_switches`), and version 9 (before
-//! `closed_threads`).
+//! version 8 (before `agent_switches`), version 9 (before
+//! `closed_threads`), and version 10 (before `summaries.ask`).
 //! `metadata_v6.sql` is version 6's definition exactly as that build shipped
 //! it (docs/adr/todo/202-versioned-local-datasets.md, "Migrations").
 use super::store::LocalConversationStore;
@@ -159,7 +159,8 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         let connection = Connection::open(&path).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE agent_switches; DROP TABLE closed_threads; DROP TABLE owner_asks",
+                "DROP TABLE agent_switches; DROP TABLE closed_threads;
+                 ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
@@ -182,7 +183,7 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
         connection
             .execute_batch(
                 "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
-                 DROP TABLE closed_threads; DROP TABLE owner_asks",
+                 DROP TABLE closed_threads; ALTER TABLE summaries DROP COLUMN ask",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 8).unwrap();
@@ -211,7 +212,7 @@ async fn a_version_9_file_gains_the_closed_threads() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE closed_threads; DROP TABLE owner_asks")
+            .execute_batch("DROP TABLE closed_threads; ALTER TABLE summaries DROP COLUMN ask")
             .unwrap();
         connection.pragma_update(None, "user_version", 9).unwrap();
     }
@@ -235,21 +236,29 @@ async fn a_version_9_file_gains_the_closed_threads() {
 }
 
 /// A version 10 file, from before an agent could ask its owner, gains
-/// `owner_asks` and keeps its conversations.
+/// `summaries.ask` and keeps its conversations, with nothing asked.
 #[tokio::test]
-async fn a_version_10_file_gains_the_owner_asks() {
+async fn a_version_10_file_gains_the_ask_on_its_summaries() {
+    use crate::application::ConversationSummaries;
     let (_directory, path) = private_path();
     older_file(&path, true);
     drop(LocalConversationStore::open(&path).unwrap());
     {
         let connection = Connection::open(&path).unwrap();
-        connection.execute_batch("DROP TABLE owner_asks").unwrap();
+        connection
+            .execute_batch("ALTER TABLE summaries DROP COLUMN ask")
+            .unwrap();
         connection.pragma_update(None, "user_version", 10).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
     assert_eq!(version(&path), 11);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
+    let kept = ConversationSummaries::load(&store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.ask(), None);
     let ask = nessa_protocol::conversation::view::OwnerAsk {
         ask_id: "0123456789abcdef0123456789abcdef".into(),
         question: "Ship it?".into(),
@@ -267,43 +276,41 @@ async fn a_version_10_file_gains_the_owner_asks() {
         reason: "It is ready.".into(),
         asked_at_ms: 3000,
     };
-    ConversationRepository::ask_owner(&store, &id, ask.clone())
+    let asked = nessa_protocol::conversation::domain::ConversationSummary::after_asking(
+        Some(&kept),
+        ask.clone(),
+    );
+    ConversationSummaries::record(&store, &id, asked)
         .await
         .unwrap();
     drop(store);
     assert_eq!(shape(&path), current_shape());
-    // Kept across a restart.
+    // Kept across a restart, on the summary a list reads.
     let store = LocalConversationStore::open(&path).unwrap();
-    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
-        .await
+    let organization = OrganizationId::new("org").unwrap();
+    let alice = PrincipalId::new("alice").unwrap();
+    let listed =
+        ConversationListing::list(&store, &organization, &alice, false, 10, &Reader::Owner)
+            .await
+            .unwrap();
+    assert_eq!(listed.conversations[0].summary.ask(), Some(&ask));
+    // A stored ask that no longer reads is left off; the summary still lists.
+    Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE summaries SET ask = '{}' WHERE conversation_id = ?1",
+            [CONVERSATION],
+        )
         .unwrap();
-    assert_eq!(asks.get(&id), Some(&ask));
-    // An answer to another ask leaves this one; its own answer removes it.
-    ConversationRepository::answer_owner_ask(&store, &id, "fedcba9876543210fedcba9876543210")
+    let summary = ConversationSummaries::load(&store, &id)
         .await
+        .unwrap()
         .unwrap();
-    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
-        .await
-        .unwrap();
-    assert_eq!(asks.get(&id), Some(&ask));
-    ConversationRepository::answer_owner_ask(&store, &id, &ask.ask_id)
-        .await
-        .unwrap();
-    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
-        .await
-        .unwrap();
-    assert!(asks.is_empty());
-    // Erasing the conversation takes what was asked with it.
-    ConversationRepository::ask_owner(&store, &id, ask.clone())
-        .await
-        .unwrap();
-    crate::application::ConversationSummaries::erase(&store, &id)
-        .await
-        .unwrap();
-    let asks = ConversationRepository::owner_asks(&store, vec![id.clone()])
-        .await
-        .unwrap();
-    assert!(asks.is_empty());
+    assert_eq!(summary.ask(), None);
+    assert_eq!(
+        summary.title().map(|title| title.as_str()),
+        Some("Kept across the upgrade")
+    );
 }
 
 /// A file a step cannot apply to is refused and left at its version: here a

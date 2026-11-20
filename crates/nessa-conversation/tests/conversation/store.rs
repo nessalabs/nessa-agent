@@ -1187,7 +1187,7 @@ fn many(path: &Path, owner: &str, count: usize) {
             .unwrap();
         transaction
             .execute(
-                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0)",
+                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0, NULL)",
                 params![id, 10 + n as i64],
             )
             .unwrap();
@@ -2088,7 +2088,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     }
     connection
         .execute(
-            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0)",
+            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0, NULL)",
             params![
                 second.to_string(),
                 "😀".repeat(ConversationTitle::MAX_CHARS),

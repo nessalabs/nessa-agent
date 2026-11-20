@@ -8,12 +8,10 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationSummary,
 };
-use nessa_protocol::conversation::view::OwnerAsk;
 use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::PublishedFile;
 use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
-use std::collections::HashMap;
 use std::{future::Future, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
@@ -363,19 +361,6 @@ pub trait ConversationRepository: Send + Sync {
     /// Whether `id`'s agent closed its thread and no message has opened it
     /// since.
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool>;
-    /// Keep the question `id`'s agent asked its owner (`ask_owner`) in place
-    /// of any earlier one. Durable before it returns.
-    fn ask_owner(&self, id: &ConversationId, ask: OwnerAsk) -> ConversationFuture<'_, ()>;
-    /// A person answered the question `ask_id` in `id`: it is removed, and a
-    /// later ask that replaced it is kept. Durable before it returns; nothing
-    /// asked, or another ask, is not an error.
-    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()>;
-    /// The questions still waiting in these conversations. A row that no
-    /// longer reads as an ask is left out, and said in the log.
-    fn owner_asks(
-        &self,
-        ids: Vec<ConversationId>,
-    ) -> ConversationFuture<'_, HashMap<ConversationId, OwnerAsk>>;
     /// Retain the observed provider/deferred outcome before delivering it to
     /// the independent audit sink. Repeated identical observations agree.
     fn observe_mode_application(
@@ -595,8 +580,8 @@ pub trait ConversationSummaries: Send + Sync {
         id: &ConversationId,
         summary: ConversationSummary,
     ) -> ConversationFuture<'_, ()>;
-    /// Remove the conversation's summary, if it has one, and what its agent
-    /// asked its owner. Durable before it returns; a summary that is already
+    /// Remove the conversation's summary, if it has one, with the ask that
+    /// waits on it. Durable before it returns; a summary that is already
     /// gone is not an error.
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
 }

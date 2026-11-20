@@ -53,17 +53,25 @@ admission with a code that says what to fix (`ask_question_too_long`,
 `ask_line_too_long`, `ask_choices`, `ask_recommended`, `ask_not_one_line`),
 so a refused ask writes no audit record.
 
-The ask is kept in the conversation metadata (`owner_asks`, one per
-conversation; a later ask replaces it) and nowhere else: every list row of
-that conversation carries it as `ask`, which is how each window and the
-floating panel learn of it, followed or not. The person's next message in the
-conversation is the answer, a tapped choice or anything they type. The ask
-waiting when the message is sent is the one it answers, and it goes once the
-agent has the message, before the list summary that message writes, so the
-list that wakes no longer shows it; one the agent asks after it stays. A message refused
-on its way answers nothing, and neither does a usage-limit continuation or
-an external event the gateway sends for the person: whether a message is
-the person's own is read from the same saved facts `read_turn` reads. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
+The ask is kept on the conversation's summary (`summaries.ask`; a later ask
+replaces it) and nowhere else, written as every summary is, under the
+summary lock a delete erases it under. Every list row of that conversation
+the owner reads carries it as `ask`, which is how each window and the
+floating panel learn of it, followed or not; a device the conversation is
+shared with lists the conversation without it. Asking moves the conversation
+to the top of the list and out of the archive, so it is never past the
+list's bound or out of sight. The owner's next message in the conversation
+is the answer, a tapped choice or anything they type. The ask waiting when
+the message is sent is the one it answers, and the summary write that
+records the message also takes the ask down: the list never shows the
+message with the question still up, and one the agent asks after it stays.
+A message refused on its way writes no summary and answers nothing, and
+neither does a message from someone the conversation is shared with, a
+usage-limit continuation or an external event the gateway sends for the
+owner: whether a message is the owner's own is read from the same saved
+facts `read_turn` reads. Known limits: a queued answer the owner later
+removes still took the ask down, and a tapped choice still waiting to send
+when the agent asks again answers the newer ask. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
 any turn of the owner's agents on their own live conversation, one another
 agent started included: a coordinator woken by a thread's report is who most
 needs to ask. Asking changes nothing else.
@@ -72,14 +80,14 @@ needs to ask. Asking changes nothing else.
 sequenceDiagram
     participant Agent
     participant Tools as nessa-agents
-    participant Meta as metadata owner_asks
+    participant Meta as metadata summaries.ask
     participant List as list subscription
     participant Window as desktop window
     participant Panel as floating panel
     participant Host as system notices
     Agent->>Tools: ask_owner {question, choices, recommended, reason}
     Tools->>Tools: check bounds (refused before admission)
-    Tools->>Meta: keep ask (replaces any earlier one)
+    Tools->>Meta: keep ask on the summary (replaces any earlier one; top of list, unarchived)
     Tools-->>Agent: {asked, askId}: end your turn
     Note over List: the tool result commits a record and wakes every list
     List->>Window: row.ask
@@ -87,7 +95,7 @@ sequenceDiagram
     Window->>Host: notice titled with the question (review notice path)
     Panel->>Panel: tab added at the end with a dot, not shown
     Window->>Window: card with choices in the chat
-    Window->>Meta: person's message (a tapped label) removes the ask
+    Window->>Meta: owner's message (a tapped label): its summary write takes the ask down
     List->>Window: row without ask: card and notice go
 ```
 

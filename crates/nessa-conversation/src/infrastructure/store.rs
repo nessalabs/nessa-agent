@@ -51,7 +51,6 @@ use nessa_sync::replication::catalogue::{
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(any(test, feature = "test-support"))]
@@ -662,6 +661,7 @@ struct StoredSummary {
     preview: Option<String>,
     updated_at_ms: i64,
     archived: bool,
+    ask: Option<String>,
 }
 impl StoredSummary {
     /// Held to the same bounds as one written here: a time a list cannot
@@ -677,7 +677,22 @@ impl StoredSummary {
             .map(|preview| ConversationPreview::new(&preview))
             .transpose()
             .ok()?;
-        ConversationSummary::new(title, preview, time(self.updated_at_ms)?, self.archived).ok()
+        // An ask that cannot be read is left off rather than making the
+        // conversation's whole summary unreadable: the list still shows it.
+        let ask = self
+            .ask
+            .and_then(|ask| match serde_json::from_str::<OwnerAsk>(&ask) {
+                Ok(ask) if ask.check().is_ok() => Some(ask),
+                _ => {
+                    tracing::warn!("a stored ask could not be read; left off its summary");
+                    None
+                }
+            });
+        Some(
+            ConversationSummary::new(title, preview, time(self.updated_at_ms)?, self.archived)
+                .ok()?
+                .with_ask(ask),
+        )
     }
 }
 
@@ -1412,107 +1427,6 @@ impl ConversationRepository for LocalConversationStore {
                 .map_err(failed)
         })
     }
-    fn ask_owner(&self, id: &ConversationId, ask: OwnerAsk) -> ConversationFuture<'_, ()> {
-        let id = id.clone();
-        let changes = self.changes.clone();
-        self.run(move |connection| {
-            let ask = serde_json::to_string(&ask).map_err(|_| ConversationError::InvalidInput)?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(failed)?;
-            let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
-            if conversation.deletion().is_some() {
-                return Err(ConversationError::Deleted);
-            }
-            transaction
-                .cached_execute(
-                    "INSERT INTO owner_asks (conversation_id, ask) VALUES (?1, ?2)
-                     ON CONFLICT (conversation_id) DO UPDATE SET ask = excluded.ask",
-                    [id.to_string(), ask],
-                )
-                .map_err(failed)?;
-            // A catalogue change, as a summary is: a list that does not hold
-            // this row is told to read again, so the ask reaches it.
-            let revision = next_revision(&transaction, &conversation, false)?;
-            transaction
-                .cached_execute(
-                    "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
-                    params![revision, id.to_string()],
-                )
-                .map_err(failed)?;
-            transaction.commit().map_err(failed)?;
-            changes.publish(&(
-                conversation.organization().clone(),
-                conversation.owner().clone(),
-            ));
-            Ok(())
-        })
-    }
-    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
-        let id = id.clone();
-        let ask_id = ask_id.to_owned();
-        let changes = self.changes.clone();
-        self.run(move |connection| {
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(failed)?;
-            let removed = transaction
-                .cached_execute(
-                    "DELETE FROM owner_asks
-                     WHERE conversation_id = ?1 AND json_extract(ask, '$.askId') = ?2",
-                    [id.to_string(), ask_id],
-                )
-                .map_err(failed)?;
-            let changed_owner = match read(&transaction, &id)? {
-                Some(conversation) if removed > 0 && conversation.deletion().is_none() => {
-                    let revision = next_revision(&transaction, &conversation, false)?;
-                    transaction
-                        .cached_execute(
-                            "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
-                            params![revision, id.to_string()],
-                        )
-                        .map_err(failed)?;
-                    Some((
-                        conversation.organization().clone(),
-                        conversation.owner().clone(),
-                    ))
-                }
-                _ => None,
-            };
-            transaction.commit().map_err(failed)?;
-            if let Some(owner) = changed_owner {
-                changes.publish(&owner);
-            }
-            Ok(())
-        })
-    }
-    fn owner_asks(
-        &self,
-        ids: Vec<ConversationId>,
-    ) -> ConversationFuture<'_, HashMap<ConversationId, OwnerAsk>> {
-        self.run(move |connection| {
-            let mut asks = HashMap::new();
-            for id in ids {
-                let row: Option<String> = connection
-                    .cached_row(
-                        "SELECT ask FROM owner_asks WHERE conversation_id = ?1",
-                        [id.to_string()],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(failed)?;
-                let Some(row) = row else { continue };
-                match serde_json::from_str::<OwnerAsk>(&row) {
-                    Ok(ask) if ask.check().is_ok() => {
-                        asks.insert(id, ask);
-                    }
-                    // Left out, not failing the list it is part of.
-                    _ => drop(unreadable("owner_asks", &id.to_string())),
-                }
-            }
-            Ok(asks)
-        })
-    }
     fn observe_mode_application(
         &self,
         id: &ConversationId,
@@ -1780,6 +1694,7 @@ impl ConversationSummaries for LocalConversationStore {
                             preview: row.get(1)?,
                             updated_at_ms: row.get(2)?,
                             archived: row.get(3)?,
+                            ask: row.get(4)?,
                         })
                     },
                 )
@@ -1802,6 +1717,11 @@ impl ConversationSummaries for LocalConversationStore {
         let id = id.clone();
         let changes = self.changes.clone();
         self.run(move |connection| {
+            let ask = summary
+                .ask()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| ConversationError::InvalidInput)?;
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
             if conversation.deletion().is_some() {
@@ -1810,19 +1730,21 @@ impl ConversationSummaries for LocalConversationStore {
             let revision = next_revision(&transaction, &conversation, false)?;
             transaction
                 .cached_execute(
-                    "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived, ask)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT (conversation_id) DO UPDATE SET
                          title = excluded.title,
                          preview = excluded.preview,
                          updated_at_ms = excluded.updated_at_ms,
-                         archived = excluded.archived",
+                         archived = excluded.archived,
+                         ask = excluded.ask",
                     params![
                         id.to_string(),
                         summary.title().map(ConversationTitle::as_str),
                         summary.preview().map(ConversationPreview::as_str),
                         stored_time(summary.updated_at_ms())?,
                         summary.archived(),
+                        ask,
                     ],
                 )
                 .map_err(failed)?;
@@ -1843,14 +1765,6 @@ impl ConversationSummaries for LocalConversationStore {
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
             let conversation = read(&transaction, &id)?;
-            // What an agent asked is the conversation's content too, and goes
-            // with it.
-            transaction
-                .cached_execute(
-                    "DELETE FROM owner_asks WHERE conversation_id = ?1",
-                    [id.to_string()],
-                )
-                .map_err(failed)?;
             let removed = transaction
                 .cached_execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",
@@ -1970,6 +1884,7 @@ impl ConversationListing for LocalConversationStore {
                         preview: row.get(10)?,
                         updated_at_ms: row.get(11)?,
                         archived: row.get(12)?,
+                        ask: row.get(13)?,
                     })
                 })();
                 let conversation = cells(conversation)?;
@@ -1984,7 +1899,7 @@ impl ConversationListing for LocalConversationStore {
                     (Some(conversation), Some(summary)) => {
                         listed.conversations.push(ListedConversation {
                             held: share_grants::stored_capabilities(
-                                row.get(13).map_err(failed)?,
+                                row.get(14).map_err(failed)?,
                                 &conversation.id().to_string(),
                             )?,
                             conversation,
@@ -2340,6 +2255,7 @@ impl ConversationCatalogue for LocalConversationStore {
                                 preview: row.get(1)?,
                                 updated_at_ms: row.get(2)?,
                                 archived: row.get(3)?,
+                                ask: row.get(4)?,
                             })
                         },
                     )

@@ -136,29 +136,12 @@ pub enum ChainEnd {
 }
 
 impl ConversationService {
-    /// Whether a message about to be admitted with the person as its sender
-    /// was sent by a person, read as `read_turn` will read its saved turn: a
-    /// usage-limit continuation or an external event was not. Its answer
-    /// decides whether the message answers what an agent asked
-    /// (`ask_owner`).
-    async fn sent_by_a_person(
-        &self,
-        thread: &ConversationId,
-        execution: &str,
-        caller: &ConversationCaller,
-        initiator: &Initiator,
-    ) -> Result<bool, ConversationError> {
-        Ok(Origins::new(self)
-            .sent_as_person(thread, execution, &caller.surface_id, initiator)
-            .await?
-            .is_a_person())
-    }
-
     /// The id of the question waiting in `thread` that this message answers:
-    /// the one waiting now, when the message is the person's own
-    /// ([`Self::sent_by_a_person`]). A read that fails answers nothing and
-    /// is said in the log, so the question stays up rather than the message
-    /// being refused.
+    /// the one waiting now, when the message is the owner's own, read as
+    /// `read_turn` will read its saved turn. A usage-limit continuation, an
+    /// external event, or someone the thread is shared with does not answer
+    /// it. A read that fails answers nothing and is said in the log, so the
+    /// question stays up rather than the message being refused.
     pub(super) async fn waiting_ask_answered(
         &self,
         thread: &ConversationId,
@@ -166,19 +149,19 @@ impl ConversationService {
         caller: &ConversationCaller,
         initiator: &Initiator,
     ) -> Option<String> {
-        let waiting = match self.inner.metadata.owner_asks(vec![thread.clone()]).await {
-            Ok(mut asks) => asks.remove(thread)?,
+        let waiting = match self.inner.summaries.load(thread).await {
+            Ok(summary) => summary?.ask()?.ask_id.clone(),
             Err(error) => {
                 tracing::warn!(%thread, ?error, "the waiting ask could not be read");
                 return None;
             }
         };
-        match self
-            .sent_by_a_person(thread, execution, caller, initiator)
+        match Origins::new(self)
+            .sent_as_person(thread, execution, &caller.surface_id, initiator)
             .await
         {
-            Ok(true) => Some(waiting.ask_id),
-            Ok(false) => None,
+            Ok(TurnOrigin::Person { .. }) => Some(waiting),
+            Ok(_) => None,
             Err(error) => {
                 tracing::warn!(%thread, ?error, "who sent the message could not be read");
                 None

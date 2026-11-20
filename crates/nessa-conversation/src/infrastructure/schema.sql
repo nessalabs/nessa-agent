@@ -131,13 +131,19 @@ CREATE INDEX unfinished_deletions ON deletions (conversation_id) WHERE erased = 
 
 -- What a list shows about a conversation. Replaced on every change; removed
 -- when the conversation's deletion erases it.
+-- `ask` is the question an agent asked the owner (`ask_owner`) and is
+-- waiting on, as JSON: a later ask replaces it, and the owner's next message,
+-- which is the answer, takes it down in the write that records that message
+-- (docs/design/agent-thread-tools.md). Added by schema_upgrades/10.sql and
+-- written here exactly as SQLite records that ALTER TABLE, so a new file and
+-- an upgraded one hold the same definition.
 CREATE TABLE summaries (
     conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id),
     title TEXT,
     preview TEXT,
     updated_at_ms INTEGER NOT NULL,
     archived INTEGER NOT NULL CHECK (archived IN (0, 1))
-) STRICT;
+, ask TEXT CHECK (ask IS NULL OR length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192)) STRICT;
 
 -- Frozen legacy metadata tables. Current grants live in store/grants.sql in
 -- their own versioned file; runtime queries explicitly select that database.
@@ -231,15 +237,6 @@ CREATE TABLE unfinished_turns (
 -- (docs/design/agent-parking.md).
 CREATE TABLE closed_threads (
     conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id)
-) STRICT, WITHOUT ROWID;
-
--- The question an agent asked its conversation's owner (`ask_owner`), one
--- per conversation: a later ask replaces it, and the next message a person
--- writes in the conversation, which is the answer, removes it
--- (docs/design/agent-thread-tools.md). `ask` is the whole ask as JSON.
-CREATE TABLE owner_asks (
-    conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id),
-    ask TEXT NOT NULL CHECK (length(CAST(ask AS BLOB)) BETWEEN 2 AND 8192)
 ) STRICT, WITHOUT ROWID;
 
 PRAGMA user_version = 11;

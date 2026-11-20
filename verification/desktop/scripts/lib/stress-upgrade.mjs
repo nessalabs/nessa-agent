@@ -14,10 +14,10 @@
  *   version 9   the build before closed threads were kept: no
  *               `closed_threads`, when it is empty and a switch is kept
  *   version 10  the build before agents could ask their owner: no
- *               `owner_asks`, when a closed thread is kept
+ *               `summaries.ask`, when a closed thread is kept
  *
- * Each needs `owner_asks` empty, which version 11 added: a file with a
- * waiting ask in it is left as it is, the newest build's. Those before 10
+ * Each needs no ask waiting in `summaries.ask`, which version 11 added: a
+ * file with a waiting ask in it is left as it is, the newest build's. Those before 10
  * also need `closed_threads` empty, which version 10 added, and those before
  * 9 need `agent_switches` empty, which version 9 added.
  *
@@ -60,12 +60,12 @@ export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
-    if (rows("owner_asks") > 0)
+    if (rows("summaries WHERE ask IS NOT NULL") > 0)
       return database.prepare("PRAGMA user_version").get().user_version
     const closed = rows("closed_threads")
     const switches = rows("agent_switches")
     database.exec("BEGIN IMMEDIATE")
-    database.exec("DROP TABLE owner_asks")
+    database.exec("ALTER TABLE summaries DROP COLUMN ask")
     if (closed > 0) {
       database.exec("PRAGMA user_version = 10")
       database.exec("COMMIT")

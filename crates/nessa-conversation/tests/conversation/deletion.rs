@@ -849,25 +849,6 @@ impl ConversationRepository for Unfenceable {
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.0.thread_closed(id)
     }
-    fn ask_owner(
-        &self,
-        id: &ConversationId,
-        ask: nessa_protocol::conversation::view::OwnerAsk,
-    ) -> ConversationFuture<'_, ()> {
-        self.0.ask_owner(id, ask)
-    }
-    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
-        self.0.answer_owner_ask(id, ask_id)
-    }
-    fn owner_asks(
-        &self,
-        ids: Vec<ConversationId>,
-    ) -> ConversationFuture<
-        '_,
-        std::collections::HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
-    > {
-        self.0.owner_asks(ids)
-    }
     fn observe_mode_application(
         &self,
         id: &ConversationId,
@@ -1097,25 +1078,6 @@ impl ConversationRepository for Faulty {
     }
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.repository.thread_closed(id)
-    }
-    fn ask_owner(
-        &self,
-        id: &ConversationId,
-        ask: nessa_protocol::conversation::view::OwnerAsk,
-    ) -> ConversationFuture<'_, ()> {
-        self.repository.ask_owner(id, ask)
-    }
-    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
-        self.repository.answer_owner_ask(id, ask_id)
-    }
-    fn owner_asks(
-        &self,
-        ids: Vec<ConversationId>,
-    ) -> ConversationFuture<
-        '_,
-        std::collections::HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
-    > {
-        self.repository.owner_asks(ids)
     }
     fn observe_mode_application(
         &self,
@@ -2163,6 +2125,7 @@ async fn a_late_reply_cannot_write_back_a_deleted_summary() {
         .summarize_message(
             &id,
             &UserMessage::text_only(PromptText::new("late").unwrap()),
+            None,
         )
         .await;
     assert_eq!(summary(&fixture, &id), None);
@@ -2308,25 +2271,6 @@ impl ConversationRepository for PausingRepository {
     }
     fn thread_closed(&self, id: &ConversationId) -> ConversationFuture<'_, bool> {
         self.inner.thread_closed(id)
-    }
-    fn ask_owner(
-        &self,
-        id: &ConversationId,
-        ask: nessa_protocol::conversation::view::OwnerAsk,
-    ) -> ConversationFuture<'_, ()> {
-        self.inner.ask_owner(id, ask)
-    }
-    fn answer_owner_ask(&self, id: &ConversationId, ask_id: &str) -> ConversationFuture<'_, ()> {
-        self.inner.answer_owner_ask(id, ask_id)
-    }
-    fn owner_asks(
-        &self,
-        ids: Vec<ConversationId>,
-    ) -> ConversationFuture<
-        '_,
-        std::collections::HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
-    > {
-        self.inner.owner_asks(ids)
     }
     fn observe_mode_application(
         &self,

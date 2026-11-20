@@ -6,7 +6,7 @@ use crate::application::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource, RequestShape,
 };
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_protocol::conversation::view::OwnerAsk;
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
@@ -27,9 +27,11 @@ pub const CLOSE_THREAD_TOOL: &str = "close_thread";
 
 impl ConversationService {
     /// Keep the question an admitted turn asked its conversation's owner, in
-    /// place of any earlier one, until a person writes in the conversation,
-    /// dated now. The list shows it from the next read: the tool's answer is
-    /// a record that wakes every list.
+    /// place of any earlier one, until the owner writes in the conversation,
+    /// dated now. It is kept on the conversation's summary, written as every
+    /// summary is, under the summary lock a delete erases it under: the list
+    /// shows it from the next read, at the top and out of the archive, and
+    /// the summary write that records the owner's answer takes it down.
     pub async fn ask_owner(
         &self,
         conversation: &ConversationId,
@@ -37,7 +39,22 @@ impl ConversationService {
     ) -> Result<(), ConversationError> {
         ask.asked_at_ms = self.inner.clock.unix_milliseconds();
         ask.check().map_err(|_| ConversationError::InvalidInput)?;
-        self.inner.metadata.ask_owner(conversation, ask).await
+        let _writes = self.inner.records.summary_writes().lock(conversation).await;
+        match load_conversation(self.inner.metadata.as_ref(), conversation).await? {
+            Some(record) if record.deletion().is_none() => {}
+            Some(_) => return Err(ConversationError::Deleted),
+            None => return Err(ConversationError::NotFound),
+        }
+        let previous = self.inner.summaries.load(conversation).await?;
+        self.inner
+            .summaries
+            .record(
+                conversation,
+                ConversationSummary::after_asking(previous.as_ref(), ask),
+            )
+            .await?;
+        self.inner.live_changes.publish(conversation);
+        Ok(())
     }
 
     pub fn bind_agent_tool_audit(&self, audit: Arc<dyn AgentToolAudit>) {

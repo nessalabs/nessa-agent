@@ -215,7 +215,7 @@ fn stored_many(
                 .unwrap();
             transaction
                 .execute(
-                    "INSERT INTO summaries VALUES (?1, 'Said', 'said', ?2, ?3)",
+                    "INSERT INTO summaries VALUES (?1, 'Said', 'said', ?2, ?3, NULL)",
                     params![conversation.to_string(), at(n) as i64, archived],
                 )
                 .unwrap();

@@ -45,6 +45,16 @@ function current(fill = "") {
   return { directory, path }
 }
 
+const askColumn = (path) => {
+  const database = new DatabaseSync(path, { readOnly: true })
+  const has = database
+    .prepare("SELECT name FROM pragma_table_info('summaries')")
+    .all()
+    .some((row) => row.name === "ask")
+  database.close()
+  return has
+}
+
 const tables = (path) => {
   const database = new DatabaseSync(path, { readOnly: true })
   const names = database
@@ -62,7 +72,7 @@ test("a file with nothing in the newer tables goes back to version 6", (t) => {
   assert.equal(schemaVersion(path), 11)
   assert.equal(asOlderBuild(path), 6)
   assert.equal(schemaVersion(path), 6)
-  assert.ok(!tables(path).includes("owner_asks"))
+  assert.ok(!askColumn(path))
   assert.ok(!tables(path).includes("closed_threads"))
   assert.ok(!tables(path).includes("agent_switches"))
   assert.ok(!tables(path).includes("unfinished_turns"))
@@ -111,17 +121,18 @@ test("a file with a closed thread goes back to version 10", (t) => {
   assert.equal(asOlderBuild(path), 10)
   assert.equal(schemaVersion(path), 10)
   assert.ok(tables(path).includes("closed_threads"))
-  assert.ok(!tables(path).includes("owner_asks"))
+  assert.ok(!askColumn(path))
 })
 
 test("a file with a waiting ask is left as the newest build's", (t) => {
   const { directory, path } = current(
-    `INSERT INTO owner_asks (conversation_id, ask) VALUES ('c1', '{"askId":"a"}');`,
+    `INSERT INTO summaries (conversation_id, updated_at_ms, archived, ask)
+      VALUES ('c1', 1, 0, '{"askId":"a"}');`,
   )
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   assert.equal(asOlderBuild(path), 11)
   assert.equal(schemaVersion(path), 11)
-  assert.ok(tables(path).includes("owner_asks"))
+  assert.ok(askColumn(path))
 })
 
 test("place records turn back into an older build's placement and binding files", () => {

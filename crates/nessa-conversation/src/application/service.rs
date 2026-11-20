@@ -4618,11 +4618,12 @@ impl ConversationService {
                     }));
                 }
             }
-            // A person's new message is their answer to whatever the agent
-            // asked them (`ask_owner`), a tapped choice or not. A
-            // continuation or an external event sent for the person is not
-            // their answer. Read before the agent has the message, so a
-            // question it asks after it is not taken for the one answered.
+            // The owner's new message is their answer to whatever the agent
+            // asked them (`ask_owner`), a tapped choice or not. Someone it is
+            // shared with, a continuation, or an external event sent for the
+            // owner does not answer it. Read before the agent has the
+            // message, so a question it asks after it is not taken for the
+            // one answered; taken down with the message's summary below.
             let answered = if !known && writer.is_person() {
                 service
                     .waiting_ask_answered(
@@ -4710,23 +4711,15 @@ impl ConversationService {
                 Err(error) if again => return Err(Halt::Again(error)),
                 delivery => delivery?,
             };
-            // The question the message answered goes once the agent has it,
-            // so a message refused on the way leaves it waiting. Only the one
-            // that was waiting before it was sent: one the agent asked since
-            // stays. Removed before the summary below, so the list that
-            // summary wakes no longer shows it. A failure here leaves the
-            // card up and is said in the log; the message was delivered all
-            // the same, and the rest of its delivery goes on.
-            if let Some(ask_id) = answered.as_deref() {
-                if let Err(error) = service.inner.metadata.answer_owner_ask(&id, ask_id).await {
-                    tracing::warn!(%id, ?error, "the answered ask was not removed");
-                }
-            }
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
+            // The same write takes down the question the message answered:
+            // the list never shows the message and the question still up.
             if !known && !matches!(writer, Writer::Internal) {
-                service.summarize_message(&id, &message).await;
+                service
+                    .summarize_message(&id, &message, answered.as_deref())
+                    .await;
             }
             match delivery {
                 SubmissionDelivery::Queued(receipt) => {
@@ -4920,10 +4913,9 @@ impl ConversationService {
             .collect();
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
-        let asks = self.inner.metadata.owner_asks(listed_ids(&owned)).await?;
         Ok((
             ConversationList {
-                conversations: list_entries(&owned, &running, &channels, &asks),
+                conversations: list_entries(&owned, &running, &channels, reader),
                 complete,
             },
             head,
@@ -4985,9 +4977,8 @@ impl ConversationService {
             self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
-        let asks = self.inner.metadata.owner_asks(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running, &channels, &asks),
+            conversations: list_entries(&owned, &running, &channels, reader),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -5082,7 +5073,12 @@ impl ConversationService {
         running
     }
     /// Record in the conversation's summary that `message` was accepted.
-    async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
+    async fn summarize_message(
+        &self,
+        id: &ConversationId,
+        message: &UserMessage,
+        answered: Option<&str>,
+    ) {
         let at_ms = self.inner.clock.unix_milliseconds();
         let first_file = message
             .files()
@@ -5090,12 +5086,10 @@ impl ConversationService {
             .map(LinkedFile::name)
             .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
-            Some(ConversationSummary::after_message(
-                previous,
-                message.text_str(),
-                first_file,
-                at_ms,
-            ))
+            Some(
+                ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
+                    .answering(answered),
+            )
         })
         .await;
     }
@@ -7866,8 +7860,12 @@ fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
     channels: &HashMap<ConversationId, crate::domain::ChannelId>,
-    asks: &HashMap<ConversationId, nessa_protocol::conversation::view::OwnerAsk>,
+    reader: &Reader,
 ) -> Vec<ConversationListEntry> {
+    // An agent asks its owner: a device a conversation is shared with sees
+    // the conversation, not the question
+    // (`a_shared_reader_neither_sees_nor_answers_the_owners_ask`).
+    let owners = !matches!(reader, Reader::PairedDevice { .. });
     owned
         .iter()
         .map(|listed| ConversationListEntry {
@@ -7887,7 +7885,7 @@ fn list_entries(
             channel_id: channels
                 .get(listed.conversation.id())
                 .map(|channel| channel.as_str().to_owned()),
-            ask: asks.get(listed.conversation.id()).cloned(),
+            ask: owners.then(|| listed.summary.ask().cloned()).flatten(),
         })
         .collect()
 }
