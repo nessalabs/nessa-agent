@@ -15,6 +15,7 @@ import { AccessRequestHost, OwnerAskCard, type OwnerAskView } from "../../conver
  * it, every fact here as the view states it.
  */
 export function PanelOwnerAsk({
+  chat,
   ask,
   submit,
   raiseAccess,
@@ -23,6 +24,8 @@ export function PanelOwnerAsk({
   revision,
   working,
 }: {
+  /** The tab's conversation: its Approve is kept under it while tabs change. */
+  chat: string
   ask: OwnerAskView | undefined
   /** Sends text as the person's message; resolves whether the gateway took it. */
   submit: (text: string) => Promise<boolean>
@@ -52,6 +55,7 @@ export function PanelOwnerAsk({
   return (
     <>
       <AccessRequestHost
+        chat={chat}
         ask={ask}
         runsAt={access}
         underway={underway}

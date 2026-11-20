@@ -127,18 +127,20 @@ a turn is at work, since access changes only between turns. The person can
 still type "Approve", so the word is their answer and never the agent's
 access: the agent reads that from its next commands.
 
-Both windows draw the card from one record that one table moves
+Both windows draw the card from one record per chat that one table moves
 (`src/conversation/model/access-approval.ts`, `stepApproval`, a test per
-row). Each window states the chat's facts as their owners say them, and each
+row). The window keeps the record, not the card
+(`src/conversation/ui/access-approvals.ts`), so a card that leaves the
+screen while the access waits for a turn's end finds it again. Each window states the chat's facts as their owners say them, and each
 look at them is judged whole, the ask first: the ask on the list row, the
 access the conversation runs at, where a change on its way is headed, a turn
 at work, and the view's revision.
 
 | State | Event | Next |
 | --- | --- | --- |
-| raising | the access command is taken, or held for the turn's end | waiting, at this view |
+| raising | the access command is taken, or held for the turn's end | waiting, at this view, then that same look judged as waiting is |
 | raising | another change is on its way, or it is refused | ended, saying which |
-| raising, waiting, ended | the row's ask is not this one | gone, nothing sent |
+| raising, waiting, ended | the row's ask is not this one (in any look, the raise's own too) | gone, nothing sent |
 | waiting | a change on its way to this access, or a turn at work | waiting |
 | waiting | a change on its way to another access | ended: didn't change |
 | waiting | runs at this access | sending |
@@ -146,6 +148,7 @@ at work, and the view's revision.
 | waiting | runs at another, in a newer view | ended: didn't change |
 | sending | anything (the ask leaving is this answer landing) | sending |
 | sending | the answer went / did not | approved / ended: not sent |
+| approved | no ask, or this one, at this access | approved |
 | approved | another ask, or runs at another access | gone |
 | ended | Approve again | raising |
 

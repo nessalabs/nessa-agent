@@ -771,6 +771,7 @@ export function App({
                       after the conversation's own notice. */}
                   <PanelOwnerAsk
                     key={`ask:${chat.active.id}`}
+                    chat={chat.active.id}
                     ask={
                       chat.active.serverConversationId
                         ? asks.get(chat.active.serverConversationId)?.ask

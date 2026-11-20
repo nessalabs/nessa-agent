@@ -56,6 +56,7 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
   return (
     <>
       <AccessRequestHost
+        chat={sessionId}
         ask={ask}
         runsAt={runsAt}
         underway={underway}

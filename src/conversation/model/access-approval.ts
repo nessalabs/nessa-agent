@@ -12,9 +12,11 @@
  *
  * | State    | Event                                              | Next                    |
  * | -------- | -------------------------------------------------- | ----------------------- |
- * | raising  | raised: taken or pending                           | waiting, at this view   |
+ * | raising  | raised: taken or pending                           | waiting, at this view,  |
+ * |          |                                                    | then judged on its look |
+ * |          |                                                    | as waiting is (below)   |
  * | raising  | raised: changing or refused                        | ended, saying which     |
- * | raising  | snapshot: the row's ask is not this one            | gone, nothing sent      |
+ * | raising  | snapshot or raised: the row's ask is not this one  | gone, nothing sent      |
  * | waiting  | snapshot: the row's ask is not this one            | gone, nothing sent      |
  * | waiting  | snapshot: a change on its way to this access, or   | waiting                 |
  * |          | a turn at work                                     |                         |
@@ -25,6 +27,7 @@
  * | sending  | snapshot: anything (the ask leaving is our answer) | sending                 |
  * | sending  | answered: sent                                     | approved                |
  * | sending  | answered: not sent                                 | ended: not sent         |
+ * | approved | snapshot: no ask, or this one, at this access      | approved                |
  * | approved | snapshot: another ask, or runs at another access   | gone                    |
  * | ended    | snapshot: the row's ask is not this one            | gone                    |
  * | ended    | Approve pressed again                              | raising                 |
@@ -96,9 +99,15 @@ export function stepApproval<Ask extends { readonly askId: string }>(
     case "raised":
       if (approval.state !== "raising") return approval
       if (event.snapshot.askId !== ask.askId) return undefined
-      return event.outcome === "taken" || event.outcome === "pending"
-        ? { state: "waiting", ask, mode, takenAt: event.snapshot.revision }
-        : { state: "ended", ask, mode, ending: event.outcome }
+      if (event.outcome !== "taken" && event.outcome !== "pending")
+        return { state: "ended", ask, mode, ending: event.outcome }
+      // The look the raise landed in is judged too: its view may already
+      // run at the access (the window read it before the command returned,
+      // or the chat was already there), and no later look need come.
+      return stepApproval<Ask>(
+        { state: "waiting", ask, mode, takenAt: event.snapshot.revision },
+        { kind: "snapshot", snapshot: event.snapshot },
+      )
     case "answered":
       if (approval.state !== "sending") return approval
       return event.sent

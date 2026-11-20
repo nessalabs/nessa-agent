@@ -1,7 +1,7 @@
-import { useEffect, useReducer, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { sendChatAnswer, stepChatApproval, useChatApproval } from "./access-approvals"
 import {
-  stepApproval,
-  type AccessApproval,
+  type ApprovalEvent,
   type AccessMode,
   type ApprovalEnding,
   type ApprovalSnapshot,
@@ -76,13 +76,15 @@ export function isAccessRequest<Ask extends { readonly access?: AccessAsk["acces
 /**
  * The red card's whole round, for either window, drawn from one record that
  * `stepApproval` moves (`model/access-approval.ts`, whose table says every
- * ending). The host states the chat's facts as its owners say them; this
+ * ending), kept per chat for the window (`access-approvals.ts`) so a card
+ * that leaves the screen and comes back finds it. The host states the chat's facts as its owners say them; this
  * judges each look at them whole, sends the person's access command and, once
  * the record says so, their Approve. The card stays drawn from the record
  * while the answer goes, so the list letting the ask go never blinks it out.
  * Renders nothing for an ordinary ask.
  */
 export function AccessRequestHost<Ask extends AccessAsk>({
+  chat,
   ask,
   runsAt,
   underway,
@@ -91,6 +93,8 @@ export function AccessRequestHost<Ask extends AccessAsk>({
   raise,
   answer,
 }: {
+  /** The host's own id for the chat: its Approve is kept under it. */
+  chat: string
   /** The ask the list row carries now, of any kind. */
   ask: (Omit<Ask, "access"> & { readonly access?: Ask["access"] }) | undefined
   /** The access the chat runs at with nothing changing; absent while changing. */
@@ -106,33 +110,26 @@ export function AccessRequestHost<Ask extends AccessAsk>({
   /** Sends text as the person's message; resolves whether it went. */
   answer: (text: string) => Promise<boolean>
 }) {
-  const [approval, dispatch] = useReducer(
-    stepApproval<Ask>,
-    undefined as AccessApproval<Ask> | undefined,
-  )
+  const approval = useChatApproval<Ask>(chat)
+  const dispatch = (event: ApprovalEvent<Ask>) => stepChatApproval(chat, event)
   const askId = ask?.askId
   const snapshot: ApprovalSnapshot = { askId, runsAt, underway, working, revision }
   // The look a raise's answer is judged with: the latest, when it lands.
   const latest = useRef(snapshot)
   latest.current = snapshot
   useEffect(() => {
-    dispatch({
+    stepChatApproval<Ask>(chat, {
       kind: "snapshot",
       snapshot: { askId, runsAt, underway, working, revision },
     })
-  }, [askId, runsAt, underway, working, revision])
-  // The answer goes once per record that reaches sending.
-  const sent = useRef<AccessApproval<Ask> | null>(null)
+  }, [chat, askId, runsAt, underway, working, revision])
+  // The answer goes once per record that reaches sending, from whichever
+  // card draws it.
   useEffect(() => {
-    if (approval?.state !== "sending" || sent.current === approval) return
-    sent.current = approval
-    const label = approval.ask.choices[0]?.label
-    const done = (ok: boolean) => dispatch({ kind: "answered", sent: ok })
-    if (!label) return done(false)
-    answer(label).then(done, () => done(false))
+    sendChatAnswer(chat, answer)
     // `answer` is this render's; only the record starts it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [approval])
+  }, [chat, approval])
 
   const declined = useState<{ askId: string; failed: boolean } | null>(null)
   const [decline, setDecline] = declined
@@ -191,7 +188,7 @@ export function AccessRequestHost<Ask extends AccessAsk>({
 }
 
 const endingCopy: Record<ApprovalEnding, string> = {
-  changing: "Access is still changing. Press Approve once it settles.",
+  changing: "Another change to this chat is on its way. Press Approve once it settles.",
   refused: "Access didn’t change. Press Approve again, or write your answer.",
   "changed-elsewhere":
     "Access didn’t change to this. Press Approve again, or write your answer.",

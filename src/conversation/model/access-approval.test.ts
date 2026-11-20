@@ -35,6 +35,23 @@ describe("raising", () => {
         }),
       ).toEqual({ ...waiting, takenAt: 4 })
   })
+  it("judges the look it landed in: an access already there sends at once", () => {
+    expect(
+      stepApproval(raising, {
+        kind: "raised",
+        outcome: "taken",
+        snapshot: look({ runsAt: "full", revision: 2 }),
+      }),
+    ).toEqual(sending)
+    // Held for a turn's end: waits through it.
+    expect(
+      stepApproval(raising, {
+        kind: "raised",
+        outcome: "pending",
+        snapshot: look({ runsAt: "ask", underway: "full", working: true, revision: 3 }),
+      }),
+    ).toEqual({ ...waiting, takenAt: 3 })
+  })
   it("ends, saying which, when another change is on its way or it was refused", () => {
     for (const outcome of ["changing", "refused"] as const)
       expect(

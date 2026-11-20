@@ -4,6 +4,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { PanelOwnerAsk } from "./owner-ask"
+import { forgetChatApprovals } from "../../conversation/ui/access-approvals"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -18,6 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount())
+  forgetChatApprovals()
   container.remove()
 })
 
@@ -45,6 +47,7 @@ it("offers every choice again when the gateway did not take the answer", async (
   act(() => {
     root.render(
       <PanelOwnerAsk
+        chat="c0"
         ask={ask}
         submit={(text) => {
           sent.push(text)
@@ -105,6 +108,7 @@ it("sends Approve only once the chat runs at the access asked for", async () => 
     act(() => {
       root.render(
         <PanelOwnerAsk
+          chat="c0"
           ask={shown}
           submit={(text) => {
             steps.push(`sent ${text}`)
@@ -146,6 +150,7 @@ it("sends no Approve when the ask left before the access changed", async () => {
     act(() => {
       root.render(
         <PanelOwnerAsk
+          chat="c0"
           ask={shown}
           submit={(text) => {
             steps.push(`sent ${text}`)
@@ -170,6 +175,7 @@ it("sends no Approve when the access did not change, and Not now changes nothing
   act(() => {
     root.render(
       <PanelOwnerAsk
+        chat="c0"
         ask={access}
         submit={(text) => {
           steps.push(`sent ${text}`)

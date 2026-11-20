@@ -3,6 +3,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { RaiseOutcome } from "../model/access-approval"
+import { forgetChatApprovals } from "./access-approvals"
 import { AccessRequestHost } from "./access-request-card"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -18,6 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount())
+  forgetChatApprovals()
   container.remove()
 })
 
@@ -73,6 +75,7 @@ function host(raised: RaiseOutcome = "taken") {
     act(() =>
       root.render(
         <AccessRequestHost
+          chat="c"
           ask={ask}
           runsAt={runsAt}
           underway={underway}
@@ -189,7 +192,7 @@ it("says another change is on its way, rather than a refusal", async () => {
   const { draw } = host("changing")
   draw({ ask: access, runsAt: "ask" })
   await act(async () => button("Approve").click())
-  expect(container.textContent).toContain("Access is still changing.")
+  expect(container.textContent).toContain("Another change to this chat is on its way.")
 })
 
 it("sends Not now as the answer, and changes nothing", async () => {
@@ -200,4 +203,48 @@ it("sends Not now as the answer, and changes nothing", async () => {
   await answer(false)
   expect(container.textContent).toContain("Not now was not sent.")
   expect(card()?.dataset.state).toBe("asking")
+})
+
+it("sends when the view shows the access before the raise returns, as the panel's does", async () => {
+  const sent: string[] = []
+  const draw = (runsAt: Mode, revision: number, raise: () => Promise<RaiseOutcome>) =>
+    act(() =>
+      root.render(
+        <AccessRequestHost
+          chat="c"
+          ask={access}
+          runsAt={runsAt}
+          underway={undefined}
+          working={false}
+          revision={revision}
+          raise={raise}
+          answer={(text) => {
+            sent.push(text)
+            return Promise.resolve(true)
+          }}
+        />,
+      ),
+    )
+  // The raise reads the conversation again before it returns: the view
+  // already runs at Full, and no later look comes.
+  const raise = async () => {
+    await draw("full", 2, raise)
+    return "taken" as const
+  }
+  draw("ask", 1, raise)
+  await act(async () => button("Approve").click())
+  expect(sent).toEqual(["Approve"])
+  expect(card()?.dataset.state).toBe("approved")
+})
+
+it("keeps a waiting Approve when the card leaves the screen and comes back", async () => {
+  const { sent, draw } = host("pending")
+  draw({ ask: access, runsAt: "ask" })
+  await act(async () => button("Approve").click())
+  draw({ ask: access, runsAt: "ask", underway: "full", working: true, revision: 2 })
+  // Another tab: the card is not drawn.
+  act(() => root.render(<></>))
+  // Back, once the turn ended and the chat runs at Full.
+  draw({ ask: access, runsAt: "full", revision: 3 })
+  expect(sent).toEqual(["Approve"])
 })

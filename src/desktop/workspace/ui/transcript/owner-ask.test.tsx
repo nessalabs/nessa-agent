@@ -15,6 +15,7 @@ import {
   type FakeSource,
 } from "../../testing"
 import { OwnerAsk } from "./owner-ask"
+import { forgetChatApprovals } from "../../../../conversation/ui/access-approvals"
 
 let root: Root
 let host: HTMLDivElement
@@ -28,6 +29,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  forgetChatApprovals()
   host.remove()
 })
 
