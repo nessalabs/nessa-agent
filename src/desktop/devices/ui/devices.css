@@ -15,6 +15,10 @@
   overflow-y: auto;
   color: var(--foreground);
   font-size: var(--desktop-text-body);
+  /* "nessa Studio" stands in the window's bottom-left corner over this page
+     (`side-rail.css`). The cards fade out before the window's foot as they
+     scroll under it, and the page's last 64px of room ends clear of it. */
+  mask-image: linear-gradient(to bottom, black calc(100% - 56px), transparent);
 }
 
 .devices-muted {

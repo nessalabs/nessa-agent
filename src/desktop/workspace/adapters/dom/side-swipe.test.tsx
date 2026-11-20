@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The swipe is read only over the chat, and a gesture that begins over
- * something scrolling sideways is left to it (`side-swipe.ts`).
+ * The swipe is read only over the chat and the side columns, a gesture that
+ * begins over something scrolling sideways is left to it, and one that a row
+ * claims for its own swipe is the row's (`side-swipe.ts`).
  */
 import { act, useRef, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -42,7 +43,14 @@ function render(enabled = true) {
   act(() =>
     root.render(
       <Window enabled={enabled}>
-        <aside id="sidebar">sidebar</aside>
+        <aside id="elsewhere">elsewhere</aside>
+        <aside className="workspace-sidebar">
+          <p id="channel">channel</p>
+        </aside>
+        <section className="workspace-list">
+          <p id="list-head">Sessions</p>
+          <div id="row">row</div>
+        </section>
         <main className="workspace-chat">
           <p id="words">words</p>
           <input id="field" />
@@ -88,10 +96,53 @@ it("reads one swipe per gesture over the chat", () => {
   expect(swiped).toEqual(["left"])
 })
 
-it("leaves a gesture alone outside the chat", () => {
+it("leaves a gesture alone outside the chat and the side columns", () => {
   render()
-  wheel("sidebar", 15)
+  wheel("elsewhere", 15)
   expect(swiped).toEqual([])
+})
+
+it("reads a swipe over the sidebar", () => {
+  render()
+  wheel("channel", 15)
+  expect(swiped).toEqual(["left"])
+})
+
+it("reads a swipe over the session list", () => {
+  render()
+  wheel("list-head", -15)
+  expect(swiped).toEqual(["right"])
+})
+
+/** A session row that takes sideways wheels for its own swipe, from `from` on. */
+function claimingRow(from = 0) {
+  const row = host.querySelector<HTMLElement>("#row")
+  if (!row) throw new Error("no row")
+  let seen = 0
+  row.addEventListener("wheel", (event) => {
+    if (seen++ >= from) event.preventDefault()
+  })
+}
+
+it("leaves a gesture to a row that claims it", () => {
+  render()
+  claimingRow()
+  wheel("row", 15, 8, { cancelable: true })
+  expect(swiped).toEqual([])
+})
+
+it("leaves a gesture to a row that claims it after its first event", () => {
+  render()
+  // A row claims a wheel only once the travel leans sideways.
+  claimingRow(1)
+  wheel("row", 15, 8, { cancelable: true })
+  expect(swiped).toEqual([])
+})
+
+it("reads a swipe over a row that does not claim it", () => {
+  render()
+  wheel("row", 15, 8, { cancelable: true })
+  expect(swiped).toEqual(["left"])
 })
 
 it("leaves a gesture to what scrolls sideways under it", () => {

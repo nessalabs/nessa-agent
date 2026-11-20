@@ -1,9 +1,10 @@
 /**
- * Reads a two-finger sideways swipe over the chat from the page's wheel
- * events (`model/side-swipe.ts` decides what counts). Only over the chat:
- * other surfaces keep the gesture for themselves, and a swipe that begins
- * over something that scrolls sideways (a wide table, a code block, a long
- * input) is that thing's scroll.
+ * Reads a two-finger sideways swipe over the chat or a side column from the
+ * page's wheel events (`model/side-swipe.ts` decides what counts). Only there:
+ * other surfaces keep the gesture for themselves. A swipe that begins over
+ * something that scrolls sideways (a wide table, a code block, a long input)
+ * is that thing's scroll, and one that something under the pointer claims (a
+ * session row sliding open its actions) is that thing's swipe.
  */
 import { useEffect, useRef, type RefObject } from "react"
 import {
@@ -14,8 +15,8 @@ import {
   type SwipeState,
 } from "../../model/side-swipe"
 
-/** Where a swipe is read: the chat's panes. */
-export const SWIPE_SURFACE = ".workspace-chat"
+/** Where a swipe is read: the chat's panes, the sidebar and the session list. */
+export const SWIPE_SURFACE = ".workspace-chat, .workspace-sidebar, .workspace-list"
 
 /** A line is about this many pixels, for a wheel that counts in lines. */
 const LINE = 16
@@ -56,8 +57,10 @@ function travel(event: WheelEvent): { x: number; y: number } {
 }
 
 /**
- * Calls `onSwipe` once per swipe over the chat inside `root`, while
- * `enabled`. The listener is passive: the chat's own scrolling is never held.
+ * Calls `onSwipe` once per swipe over the chat or a side column inside
+ * `root`, while `enabled`. The listener is passive and on `root`, so it hears
+ * each event after everything under the pointer: one that a row cancelled
+ * for its own swipe (`defaultPrevented`) is claimed. Nothing here is held.
  */
 export function useSideSwipe(
   root: RefObject<HTMLElement | null>,
@@ -74,7 +77,7 @@ export function useSideSwipe(
       const target = event.target instanceof Element ? event.target : null
       const surface = target?.closest(SWIPE_SURFACE)
       const sample = { at: event.timeStamp, ...travel(event) }
-      // Read only where the gesture begins: a swipe is the chat's or not
+      // Read only where the gesture begins: a swipe is the window's or not
       // from its first event, whatever the pointer passes over after.
       const skip =
         beginsGesture(state, sample) &&
@@ -85,7 +88,7 @@ export function useSideSwipe(
           event.shiftKey ||
           target.closest("[inert]") !== null ||
           scrollsSideways(event.composedPath(), surface))
-      const next = swipeStep(state, sample, skip)
+      const next = swipeStep(state, sample, skip, event.defaultPrevented)
       state = next.state
       if (next.swiped) latest.current(next.swiped)
     }

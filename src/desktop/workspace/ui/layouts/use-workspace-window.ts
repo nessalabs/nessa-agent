@@ -267,8 +267,8 @@ function useShownArrangement(region: SidebarRegion) {
 }
 
 /**
- * A two-finger swipe across the chat folds the open side column nearest it
- * (swiped left) or opens the closed one nearest the window's edge (swiped
+ * A two-finger swipe across the chat, the sidebar or the session list folds
+ * the open side column nearest the chat (swiped left) or opens the closed one nearest the window's edge (swiped
  * right), one per swipe, with a haptic tick when one moved
  * (`model/side-swipe.ts`), only while the chat reads one (`swipeReads`).
  */

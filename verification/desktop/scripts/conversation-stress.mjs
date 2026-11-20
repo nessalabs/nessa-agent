@@ -131,7 +131,11 @@ import {
  *               haptic tick and a swipe with nothing left to move gives
  *               none; over a wide table or a wide code block (its lines
  *               in a shadow root) the swipe scrolls it, and a vertical
- *               scroll that drifts sideways folds nothing
+ *               scroll that drifts sideways folds nothing; over the
+ *               sidebar and the session list's head a swipe moves the
+ *               columns as over the chat, and over a session row it is
+ *               the row's own (its actions open and close, no column
+ *               moves)
  *   touchId     the vault is sealed and Settings › Accounts asks for it,
  *               with a fake Touch ID on: the dialog offers Touch ID ticked
  *               and keeps the typed passphrase; the next unlock is the
@@ -773,11 +777,15 @@ async function swipeColumns(run, step, message, port, code, failures) {
       (await over.evaluate(
         (element, { x, y }) =>
           element.contains(document.elementFromPoint(x, y)) &&
-          document.elementFromPoint(x, y)?.closest(".workspace-chat") !== null,
+          document
+            .elementFromPoint(x, y)
+            ?.closest(".workspace-chat, .workspace-sidebar, .workspace-list") !== null,
         point,
       ))
     if (!onIt) {
-      failures.push(`nothing to swipe over in the chat at ${JSON.stringify(point)}`)
+      failures.push(
+        `nothing to swipe over in the chat or a side column at ${JSON.stringify(point)}`,
+      )
       return
     }
     await page.mouse.move(point.x, point.y)
@@ -929,6 +937,30 @@ async function swipeColumns(run, step, message, port, code, failures) {
   const neg = (xs) => xs.map((each) => -each)
   await swipe(words, [...neg(fading), ...neg(picking)])
   await expect("a second swipe right while the first one's momentum fades", all, 2)
+  // Over the side columns as over the chat: over the sidebar a swipe left
+  // folds the list and one right opens it back, and over the list's head
+  // a swipe left folds the list it is in.
+  const inSidebar = page.locator(css.overviewEntry).first()
+  await swipe(inSidebar, 15)
+  await expect("a swipe left over the sidebar", { ...all, list: "closed" }, 1)
+  await swipe(inSidebar, -15)
+  await expect("a swipe right over the sidebar", all, 1)
+  await swipe(page.locator(`${css.sessionList} .desktop-column-title`).first(), 15)
+  await expect("a swipe left over the session list", { ...all, list: "closed" }, 1)
+  await swipe(words, -15)
+  await expect("a swipe right to open the session list again", all, 1)
+  // A session row's own two-finger swipe stays the row's: left uncovers
+  // its Archive and Delete, right covers them again, and no column moves.
+  const row = page.locator(selectorFor.sessionListRowFor(run.main.id))
+  const tray = () => row.locator("xpath=..").getAttribute("data-swipe")
+  await swipe(row, 15, 0, 16)
+  await expect("a swipe left over a session row", all, 0)
+  if (!(await waitFor(async () => (await tray()) === "open", 3_000)))
+    failures.push(`a swipe left over a session row left it ${await tray()}, not open`)
+  await swipe(row, -15, 0, 16)
+  await expect("a swipe right over an open session row", all, 0)
+  if (!(await waitFor(async () => (await tray()) === null, 3_000)))
+    failures.push(`a swipe right over an open session row left it ${await tray()}`)
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The conversation still takes a message.
@@ -7687,9 +7719,19 @@ const steps = {
           ))
         )
           failures.push("the Devices view drew no hub card")
-        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
-        if ((await page.locator(".side-rail-studio").count()) !== 0)
-          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
+        // It keeps "nessa Studio", the way to Settings, in the bottom-left
+        // corner as Agents does, and its page fades out before that corner.
+        if (
+          !(await page.locator(".side-rail-studio .desktop-identity-button").isVisible())
+        )
+          failures.push(`the Devices view draws no "nessa Studio" in its corner`)
+        const faded = await page.evaluate(
+          () =>
+            getComputedStyle(document.querySelector(".devices-page") ?? document.body)
+              .maskImage,
+        )
+        if (!faded || faded === "none")
+          failures.push(`the Devices page does not fade out under "nessa Studio"`)
         // Its titlebar's free room moves the window, as over a chat.
         const drags = await page.evaluate(() => {
           const space = document.querySelector(".workspace-titlebar-space")

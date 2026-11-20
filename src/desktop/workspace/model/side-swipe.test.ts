@@ -217,6 +217,19 @@ describe("swipeStep", () => {
     expect(state.phase).toBe("skipped")
   })
 
+  it("leaves a gesture that something claims before it is a swipe", () => {
+    let state: SwipeState = idleSwipe
+    const swiped: (SwipeDirection | null)[] = []
+    gesture(0, 10, 10).forEach((sample, i) => {
+      // A session row claims the wheel once the travel leans sideways.
+      const next = swipeStep(state, sample, false, i > 0)
+      state = next.state
+      swiped.push(next.swiped)
+    })
+    expect(swiped.filter(Boolean)).toEqual([])
+    expect(state.phase).toBe("skipped")
+  })
+
   it("decides skipping where the gesture began, not on each event", () => {
     let state: SwipeState = idleSwipe
     const swiped: (SwipeDirection | null)[] = []
