@@ -8,14 +8,21 @@
 /** Where the refused run's agent ran, as its lease says. */
 export type LeaseEnvironment = "here" | "ssh" | "peer" | "boat"
 
-/** Which sign-in the card offers: this computer's, or one minted for Boat. */
-export type SignInAction = "computer" | "boat"
+/**
+ * Which sign-in the card offers: this computer's, one minted for Boat, or a
+ * ChatGPT account the gateway hands Codex on another computer
+ * (`chatgpt-sign-in.ts`). This computer's sign-in reaches none of those.
+ */
+export type SignInAction = "computer" | "boat" | "chatgpt"
 
 export function signInAction(
   provider: "claude" | "codex",
   environment: LeaseEnvironment | undefined,
 ): SignInAction {
-  return provider === "claude" && environment === "boat" ? "boat" : "computer"
+  if (provider === "claude") return environment === "boat" ? "boat" : "computer"
+  return environment === "ssh" || environment === "peer" || environment === "boat"
+    ? "chatgpt"
+    : "computer"
 }
 
 /** Why a Boat sign-in did not complete: minting ended without a token, or

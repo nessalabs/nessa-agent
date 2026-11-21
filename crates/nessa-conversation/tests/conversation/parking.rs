@@ -1191,3 +1191,150 @@ async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_pas
     drop((held, follower));
     fixture.service.shutdown().await.unwrap();
 }
+
+/// The machine here, whose every lease holds a login to be renewed by
+/// `by` (Unix milliseconds; 0 for none), as a ChatGPT token handed to a VM.
+struct Renewing {
+    by: Arc<AtomicU64>,
+}
+
+struct RenewingHold {
+    inner: Arc<dyn crate::application::LeaseHold>,
+    by: Arc<AtomicU64>,
+}
+
+impl crate::application::LeaseHold for RenewingHold {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
+    ) -> Result<
+        Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
+        nessa_sdk::application::agent_execution::agents::AgentError,
+    > {
+        self.inner.model_provider(binding)
+    }
+    fn ends(
+        &self,
+    ) -> Option<
+        crate::application::EnvironmentFuture<
+            'static,
+            nessa_sdk::domain::agent_execution::leases::LeaseEndCause,
+        >,
+    > {
+        self.inner.ends()
+    }
+    fn renew_by(&self) -> Option<u64> {
+        Some(self.by.load(Ordering::SeqCst)).filter(|by| *by != 0)
+    }
+    fn end(
+        &self,
+        cause: nessa_sdk::domain::agent_execution::leases::LeaseEndCause,
+    ) -> crate::application::EnvironmentFuture<'_, crate::application::LeaseRelease> {
+        self.inner.end(cause)
+    }
+}
+
+impl crate::application::Environment for Renewing {
+    fn declaration(&self) -> crate::application::EnvironmentDeclaration {
+        crate::infrastructure::in_process_environment().declaration()
+    }
+    fn open<'a>(
+        &'a self,
+        lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
+        grant: &'a nessa_sdk::domain::agent_execution::leases::LeaseTerms,
+        binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
+    ) -> crate::application::EnvironmentFuture<
+        'a,
+        Result<
+            crate::application::EnvironmentLease,
+            nessa_sdk::domain::agent_execution::leases::LeaseRefusal,
+        >,
+    > {
+        Box::pin(async move {
+            let mut lease = crate::infrastructure::in_process_environment()
+                .open(lease, grant, binding)
+                .await?;
+            lease.hold = Arc::new(RenewingHold {
+                inner: lease.hold,
+                by: self.by.clone(),
+            });
+            Ok(lease)
+        })
+    }
+    fn account<'a>(
+        &'a self,
+        lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
+    ) -> crate::application::EnvironmentFuture<
+        'a,
+        Option<nessa_sdk::domain::agent_execution::leases::LeaseCleanup>,
+    > {
+        Box::pin(async move {
+            crate::infrastructure::in_process_environment()
+                .account(lease)
+                .await
+        })
+    }
+}
+
+impl Fixture {
+    /// A conversation whose lease holds a login to be renewed by `by`.
+    async fn renewing(by: Arc<AtomicU64>) -> Self {
+        let environment: Arc<dyn crate::application::Environment> = Arc::new(Renewing { by });
+        Self::build_in(
+            Some(NEVER),
+            false,
+            ConversationLimits::default().max_conversations,
+            None,
+            environment.into(),
+            None,
+        )
+        .await
+    }
+}
+
+/// Row P1 (`docs/design/chatgpt-sign-in.md`): an idle agent whose handed
+/// login is past its renewal is parked at once, even while followed, so the
+/// next message starts it with a fresh one; before then it waits as usual.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_agent_past_its_logins_renewal_is_parked_even_when_followed() {
+    let by = Arc::new(AtomicU64::new(0));
+    let fixture = Fixture::renewing(by.clone()).await;
+    fixture.turn("first").await;
+    let follower = fixture.service.live_changes(&fixture.id);
+    by.store(fixture.clock.now() + 60_000, Ordering::SeqCst);
+    assert_eq!(fixture.service.park_idle(NEVER).await, 0, "not yet due");
+    fixture.wait(Duration::from_secs(60));
+    assert_eq!(fixture.service.park_idle(NEVER).await, 1, "due, followed");
+    assert!(fixture.slot().await.is_none());
+    assert_eq!(
+        fixture.lease().await,
+        (
+            ConversationLeaseState::Ended,
+            Some(ConversationLeaseCause::Idle)
+        )
+    );
+    drop(follower);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Row P2: a turn still running when its login is due keeps its agent;
+/// once it ends, the agent is parked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_running_turn_past_its_logins_renewal_is_not_parked() {
+    let by = Arc::new(AtomicU64::new(0));
+    let fixture = Fixture::renewing(by.clone()).await;
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
+    let sent = fixture.send("long");
+    tokio::time::timeout(BOUND, fixture.provider.execution_started.notified())
+        .await
+        .expect("the turn reaches the provider");
+    by.store(fixture.clock.now(), Ordering::SeqCst);
+    assert_eq!(fixture.service.park_idle(NEVER).await, 0, "busy");
+    release.send(()).unwrap();
+    sent.await.unwrap().unwrap();
+    fixture.completed("long").await;
+    fixture.wait_until_idle().await;
+    assert_eq!(fixture.service.park_idle(NEVER).await, 1);
+    fixture.service.shutdown().await.unwrap();
+}

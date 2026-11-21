@@ -4460,14 +4460,16 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
             environment: &'a EnvironmentRef,
             agent: nessa_protocol::agents::AgentId,
             lease: &'a str,
-        ) -> crate::application::EnvironmentFuture<'a, Option<nessa_protocol::lease::Login>>
-        {
+        ) -> crate::application::EnvironmentFuture<'a, Option<super::HandedLogin>> {
             self.asked
                 .lock()
                 .unwrap()
                 .push((environment.name(), agent, lease.to_owned()));
             Box::pin(async {
-                Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap())
+                Some(super::HandedLogin {
+                    login: nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap(),
+                    renew_by_ms: None,
+                })
             })
         }
     }
@@ -4542,7 +4544,7 @@ async fn a_withheld_login_hands_none_and_the_lease_stays_granted() {
             _: &'a EnvironmentRef,
             _: nessa_protocol::agents::AgentId,
             _: &'a str,
-        ) -> crate::application::EnvironmentFuture<'a, Option<Login>> {
+        ) -> crate::application::EnvironmentFuture<'a, Option<super::HandedLogin>> {
             Box::pin(async { None })
         }
     }
@@ -4678,4 +4680,141 @@ async fn a_sign_in_change_lets_go_of_idle_workspace_connections_only() {
         "the next lease after the change is served again"
     );
     resent.hold.end(LeaseEndCause::Closed).await;
+}
+
+/// A host that records each login renewed for a lease's running harnesses.
+struct Renewed {
+    stopped: Arc<AtomicUsize>,
+    renewed: Mutex<Vec<(String, String, String)>>,
+}
+impl HarnessLauncher for Renewed {
+    fn workspace(&self) -> &str {
+        "/srv/work"
+    }
+    fn runs(&self, agent: &str) -> bool {
+        agent == "codex"
+    }
+    fn sandboxes(&self) -> SandboxProfiles {
+        SandboxProfiles::HARNESS_DEFAULT
+    }
+    fn launch(
+        &self,
+        agent: &str,
+        environment: &BTreeMap<String, String>,
+        _login: Option<&nessa_protocol::lease::Login>,
+        publish_point: Option<&str>,
+    ) -> Result<HarnessProcess, AgentError> {
+        Echo {
+            stopped: self.stopped.clone(),
+        }
+        .launch(agent, environment, None, publish_point)
+    }
+    fn renew_login(&self, lease: &str, agent: &str, login: &nessa_protocol::lease::Login) -> bool {
+        self.renewed.lock().unwrap().push((
+            lease.to_owned(),
+            agent.to_owned(),
+            login.expose().to_owned(),
+        ));
+        true
+    }
+}
+
+/// Saved logins that hand each answer in turn, then the last for every
+/// later ask.
+struct Handing {
+    answers: Mutex<std::collections::VecDeque<Option<super::HandedLogin>>>,
+    asked: AtomicUsize,
+}
+impl super::SavedLogins for Handing {
+    fn login<'a>(
+        &'a self,
+        _: &'a EnvironmentRef,
+        _: nessa_protocol::agents::AgentId,
+        _: &'a str,
+    ) -> crate::application::EnvironmentFuture<'a, Option<super::HandedLogin>> {
+        let mut answers = self.answers.lock().unwrap();
+        let answer = if answers.len() > 1 {
+            answers.pop_front().unwrap()
+        } else {
+            answers.front().cloned().flatten()
+        };
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { answer })
+    }
+}
+
+fn handed(token: &str, renew_by_ms: Option<u64>) -> Option<super::HandedLogin> {
+    Some(super::HandedLogin {
+        login: nessa_protocol::lease::Login::new(token.into()).unwrap(),
+        renew_by_ms,
+    })
+}
+
+/// A Codex lease on a host recording renewals, its saved logins answering
+/// `answers` in turn; and that lease, once asked `asks` times in all.
+async fn renewing(
+    answers: Vec<Option<super::HandedLogin>>,
+    asks: usize,
+) -> (Arc<Renewed>, crate::application::EnvironmentLease) {
+    let stopped = Arc::new(AtomicUsize::new(0));
+    let launcher = Arc::new(Renewed {
+        stopped: stopped.clone(),
+        renewed: Mutex::new(Vec::new()),
+    });
+    let connector = Connector::with(Reach::Serving, launcher.clone(), stopped);
+    let saved = Arc::new(Handing {
+        answers: Mutex::new(answers.into()),
+        asked: AtomicUsize::new(0),
+    });
+    let environment = environment(connector, Arc::new(Audit::default())).with_logins(saved.clone());
+    let opened = environment
+        .open(&lease(), &terms("codex"), binding(true).0)
+        .await
+        .unwrap_or_else(|_| panic!("granted"));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while saved.asked.load(Ordering::SeqCst) < asks {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("asked again once due");
+    // What the last ask led to has reached the host.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    (launcher, opened)
+}
+
+/// Rows L1 and L3 (`docs/design/chatgpt-sign-in.md`): a login handed with a
+/// `renew_by` is asked for again once that passes; a fresh one is sent to
+/// the host for the harnesses already running and becomes the lease's. A
+/// login that no longer expires (the key, once the account is set aside)
+/// ends the renewals, and nothing is sent for it.
+#[tokio::test]
+async fn a_handed_login_is_renewed_on_the_host_until_it_no_longer_expires() {
+    let (launcher, opened) = renewing(
+        vec![
+            handed("eyJ.first.x", Some(1_000)),
+            handed("eyJ.second.x", Some(1_001)),
+            handed("sk-key", None),
+        ],
+        3,
+    )
+    .await;
+    let renewed = launcher.renewed.lock().unwrap().clone();
+    assert_eq!(renewed.len(), 1, "{renewed:?}");
+    assert_eq!(renewed[0].1, "codex");
+    assert_eq!(renewed[0].2, "eyJ.second.x");
+    assert_eq!(opened.hold.renew_by(), Some(1_001));
+    opened.hold.end(LeaseEndCause::Closed).await;
+}
+
+/// Row L2: a renewal that hands nothing, or the same token again, sends
+/// nothing and leaves the lease's login as it was.
+#[tokio::test]
+async fn a_renewal_with_nothing_new_sends_nothing() {
+    for again in [None, handed("eyJ.first.x", Some(1_000))] {
+        let (launcher, opened) = renewing(vec![handed("eyJ.first.x", Some(1_000)), again], 2).await;
+        assert!(launcher.renewed.lock().unwrap().is_empty());
+        assert_eq!(opened.hold.renew_by(), Some(1_000));
+        opened.hold.end(LeaseEndCause::Closed).await;
+    }
 }

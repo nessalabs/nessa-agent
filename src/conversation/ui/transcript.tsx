@@ -25,7 +25,11 @@ import { PublishedFiles } from "./published-files"
 import { TranscriptNotes } from "./transcript-note"
 import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
 import { ReplyMarkdown } from "@nessa-ui/react/reply-markdown"
-import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
+import {
+  ChatgptSignInCard,
+  ProviderSignInCard,
+} from "../../provider-authentication/ui/provider-sign-in"
+import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
 import {
   signInAction,
   type BoatClaudeSignIn,
@@ -58,6 +62,7 @@ export function Transcript({
   onProviderSignIn,
   canSignInToProvider,
   boatSignIn,
+  chatgptSignIn,
   onUsageLimitAutoContinue,
 }: {
   conversation: Conversation
@@ -71,6 +76,8 @@ export function Transcript({
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
   boatSignIn?: BoatClaudeSignIn
+  /** A ChatGPT account for Codex on another computer. */
+  chatgptSignIn?: CodexChatgptSignIn
   /** Turns this gateway's usage-limit continuation preference on or off. */
   onUsageLimitAutoContinue?: (enabled: boolean) => Promise<void>
 }) {
@@ -252,6 +259,11 @@ export function Transcript({
                           onSignIn={boatSignIn?.signIn}
                           canSignIn={boatSignIn?.available}
                         />
+                      ) : signInAction(
+                          provider,
+                          conversation.remote?.lease?.environment,
+                        ) === "chatgpt" ? (
+                        <ChatgptSignInCard signIn={chatgptSignIn} />
                       ) : (
                         <ProviderSignInCard
                           provider={provider}

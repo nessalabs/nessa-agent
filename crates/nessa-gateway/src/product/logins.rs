@@ -1,18 +1,26 @@
 //! The saved-login methods (issue #1260): `logins.status`, `logins.save`,
-//! `logins.remove` and `logins.setDevice`, each admitted by Cedar's
-//! `credential.manage`, translated into [`SavedLoginsService`]. No answer
-//! carries a login.
+//! `logins.remove` and `logins.setDevice`, and Codex's ChatGPT accounts'
+//! `logins.chatgptSignIn`, `logins.chatgptCancel`, `logins.chatgptUse` and
+//! `logins.chatgptRemove` (`docs/design/chatgpt-sign-in.md`), each admitted
+//! by Cedar's `credential.manage`, translated into [`SavedLoginsService`].
+//! No answer carries a login or a token.
 use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
 use crate::logins::application::{LoginCaller, LoginsError, LoginsStatus};
+use crate::logins::chatgpt::{
+    application::{ChatgptStatus, SignInStatus},
+    domain::{AccountId, SignInEnd},
+};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::lease::Login;
 use nessa_protocol::product::generated::{
-    LoginAgent, LoginsErrorCode, LoginsRemoveParams, LoginsSaveParams, LoginsSetDeviceParams,
-    LoginsStatus as WireStatus, SavedLogin,
+    ChatgptAccount as WireAccount, ChatgptLogins as WireChatgpt, ChatgptSignIn as WireSignIn,
+    ChatgptSignInEnd as WireEnd, LoginAgent, LoginsChatgptRemoveParams, LoginsChatgptSignInParams,
+    LoginsChatgptUseParams, LoginsErrorCode, LoginsRemoveParams, LoginsSaveParams,
+    LoginsSetDeviceParams, LoginsStatus as WireStatus, SavedLogin,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
@@ -61,6 +69,78 @@ pub(super) async fn dispatch(
             };
             logins.set_device(caller, peer, params.on).await
         }
+        "logins.chatgptSignIn" => {
+            let Ok(params) =
+                serde_json::from_value::<LoginsChatgptSignInParams>(frame.params.clone())
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Ok(account) = params
+                .account_id
+                .as_deref()
+                .map(AccountId::parse)
+                .transpose()
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            match logins.chatgpt() {
+                Ok(chatgpt) => match chatgpt.begin(caller, account).await {
+                    Ok(()) => logins.status(),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            }
+        }
+        "logins.chatgptCancel" => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            match logins.chatgpt() {
+                Ok(chatgpt) => {
+                    chatgpt.cancel();
+                    logins.status()
+                }
+                Err(error) => Err(error),
+            }
+        }
+        "logins.chatgptUse" => {
+            let Ok(params) = serde_json::from_value::<LoginsChatgptUseParams>(frame.params.clone())
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Ok(account) = params
+                .account_id
+                .as_deref()
+                .map(AccountId::parse)
+                .transpose()
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            match logins.chatgpt() {
+                Ok(chatgpt) => match chatgpt.use_account(caller, account).await {
+                    Ok(()) => logins.status(),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            }
+        }
+        "logins.chatgptRemove" => {
+            let Ok(params) =
+                serde_json::from_value::<LoginsChatgptRemoveParams>(frame.params.clone())
+            else {
+                return failure(&frame.id, "invalid_request");
+            };
+            let Ok(account) = AccountId::parse(&params.account_id) else {
+                return failure(&frame.id, "invalid_request");
+            };
+            match logins.chatgpt() {
+                Ok(chatgpt) => match chatgpt.remove(caller, account).await {
+                    Ok(()) => logins.status(),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            }
+        }
         _ => return failure(&frame.id, "unknown_method"),
     };
     match answer {
@@ -99,6 +179,57 @@ fn wire(status: &LoginsStatus) -> WireStatus {
             .iter()
             .map(PeerEnvironment::name)
             .collect(),
+        chatgpt: status.chatgpt.as_ref().map(wire_chatgpt),
+    }
+}
+
+fn wire_chatgpt(status: &ChatgptStatus) -> WireChatgpt {
+    WireChatgpt {
+        accounts: status
+            .accounts
+            .iter()
+            .map(|account| WireAccount {
+                id: account.id.as_str().to_owned(),
+                email: account.email.clone(),
+                in_use: account.in_use,
+                needs_sign_in: account.needs_sign_in,
+            })
+            .collect(),
+        sign_in: match &status.sign_in {
+            SignInStatus::Idle { last } => WireSignIn {
+                state: "idle".into(),
+                authorize_url: None,
+                account_id: None,
+                last: last.map(wire_end),
+            },
+            SignInStatus::Waiting {
+                authorize_url,
+                account,
+            } => WireSignIn {
+                state: "waiting".into(),
+                authorize_url: Some(authorize_url.clone()),
+                account_id: account.as_ref().map(|account| account.as_str().to_owned()),
+                last: None,
+            },
+        },
+    }
+}
+
+fn wire_end(end: SignInEnd) -> WireEnd {
+    match end {
+        SignInEnd::SignedIn => WireEnd::SignedIn,
+        SignInEnd::Declined => WireEnd::Declined,
+        SignInEnd::Incomplete => WireEnd::Incomplete,
+        SignInEnd::WrongAccount => WireEnd::WrongAccount,
+        SignInEnd::ExchangeFailed => WireEnd::ExchangeFailed,
+        SignInEnd::InvalidIdentity => WireEnd::InvalidIdentity,
+        SignInEnd::PlanNotEnabled => WireEnd::PlanNotEnabled,
+        SignInEnd::TooManyAccounts => WireEnd::TooManyAccounts,
+        SignInEnd::NotSaved => WireEnd::NotSaved,
+        SignInEnd::TimedOut => WireEnd::TimedOut,
+        SignInEnd::Cancelled => WireEnd::Cancelled,
+        SignInEnd::Replaced => WireEnd::Replaced,
+        SignInEnd::ListenFailed => WireEnd::ListenFailed,
     }
 }
 
@@ -118,5 +249,7 @@ fn code(error: LoginsError) -> LoginsErrorCode {
         LoginsError::AuditUnavailable => LoginsErrorCode::LoginsAuditUnavailable,
         LoginsError::ChangeUnrecorded => LoginsErrorCode::LoginsChangeUnrecorded,
         LoginsError::TooManyDevices => LoginsErrorCode::LoginsTooManyDevices,
+        LoginsError::UnknownAccount => LoginsErrorCode::LoginsUnknownAccount,
+        LoginsError::ChatgptNotConfigured => LoginsErrorCode::LoginsChatgptNotConfigured,
     }
 }

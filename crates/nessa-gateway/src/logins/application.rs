@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 
+use super::chatgpt::application::{AccessRefused, ChatgptLogins, ChatgptStatus};
+use super::chatgpt::domain::{AccountId, RefreshProblem, SignInEnd};
 use super::domain::{DeviceSwitches, InvalidSwitches, MAX_SWITCHED_ON};
 use crate::secrets::{SecretStore, SecretUnavailable};
 
@@ -36,44 +38,80 @@ pub enum Withheld {
     Locked,
     /// The vault, or the policy, could not answer.
     Unavailable,
+    /// The ChatGPT account Codex uses needs signing in again.
+    SignInNeeded,
+    /// The ChatGPT account's token could not be refreshed now, or its new
+    /// tokens could not be kept.
+    RefreshFailed,
 }
 
 /// What a record says happened. Never a login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoginEvent {
     /// An agent's login is about to be saved; `replacing` when one was.
-    SaveRequested { agent: AgentId, replacing: bool },
+    SaveRequested {
+        agent: AgentId,
+        replacing: bool,
+    },
     /// The save did not complete; whatever was saved still is.
-    SaveFailed { agent: AgentId },
+    SaveFailed {
+        agent: AgentId,
+    },
     /// The vault refused the save and then could not say what it holds:
     /// the new login may or may not be saved.
-    SaveUnsettled { agent: AgentId },
+    SaveUnsettled {
+        agent: AgentId,
+    },
     /// The login is saved.
-    Saved { agent: AgentId },
+    Saved {
+        agent: AgentId,
+    },
     /// An agent's saved login is about to be deleted.
-    RemoveRequested { agent: AgentId },
+    RemoveRequested {
+        agent: AgentId,
+    },
     /// The delete did not complete; the login is still saved.
-    RemoveFailed { agent: AgentId },
+    RemoveFailed {
+        agent: AgentId,
+    },
     /// The vault refused the delete and then could not say what it holds:
     /// the login may or may not still be saved.
-    RemoveUnsettled { agent: AgentId },
+    RemoveUnsettled {
+        agent: AgentId,
+    },
     /// No login is saved for the agent now.
-    Removed { agent: AgentId },
+    Removed {
+        agent: AgentId,
+    },
     /// A paired machine's switch is about to be turned `on` or off.
-    SwitchRequested { peer: PeerEnvironment, on: bool },
+    SwitchRequested {
+        peer: PeerEnvironment,
+        on: bool,
+    },
     /// The switch did not change.
-    SwitchFailed { peer: PeerEnvironment, on: bool },
+    SwitchFailed {
+        peer: PeerEnvironment,
+        on: bool,
+    },
     /// The vault refused the switch and then could not say what it holds:
     /// the switch may or may not be as asked.
-    SwitchUnsettled { peer: PeerEnvironment, on: bool },
+    SwitchUnsettled {
+        peer: PeerEnvironment,
+        on: bool,
+    },
     /// The switch is as asked now.
-    Switched { peer: PeerEnvironment, on: bool },
+    Switched {
+        peer: PeerEnvironment,
+        on: bool,
+    },
     /// A harness of `agent` on `environment` is started with its login,
     /// under `lease`: the lease's own records name who started it.
+    /// `chatgpt` names the ChatGPT account whose access token it was.
     Sent {
         environment: String,
         agent: AgentId,
         lease: String,
+        chatgpt: Option<AccountId>,
     },
     /// A harness of `agent` on `environment` is started without one.
     NotSent {
@@ -81,6 +119,47 @@ pub enum LoginEvent {
         agent: AgentId,
         lease: String,
         why: Withheld,
+    },
+    /// A ChatGPT sign-in, of `account` again or of a new one, is about to
+    /// start.
+    ChatgptSignInRequested {
+        account: Option<AccountId>,
+    },
+    /// It ended, and how.
+    ChatgptSignInEnded {
+        account: Option<AccountId>,
+        end: SignInEnd,
+    },
+    /// Codex is about to use `account`, or the API key when `None`.
+    ChatgptUseRequested {
+        account: Option<AccountId>,
+    },
+    ChatgptUseFailed {
+        account: Option<AccountId>,
+    },
+    ChatgptUsed {
+        account: Option<AccountId>,
+    },
+    /// `account` is about to be forgotten.
+    ChatgptRemoveRequested {
+        account: AccountId,
+    },
+    ChatgptRemoveFailed {
+        account: AccountId,
+    },
+    /// Forgotten; `revoked` says whether OpenAI confirmed its refresh
+    /// token revoked.
+    ChatgptRemoved {
+        account: AccountId,
+        revoked: bool,
+    },
+    /// `account`'s tokens were refreshed and saved, for a lease.
+    ChatgptRefreshed {
+        account: AccountId,
+    },
+    ChatgptRefreshFailed {
+        account: AccountId,
+        why: RefreshProblem,
     },
 }
 
@@ -129,6 +208,10 @@ pub enum LoginsError {
     /// the status again.
     ChangeUnrecorded,
     TooManyDevices,
+    /// No ChatGPT account with that id is kept.
+    UnknownAccount,
+    /// This gateway keeps no ChatGPT accounts.
+    ChatgptNotConfigured,
 }
 
 /// Which agents have a login saved, and which paired machines receive them.
@@ -136,6 +219,16 @@ pub enum LoginsError {
 pub struct LoginsStatus {
     pub saved: BTreeMap<AgentId, bool>,
     pub devices_on: Vec<PeerEnvironment>,
+    /// The ChatGPT accounts Codex can use, when this gateway keeps them.
+    pub chatgpt: Option<ChatgptStatus>,
+}
+
+/// A login handed to one lease, and when its agent should be started
+/// again: a ChatGPT access token's, ten minutes before it expires.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandedLogin {
+    pub login: Login,
+    pub renew_by_ms: Option<u64>,
 }
 
 pub struct SavedLoginsService {
@@ -148,6 +241,8 @@ pub struct SavedLoginsService {
     /// Told after an agent's login is saved or removed, so whatever was
     /// started with the old one can start again with the new.
     changed: Arc<dyn Fn(AgentId) + Send + Sync>,
+    /// The ChatGPT accounts Codex can use instead of its saved key.
+    chatgpt: Option<Arc<ChatgptLogins>>,
 }
 
 /// What a store that refused a change holds now. A store can make a change
@@ -199,7 +294,25 @@ impl SavedLoginsService {
             audit,
             changes: tokio::sync::Mutex::new(()),
             changed: Arc::new(|_| {}),
+            chatgpt: None,
         }
+    }
+
+    /// These logins, with `chatgpt`'s accounts for Codex.
+    #[must_use]
+    pub fn with_chatgpt(mut self, chatgpt: Arc<ChatgptLogins>) -> Self {
+        self.chatgpt = Some(chatgpt);
+        self
+    }
+
+    /// The ChatGPT accounts, when this gateway keeps them.
+    ///
+    /// # Errors
+    /// [`LoginsError::ChatgptNotConfigured`].
+    pub fn chatgpt(&self) -> Result<&Arc<ChatgptLogins>, LoginsError> {
+        self.chatgpt
+            .as_ref()
+            .ok_or(LoginsError::ChatgptNotConfigured)
     }
 
     /// These logins, telling `changed` after each agent's login is saved or
@@ -328,6 +441,11 @@ impl SavedLoginsService {
         Ok(LoginsStatus {
             saved,
             devices_on: self.switches()?.on().copied().collect(),
+            chatgpt: self
+                .chatgpt
+                .as_ref()
+                .map(|chatgpt| chatgpt.status())
+                .transpose()?,
         })
     }
 
@@ -463,39 +581,187 @@ impl SavedLoginsService {
         lease: &str,
     ) -> Option<Login> {
         let operation_id = Uuid::new_v4().to_string();
-        let name = environment.name();
-        let withheld = |why: Withheld| {
-            let kept = self.record(
-                &operation_id,
-                None,
-                LoginEvent::NotSent {
-                    environment: name.clone(),
-                    agent,
-                    lease: lease.to_owned(),
-                    why,
-                },
-            );
-            if kept.is_err() {
-                tracing::error!(
-                    environment = %name,
-                    agent = agent.name(),
-                    lease,
-                    "a withheld saved login could not be recorded"
-                );
-            }
-            None
-        };
         let login = match self.saved(agent) {
             Ok(Some(login)) => login,
             Ok(None) => return None,
-            Err(LoginsError::VaultLocked) => return withheld(Withheld::Locked),
-            Err(_) => return withheld(Withheld::Unavailable),
+            Err(LoginsError::VaultLocked) => {
+                return self.withheld(&operation_id, environment, agent, lease, Withheld::Locked)
+            }
+            Err(_) => {
+                return self.withheld(
+                    &operation_id,
+                    environment,
+                    agent,
+                    lease,
+                    Withheld::Unavailable,
+                )
+            }
         };
+        self.admit(&operation_id, environment, agent, lease)?;
+        self.sent(&operation_id, environment, agent, lease, None)
+            .then_some(login)
+    }
+
+    /// The login a harness of `agent` started on `environment` under
+    /// `lease` is given: for Codex, the access token of the ChatGPT account
+    /// it uses when one is chosen ([`ChatgptLogins::access`], refreshed
+    /// first when it must be), else the saved key as [`Self::login_for`]
+    /// hands it. A ChatGPT account that cannot give a token hands nothing:
+    /// the key is never used in its place, because OpenAI says a plan
+    /// error stops inference rather than switching how it is paid for.
+    pub async fn hand(
+        self: Arc<Self>,
+        environment: EnvironmentRef,
+        agent: AgentId,
+        lease: String,
+    ) -> Option<HandedLogin> {
+        let chatgpt = match (&self.chatgpt, agent) {
+            (Some(chatgpt), AgentId::Codex) => Some(chatgpt.clone()),
+            _ => None,
+        };
+        let uses_chatgpt = match &chatgpt {
+            Some(chatgpt) => {
+                let check = chatgpt.clone();
+                tokio::task::spawn_blocking(move || check.in_use())
+                    .await
+                    .unwrap_or(Err(LoginsError::StorageUnavailable))
+            }
+            None => Ok(false),
+        };
+        let (Some(chatgpt), Ok(true)) = (chatgpt, &uses_chatgpt) else {
+            // The vault read and the audit write block: off the executor.
+            let this = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                let operation_id = Uuid::new_v4().to_string();
+                match uses_chatgpt {
+                    Err(LoginsError::VaultLocked) => {
+                        this.withheld(&operation_id, &environment, agent, &lease, Withheld::Locked)
+                    }
+                    Err(_) => this.withheld(
+                        &operation_id,
+                        &environment,
+                        agent,
+                        &lease,
+                        Withheld::Unavailable,
+                    ),
+                    Ok(_) => this.login_for(&environment, agent, &lease),
+                }
+                .map(|login| HandedLogin {
+                    login,
+                    renew_by_ms: None,
+                })
+            })
+            .await
+            .ok()
+            .flatten();
+        };
+        let operation_id = Uuid::new_v4().to_string();
+        // The policy first: a machine that may not receive logins never
+        // costs a refresh.
+        let admitted = {
+            let this = self.clone();
+            let (operation_id, environment, lease) =
+                (operation_id.clone(), environment.clone(), lease.clone());
+            tokio::task::spawn_blocking(move || {
+                this.admit(&operation_id, &environment, agent, &lease)
+                    .is_some()
+            })
+            .await
+            .unwrap_or(false)
+        };
+        if !admitted {
+            return None;
+        }
+        let access = chatgpt.access().await;
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || match access {
+            Ok(Some(access)) => this
+                .sent(
+                    &operation_id,
+                    &environment,
+                    agent,
+                    &lease,
+                    Some(access.account.clone()),
+                )
+                .then_some(HandedLogin {
+                    login: access.login,
+                    renew_by_ms: Some(access.renew_by_ms),
+                }),
+            // Chosen a moment ago, gone now: as if none were.
+            Ok(None) => None,
+            Err(refused) => this.withheld(
+                &operation_id,
+                &environment,
+                agent,
+                &lease,
+                match refused {
+                    AccessRefused::Locked => Withheld::Locked,
+                    AccessRefused::Unavailable => Withheld::Unavailable,
+                    AccessRefused::SignInNeeded => Withheld::SignInNeeded,
+                    AccessRefused::Refresh(_) => Withheld::RefreshFailed,
+                },
+            ),
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Record that nothing is handed, and why: `None`, always.
+    fn withheld<T>(
+        &self,
+        operation_id: &str,
+        environment: &EnvironmentRef,
+        agent: AgentId,
+        lease: &str,
+        why: Withheld,
+    ) -> Option<T> {
+        let name = environment.name();
+        let kept = self.record(
+            operation_id,
+            None,
+            LoginEvent::NotSent {
+                environment: name.clone(),
+                agent,
+                lease: lease.to_owned(),
+                why,
+            },
+        );
+        if kept.is_err() {
+            tracing::error!(
+                environment = %name,
+                agent = agent.name(),
+                lease,
+                "a withheld saved login could not be recorded"
+            );
+        }
+        None
+    }
+
+    /// Whether the policy lets `environment` receive `agent`'s login; a no
+    /// is recorded as withheld.
+    fn admit(
+        &self,
+        operation_id: &str,
+        environment: &EnvironmentRef,
+        agent: AgentId,
+        lease: &str,
+    ) -> Option<()> {
         let switched_on = match environment {
             EnvironmentRef::Peer(peer) => match self.switches() {
                 Ok(switches) => switches.is_on(peer),
-                Err(LoginsError::VaultLocked) => return withheld(Withheld::Locked),
-                Err(_) => return withheld(Withheld::Unavailable),
+                Err(LoginsError::VaultLocked) => {
+                    return self.withheld(operation_id, environment, agent, lease, Withheld::Locked)
+                }
+                Err(_) => {
+                    return self.withheld(
+                        operation_id,
+                        environment,
+                        agent,
+                        lease,
+                        Withheld::Unavailable,
+                    )
+                }
             },
             _ => false,
         };
@@ -505,31 +771,54 @@ impl SavedLoginsService {
             switched_on,
         };
         match self.policy.may_receive(&facts) {
-            Ok(true) => {}
-            Ok(false) => return withheld(Withheld::NotAllowed),
-            Err(_) => return withheld(Withheld::Unavailable),
+            Ok(true) => Some(()),
+            Ok(false) => self.withheld(
+                operation_id,
+                environment,
+                agent,
+                lease,
+                Withheld::NotAllowed,
+            ),
+            Err(_) => self.withheld(
+                operation_id,
+                environment,
+                agent,
+                lease,
+                Withheld::Unavailable,
+            ),
         }
+    }
+
+    /// Record that the login is handed; `false` when the record cannot be
+    /// kept, and then it is not handed.
+    fn sent(
+        &self,
+        operation_id: &str,
+        environment: &EnvironmentRef,
+        agent: AgentId,
+        lease: &str,
+        chatgpt: Option<AccountId>,
+    ) -> bool {
+        let name = environment.name();
         let kept = self.record(
-            &operation_id,
+            operation_id,
             None,
             LoginEvent::Sent {
                 environment: name.clone(),
                 agent,
                 lease: lease.to_owned(),
+                chatgpt,
             },
         );
-        match kept {
-            Ok(()) => Some(login),
-            Err(_) => {
-                tracing::error!(
-                    environment = %name,
-                    agent = agent.name(),
-                    lease,
-                    "a saved login was not handed: its handoff could not be recorded"
-                );
-                None
-            }
+        if kept.is_err() {
+            tracing::error!(
+                environment = %name,
+                agent = agent.name(),
+                lease,
+                "a saved login was not handed: its handoff could not be recorded"
+            );
         }
+        kept.is_ok()
     }
 }
 

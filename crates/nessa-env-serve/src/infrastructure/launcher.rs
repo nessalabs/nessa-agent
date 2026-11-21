@@ -24,7 +24,10 @@
 use crate::application::{HarnessLauncher, PUBLISH_POINT_VARIABLE};
 use nessa_protocol::{
     agents::AgentId,
-    lease::{login_variable, login_variables, Login},
+    lease::{
+        is_chatgpt_access_token, login_variable, login_variables, Login,
+        CHATGPT_TOKEN_FILE_VARIABLE,
+    },
 };
 use nessa_sdk::{
     application::agent_execution::{agents::AgentError, providers::HarnessProcess},
@@ -118,6 +121,45 @@ impl HarnessLauncher for ConfiguredLauncher {
         login: Option<&Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError> {
+        self.start(None, agent, environment, login, publish_point)
+    }
+
+    fn launch_for_lease(
+        &self,
+        lease: &str,
+        agent: &str,
+        environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
+        publish_point: Option<&str>,
+    ) -> Result<HarnessProcess, AgentError> {
+        self.start(Some(lease), agent, environment, login, publish_point)
+    }
+
+    fn renew_login(&self, lease: &str, agent: &str, login: &Login) -> bool {
+        AgentId::parse(agent) == Some(AgentId::Codex)
+            && is_chatgpt_access_token(login)
+            && self
+                .codex_sessions
+                .as_deref()
+                .is_some_and(|sessions| renew_chatgpt_token(sessions, lease, login))
+    }
+
+    fn lease_ended(&self, lease: &str) {
+        if let Some(sessions) = self.codex_sessions.as_deref() {
+            forget_chatgpt_token(sessions, lease);
+        }
+    }
+}
+
+impl ConfiguredLauncher {
+    fn start(
+        &self,
+        lease: Option<&str>,
+        agent: &str,
+        environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
+        publish_point: Option<&str>,
+    ) -> Result<HarnessProcess, AgentError> {
         let id = AgentId::parse(agent)
             .ok_or_else(|| AgentError::Unsupported(format!("no agent named {agent}")))?;
         let (Some(names), Some(spec)) = (accepted(id), self.agents.get(&id)) else {
@@ -144,6 +186,7 @@ impl HarnessLauncher for ConfiguredLauncher {
         // replaced by the host's `CODEX_HOME`. Host-wins already refused
         // this when the host has a sign-in.
         if let Some(handed) = login_to_set(
+            lease,
             id,
             login,
             &spec.environment,
@@ -195,7 +238,16 @@ const CODEX_API_KEY_AUTH: &str = r#"{"methodId":"api-key"}"#;
 /// 0.154 keeps that key in the process and its threads under
 /// `sessions/` in that home, so the next harness can resume them. No
 /// directory means no Codex login.
-pub fn login_to_set(
+///
+/// For a harness started under `lease` (`None` outside one), a ChatGPT access
+/// token for Codex goes in the lease's token file in the ChatGPT home beside
+/// `codex_sessions` ([`prepare_chatgpt_home`]), named to Codex by
+/// [`CHATGPT_TOKEN_FILE_VARIABLE`], with `CODEX_HOME` set to that home and
+/// no auth request: its provider asks for no sign-in. A renewed token is
+/// written to the same file ([`renew_chatgpt_token`]). Without a lease, or
+/// when the home or file cannot be made, the token is not handed.
+fn login_to_set(
+    lease: Option<&str>,
     agent: AgentId,
     login: Option<&Login>,
     configured: &BTreeMap<OsString, OsString>,
@@ -218,6 +270,17 @@ pub fn login_to_set(
         (Some(login), false) => login,
         _ => return None,
     };
+    if agent == AgentId::Codex && is_chatgpt_access_token(login) {
+        let home = prepare_chatgpt_home(codex_sessions?)?;
+        let file = write_chatgpt_token(&home, lease?, login)?;
+        return Some(vec![
+            (
+                CHATGPT_TOKEN_FILE_VARIABLE.to_owned(),
+                file.to_str()?.to_owned(),
+            ),
+            ("CODEX_HOME".to_owned(), home.to_str()?.to_owned()),
+        ]);
+    }
     let variable = login_variable(agent, login);
     let mut handed = vec![(variable.to_owned(), login.expose().to_owned())];
     if agent == AgentId::Codex {
@@ -229,6 +292,161 @@ pub fn login_to_set(
         handed.push(("CODEX_HOME".to_owned(), home));
     }
     Some(handed)
+}
+
+/// Write `lease`'s renewed ChatGPT access token over the one its harnesses
+/// read, in the ChatGPT home beside `codex_sessions`. Only a lease whose
+/// harness was started with a token has a file; `false` for any other, or
+/// when it cannot be written.
+fn renew_chatgpt_token(codex_sessions: &Path, lease: &str, login: &Login) -> bool {
+    let Some(home) = chatgpt_home(codex_sessions) else {
+        return false;
+    };
+    token_file(&home, lease).exists() && write_chatgpt_token(&home, lease, login).is_some()
+}
+
+/// Remove `lease`'s token file, once the lease has ended: nothing under it
+/// reads it again.
+fn forget_chatgpt_token(codex_sessions: &Path, lease: &str) {
+    if let Some(home) = chatgpt_home(codex_sessions) {
+        let _ = std::fs::remove_file(token_file(&home, lease));
+    }
+}
+
+/// The lease's token file: named by a digest of the lease's id, so no id
+/// the gateway sends can name a path.
+fn token_file(home: &Path, lease: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(lease.as_bytes());
+    let name: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    home.join(TOKENS_DIRECTORY).join(name)
+}
+
+/// Where the lease token files are kept in the ChatGPT home.
+const TOKENS_DIRECTORY: &str = "tokens";
+
+/// Write `login` as `lease`'s token file, readable only by this account,
+/// replacing the old one whole so Codex never reads half of it.
+fn write_chatgpt_token(home: &Path, lease: &str, login: &Login) -> Option<PathBuf> {
+    let file = token_file(home, lease);
+    let directory = file.parent()?;
+    std::fs::create_dir_all(directory).ok()?;
+    restrict(directory, 0o700)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(directory).ok()?;
+    restrict(temporary.path(), 0o600)?;
+    std::io::Write::write_all(&mut temporary, login.expose().as_bytes()).ok()?;
+    temporary.persist(&file).ok()?;
+    Some(file)
+}
+
+#[cfg(unix)]
+fn restrict(path: &Path, mode: u32) -> Option<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).ok()
+}
+
+#[cfg(not(unix))]
+fn restrict(_path: &Path, _mode: u32) -> Option<()> {
+    Some(())
+}
+
+/// The provider a ChatGPT access token is used through, as OpenAI's
+/// Codex app-server guide sets it up: the Responses API, the token sent as
+/// a bearer token, and no Codex sign-in asked for. Codex reads the token by
+/// running [`TOKEN_COMMAND`], which prints the lease's token file, again on
+/// any 401 and every [`TOKEN_REREAD_MS`], so a renewed token is used without
+/// restarting the harness (Codex 0.154's `model_providers.<id>.auth`).
+const CHATGPT_PROVIDER: &str = "nessa_chatgpt";
+
+/// The command Codex runs for the token: the file the launch named, through
+/// the shell only to read that variable.
+const TOKEN_COMMAND: [&str; 3] = ["/bin/sh", "-c", "exec cat -- \"$NESSA_CHATGPT_TOKEN_FILE\""];
+
+/// How often Codex reads the token file again without a 401: well inside
+/// the ten minutes the gateway renews a token before it expires.
+const TOKEN_REREAD_MS: i64 = 5 * 60 * 1000;
+
+/// Make the `CODEX_HOME` a ChatGPT access token is used in, beside the
+/// saved key's `sessions_home`: `<sessions_home>-chatgpt`. Its
+/// `config.toml` makes [`CHATGPT_PROVIDER`] the default provider, which
+/// is why it is a home of its own: the key's home keeps OpenAI's. Its
+/// `sessions/` is a link to the key's, so a thread started under either
+/// login resumes under the other. The credential store stays ephemeral.
+/// `None` when either home cannot be prepared: the token is then not
+/// handed.
+fn prepare_chatgpt_home(sessions_home: &Path) -> Option<PathBuf> {
+    prepare_codex_home(sessions_home)?;
+    let home = chatgpt_home(sessions_home)?;
+    std::fs::create_dir_all(&home).ok()?;
+    let shared = sessions_home.join("sessions");
+    std::fs::create_dir_all(&shared).ok()?;
+    let link = home.join("sessions");
+    match std::fs::read_link(&link) {
+        Ok(target) if target == shared => {}
+        Ok(_) => {
+            std::fs::remove_file(&link).ok()?;
+            link_directory(&shared, &link)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            link_directory(&shared, &link)?;
+        }
+        // A real directory or file there: not one this launcher made.
+        Err(_) => return None,
+    }
+    let config = home.join("config.toml");
+    let existing = match std::fs::read_to_string(&config) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return None,
+    };
+    let mut document: toml_edit::DocumentMut = existing.parse().ok()?;
+    let before = document.to_string();
+    document[CREDENTIAL_STORE] = toml_edit::value(EPHEMERAL);
+    document["model_provider"] = toml_edit::value(CHATGPT_PROVIDER);
+    let mut provider = toml_edit::Table::new();
+    provider["name"] = toml_edit::value("ChatGPT plan");
+    provider["base_url"] = toml_edit::value("https://api.openai.com/v1");
+    provider["wire_api"] = toml_edit::value("responses");
+    provider["requires_openai_auth"] = toml_edit::value(false);
+    provider["supports_websockets"] = toml_edit::value(false);
+    let mut auth = toml_edit::Table::new();
+    auth["command"] = toml_edit::value(TOKEN_COMMAND[0]);
+    let mut args = toml_edit::Array::new();
+    for arg in &TOKEN_COMMAND[1..] {
+        args.push(*arg);
+    }
+    auth["args"] = toml_edit::value(args);
+    auth["refresh_interval_ms"] = toml_edit::value(TOKEN_REREAD_MS);
+    provider["auth"] = toml_edit::Item::Table(auth);
+    if !document.contains_table("model_providers") {
+        let mut providers = toml_edit::Table::new();
+        providers.set_implicit(true);
+        document["model_providers"] = toml_edit::Item::Table(providers);
+    }
+    document["model_providers"][CHATGPT_PROVIDER] = toml_edit::Item::Table(provider);
+    if document.to_string() != before {
+        std::fs::write(&config, document.to_string()).ok()?;
+    }
+    Some(home)
+}
+
+/// The ChatGPT home beside `sessions_home`: `<sessions_home>-chatgpt`.
+fn chatgpt_home(sessions_home: &Path) -> Option<PathBuf> {
+    let mut name = sessions_home.file_name()?.to_os_string();
+    name.push("-chatgpt");
+    Some(sessions_home.with_file_name(name))
+}
+
+#[cfg(unix)]
+fn link_directory(target: &Path, link: &Path) -> Option<()> {
+    std::os::unix::fs::symlink(target, link).ok()
+}
+
+/// Windows hosts start no Codex for a lease (the binding refuses one), so
+/// no ChatGPT home is made there.
+#[cfg(not(unix))]
+fn link_directory(_target: &Path, _link: &Path) -> Option<()> {
+    None
 }
 
 /// Codex 0.154's credential-store setting, and the value that keeps a

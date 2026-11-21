@@ -10,7 +10,8 @@ import {
   type LoginsApi,
   type LoginsStatus,
 } from "@nessa/client"
-import { savedLoginsGateway } from "./saved-logins-gateway"
+import { chatgptEndSentence, savedLoginsGateway } from "./saved-logins-gateway"
+import { ChatgptSignInEnd } from "@nessa/client"
 
 const peer = `peer:${"cd".repeat(32)}`
 const status: LoginsStatus = {
@@ -28,6 +29,10 @@ function over(answer: () => Promise<LoginsStatus>) {
     save: answer,
     remove: answer,
     setDevice: answer,
+    chatgptSignIn: answer,
+    chatgptCancel: answer,
+    chatgptUse: answer,
+    chatgptRemove: answer,
   }
   return savedLoginsGateway(() => Promise.resolve({ logins }))
 }
@@ -55,4 +60,47 @@ it("says every refusal in a sentence, and one for no answer", async () => {
     kind: "refused",
     sentence: "The gateway didn’t answer. Try again.",
   })
+})
+
+const account = {
+  id: "0b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e",
+  email: "a@example.com",
+  inUse: true,
+  needsSignIn: false,
+}
+
+it("reads the ChatGPT accounts and where a sign-in stands", async () => {
+  const waiting = await over(() =>
+    Promise.resolve({
+      ...status,
+      chatgpt: {
+        accounts: [account],
+        signIn: { state: "waiting", authorizeUrl: "https://auth.example/a" },
+      },
+    }),
+  ).chatgptSignIn()
+  expect(waiting.kind === "read" && waiting.logins.chatgpt).toEqual({
+    accounts: [account],
+    signIn: { kind: "waiting", authorizeUrl: "https://auth.example/a" },
+  })
+  const ended = await over(() =>
+    Promise.resolve({
+      ...status,
+      chatgpt: { accounts: [], signIn: { state: "idle", last: "timed_out" } },
+    }),
+  ).read()
+  expect(ended.kind === "read" && ended.logins.chatgpt?.signIn).toEqual({
+    kind: "idle",
+    last: "timed_out",
+  })
+  const none = await over(() => Promise.resolve(status)).read()
+  expect(none.kind === "read" && none.logins.chatgpt).toBeUndefined()
+})
+
+it("says how a sign-in ended, except when the person stopped it", () => {
+  for (const end of Object.values(ChatgptSignInEnd)) {
+    const sentence = chatgptEndSentence(end)
+    if (end === "cancelled" || end === "replaced") expect(sentence).toBeUndefined()
+    else expect(sentence).toMatch(/\.$/)
+  }
 })

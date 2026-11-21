@@ -392,11 +392,13 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
                 environment: "studio".into(),
                 agent,
                 lease: "lease-1".into(),
+                chatgpt: None,
             },
             LoginEvent::Sent {
                 environment: "boat:thread".into(),
                 agent,
                 lease: "lease-1".into(),
+                chatgpt: None,
             },
             LoginEvent::NotSent {
                 environment: "here".into(),
@@ -414,6 +416,7 @@ async fn a_login_is_handed_only_where_the_policy_allows() {
                 environment: peer(3).name(),
                 agent,
                 lease: "lease-1".into(),
+                chatgpt: None,
             },
             LoginEvent::NotSent {
                 environment: peer(4).name(),

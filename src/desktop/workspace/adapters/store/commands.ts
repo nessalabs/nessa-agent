@@ -93,6 +93,8 @@ export {
   providerLoginAvailable,
   signInForBoat,
   boatSignInAvailable,
+  signInWithChatgpt,
+  chatgptSignInAvailable,
   removeComposerImage,
   renameSession,
   forkSession,

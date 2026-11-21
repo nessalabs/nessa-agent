@@ -166,6 +166,14 @@ pub trait LeaseHold: Send + Sync {
     /// lease ends. `None` when that cannot happen apart from the gateway
     /// itself, as in process.
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>>;
+    /// When the lease's agent should be started again because the login it
+    /// was handed is about to expire, in Unix milliseconds: the parking
+    /// sweep stops it once idle past this (row P1 in
+    /// `docs/design/chatgpt-sign-in.md`). `None` when its login does not
+    /// expire, or it was handed none.
+    fn renew_by(&self) -> Option<u64> {
+        None
+    }
     /// End the lease for `cause`: the environment stops anything still
     /// running under it and answers what releasing it took. The caller bounds
     /// the wait.
@@ -1062,6 +1070,12 @@ impl LiveLease {
     /// apart from the gateway itself.
     pub fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         self.hold.as_ref().and_then(|hold| hold.ends())
+    }
+
+    /// When this lease's agent should be started again for a fresh login
+    /// ([`LeaseHold::renew_by`]).
+    pub fn renew_by(&self) -> Option<u64> {
+        self.hold.as_ref().and_then(|hold| hold.renew_by())
     }
 
     /// Ask the environment to publish a file under this lease; see

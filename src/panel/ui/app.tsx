@@ -1,3 +1,4 @@
+import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
 import type { BoatClaudeSignIn } from "../../provider-authentication/model/boat-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
@@ -122,6 +123,7 @@ export function App({
   onProviderSignIn,
   canSignInToProvider,
   boatSignIn,
+  chatgptSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -145,6 +147,8 @@ export function App({
   canSignInToProvider?: () => Promise<boolean>
   /** A Claude sign-in minted for Boat VMs, for a refusal from one (ADR 501). */
   boatSignIn?: BoatClaudeSignIn
+  /** A ChatGPT account for Codex on another computer. */
+  chatgptSignIn?: CodexChatgptSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -613,6 +617,7 @@ export function App({
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
                   boatSignIn={boatSignIn}
+                  chatgptSignIn={chatgptSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }
