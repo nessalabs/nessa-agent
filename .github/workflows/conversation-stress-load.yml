@@ -135,6 +135,8 @@ jobs:
       - run: |
           eval "$(scripts/terminal/ghostty.sh)"
           cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
       # The peer step enrolls through this example.
       - run: cargo build -p nessa-client-core --example read_only_sync
       - name: Pick the seed
