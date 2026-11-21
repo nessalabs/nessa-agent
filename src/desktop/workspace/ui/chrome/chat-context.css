@@ -1,26 +1,12 @@
 /*
- * Chat context (`chat-context.tsx`): the right panel's first tab. Sections
+ * Chat context (`chat-context.tsx`): the column on a chat pane's right. Sections
  * fold from their headers; rows are an icon, a name that truncates, and a
  * quiet trailing value. Tokens are the window's.
  */
-.workspace-panel-context {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  overflow: auto;
-  /* Alone, it starts below the titlebar row, as a tab's widget does. */
-  margin-top: var(--desktop-titlebar-height);
-}
-
-.workspace-panel-context[data-tabbed] {
-  margin-top: 0;
-}
-
 .chat-context {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--desktop-gutter) * 2);
+  gap: calc(var(--desktop-gutter) * 2.5);
   padding: 0 var(--desktop-gutter) calc(var(--desktop-gutter) * 2);
   color: var(--foreground);
 }

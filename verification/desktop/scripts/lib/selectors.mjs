@@ -106,8 +106,8 @@ export const css = {
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
   widgetCardRow: '[data-widget-inline="row"]', // an Open row while the app is live in its panel
   panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
-  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs: Chat context, then one per widget open for the chat in front
-  widgetTab: '.workspace-panel-tabs [role="tab"]:not([title="Chat context"])', // a widget's tab, never Chat context's
+  chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  widgetTab: '.workspace-panel-tabs [role="tab"]', // a widget's tab in the right panel
   panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
   panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
   widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands
@@ -135,7 +135,7 @@ export const css = {
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
   subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its Chat context
   chatContextButton: "[data-chat-context-button]", // a pane header's Chat context button
-  chatContext: "[data-chat-context]", // the right panel's Chat context tab
+  chatContext: "[data-chat-context]", // Chat context, the column on a chat pane's right
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
 

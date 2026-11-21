@@ -719,6 +719,13 @@ on.
   overlapping, and the title keeps a positive width inside the header.
   A production Chromium run fails when the open's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **Chat context shows as a column in its own pane.** The header's button
+  controls it and is pressed while it shows, and a new session's home offers
+  none (`widgets.test.tsx`). In a pane of 40rem or more the column sits beside
+  the conversation, inside the pane, 16 to 22rem wide, with nothing under it;
+  in a narrower pane it lies over the conversation's right side, at the pane's
+  right edge, at most 85% of the pane. A second click hides it. _Check:_
+  `subagents.mjs --only context,context-narrow` (1440 × 900 and 1000 × 560).
 - [ ] **The card's Open is measured the same way.** A production Chromium
   run at the same size fails when that click's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only card-open` (1000 × 560).

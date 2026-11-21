@@ -616,12 +616,15 @@ const checks = {
       if (inList.seen.length === 0) failures.push("no kit EmptyState in the session list")
       failures.push(...(await emptyListPill(page)))
     }
-    // The right panel is never empty for a chat: with nothing opened in it, it
-    // shows the chat's Chat context, in either layout.
+    // The right panel's "Nothing open", in either layout.
     await page.getByRole("button", { name: "Show Panel" }).click()
-    await need(page, "#workspace-panel [data-chat-context]", "the panel's Chat context")
+    await need(page, "#workspace-panel [data-slot='empty-state']", "the panel's note")
+    const inPanel = await page.evaluate(measureEmptyStates, css)
+    failures.push(...inPanel.failures.map((f) => `panel ${f}`))
+    if (!inPanel.seen.some((each) => /Nothing open/.test(JSON.stringify(each))))
+      failures.push('the right panel\'s "Nothing open" is not shown')
     await page.getByRole("button", { name: "Hide Panel" }).click()
-    return { failures, measured: { inList: inList.seen } }
+    return { failures, measured: { inList: inList.seen, inPanel: inPanel.seen } }
   },
   keys: async (page) => {
     await need(page, `${css.keyCap}:visible`, "a key cap")
@@ -953,9 +956,8 @@ Checks, per engine and layout (--only badges,empty,identity,keys,list,rims,rows,
              least 18 wide, no border, the needs light for what waits); every
              lit point — unread, needs you, the overview's heading included —
              is StatusGlyph's 6px point in its light. On load and in the overview.
-  empty      every empty state — the session list's with no match — is the
-             kit's EmptyState in the window's type, and the right panel with
-             nothing opened shows Chat context, not a note: a
+  empty      every empty state — the session list's with no match, the right
+             panel's "Nothing open" — is the kit's EmptyState in the window's type: a
              quiet one faint footnote, a titled one at reading size, 600.
              Columns: the writing channel's one session is archived, and New
              Session is the kit's tinted pill (28px, fully round,
