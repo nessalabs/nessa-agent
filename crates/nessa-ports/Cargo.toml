@@ -1,0 +1,10 @@
+[package]
+name = "nessa-ports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Headless workspace listener inventory primitives."
+
+[lints]
+workspace = true

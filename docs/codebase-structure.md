@@ -729,6 +729,10 @@ conversation read model with the agent names it uses (`conversation/`,
 any client. See the [protocol crate](../crates/nessa-protocol/README.md) and
 [ADR 483](adr/done/483-protocol-and-client-core-crates.md).
 
+`crates/nessa-ports` owns headless, advisory listener inventories. Its
+[crate guide](../crates/nessa-ports/README.md) describes the snapshot contract;
+it has no provider, gateway, UI, or network dependencies.
+
 `crates/nessa-gateway-endpoint` owns the bound local endpoint, per-process
 identity, application publication/discovery ports, and private-file adapters.
 Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`

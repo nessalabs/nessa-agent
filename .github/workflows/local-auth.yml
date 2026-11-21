@@ -190,6 +190,8 @@ jobs:
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.
+      - run: cargo clippy -p nessa-ports --all-targets -- -D warnings
+      - run: cargo test -p nessa-ports
       - run: cargo clippy -p nessa-agent-credentials --all-targets -- -D warnings
       - run: cargo test -p nessa-agent-credentials
       # Test before lint, here and in the matrix below, and it is worth saying
