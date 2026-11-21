@@ -9852,7 +9852,8 @@ const steps = {
    * it on, the channel's first chat is its coordinator, and (said only in
    * Claude's reply) it is told its job. Off, the channel keeps that chat but
    * no longer opens at it: a new chat there is an ordinary thread, told no
-   * job. On again, it is the same coordinator chat. A channel made with it
+   * job. On again, it is the same coordinator chat, pinned as the first row of
+   * the channel's list above newer threads. A channel made with it
    * off says so, and still names the main chat it would have.
    */
   async coordinator(run, step, failures) {
@@ -9921,6 +9922,36 @@ const steps = {
         )
       return now
     }
+    // The list's first row, and its group, while the channel is shown.
+    const pinnedCheck = async (made, on) => {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(made.name, { exact: true })
+        .first()
+        .click({ timeout: 15_000 })
+      const top = async () => {
+        const row = run.page.locator("[data-list-group] [data-session-row]").first()
+        if ((await row.count()) === 0) return null
+        return {
+          id: await row.getAttribute("data-session-row"),
+          group: await row.evaluate((node) =>
+            node.closest("[data-list-group]")?.getAttribute("data-list-group"),
+          ),
+        }
+      }
+      const pinned = await waitFor(async () => {
+        const first = await top()
+        const at =
+          first?.id === made.coordinatorConversationId && first.group === "coordinator"
+        return at === on ? first : null
+      }, 10_000)
+      if (!pinned)
+        failures.push(
+          on
+            ? `the coordinator is not the list's first row, in its own group: ${JSON.stringify(await top())}`
+            : `the list still pins the coordinator while it is off`,
+        )
+    }
     try {
       const made = await makeChannel(run, failures, {
         name: `stress-coord-r${step.index}-s${run.knobs.seed}`,
@@ -9983,8 +10014,12 @@ const steps = {
                 "a thread started with the coordinator off was told the coordinator's job",
               )
           }
+          // Off, it is an ordinary row: no Coordinator group in the list.
+          await pinnedCheck(made, false)
           // On again: the same coordinator chat, which still answers.
           if (await switchTo(made, true)) {
+            // Pinned at the top of the list, above the newer thread.
+            await pinnedCheck(made, true)
             await openStressConversation(run.page, made.coordinatorConversationId)
             const again = prompt(run, STRESS.channel, step, " coordinator again")
             const seen = await send(run, made.coordinatorConversationId, again, failures)

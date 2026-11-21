@@ -400,9 +400,9 @@ export interface ListGroup {
 }
 
 /**
- * The session list's groups for the current view and a search, as ids;
- * running sessions kept in a group above the rest unless `runningFirst` is
- * off.
+ * The session list's groups for the current view and a search, as ids: the
+ * channel's coordinator on top while it is on, then running sessions kept in
+ * a group above the rest unless `runningFirst` is off.
  */
 export function selectListGroups(
   state: Root,
@@ -410,11 +410,14 @@ export function selectListGroups(
   runningFirst = true,
 ): ListGroup[] {
   const view = state.workspace.view
+  const channel = selectChannel(state, view.channelId)
+  const coordinatorId =
+    channel?.coordinatorOn === false ? undefined : channel?.coordinatorConversationId
   return groupByStatus(
     listed(state).filter(
       (session) => inView(session, view) && matchesSearch(session, query),
     ),
-    { runningFirst },
+    { runningFirst, coordinatorId },
   ).map((group) => ({
     id: group.id,
     label: group.label,
