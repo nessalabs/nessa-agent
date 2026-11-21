@@ -619,6 +619,27 @@ impl TerminalHub {
         Ok(())
     }
 
+    /// The person's own name for `id`; every list shows it from now on.
+    pub fn rename(
+        &self,
+        owner: &TerminalOwner,
+        id: &str,
+        title: String,
+    ) -> Result<(), TerminalError> {
+        let mut hub = self.lock();
+        let live = hub
+            .terminals
+            .iter_mut()
+            .find(|live| live.entry.id == id && &live.owner == owner)
+            .ok_or(TerminalError::NotFound)?;
+        if live.entry.title == title {
+            return Ok(());
+        }
+        live.entry.title = title;
+        self.announce(&mut hub, owner);
+        Ok(())
+    }
+
     /// A connection went: every view it had goes with it.
     fn disconnect(&self, connection: u64) {
         let mut hub = self.lock();
@@ -641,6 +662,14 @@ impl TerminalHub {
         self.with_terminal(owner, id, |live| Ok((live.size_owner.clone(), live.size)))
             .ok()
     }
+}
+
+/// A name the person gave, as kept: trimmed, 1 to 80 characters, no
+/// control characters. None when it is none of those.
+pub fn named(title: &str) -> Option<String> {
+    let title = title.trim();
+    let count = title.chars().count();
+    ((1..=80).contains(&count) && !title.chars().any(char::is_control)).then(|| title.to_owned())
 }
 
 /// The title of a Run: its first non-blank line, cut to 80 characters.
@@ -734,6 +763,10 @@ impl TerminalLink {
 
     pub fn close(&self, id: &str) -> Result<(), TerminalError> {
         self.hub()?.close(&self.owner, id)
+    }
+
+    pub fn rename(&self, id: &str, title: String) -> Result<(), TerminalError> {
+        self.hub()?.rename(&self.owner, id, title)
     }
 }
 

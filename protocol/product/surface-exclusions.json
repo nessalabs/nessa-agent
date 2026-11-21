@@ -17,5 +17,6 @@
   "terminal.detach": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
   "terminal.input": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
   "terminal.history": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
-  "terminal.close": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+  "terminal.close": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.rename": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
 }

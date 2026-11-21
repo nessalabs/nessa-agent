@@ -634,6 +634,8 @@ export interface TerminalSource {
   input(terminalId: string, bytes: Uint8Array): void
   /** End a terminal. It leaves the list. */
   close(terminalId: string): Promise<void>
+  /** The person's own name for a terminal; the list shows it once the gateway says so. */
+  rename(terminalId: string, title: string): Promise<void>
 }
 
 /**

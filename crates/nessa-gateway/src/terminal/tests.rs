@@ -231,3 +231,25 @@ fn a_grid_outside_what_the_runtime_takes_is_refused() {
     assert!(GridSize::new(1001, 10).is_none());
     assert_eq!(GridSize::new(80, 24), Some(size(80, 24)));
 }
+
+#[test]
+fn a_terminal_takes_the_name_its_person_gives_it() {
+    let (hub, _engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    let id = link
+        .open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap()
+        .id;
+    link.rename(&id, "build watcher".into()).unwrap();
+    assert_eq!(hub.list(&owner("p"))[0].title, "build watcher");
+    // Another person cannot name it.
+    let (other, _o) = hub.connect(owner("q"));
+    assert!(other.rename(&id, "mine".into()).is_err());
+    assert_eq!(hub.list(&owner("p"))[0].title, "build watcher");
+    // A name is trimmed, 1 to 80 characters, with no control characters.
+    assert_eq!(super::named("  logs  ").as_deref(), Some("logs"));
+    assert_eq!(super::named("   "), None);
+    assert_eq!(super::named("a\u{7}b"), None);
+    assert_eq!(super::named(&"x".repeat(81)), None);
+    assert!(super::named(&"x".repeat(80)).is_some());
+}

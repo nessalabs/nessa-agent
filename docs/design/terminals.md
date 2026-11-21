@@ -146,7 +146,7 @@ The state page with the TLA+ model is
 
 ## As built (T1 to T4)
 
-- Methods: `terminal.open`, `list`, `attach`, `focus`, `fit`, `detach`,
+- Methods: `terminal.open`, `list`, `rename`, `attach`, `focus`, `fit`, `detach`,
   `input`, `history`, `close`; events `terminal.output` (`{terminalId,
   viewId, message}`, one pty-runtime protocol message as JSON) and
   `terminal.listed` (the whole list on each change). The gateway forgets a

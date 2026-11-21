@@ -4,10 +4,14 @@
  * its path (that is in the pane's details). A row opens its terminal as a
  * session row opens its session, and drags to a pane the same way.
  */
-import { memo } from "react"
+import { memo, useState } from "react"
 import { shallowEqual } from "react-redux"
 import { GroupHeader } from "@nessa-ui/react/group-header"
-import { closeTerminal, openTerminal } from "../../adapters/store/commands"
+import {
+  closeTerminal,
+  openTerminal,
+  renameTerminal,
+} from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectChannelShells,
@@ -20,6 +24,7 @@ import { useNow } from "../../../../clock"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import { ListRow } from "../../../ui/list-row"
+import { RenameField } from "../session-row-actions"
 
 export const TerminalRows = memo(function TerminalRows({
   channelId,
@@ -58,7 +63,10 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
   const terminal = useWorkspaceSelector((state) => selectTerminal(state, terminalId))
   const shown = useWorkspaceSelector((state) => selectTerminalShown(state, terminalId))
   const now = useNow(30_000)
+  // The name being typed, while the person renames it here.
+  const [draft, setDraft] = useState<string | null>(null)
   if (!terminal) return null
+  const renaming = draft !== null
   const exited = terminal.state === "exited"
   return (
     <ListRow
@@ -70,14 +78,34 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
       data-terminal-row={terminal.id}
       className="workspace-session workspace-terminal-row"
       data-drag-item={paneItemKey(terminalItem(terminal.id))}
-      onClick={() => dispatch(openTerminal({ terminalId: terminal.id }))}
+      data-renaming={renaming || undefined}
+      onClick={() => {
+        if (!renaming) dispatch(openTerminal({ terminalId: terminal.id }))
+      }}
+      onDoubleClick={() => setDraft(terminal.title)}
       onKeyDown={(event) => {
-        if (event.key !== "Enter") return
+        if (renaming || event.key !== "Enter") return
         event.preventDefault()
         dispatch(openTerminal({ terminalId: terminal.id }))
       }}
       leading={<DesktopIcon name="terminal" size={18} />}
-      title={terminal.title}
+      title={
+        renaming ? (
+          <RenameField
+            title={terminal.title}
+            draft={draft}
+            label="Terminal name"
+            onDraft={setDraft}
+            onDone={(next) => {
+              setDraft(null)
+              if (next !== null && next.trim() && next.trim() !== terminal.title)
+                void dispatch(renameTerminal(terminal.id, next))
+            }}
+          />
+        ) : (
+          terminal.title
+        )
+      }
       trailing={
         <>
           <time>
@@ -86,6 +114,17 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
               : sessionTime(terminal.startedAtMs, now)}
           </time>
           <span className="workspace-session-actions" aria-hidden="true">
+            <IconButton
+              icon="rename"
+              label="Rename Terminal"
+              size="sm"
+              tabIndex={-1}
+              aria-label={`Rename ${terminal.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                setDraft(terminal.title)
+              }}
+            />
             <IconButton
               icon="close"
               label="End Terminal"

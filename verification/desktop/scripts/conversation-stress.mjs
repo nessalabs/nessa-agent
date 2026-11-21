@@ -11583,6 +11583,29 @@ const steps = {
         if (!said.includes(part))
           failures.push(`the terminal's details do not say ${part}`)
       await page.keyboard.press(keys.escape)
+      // Renamed from its row: the gateway keeps the name and the row and the
+      // pane's title show it.
+      const name = `stress shell ${step.index}`
+      await row.hover()
+      // The row's buttons are hover chrome, hidden from the accessibility tree.
+      await row.locator(`button[aria-label="Rename ${opened.title}"]`).click()
+      const field = row.getByRole("textbox", { name: "Terminal name" })
+      await field.fill(name)
+      await field.press(keys.enter)
+      const renamed = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find((each) => each.terminalId === opened.terminalId)?.title === name
+      }, 5_000)
+      if (!renamed) failures.push("the gateway did not keep the terminal's new name")
+      else if (
+        !(await waitFor(
+          async () =>
+            (await row.innerText()).includes(name) &&
+            (await pane.locator(".workspace-pane-title").innerText()) === name,
+          5_000,
+        ))
+      )
+        failures.push("the terminal's row or pane does not show its new name")
       // The pane's × ends it: the gateway lists it no more, nor does the window.
       await pane.getByRole("button", { name: "End Terminal" }).click()
       const ended = await waitFor(async () => {

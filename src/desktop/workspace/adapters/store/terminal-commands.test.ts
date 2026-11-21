@@ -9,6 +9,7 @@ import {
   interruptTerminal,
   loadWorkspace,
   newTerminal,
+  renameTerminal,
   runInConversation,
 } from "./commands"
 
@@ -55,6 +56,11 @@ function memoryTerminals() {
         list.findIndex((terminal) => terminal.id === terminalId),
         1,
       )
+      tell()
+    },
+    async rename(terminalId, title) {
+      const at = list.findIndex((terminal) => terminal.id === terminalId)
+      if (at >= 0) list[at] = { ...list[at]!, title }
       tell()
     },
   }
@@ -111,6 +117,18 @@ describe("ending a terminal", () => {
     await made.dispatch(closeTerminal(id(1)))
     expect(shownIn(made.getState().workspace.panes)).not.toContain(`terminal ${id(1)}`)
     expect(made.getState().workspace.terminals).toEqual({})
+  })
+})
+
+describe("renaming a terminal", () => {
+  it("lists the name the gateway kept, trimmed, and sends no blank one", async () => {
+    const memory = memoryTerminals()
+    const made = await store(memory.source)
+    await made.dispatch(newTerminal())
+    await made.dispatch(renameTerminal(id(1), "  build watcher  "))
+    expect(made.getState().workspace.terminals[id(1)]?.title).toBe("build watcher")
+    await made.dispatch(renameTerminal(id(1), "   "))
+    expect(made.getState().workspace.terminals[id(1)]?.title).toBe("build watcher")
   })
 })
 

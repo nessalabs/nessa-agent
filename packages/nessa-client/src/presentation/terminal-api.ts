@@ -37,6 +37,8 @@ export type TerminalApi = {
   history(terminalId: string, viewId: string, start: number, count: number): Promise<void>
   /** End a terminal: hung up, then killed after 5 s, and gone from the list. */
   close(terminalId: string): Promise<void>
+  /** Give a terminal the person's own name (1 to 80 characters); every list shows it. */
+  rename(terminalId: string, title: string): Promise<void>
 }
 
 /** The largest input the gateway takes in one call, before base64. */
@@ -81,6 +83,8 @@ export function createTerminalApi(session: RpcRequester): TerminalApi {
     history: (terminalId, viewId, start, count) =>
       done(ProductMethod.TerminalHistory, { terminalId, viewId, start, count }),
     close: (terminalId) => done(ProductMethod.TerminalClose, { terminalId }),
+    rename: (terminalId, title) =>
+      done(ProductMethod.TerminalRename, { terminalId, title }),
   }
 }
 

@@ -71,6 +71,7 @@ export {
   closeTerminal,
   interruptTerminal,
   newTerminal,
+  renameTerminal,
   runInConversation,
 } from "./terminal-commands"
 export {

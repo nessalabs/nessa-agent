@@ -75,6 +75,10 @@
     {
       "method": "terminal.close",
       "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.rename",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
     }
   ],
   "methods": [

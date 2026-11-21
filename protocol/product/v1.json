@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 151,
+          "maxItems": 152,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -10464,7 +10464,10 @@
       "additionalProperties": false,
       "description": "One of the person's terminals.",
       "properties": {
-        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal's id." },
+        "terminalId": {
+          "$ref": "#/$defs/TerminalId",
+          "description": "The terminal's id."
+        },
         "title": {
           "type": "string",
           "minLength": 1,
@@ -10517,15 +10520,29 @@
           "enum": ["here"],
           "description": "The machine: here is the gateway's own."
         },
-        "startedAtMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "When it started, in milliseconds since the Unix epoch." },
-        "state": { "type": "string", "enum": ["running", "exited"], "description": "running until the program ends, then exited." },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it started, in milliseconds since the Unix epoch."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["running", "exited"],
+          "description": "running until the program ends, then exited."
+        },
         "exitStatus": {
           "type": "integer",
           "minimum": -2147483648,
           "maximum": 2147483647,
           "description": "The exit code once exited; omitted when it was ended by a signal or is running."
         },
-        "endedAtMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "When it ended, in milliseconds since the Unix epoch; only once exited." }
+        "endedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it ended, in milliseconds since the Unix epoch; only once exited."
+        }
       },
       "required": [
         "terminalId",
@@ -10543,7 +10560,12 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The terminal terminal.open started, or the one this requestId already started.",
-      "properties": { "terminal": { "$ref": "#/$defs/TerminalSummary", "description": "The terminal that opened, or the one the same requestId opened before." } },
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/TerminalSummary",
+          "description": "The terminal that opened, or the one the same requestId opened before."
+        }
+      },
       "required": ["terminal"]
     },
     "TerminalListResult": {
@@ -10580,7 +10602,10 @@
       "description": "Show a terminal in a view (terminal.attach), or make the view the size owner (terminal.focus), or report its new fit (terminal.fit). Attach sends a checkpoint of the screen then live terminal.output. Focus resizes the terminal to the view's fit when it differs; fit resizes it only when this view owns the size.",
       "properties": {
         "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
-        "viewId": { "$ref": "#/$defs/TerminalViewId", "description": "The view, chosen by the window, unique per connection." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
         "cols": {
           "type": "integer",
           "minimum": 2,
@@ -10602,7 +10627,10 @@
       "description": "Stop showing a terminal in a view (terminal.detach). The terminal keeps running; if this view owned the size, the size is kept.",
       "properties": {
         "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
-        "viewId": { "$ref": "#/$defs/TerminalViewId", "description": "The view, chosen by the window, unique per connection." }
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        }
       },
       "required": ["terminalId", "viewId"]
     },
@@ -10628,9 +10656,22 @@
       "description": "Read retained rows for one view (terminal.history); the rows arrive as a history terminal.output for that view. Reading moves no other view.",
       "properties": {
         "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
-        "viewId": { "$ref": "#/$defs/TerminalViewId", "description": "The view, chosen by the window, unique per connection." },
-        "start": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "The first history row to read, counted from the oldest kept." },
-        "count": { "type": "integer", "minimum": 1, "maximum": 500, "description": "How many rows to read." }
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The first history row to read, counted from the oldest kept."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "How many rows to read."
+        }
       },
       "required": ["terminalId", "viewId", "start", "count"]
     },
@@ -10638,8 +10679,25 @@
       "type": "object",
       "additionalProperties": false,
       "description": "End a terminal and remove it from the list (terminal.close): its program is hung up, then killed after 5 s.",
-      "properties": { "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." } },
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." }
+      },
       "required": ["terminalId"]
+    },
+    "TerminalRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Give a terminal the person's own name (terminal.rename); every window's list shows it. Kept while the terminal runs.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "The new name: 1 to 80 characters, no control characters, not only spaces."
+        }
+      },
+      "required": ["terminalId", "title"]
     },
     "TerminalOutput": {
       "type": "object",
@@ -10647,7 +10705,10 @@
       "description": "One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator.",
       "properties": {
         "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
-        "viewId": { "$ref": "#/$defs/TerminalViewId", "description": "The view, chosen by the window, unique per connection." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
         "message": {
           "type": "string",
           "minLength": 2,

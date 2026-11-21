@@ -2150,7 +2150,8 @@ async fn dispatch_authorized(
         | ProductMethod::TerminalDetach
         | ProductMethod::TerminalInput
         | ProductMethod::TerminalHistory
-        | ProductMethod::TerminalClose => {
+        | ProductMethod::TerminalClose
+        | ProductMethod::TerminalRename => {
             super::terminal::dispatch(state, session, frame, places.terminals).await
         }
         ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),

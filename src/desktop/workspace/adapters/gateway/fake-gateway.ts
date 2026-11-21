@@ -1339,5 +1339,13 @@ function fakeTerminals(publish: (event: string, payload: unknown) => void): Term
       listed()
       return Promise.resolve()
     },
+    rename: (terminalId, title) => {
+      const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
+      if (at < 0)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      terminals[at] = { ...terminals[at]!, title }
+      listed()
+      return Promise.resolve()
+    },
   }
 }

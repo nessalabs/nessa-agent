@@ -278,6 +278,10 @@ export function terminalGateway(options: {
       const current = await client()
       await current.terminals.close(terminalId)
     },
+    async rename(terminalId, title) {
+      const current = await client()
+      await current.terminals.rename(terminalId, title)
+    },
   }
 }
 

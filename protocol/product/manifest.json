@@ -761,6 +761,11 @@
       "params": "TerminalCloseParams",
       "grant": "credential.manage",
       "lane": "requests"
+    },
+    "terminal.rename": {
+      "params": "TerminalRenameParams",
+      "grant": "credential.manage",
+      "lane": "requests"
     }
   },
   "events": {

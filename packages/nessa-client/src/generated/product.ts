@@ -4359,6 +4359,13 @@ export interface TerminalCloseParams {
   /** The terminal. */
   terminalId: TerminalId
 }
+/** Give a terminal the person's own name (terminal.rename); every window's list shows it. Kept while the terminal runs. */
+export interface TerminalRenameParams {
+  /** The terminal. */
+  terminalId: TerminalId
+  /** The new name: 1 to 80 characters, no control characters, not only spaces. */
+  title: string
+}
 /** One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator. */
 export interface TerminalOutput {
   /** The terminal. */
@@ -4430,7 +4437,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 151,
+  maxReadyMethods: 152,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4805,6 +4812,7 @@ export const ProductMethod = {
   TerminalInput: "terminal.input",
   TerminalHistory: "terminal.history",
   TerminalClose: "terminal.close",
+  TerminalRename: "terminal.rename",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4974,6 +4982,7 @@ export const productReadyMethods = [
   "terminal.input",
   "terminal.history",
   "terminal.close",
+  "terminal.rename",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -5129,6 +5138,7 @@ export const productMethodGrants = {
   "terminal.input": "credential.manage",
   "terminal.history": "credential.manage",
   "terminal.close": "credential.manage",
+  "terminal.rename": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

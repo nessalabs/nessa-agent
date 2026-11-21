@@ -80,6 +80,25 @@ function listedNow(entry: TerminalEntry): WorkspaceCommand<void> {
   }
 }
 
+/**
+ * Names a terminal as the person typed it. The list changes when the gateway
+ * announces it, so every window shows the same name.
+ */
+export function renameTerminal(
+  terminalId: string,
+  title: string,
+): WorkspaceCommand<Promise<void>> {
+  return async (_dispatch, _getState, { terminals }) => {
+    const name = title.trim()
+    if (!terminals || !name) return
+    try {
+      await terminals.rename(terminalId, name.slice(0, 80))
+    } catch (error) {
+      console.warn("A terminal was not renamed", error)
+    }
+  }
+}
+
 /** Ends a terminal and closes the pane that shows it, if one does. */
 export function closeTerminal(terminalId: string): WorkspaceCommand<Promise<void>> {
   return async (dispatch, getState, { terminals, newId }) => {

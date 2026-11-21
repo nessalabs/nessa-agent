@@ -4922,6 +4922,12 @@ pub struct TerminalCloseParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalRenameParams {
+    pub terminal_id: TerminalId,
+    pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TerminalOutput {
     pub terminal_id: TerminalId,
     pub view_id: TerminalViewId,
@@ -5158,6 +5164,7 @@ pub mod product_method {
     pub const TERMINAL_INPUT: &str = "terminal.input";
     pub const TERMINAL_HISTORY: &str = "terminal.history";
     pub const TERMINAL_CLOSE: &str = "terminal.close";
+    pub const TERMINAL_RENAME: &str = "terminal.rename";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -5353,7 +5360,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 151
+                items.len() <= 152
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5529,6 +5536,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "terminal.input",
     "terminal.history",
     "terminal.close",
+    "terminal.rename",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -5897,6 +5905,8 @@ pub enum ProductMethod {
     TerminalHistory,
     /// `terminal.close`
     TerminalClose,
+    /// `terminal.rename`
+    TerminalRename,
 }
 
 impl ProductMethod {
@@ -6054,6 +6064,7 @@ impl ProductMethod {
         ProductMethod::TerminalInput,
         ProductMethod::TerminalHistory,
         ProductMethod::TerminalClose,
+        ProductMethod::TerminalRename,
     ];
 
     /// The method a frame names, or `None` when the manifest has none by
@@ -6218,6 +6229,7 @@ impl ProductMethod {
             "terminal.input" => Some(ProductMethod::TerminalInput),
             "terminal.history" => Some(ProductMethod::TerminalHistory),
             "terminal.close" => Some(ProductMethod::TerminalClose),
+            "terminal.rename" => Some(ProductMethod::TerminalRename),
             _ => None,
         }
     }
@@ -6379,6 +6391,7 @@ impl ProductMethod {
             ProductMethod::TerminalInput => "terminal.input",
             ProductMethod::TerminalHistory => "terminal.history",
             ProductMethod::TerminalClose => "terminal.close",
+            ProductMethod::TerminalRename => "terminal.rename",
         }
     }
 
@@ -6538,6 +6551,7 @@ impl ProductMethod {
             ProductMethod::TerminalInput => Some("credential.manage"),
             ProductMethod::TerminalHistory => Some("credential.manage"),
             ProductMethod::TerminalClose => Some("credential.manage"),
+            ProductMethod::TerminalRename => Some("credential.manage"),
         }
     }
 
@@ -6696,6 +6710,7 @@ impl ProductMethod {
             ProductMethod::TerminalInput => ProductLane::Requests,
             ProductMethod::TerminalHistory => ProductLane::Requests,
             ProductMethod::TerminalClose => ProductLane::Requests,
+            ProductMethod::TerminalRename => ProductLane::Requests,
         }
     }
 
@@ -7207,6 +7222,9 @@ impl ProductMethod {
             ProductMethod::TerminalClose => ProductParams::TerminalClose(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::TerminalRename => ProductParams::TerminalRename(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
         })
     }
 }
@@ -7369,6 +7387,7 @@ pub enum ProductParams {
     TerminalInput(TerminalInputParams),
     TerminalHistory(TerminalHistoryParams),
     TerminalClose(TerminalCloseParams),
+    TerminalRename(TerminalRenameParams),
 }
 
 impl ProductParams {
@@ -7551,6 +7570,7 @@ impl ProductParams {
             ProductParams::TerminalInput(_) => ProductMethod::TerminalInput,
             ProductParams::TerminalHistory(_) => ProductMethod::TerminalHistory,
             ProductParams::TerminalClose(_) => ProductMethod::TerminalClose,
+            ProductParams::TerminalRename(_) => ProductMethod::TerminalRename,
         }
     }
 }

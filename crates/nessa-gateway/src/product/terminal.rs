@@ -18,8 +18,8 @@ use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     TerminalCloseParams, TerminalDetachParams, TerminalHistoryParams, TerminalInputParams,
-    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalSummary,
-    TerminalViewParams,
+    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalRenameParams,
+    TerminalSummary, TerminalViewParams,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde::de::DeserializeOwned;
@@ -98,6 +98,15 @@ pub(super) async fn dispatch(
                 );
             }
             closed
+        }
+        "terminal.rename" => {
+            let Some(params) = decode::<TerminalRenameParams>(&frame) else {
+                return failure(&id, "invalid_request");
+            };
+            let Some(title) = crate::terminal::named(&params.title) else {
+                return failure(&id, "invalid_request");
+            };
+            link.rename(&params.terminal_id, title)
         }
         _ => return failure(&id, "invalid_request"),
     };
