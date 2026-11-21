@@ -24,6 +24,7 @@ import { ClockProvider } from "../../../../clock"
 import {
   focusPane,
   loadWorkspace,
+  newSession,
   openBeside,
   openSession,
   openWidget,
@@ -436,6 +437,19 @@ describe("Chat context", () => {
     ).not.toBeNull()
     expect(panelOf(store, "a")).toBeUndefined()
     expect(panelOf(store, "b")).toBeUndefined()
+  })
+
+  it("is not offered on a new session's home, which has none to show", async () => {
+    const store = await render()
+    expect(
+      host.querySelector("[data-pane-focused] [data-chat-context-button]"),
+    ).not.toBeNull()
+    await act(async () => void store.dispatch(newSession()))
+    await frames()
+    expect(host.querySelector("[data-pane-focused] .workspace-pane-home")).not.toBeNull()
+    expect(
+      host.querySelector("[data-pane-focused] [data-chat-context-button]"),
+    ).toBeNull()
   })
 })
 

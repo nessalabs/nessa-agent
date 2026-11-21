@@ -69,6 +69,13 @@ Checks, per engine and layout (--only <names> to pick):
            frame budget (budgetMs).
   card-open the card's Open, at the same size, measured the same way. A
            production Chromium run fails on the same budget.
+  context, context-narrow
+           Chat context's column, wide (1440 × 900) and narrow (1000 × 560):
+           the button controls it and is pressed while it shows; in a pane of
+           40rem or more it sits beside the conversation, inside the pane,
+           16 to 22rem wide, overlapping nothing; in a narrower pane it lies
+           over the conversation's right side, at the pane's right edge, at
+           most 85% of the pane; a second click hides it.
 
 The panel check waits on the sample's follow-up lines, so it takes about
 half a minute.`,
@@ -557,7 +564,101 @@ const checks = {
   },
 }
 
+/**
+ * Chat context's column in the focused pane: where it is against the pane and
+ * the conversation, and what the button that shows it says.
+ */
+function contextFit(page) {
+  return page.evaluate(
+    (sel) => {
+      const pane = document.querySelector(sel.focusedPane)
+      const button = pane?.querySelector(sel.button)
+      const column = pane?.querySelector(".workspace-pane-context")
+      const conversation = pane?.querySelector(".workspace-conversation")
+      const box = (node) => {
+        const r = node?.getBoundingClientRect()
+        return (
+          r && {
+            left: r.left,
+            right: r.right,
+            top: r.top,
+            bottom: r.bottom,
+            width: r.width,
+          }
+        )
+      }
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+      return {
+        rem,
+        pressed: button?.getAttribute("aria-pressed") ?? null,
+        controls: button?.getAttribute("aria-controls") ?? null,
+        columnId: column?.id ?? null,
+        overlay: column ? getComputedStyle(column).position === "absolute" : null,
+        pane: box(pane),
+        column: box(column),
+        conversation: box(conversation),
+      }
+    },
+    { focusedPane: css.focusedPane, button: css.chatContextButton },
+  )
+}
+
+function assertContext(fit, failures, when) {
+  const { pane, column, conversation, rem } = fit
+  if (fit.pressed !== "true") failures.push(`the button is not pressed ${when}`)
+  if (!column || !pane || !conversation) {
+    failures.push(`no column to measure ${when}: ${JSON.stringify(fit)}`)
+    return
+  }
+  if (!fit.columnId || fit.controls !== fit.columnId)
+    failures.push(`the button does not control the column ${when}`)
+  if (column.left < pane.left - 1 || column.right > pane.right + 1)
+    failures.push(`the column leaves the pane ${when}: ${JSON.stringify(fit)}`)
+  if (column.bottom > pane.bottom + 1)
+    failures.push(`the column runs past the pane's foot ${when}`)
+  if (pane.width >= 40 * rem) {
+    if (fit.overlay) failures.push(`the column covers the conversation ${when}`)
+    if (conversation.right > column.left + 1)
+      failures.push(
+        `the conversation runs under the column ${when}: ${JSON.stringify(fit)}`,
+      )
+    if (column.width < 16 * rem - 1 || column.width > 22 * rem + 1)
+      failures.push(`the column is ${column.width}px wide ${when}`)
+  } else {
+    if (!fit.overlay) failures.push(`the column squeezes a narrow pane ${when}`)
+    if (Math.abs(column.right - pane.right) > 1)
+      failures.push(`the column is off the pane's right edge ${when}`)
+    if (column.width > pane.width * 0.85 + 1)
+      failures.push(`the column takes ${column.width} of ${pane.width}px ${when}`)
+  }
+}
+
+async function contextCheck(page, label) {
+  const failures = []
+  const button = page.locator(`${css.focusedPane} ${css.chatContextButton}`)
+  await button.click()
+  await need(page, `${css.focusedPane} ${css.chatContext}`, "Chat context's column")
+  const shown = await contextFit(page)
+  assertContext(shown, failures, `at ${label.width}px`)
+  await shot(
+    page,
+    label,
+    `context-column-${label.width}-${label.engine}.png`,
+    css.focusedPane,
+  )
+  await button.click()
+  const hidden = await contextFit(page)
+  if (hidden.column) failures.push(`a second click left the column at ${label.width}px`)
+  if (hidden.pressed !== "false")
+    failures.push(`the button stays pressed at ${label.width}px`)
+  return { shown, failures }
+}
+
+checks.context = (page, label) => contextCheck(page, label)
+checks["context-narrow"] = (page, label) => contextCheck(page, label)
+
 const sizes = {
+  "context-narrow": { width: 1000, height: 560 },
   narrow: { width: 1000, height: 560 },
   "card-open": { width: 1000, height: 560 },
 }
@@ -585,6 +686,7 @@ await main(meta, async ({ options, rep, url }) => {
               layout,
               shots: options.shots,
               mode: options.mode,
+              width: size.width,
             })
           }).finally(() => opened?.close())
         }

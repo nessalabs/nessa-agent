@@ -79,13 +79,16 @@ export const Pane = memo(function Pane({
   const [headingVisible, setHeadingVisible] = useState(false)
   const [contextShown, setContextShown] = useState(false)
   const contextId = useId()
+  // A new session's home has no Chat context, so its header offers none.
+  const contextAvailable = listed && !showHome
   const context = useMemo(
     () => ({
+      available: contextAvailable,
       shown: contextShown,
       id: contextId,
       onToggle: () => setContextShown((shown) => !shown),
     }),
-    [contextShown, contextId],
+    [contextAvailable, contextShown, contextId],
   )
   const filled = useFilledAfterFirstPaint()
 
@@ -154,7 +157,7 @@ export const Pane = memo(function Pane({
       <div
         className="workspace-pane-body"
         data-split-through
-        data-context={(contextShown && filled && listed && !showHome) || undefined}
+        data-context={(contextShown && filled && contextAvailable) || undefined}
       >
         {!filled ? null : showHome ? (
           <div
@@ -175,7 +178,7 @@ export const Pane = memo(function Pane({
             onArrivalDone={finishArrival}
           />
         ) : null}
-        {contextShown && filled && listed && !showHome ? (
+        {contextShown && filled && contextAvailable ? (
           <aside
             id={contextId}
             className="workspace-pane-context"
