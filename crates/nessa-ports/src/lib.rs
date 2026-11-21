@@ -102,6 +102,8 @@ pub enum SnapshotError {
     ConflictingRevision,
     /// More than one observation claimed the same listener identity.
     DuplicateListener,
+    /// The workspace owner is closed.
+    WorkspaceClosed,
 }
 
 impl Inventory {
@@ -174,3 +176,9 @@ impl Inventory {
         })
     }
 }
+
+mod forwards;
+pub use forwards::{
+    ApplyError, CloseAction, Completion, CompletionError, ForwardError, LeaseId, LoopbackEndpoint,
+    Ports, ReleaseReason,
+};
