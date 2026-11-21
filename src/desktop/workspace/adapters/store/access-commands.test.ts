@@ -17,11 +17,7 @@ import {
   sendMessage,
 } from "./commands"
 import { selectAccess, selectAccessNotice } from "./selectors"
-import {
-  accessRefusalCopy,
-  heldAccessCopy,
-  steppedAccessCopy,
-} from "../../ui/panes/composer-access"
+import { accessRefusalCopy, steppedAccessCopy } from "../../ui/panes/composer-access"
 
 async function ready(source = fakeSource()) {
   const store = testStore(source)
@@ -237,16 +233,12 @@ describe("access chosen while the agent is at work", () => {
         ),
       ).toBe("pending")
       expect(asked).toBe(1)
-      // Still the person's pick, shown and not refused, and said to wait for the
-      // turn's end, since the agent does not run at it yet.
+      // Still the person's pick, shown and not refused, held for the turn's end.
       expect(selectAccess(store.getState(), "a")).toBe("full")
       expect(selectAccessNotice(store.getState(), "a")).toMatchObject({
         state: "pending",
         after: expect.any(Number),
       })
-      expect(heldAccessCopy("full")).toBe(
-        "Access changes to Full access when the agent stops.",
-      )
       // Not sent again while that turn is at work.
       store.dispatch(setComposerText({ sessionId: "a", text: "x" }))
       sayConversation(source, true)

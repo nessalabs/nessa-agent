@@ -220,7 +220,7 @@ describe("a pane's composer shows the model the next message is sent with", () =
       "The model change is not confirmed. Send again to check and try.",
     )
   })
-  it("says an access pick held for the turn's end, and nothing of one merely on its way", async () => {
+  it("says nothing of an access pick on its way or held for the turn's end, only the shield shows it", async () => {
     const { store } = await conversation()
     const notice = () => host.querySelector(".desktop-composer-notice")?.textContent
     await act(async () => {
@@ -238,7 +238,8 @@ describe("a pane's composer shows the model the next message is sent with", () =
         }),
       )
     })
-    expect(notice()).toBe("Access changes to Full access when the agent stops.")
+    expect(notice()).toBeUndefined()
+    expect(store.getState().workspace.accessChoices.a?.state).toBe("pending")
   })
   it("asks for no send while the source settles a model change it holds", async () => {
     const { store } = await conversation()
