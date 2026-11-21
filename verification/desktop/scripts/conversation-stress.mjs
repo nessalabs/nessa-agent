@@ -2023,6 +2023,72 @@ function carried(view, seen, text) {
  * Whether the gateway was built with terminals; a failure naming how to
  * build it when not (`scripts/terminal/ghostty.sh`).
  */
+/**
+ * ⌘\ offers terminals: the open one by its name, under the terminal glyph,
+ * chats under their agent's tile, and a new terminal, which opens beside.
+ * The new one is ended from its own pane, leaving `opened`'s in front.
+ */
+async function opensBeside(run, opened, name, listed, failures) {
+  const page = run.page
+  await page
+    .locator(`.workspace-terminal-pane${css.focusedPane} .workspace-pane-title`)
+    .click()
+  const panes = await page.locator(css.pane).count()
+  await page.keyboard.press(keys.openBeside)
+  const dialog = page.getByRole("dialog", { name: "Open beside" })
+  if (
+    !(await dialog.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("⌘\\ beside a terminal opened no Open beside picker")
+    return
+  }
+  const terminalRow = dialog.getByRole("option", { name: new RegExp(`^${name}`) })
+  if (!(await terminalRow.count()))
+    failures.push(`the Open beside picker does not offer the terminal "${name}"`)
+  else if (!(await terminalRow.locator("svg").count()))
+    failures.push("the Open beside picker's terminal row has no icon")
+  if (!(await dialog.locator('[role="option"] .workspace-agent-tile').count()))
+    failures.push("the Open beside picker shows no agent tile on its chats")
+  const fresh = dialog.getByRole("option", { name: /^New terminal in #/ })
+  if (!(await fresh.count())) {
+    failures.push("the Open beside picker offers no New terminal")
+    await page.keyboard.press(keys.escape)
+    return
+  }
+  await fresh.click()
+  const made = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  if (!made) {
+    failures.push("New terminal in the Open beside picker opened no terminal")
+    return
+  }
+  if (
+    !(await waitFor(
+      async () => (await page.locator(css.pane).count()) === panes + 1,
+      5_000,
+    ))
+  )
+    failures.push("New terminal in the Open beside picker did not open a pane beside")
+  const beside = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+  if ((await beside.locator(".workspace-pane-title").innerText()) === name)
+    failures.push("the new terminal did not take the focus beside")
+  await beside.getByRole("button", { name: "End Terminal" }).click()
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === panes, 5_000))
+  )
+    failures.push("ending the terminal opened beside left its pane")
+}
+
 async function terminalsBuilt(run, failures) {
   try {
     await run.client.terminals.list()
@@ -11606,6 +11672,7 @@ const steps = {
         ))
       )
         failures.push("the terminal's row or pane does not show its new name")
+      await opensBeside(run, opened, name, listed, failures)
       // The pane's × ends it: the gateway lists it no more, nor does the window.
       await pane.getByRole("button", { name: "End Terminal" }).click()
       const ended = await waitFor(async () => {

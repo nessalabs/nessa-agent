@@ -158,6 +158,32 @@ export function openTerminal(
   return openItem(state, { item: terminalItem(terminalId), pane })
 }
 
+/** Opens a terminal beside a pane, by `openBeside`'s rules. */
+export function openTerminalBeside(
+  state: WorkspaceState,
+  {
+    terminalId,
+    target,
+    side,
+    room,
+    replace,
+  }: {
+    terminalId: string
+    target?: PaneKey
+    side?: Side
+    room: PaneRoom | undefined
+    replace?: boolean
+  },
+): WorkspaceState {
+  return openItemBeside(state, {
+    item: terminalItem(terminalId),
+    target,
+    side,
+    room,
+    replace,
+  })
+}
+
 /**
  * The gateway's list of terminals, whole. A pane showing a terminal that is
  * no longer listed keeps it until the person closes the pane: it says the

@@ -9,6 +9,8 @@ import {
   interruptTerminal,
   loadWorkspace,
   newTerminal,
+  openTerminal,
+  openTerminalBeside,
   renameTerminal,
   runInConversation,
 } from "./commands"
@@ -101,11 +103,47 @@ describe("a new terminal", () => {
     expect(memory.opened).toEqual([{ kind: "shell", channelId: "ops" }])
   })
 
+  it("starts in the channel of the terminal in front", async () => {
+    const memory = memoryTerminals()
+    const made = await store(memory.source)
+    await made.dispatch(newTerminal({ channelId: "ops" }))
+    await made.dispatch(newTerminal())
+    expect(memory.opened.at(-1)).toEqual({ kind: "shell", channelId: "ops" })
+  })
+
+  it("opens beside the focused pane when asked, keeping what that pane shows", async () => {
+    const memory = memoryTerminals()
+    const made = await store(memory.source)
+    const before = shownIn(made.getState().workspace.panes)
+    await made.dispatch(newTerminal({ beside: true }))
+    const after = shownIn(made.getState().workspace.panes)
+    expect(after).toHaveLength(before.length + 1)
+    expect(after).toEqual(expect.arrayContaining([...before, `terminal ${id(1)}`]))
+  })
+
   it("is nothing where the window has no terminals", async () => {
     const made = await store()
     const panes = made.getState().workspace.panes
     await expect(made.dispatch(newTerminal())).resolves.toBeUndefined()
     expect(made.getState().workspace.panes).toBe(panes)
+  })
+})
+
+describe("opening a listed terminal beside", () => {
+  it("adds a pane for it and focuses it, as a session opens beside", async () => {
+    const memory = memoryTerminals()
+    const made = await store(memory.source)
+    await made.dispatch(newTerminal())
+    const shown = shownIn(made.getState().workspace.panes)
+    made.dispatch(openTerminalBeside({ terminalId: id(1) }))
+    expect(shownIn(made.getState().workspace.panes)).toEqual(shown)
+    await made.dispatch(newTerminal())
+    made.dispatch(openTerminal({ terminalId: id(2) }))
+    made.dispatch(openTerminalBeside({ terminalId: id(1) }))
+    const panes = made.getState().workspace.panes
+    expect(shownIn(panes)).toEqual(
+      expect.arrayContaining([`terminal ${id(1)}`, `terminal ${id(2)}`]),
+    )
   })
 })
 

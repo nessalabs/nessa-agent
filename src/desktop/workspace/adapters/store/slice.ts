@@ -98,6 +98,18 @@ const workspaceSlice = createSlice({
         replace?: boolean
       }>,
     ) => panes.openBeside(state, payload),
+    openedTerminalBeside: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        terminalId: string
+        target?: PaneKey
+        side?: Side
+        room: PaneRoom | undefined
+        replace?: boolean
+      }>,
+    ) => panes.openTerminalBeside(state, payload),
     sessionDropped: (
       state,
       {
@@ -565,6 +577,7 @@ const goesSomewhere: ReadonlySet<string> = new Set(
     workspaceActions.openSession,
     workspaceActions.openTerminal,
     workspaceActions.openedBeside,
+    workspaceActions.openedTerminalBeside,
     workspaceActions.sessionDropped,
     workspaceActions.draftCreated,
     workspaceActions.widgetOpened,

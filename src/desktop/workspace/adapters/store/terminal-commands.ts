@@ -20,17 +20,34 @@ const startFit: TerminalFit = { cols: 100, rows: 30 }
  * `TerminalOpenError` the caller shows.
  */
 export function newTerminal(
-  options: { channelId?: string } = {},
+  options: { channelId?: string; beside?: boolean } = {},
 ): WorkspaceCommand<Promise<string | undefined>> {
   return async (dispatch, getState, { terminals, newId }) => {
     if (!terminals) return undefined
     const state = getState().workspace
     const channelId =
-      options.channelId ?? focusedChannel(state) ?? (state.view.channelId || undefined)
+      options.channelId || focusedChannel(state) || state.view.channelId || undefined
     const entry = await terminals.open({ kind: "shell", channelId }, newId(), startFit)
     dispatch(listedNow(entry))
-    dispatch(workspaceActions.openTerminal({ terminalId: entry.id }))
+    dispatch(
+      options.beside
+        ? openTerminalBeside({ terminalId: entry.id })
+        : workspaceActions.openTerminal({ terminalId: entry.id }),
+    )
     return entry.id
+  }
+}
+
+/**
+ * Opens a terminal beside the focused pane, as `openBeside` opens a session:
+ * where the room the page measures allows, else in the pane's place.
+ */
+export function openTerminalBeside(options: {
+  terminalId: string
+  replace?: boolean
+}): WorkspaceCommand {
+  return (dispatch, _getState, { measure }) => {
+    dispatch(workspaceActions.openedTerminalBeside({ ...options, room: measure() }))
   }
 }
 

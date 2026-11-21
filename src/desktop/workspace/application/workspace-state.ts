@@ -775,9 +775,13 @@ export function toggled(
   return include ? [...ids, id] : ids.filter((other) => other !== id)
 }
 
-/** The channel of the session in the focused pane, draft or not; none when it shows a widget. */
+/** The channel of the chat or terminal in the focused pane, draft or not; none when it shows a widget. */
 export function focusedChannel(state: WorkspaceState): string | undefined {
   if (!state.panes) return undefined
+  // A terminal belongs to a channel as a chat does: what starts from its pane
+  // starts there.
+  const item = itemIn(focusedPane(state.panes))
+  if (item?.kind === "terminal") return state.terminals[item.terminalId]?.channelId
   const sessionId = sessionIn(focusedPane(state.panes))
   if (sessionId === undefined) return undefined
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
