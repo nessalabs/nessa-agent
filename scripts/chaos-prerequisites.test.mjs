@@ -31,7 +31,7 @@ function admitted(cancelled, outcome) {
 test("the readiness outcome belongs to the job's gateway build before its checks", () => {
   assert.match(
     job,
-    /- id: gateway-build\n        run: cargo build -p nessa-server -p nessa-mcp\n/,
+    /- id: gateway-build\n        run: \|\n          eval "\$\(scripts\/terminal\/ghostty\.sh\)"\n          cargo build -p nessa-server --features nessa-server\/terminals -p nessa-mcp\n/,
   )
   assert(
     job.indexOf("- id: gateway-build") <
