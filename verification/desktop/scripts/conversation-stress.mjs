@@ -11832,7 +11832,9 @@ const steps = {
         return now.length === runs.length + 2
       }, 15_000)
       if (!again) failures.push("Run again did not start a new run")
-      await prints.getByRole("button", { name: "Open in Pane" }).click()
+      // Beside the chat: the chat stays in its own pane.
+      const panesBefore = await page.locator(css.pane).count()
+      await prints.getByRole("button", { name: "Open Beside" }).click()
       const pane = page.locator(".workspace-terminal-pane")
       if (
         !(await pane
@@ -11845,6 +11847,14 @@ const steps = {
       )
         failures.push("the Run's terminal icon opened no pane")
       else {
+        if ((await page.locator(css.pane).count()) !== panesBefore + 1)
+          failures.push("the Run's terminal icon took the chat's pane, not one beside it")
+        if (await prints.locator("[data-run-output]").count())
+          failures.push("the Run still draws its output inline while a pane shows it")
+        if (run.evidence)
+          await page.screenshot({
+            path: join(run.evidence, `run-${run.engine}-${step.index}-beside.png`),
+          })
         const close = pane.first().getByRole("button", { name: /^(Close|End Terminal)$/ })
         await close.click()
       }

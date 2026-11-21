@@ -31,6 +31,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.workspace-run-status[data-failed] {
+  color: var(--destructive);
+}
+
 .workspace-run-failure {
   color: var(--destructive);
 }
@@ -41,12 +45,12 @@
 
 /*
  * Ten rows while it runs. Ended, the box stops at its last printed row
- * (`--run-rows`); the grid inside keeps its ten rows, so nothing refits.
+ * (`--run-printed`); the grid inside keeps its ten rows, so nothing refits.
  */
 .workspace-run-output {
   --run-row: calc(1.35 * var(--nessa-terminal-font-size, 13px));
   box-sizing: border-box;
-  height: calc(min(var(--run-rows, 10), 10) * var(--run-row) + 1rem);
+  height: calc(min(var(--run-printed, 100vh), 10 * var(--run-row)) + 1rem);
   padding: 0.25rem 0.75rem 0.75rem;
   overflow: hidden;
 }

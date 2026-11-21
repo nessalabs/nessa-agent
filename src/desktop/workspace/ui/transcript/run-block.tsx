@@ -2,7 +2,7 @@
  * A shell fence in a reply, with a Run button under it. Run starts the
  * command in a new terminal in the conversation's folder, on the agent's
  * machine, and its output shows here as one real grid: a terminal icon
- * opens that terminal in a pane, a stop icon sends Control-C. When it ends
+ * opens that terminal in a pane beside the chat, a stop icon sends Control-C. When it ends
  * the bar says `exit N · duration` and offers Run again. Only the person
  * runs a block: agents never press Run and never read a terminal
  * (`docs/design/terminals.md`).
@@ -10,7 +10,8 @@
  * The fence, its bar and its output are one card. The output folds away
  * from the bar: a run that ended well before this block was drawn starts
  * folded, one that runs, fails, or ends while watched stays open. An
- * ended run's box stops at its last printed row.
+ * ended run's box stops at its last printed row. While a pane shows the
+ * run, the output is read there and this one stays folded.
  */
 import type * as React from "react"
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
@@ -20,10 +21,11 @@ import type { ReplyFence } from "@nessa-ui/react/reply-markdown"
 import { TerminalOpenError, type TerminalOpenFailure } from "../../application/ports"
 import {
   interruptTerminal,
-  openTerminal,
+  openTerminalBeside,
   runInConversation,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import { selectTerminalShown } from "../../adapters/store/selectors"
 import { latestRun, runCommand, runEndWords, runRequestId } from "../../model/run-block"
 import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
@@ -87,11 +89,16 @@ export const RunBlock = memo(function RunBlock({
   const [folded, setFolded] = useState<boolean | null>(null)
   const seenRunning = useRef(false)
   if (running) seenRunning.current = true
+  // Shown in a pane, the run is read there: a second, scaled copy here helps no one.
+  const inPane = useWorkspaceSelector((state) =>
+    run ? selectTerminalShown(state, run.id) !== null : false,
+  )
   const shut =
-    folded ?? (run?.state === "exited" && run.exitStatus === 0 && !seenRunning.current)
+    inPane ||
+    (folded ?? (run?.state === "exited" && run.exitStatus === 0 && !seenRunning.current))
   useEffect(() => setFolded(null), [run?.id])
   const output = useRef<HTMLDivElement>(null)
-  const printed = usePrintedRows(output, run?.id, running, shut)
+  const printed = usePrintedHeight(output, run?.id, running, shut)
   return (
     <div
       className="workspace-run-block"
@@ -100,7 +107,7 @@ export const RunBlock = memo(function RunBlock({
     >
       <CodeBlock code={fence.code} language={fence.language} />
       <div className="workspace-run-bar">
-        {run ? (
+        {run && !inPane ? (
           <IconButton
             icon={shut ? "chevronRight" : "chevronDown"}
             label={shut ? "Show Output" : "Hide Output"}
@@ -126,7 +133,11 @@ export const RunBlock = memo(function RunBlock({
           </Button>
         )}
         {ended ? (
-          <span className="workspace-run-status" data-run-exit={run?.exitStatus ?? ""}>
+          <span
+            className="workspace-run-status"
+            data-run-exit={run?.exitStatus ?? ""}
+            data-failed={(run?.exitStatus ?? 0) !== 0 || undefined}
+          >
             {ended}
           </span>
         ) : null}
@@ -139,8 +150,8 @@ export const RunBlock = memo(function RunBlock({
         {run ? (
           <IconButton
             icon="terminal"
-            label="Open in Pane"
-            onClick={() => dispatch(openTerminal({ terminalId: run.id }))}
+            label="Open Beside"
+            onClick={() => dispatch(openTerminalBeside({ terminalId: run.id }))}
           />
         ) : null}
         {running ? (
@@ -159,7 +170,7 @@ export const RunBlock = memo(function RunBlock({
           style={
             printed === null
               ? undefined
-              : ({ "--run-rows": Math.max(printed, 1) } as React.CSSProperties)
+              : ({ "--run-printed": `${printed}px` } as React.CSSProperties)
           }
         >
           <TerminalView
@@ -174,37 +185,39 @@ export const RunBlock = memo(function RunBlock({
 })
 
 /**
- * How many rows an ended run printed, counted down to its last row with
- * anything on it, so its box stops there; none while it runs, when the box
- * keeps its full height. The terminal keeps its full grid inside: only the
- * box is shorter, so nothing refits.
+ * How far down an ended run printed, in pixels from the top of its grid to
+ * the bottom of its last row with anything on it, so its box stops there;
+ * none while it runs, when the box keeps its full height. The terminal
+ * keeps its full grid inside: only the box is shorter, so nothing refits.
  */
-function usePrintedRows(
+function usePrintedHeight(
   box: React.RefObject<HTMLDivElement | null>,
   runId: string | undefined,
   running: boolean,
   shut: boolean,
 ): number | null {
-  const [rows, setRows] = useState<number | null>(null)
+  const [height, setHeight] = useState<number | null>(null)
   useLayoutEffect(() => {
     if (running || shut || !runId) {
-      setRows(null)
+      setHeight(null)
       return
     }
     let frame = 0
-    const count = () => {
-      const drawn = [
-        ...(box.current?.querySelectorAll('[data-slot="terminal-row"]') ?? []),
-      ]
-      let last = -1
-      drawn.forEach((row, index) => {
-        if ((row.textContent ?? "").trim()) last = index
-      })
-      if (last >= 0) setRows(last + 1)
-      else frame = requestAnimationFrame(count)
+    const measure = () => {
+      const grid = box.current?.querySelector('[data-slot="terminal-grid"]')
+      const rows = [...(grid?.querySelectorAll('[data-slot="terminal-row"]') ?? [])]
+      const last = rows.filter((row) => (row.textContent ?? "").trim()).at(-1)
+      if (!grid || !last) {
+        frame = requestAnimationFrame(measure)
+        return
+      }
+      const bottom =
+        last.getBoundingClientRect().bottom - grid.getBoundingClientRect().top
+      // A scaled grid draws smaller than its box: the box is measured as drawn.
+      setHeight(Math.ceil(bottom))
     }
-    count()
+    measure()
     return () => cancelAnimationFrame(frame)
   }, [box, runId, running, shut])
-  return rows
+  return height
 }
