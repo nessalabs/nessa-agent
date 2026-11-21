@@ -11734,10 +11734,15 @@ const steps = {
       if (await prints.locator('[data-slot="terminal-scrolled"]').count())
         failures.push("scrolling the chat over Run's output scrolled the output back")
       // As typed in a terminal: the prompt, then the command, above its output.
-      const rows = (await gridRows(grid)).map((row) => row.trimEnd())
-      const typedAt = rows.findIndex((row) => row.endsWith(RUN_COMMAND))
+      // A long prompt wraps the command onto the next row, so the rows above
+      // the output are read as one run of text.
+      const rows = await gridRows(grid)
       const printedAt = rows.findIndex((row) => row.trim() === RUN_PRINTS)
-      if (typedAt < 0 || printedAt <= typedAt)
+      const above = rows.slice(0, Math.max(printedAt, 0)).join("").trimEnd()
+      const prompted =
+        above.endsWith(RUN_COMMAND) &&
+        above.slice(0, -RUN_COMMAND.length).trim().length > 0
+      if (printedAt < 0 || !prompted)
         failures.push(
           `Run's output does not show the command after a prompt above what it printed: ${JSON.stringify(rows.filter((row) => row.trim()))}`,
         )
