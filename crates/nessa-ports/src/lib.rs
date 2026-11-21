@@ -85,9 +85,10 @@ pub struct StaleGeneration;
 /// Result of accepting a snapshot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Change {
-    /// The observed set changed, including the first snapshot.
+    /// The observed set changed, including the first snapshot, or a `Ports`
+    /// owner recovered eligibility after an ambiguous snapshot.
     Changed,
-    /// The observation is identical; no new inventory event is needed.
+    /// The observation is identical and eligibility did not change.
     Unchanged,
 }
 

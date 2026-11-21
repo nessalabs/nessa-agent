@@ -209,7 +209,7 @@ fn failure_loss_and_invalid_snapshots_preserve_rules() {
     );
     assert_eq!(
         ports.apply(&workspace, 1, 3, [item.clone()]),
-        Ok((Change::Unchanged, vec![]))
+        Ok((Change::Changed, vec![]))
     );
     let lease = ports.request(&workspace, 1, 3, &item).unwrap();
     ports.opened(&lease, address("127.0.0.1:1234")).unwrap();
@@ -318,7 +318,21 @@ fn conflicting_snapshot_retires_active_lease_until_newer_evidence() {
     ports.released(&lease).unwrap();
     assert_eq!(
         ports.apply(&workspace, 1, 2, [item.clone()]),
-        Ok((Change::Unchanged, vec![]))
+        Ok((Change::Changed, vec![]))
+    );
+    assert_eq!(ports.inventory().revision(), Some(2));
+    assert_eq!(
+        ports.request(&workspace, 1, 1, &item),
+        Err(ForwardError::StaleInventory)
     );
     assert!(ports.request(&workspace, 1, 2, &item).is_ok());
+    assert_eq!(
+        ports.apply(&workspace, 1, 3, [item.clone()]),
+        Ok((Change::Unchanged, vec![]))
+    );
+    assert_eq!(ports.inventory().revision(), Some(3));
+    assert_eq!(
+        ports.request(&workspace, 1, 2, &item),
+        Err(ForwardError::StaleInventory)
+    );
 }

@@ -155,7 +155,10 @@ impl Ports {
     /// Apply a complete snapshot and return cleanup instructions for affected leases.
     /// Ambiguous snapshots return cleanup instructions and make inventory
     /// ineligible until a newer revision is accepted. An identical snapshot
-    /// opens nothing.
+    /// opens nothing. A successful recovery from ambiguity reports `Changed`,
+    /// even if observations match the last accepted snapshot. After any accepted
+    /// snapshot, including `Unchanged`, read `inventory().revision()` for the
+    /// current revision before requesting a lease.
     pub fn apply(
         &mut self,
         workspace: &Identity,
@@ -195,7 +198,7 @@ impl Ports {
             }
             Err(error) => return Err(reject(error)),
         };
-        self.uncertain_revision = None;
+        let recovered = self.uncertain_revision.take().is_some();
         let mut actions = Vec::new();
         for (id, lease) in &mut self.leases {
             if self.inventory.listeners.get(lease.listener.id()) != Some(&lease.listener) {
@@ -205,7 +208,7 @@ impl Ports {
                 }
             }
         }
-        Ok((change, actions))
+        Ok((if recovered { Change::Changed } else { change }, actions))
     }
 
     /// Replace the workspace incarnation and return cleanup instructions.

@@ -14,7 +14,7 @@ are ordered by the host within an incarnation.
 | Input | Result |
 | --- | --- |
 | First complete snapshot | Accept and report changed, even when empty |
-| Newer revision, same observations | Advance revision without an event |
+| Newer revision, same observations | Advance revision without an event, unless `Ports` recovers eligibility |
 | Equal revision, same observations | Accept replay without an event |
 | Newer revision, changed observations | Replace and report changed |
 | Older revision or different workspace/generation | Reject, preserving state |
@@ -82,3 +82,11 @@ unambiguous revision before accepting another request. Older or wrong-workspace
 updates do not invalidate a newer accepted view. A rejected ambiguous snapshot
 returns both its typed error and cleanup instructions; the host must process
 those instructions even though the snapshot was rejected.
+
+After ambiguity, `Ports::apply` reports `Changed` when a newer valid snapshot
+restores eligibility, even when its observations match the last accepted
+snapshot. Later identical polls report `Unchanged`. Every accepted snapshot can
+advance the revision, including an `Unchanged` result: callers must read the
+current `ports.inventory().revision()` before an explicit lease request. The
+revision is freshness evidence, not authorization, and the request still checks
+it against the owner’s current state.
