@@ -1050,7 +1050,7 @@ async function setSideRail(page, on, failures) {
 
 /**
  * The expanded right panel is the chat in front's: its own tabs, or with
- * nothing open its Chat context, no tab strip for the chats and no toggles for the
+ * nothing open its note, no tab strip for the chats and no toggles for the
  * columns it covers. ⌘N docks it before the new session opens, so the
  * session is in front, in sight — never under the panel. The chat is
  * brought back, docked.
@@ -1059,9 +1059,13 @@ async function expandedForItsChat(run, failures) {
   const page = run.page
   if (await chatTabs(page)) failures.push("the window draws a tab strip for the chats")
   const panel = page.locator("#workspace-panel")
-  if (!(await panel.locator("[data-chat-context], .workspace-panel-tabs").count()))
+  if (
+    !(await panel.locator("[data-panel-empty], .workspace-panel-tabs").count()) ||
+    ((await panel.locator("[data-panel-empty]").count()) &&
+      (await panel.innerText()).trim() !== "Nothing open")
+  )
     failures.push(
-      `the expanded panel shows neither its tabs nor Chat context: "${await panel.innerText()}"`,
+      `the expanded panel shows neither its tabs nor its note: "${await panel.innerText()}"`,
     )
   if (await page.locator(`${css.titlebar} [aria-controls="workspace-sidebar"]`).count())
     failures.push("the expanded panel's titlebar offers the sidebar it covers")
@@ -2799,9 +2803,33 @@ async function makeChannel(
   // Boat (no keys, or a gateway that cannot say) skips these choices rather
   // than failing on Boat's setup.
   const boat = await boatProbe(run.client)
-  if (!boat.ready)
-    log(`${name}: Boat is ${boat.state}, so its placement choices are skipped`)
-  else {
+  const note = flow.locator("[data-new-channel-placement-note]")
+  const boatConnect = flow.locator('[data-cloud-connect="boat"]')
+  // All local, the step says nothing about clouds.
+  if ((await note.count()) || (await flow.locator("[data-cloud-connect]").count()))
+    failures.push("with everything local, the placement step still talks about clouds")
+  if (!boat.ready) {
+    // A cloud not connected is still offered; chosen, it asks to be connected
+    // right here, and the question waits until it is or another place is.
+    await workerLocation.selectOption("boat")
+    if (!(await boatConnect.isVisible()))
+      failures.push("New threads on a Boat not connected does not offer to connect it")
+    if (!(await note.isVisible()))
+      failures.push(
+        "a cloud is chosen, yet the placement step does not say what that means",
+      )
+    else await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
+    await photograph(`${name}-3-placement-connect`)
+    await flow.locator(".new-channel-placement").focus()
+    await page.keyboard.press(keys.enter)
+    if (
+      !(await flow.locator(`${css.newChannelAsked}[data-step="placement"]`).isVisible())
+    )
+      failures.push("the placement question moved on while its Boat was not connected")
+    await workerLocation.selectOption("local")
+    if (await boatConnect.count())
+      failures.push("Boat's connect form stays after the threads went back to Local")
+  } else {
     const offered = await waitFor(
       () =>
         coordinatorLocation
@@ -2819,6 +2847,14 @@ async function makeChannel(
       await workerLocation.selectOption("boat")
       if ((await coordinatorLocation.inputValue()) !== "local")
         failures.push("changing worker placement also changed coordinator placement")
+      if (await boatConnect.count())
+        failures.push("Boat is connected, yet choosing it asks to connect it")
+      if (!(await note.isVisible()))
+        failures.push(
+          "a cloud is chosen, yet the placement step does not say what that means",
+        )
+      else
+        await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
       await workerLocation.selectOption("local")
     }
   }
@@ -3292,7 +3328,7 @@ async function focusedChatPanel(run, conversationId, step, failures) {
   // makes; a pointer click from the page does not reach it once two apps
   // share the pane.
   await talk.evaluate(() => document.querySelector('[data-talk="panel"]').click())
-  const tabs = () => page.locator(css.widgetTab)
+  const tabs = () => page.locator(`${css.chatPanelTabs} [role="tab"]`)
   if (!(await waitFor(async () => (await tabs().count()) === 1, 10_000))) {
     failures.push("the talk board did not open a panel tab")
     return
@@ -3338,7 +3374,7 @@ async function focusedChatPanel(run, conversationId, step, failures) {
     failures.push("the pin's panel frame was still loading when its tab left the front")
     return
   }
-  const other = page.locator(`${css.widgetTab}[aria-selected="false"]`)
+  const other = page.locator(`${css.chatPanelTabs} [role="tab"][aria-selected="false"]`)
   await other.click()
   if (!(await panelAppReady(page, 'body[data-talk-state="live"]'))) {
     failures.push("the talk board's panel frame was still loading when the chat changed")
@@ -9903,7 +9939,8 @@ const steps = {
    * it on, the channel's first chat is its coordinator, and (said only in
    * Claude's reply) it is told its job. Off, the channel keeps that chat but
    * no longer opens at it: a new chat there is an ordinary thread, told no
-   * job. On again, it is the same coordinator chat. A channel made with it
+   * job. On again, it is the same coordinator chat, pinned as the first row of
+   * the channel's list above newer threads. A channel made with it
    * off says so, and still names the main chat it would have.
    */
   async coordinator(run, step, failures) {
@@ -9972,6 +10009,36 @@ const steps = {
         )
       return now
     }
+    // The list's first row, and its group, while the channel is shown.
+    const pinnedCheck = async (made, on) => {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(made.name, { exact: true })
+        .first()
+        .click({ timeout: 15_000 })
+      const top = async () => {
+        const row = run.page.locator("[data-list-group] [data-session-row]").first()
+        if ((await row.count()) === 0) return null
+        return {
+          id: await row.getAttribute("data-session-row"),
+          group: await row.evaluate((node) =>
+            node.closest("[data-list-group]")?.getAttribute("data-list-group"),
+          ),
+        }
+      }
+      const pinned = await waitFor(async () => {
+        const first = await top()
+        const at =
+          first?.id === made.coordinatorConversationId && first.group === "coordinator"
+        return at === on ? first : null
+      }, 10_000)
+      if (!pinned)
+        failures.push(
+          on
+            ? `the coordinator is not the list's first row, in its own group: ${JSON.stringify(await top())}`
+            : `the list still pins the coordinator while it is off`,
+        )
+    }
     try {
       const made = await makeChannel(run, failures, {
         name: `stress-coord-r${step.index}-s${run.knobs.seed}`,
@@ -10034,8 +10101,12 @@ const steps = {
                 "a thread started with the coordinator off was told the coordinator's job",
               )
           }
+          // Off, it is an ordinary row: no Coordinator group in the list.
+          await pinnedCheck(made, false)
           // On again: the same coordinator chat, which still answers.
           if (await switchTo(made, true)) {
+            // Pinned at the top of the list, above the newer thread.
+            await pinnedCheck(made, true)
             await openStressConversation(run.page, made.coordinatorConversationId)
             const again = prompt(run, STRESS.channel, step, " coordinator again")
             const seen = await send(run, made.coordinatorConversationId, again, failures)

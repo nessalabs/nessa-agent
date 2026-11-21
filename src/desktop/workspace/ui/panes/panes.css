@@ -247,6 +247,44 @@
 }
 
 /*
+ * Chat context, shown from the pane's header: a column on the pane's right,
+ * part of the chat's own surface, the conversation beside it. No rule or
+ * material of its own sets it apart, so it reads as the chat's, not as a
+ * sidebar. In a pane too narrow for both it covers the conversation's right
+ * side instead of squeezing it.
+ */
+.workspace-pane-body[data-context] {
+  flex-direction: row;
+}
+
+.workspace-pane-body[data-context] > .workspace-conversation {
+  min-width: 0;
+}
+
+.workspace-pane-context {
+  display: flex;
+  width: min(22rem, 42%);
+  min-width: 16rem;
+  flex: none;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--desktop-gutter) var(--desktop-gutter) 0 0;
+}
+
+@container workspace-pane (width < 40rem) {
+  .workspace-pane-context {
+    position: absolute;
+    inset-block: 0;
+    right: 0;
+    z-index: 2;
+    width: min(18rem, 85%);
+    background: color-mix(in oklab, var(--foreground) 3.5%, var(--background));
+    box-shadow: -8px 0 24px -12px rgb(0 0 0 / 45%);
+  }
+}
+
+/*
  * The home's room, under the title row, and only while a new session's home
  * is in it. The pane's box runs up behind that row, so a query on the pane
  * would count the row as room the scene can use (`conversation.css`). A

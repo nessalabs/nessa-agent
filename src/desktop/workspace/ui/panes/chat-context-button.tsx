@@ -1,23 +1,31 @@
 import { IconButton } from "../../../ui/icon-button"
-import { useAccessoryOpen } from "../../adapters/store/widget-hosts"
-import { chatContextTab } from "../../model/chat-context"
 
 /**
- * Chat context's button in a session pane's header: everything about this
- * chat, opened in front in its right panel (`chat-context.ts`). The panel
- * shows when it was hidden.
+ * Chat context's button in a session pane's header: shows and hides
+ * everything about this chat in a column on the pane's right, inside the
+ * chat's own space (`Pane`).
  */
-export function ChatContextButton({ sessionId }: { sessionId: string }) {
-  const open = useAccessoryOpen(sessionId)
+export function ChatContextButton({
+  shown,
+  controls,
+  onToggle,
+}: {
+  shown: boolean
+  /** The id of the column it shows. */
+  controls: string
+  onToggle: () => void
+}) {
   return (
     <IconButton
       icon="chatContext"
-      label="Chat Context"
+      label={shown ? "Hide Chat Context" : "Chat Context"}
       draggable={false}
+      aria-pressed={shown}
+      aria-controls={controls}
       data-chat-context-button
       onClick={(event) => {
         event.stopPropagation()
-        open(chatContextTab(sessionId), "panel")
+        onToggle()
       }}
     />
   )
