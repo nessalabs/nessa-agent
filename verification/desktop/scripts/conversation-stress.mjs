@@ -2793,9 +2793,33 @@ async function makeChannel(
   // Boat (no keys, or a gateway that cannot say) skips these choices rather
   // than failing on Boat's setup.
   const boat = await boatProbe(run.client)
-  if (!boat.ready)
-    log(`${name}: Boat is ${boat.state}, so its placement choices are skipped`)
-  else {
+  const note = flow.locator("[data-new-channel-placement-note]")
+  const boatConnect = flow.locator('[data-cloud-connect="boat"]')
+  // All local, the step says nothing about clouds.
+  if ((await note.count()) || (await flow.locator("[data-cloud-connect]").count()))
+    failures.push("with everything local, the placement step still talks about clouds")
+  if (!boat.ready) {
+    // A cloud not connected is still offered; chosen, it asks to be connected
+    // right here, and the question waits until it is or another place is.
+    await workerLocation.selectOption("boat")
+    if (!(await boatConnect.isVisible()))
+      failures.push("New threads on a Boat not connected does not offer to connect it")
+    if (!(await note.isVisible()))
+      failures.push(
+        "a cloud is chosen, yet the placement step does not say what that means",
+      )
+    else await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
+    await photograph(`${name}-3-placement-connect`)
+    await flow.locator(".new-channel-placement").focus()
+    await page.keyboard.press(keys.enter)
+    if (
+      !(await flow.locator(`${css.newChannelAsked}[data-step="placement"]`).isVisible())
+    )
+      failures.push("the placement question moved on while its Boat was not connected")
+    await workerLocation.selectOption("local")
+    if (await boatConnect.count())
+      failures.push("Boat's connect form stays after the threads went back to Local")
+  } else {
     const offered = await waitFor(
       () =>
         coordinatorLocation
@@ -2813,6 +2837,14 @@ async function makeChannel(
       await workerLocation.selectOption("boat")
       if ((await coordinatorLocation.inputValue()) !== "local")
         failures.push("changing worker placement also changed coordinator placement")
+      if (await boatConnect.count())
+        failures.push("Boat is connected, yet choosing it asks to connect it")
+      if (!(await note.isVisible()))
+        failures.push(
+          "a cloud is chosen, yet the placement step does not say what that means",
+        )
+      else
+        await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
       await workerLocation.selectOption("local")
     }
   }
@@ -2821,8 +2853,6 @@ async function makeChannel(
   if ((await coordinatorChoice.inputValue()) !== "on")
     failures.push("a new channel's coordinator is not on until it is turned off")
   if (!coordinator) await coordinatorChoice.selectOption("off")
-  // The note under the choices stays one line, even at the narrowest window.
-  await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
   await page.keyboard.press(keys.enter)
