@@ -3291,8 +3291,9 @@ impl ConversationService {
             }
             if let Some(live) = live {
                 live.projection.lock().await.approval_mode(terminal.requested);
-                // Full never asks: what the running turn already asks is
-                // allowed as Full would have (`raised_access.rs`).
+                // A raise to Full is the person's answer to what the running
+                // turn waits on: each agent review is allowed once
+                // (`raised_access.rs`).
                 if terminal.requested == ConversationApprovalMode::Full
                     && terminal.prior != ConversationApprovalMode::Full
                 {
