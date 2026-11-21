@@ -1341,9 +1341,10 @@ function fakeTerminals(publish: (event: string, payload: unknown) => void): Term
     },
     rename: (terminalId, title) => {
       const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
-      if (at < 0)
+      const found = terminals[at]
+      if (!found)
         return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
-      terminals[at] = { ...terminals[at]!, title }
+      terminals[at] = { ...found, title }
       listed()
       return Promise.resolve()
     },
