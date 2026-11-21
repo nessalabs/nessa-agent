@@ -118,6 +118,19 @@ async fn non_default_mode(live: &LiveConversation) -> bool {
 /// Whether `live`'s agent cannot take a turn until it is closed and opened
 /// again: it awaits its close, its attachment failed, or it lost the
 /// conversation's approval mode with its attachment ([`mode_lost`]).
+/// Whether `id` has a model change still pending. Asked under the
+/// conversation's submission lock, which `change_model` holds until its
+/// change is settled or left uncertain: one pending here is a change whose
+/// caller is gone, which nothing but its recovery settles. A mode change is
+/// different: one asked while a turn runs is held, pending, until that turn
+/// ends, and settles then on its own.
+async fn model_change_left_pending(service: &ConversationService, id: &ConversationId) -> bool {
+    matches!(
+        service.inner.metadata.pending_model_change(id).await,
+        Ok(Some(_))
+    )
+}
+
 pub(super) async fn stuck(live: &LiveConversation) -> bool {
     live.agent.awaits_close()
         || matches!(
@@ -327,31 +340,39 @@ impl ConversationService {
         let Some(live) = waiting.upgrade() else {
             return false;
         };
-        // Its selection is not settled: configuration recovery reconciles the
-        // journal before any owed turn resumes, and before this agent is
-        // asked whether it can take one: a change that failed mid-turn leaves
-        // its agent retiring, which only that recovery finishes. Run here, under the lock it
-        // needs, rather than waited for: a change its caller gave up on (a
-        // model control the provider failed mid-turn, which ended the turn
-        // with it) is asked about by no one else, and the turn it left owed
-        // would wait on it for good. Recovery may retire this agent, so no
-        // handle to it is kept; the retry resumes on whichever agent the
-        // conversation holds once it is settled.
-        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None))
-            || !matches!(self.inner.metadata.pending_model_change(id).await, Ok(None))
-        {
-            let organization_id = live.organization_id.clone();
-            drop(live);
-            self.recover_selection_for_resumption(id, organization_id)
-                .await;
-            return false;
-        }
         // A close or a stop that held the lock first let this agent go, and
         // a closed agent's lifecycle opens again for work no one will run:
         // a turn given to it would hold its history until a restart
         // (`a_close_while_a_resumed_agent_opens_lets_its_history_go`). The
         // agent the conversation holds now resumes it, when it opens.
+        //
+        // One exception: a model or mode change left pending by a control
+        // the provider failed mid-turn leaves this agent retiring, and only
+        // that change's recovery finishes the retirement. Nobody else asks
+        // for it (its caller gave up), so it is asked here, as an opening
+        // read would, under the same lock; the next retry resumes the turn
+        // on whichever agent the conversation then holds.
         if !self.holds_open(id, &live).await || stuck(&live).await {
+            if model_change_left_pending(self, id).await {
+                let organization_id = live.organization_id.clone();
+                drop(live);
+                self.recover_model_for_resumption(id, organization_id).await;
+            }
+            return false;
+        }
+        // Its selection is not settled: configuration recovery reconciles the
+        // journal before any owed turn resumes. A model change left pending
+        // is recovered here (see above); a mode change waits for the turn
+        // that holds it.
+        if model_change_left_pending(self, id).await {
+            let organization_id = live.organization_id.clone();
+            drop(live);
+            self.recover_model_for_resumption(id, organization_id).await;
+            return false;
+        }
+        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None))
+            || !matches!(self.inner.metadata.pending_model_change(id).await, Ok(None))
+        {
             return false;
         }
         // The live owed view includes retained decisions. A failed terminal
@@ -658,10 +679,10 @@ impl ConversationService {
             })
     }
 
-    /// Settle a model or mode change left pending, as an opening read does,
-    /// on the owner's behalf. A change that cannot be settled now stays
-    /// pending, and the next retry asks again.
-    async fn recover_selection_for_resumption(
+    /// Settle a model change left pending, as an opening read does, on the
+    /// owner's behalf. A change that cannot be settled now stays pending,
+    /// and the next retry asks again.
+    async fn recover_model_for_resumption(
         &self,
         id: &ConversationId,
         organization_id: nessa_auth::domain::OrganizationId,
