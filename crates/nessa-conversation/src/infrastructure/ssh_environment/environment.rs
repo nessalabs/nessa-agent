@@ -1285,6 +1285,10 @@ async fn renew_login(mut renewal: Renewal) {
                     return;
                 }
             }
+            // Nothing to hand this lease any more: the policy refuses it,
+            // or the key is in use with none saved. Nothing will change that
+            // while the harnesses run.
+            None => return,
             // The same token again (OpenAI's `earliest_refresh_at` not yet
             // passed), or nothing now (row L2): asked again after a while.
             _ => false,
@@ -1294,10 +1298,12 @@ async fn renew_login(mut renewal: Renewal) {
                 lease = renewal.lease,
                 "a lease's login could not be renewed; asking again"
             );
-            tokio::select! {
-                _ = renewal.gone.changed() => return,
-                () = clock::sleep(RENEW_RETRY) => {}
-            }
+        }
+        // Never asked again sooner, even when the gateway names a time close
+        // by, so one lease cannot keep the gateway refreshing.
+        tokio::select! {
+            _ = renewal.gone.changed() => return,
+            () = clock::sleep(RENEW_RETRY) => {}
         }
     }
 }

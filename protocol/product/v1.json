@@ -10236,7 +10236,12 @@
           "items": { "$ref": "#/$defs/ChatgptAccount" },
           "description": "The accounts, in the order they were first signed in."
         },
-        "signIn": { "$ref": "#/$defs/ChatgptSignIn", "description": "The sign-in." }
+        "signIn": { "$ref": "#/$defs/ChatgptSignIn", "description": "The sign-in." },
+        "started": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile."
+        }
       },
       "required": ["accounts", "signIn"]
     },

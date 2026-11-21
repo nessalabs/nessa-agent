@@ -164,7 +164,7 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | S9 | waiting | sign-in again names another subject | ends `wrong_account`; nothing saved |
 | S10 | waiting | scopes lack `chatgpt.tokens.use.direct` | ends `plan_not_enabled`; nothing saved |
 | S11 | waiting | vault write fails | ends `not_saved`; nothing saved |
-| S12 | waiting | all checks pass | saved, audit `signed_in`; idle with `last = signed_in`. The first account kept is put in use |
+| S12 | waiting | all checks pass | saved, audit `signed_in`; idle with `last = signed_in`. The first account kept is put in use; a later one never changes which is in use, so a choice of the key (A2) stays |
 | S12a | waiting | a new sign-in names a subject already kept, or an account signs in again | that account is signed in again, not kept twice; the grant it replaced is revoked (best effort) |
 | S13 | waiting | 10 minutes pass | ends `timed_out` |
 | S14 | waiting | `chatgptCancel` | ends `cancelled`, recorded as the canceller's; a callback finishing at that moment keeps nothing |
@@ -178,9 +178,9 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | R7 | refreshed, vault write fails | lease asks | nothing handed, audit `refresh_failed` (`not_saved`); the old refresh token is spent, so the next refresh is refused and marks the account to sign in again |
 | R8 | no account in use, or the one in use set aside meanwhile | lease asks | the saved API key, if any, as before |
 | R9 | account in use needs a sign-in | lease asks | nothing handed, audit `sign_in_needed`; the key is not used in its place; the lease is due at once (L6) |
-| L1 | lease handed a ChatGPT token | `renew_by` passes | login asked again; `Renew` sent; the lease's token and `renew_by` replaced |
+| L1 | lease handed a ChatGPT token | `renew_by` passes | login asked again; `Renew` sent; the lease's token and `renew_by` replaced; never asked again sooner than a minute after |
 | L2 | renewal | gateway hands nothing (refresh failed, sign-in needed, locked), or the same token again | asked again after a minute; token on the machine unchanged |
-| L3 | renewal | account set aside or another chosen: the key or another account's token handed | renewals stop, nothing sent; running harnesses keep their token until it expires |
+| L3 | renewal | account set aside or another chosen: the key or another account's token handed, or nothing at all (policy refuses, key in use with none saved) | renewals stop, nothing sent; running harnesses keep their token until it expires |
 | L4 | renewal waiting | lease ends or its connection goes | renewal stops; the machine removes the token file |
 | L5 | machine | `Renew` for a lease whose harness has no token file, or not granted `takesLogin`, or not held | ignored, logged |
 | L6 | lease opens | an account is in use but hands nothing (refresh failed, sign-in needed, locked) | started without a login, `renew_by` 0: parked once idle (P1), watched or not; the next message asks again |

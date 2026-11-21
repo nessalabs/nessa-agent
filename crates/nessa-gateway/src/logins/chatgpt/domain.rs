@@ -212,7 +212,9 @@ impl ChatgptAccounts {
     }
 
     /// These accounts with `account` kept: replacing the one with its id,
-    /// or added. The first account kept becomes the one Codex uses.
+    /// or added. The first account kept becomes the one Codex uses; after
+    /// that, a sign-in never changes which one Codex uses, so a choice of
+    /// the API key stays chosen.
     ///
     /// # Errors
     /// [`TooManyAccounts`] when adding one passes [`MAX_ACCOUNTS`].
@@ -225,7 +227,10 @@ impl ChatgptAccounts {
         }
         Ok(Self {
             host_id: self.host_id.clone(),
-            in_use: self.in_use.clone().or(Some(account.id)),
+            in_use: match self.accounts.is_empty() {
+                true => Some(account.id),
+                false => self.in_use.clone(),
+            },
             accounts,
         })
     }

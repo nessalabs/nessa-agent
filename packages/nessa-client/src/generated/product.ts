@@ -4181,6 +4181,8 @@ export interface ChatgptLogins {
   accounts: ChatgptAccount[]
   /** The sign-in. */
   signIn: ChatgptSignIn
+  /** Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile. */
+  started?: string
 }
 /** Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced. */
 export interface LoginsChatgptSignInParams {

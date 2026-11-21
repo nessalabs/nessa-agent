@@ -102,7 +102,7 @@ function chatgptSignIn(value: unknown): ChatgptSignIn {
 }
 
 function chatgptLogins(value: unknown): ChatgptLogins {
-  const item = record(value, ["accounts", "signIn"])
+  const item = record(value, ["accounts", "signIn", "started"])
   const accounts = own(item, "accounts")
   if (!Array.isArray(accounts) || accounts.length > bounds.maxChatgptAccounts)
     invalid("chatgpt accounts")
@@ -110,7 +110,13 @@ function chatgptLogins(value: unknown): ChatgptLogins {
   if (new Set(read.map((account) => account.id)).size !== read.length)
     invalid("chatgpt account ids")
   if (read.filter((account) => account.inUse).length > 1) invalid("chatgpt inUse")
-  return { accounts: read, signIn: chatgptSignIn(own(item, "signIn")) }
+  const signIn = chatgptSignIn(own(item, "signIn"))
+  if (!Object.hasOwn(item, "started")) return { accounts: read, signIn }
+  return {
+    accounts: read,
+    signIn,
+    started: accountId(own(item, "started"), "chatgpt sign-in started"),
+  }
 }
 
 export function loginsStatus(value: unknown): LoginsStatus {

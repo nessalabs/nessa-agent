@@ -644,12 +644,16 @@ impl SavedLoginsService {
             }
             None => Ok(false),
         };
-        let (Some(chatgpt), Ok(true)) = (chatgpt, &uses_chatgpt) else {
+        let (Some(chatgpt), Ok(true)) = (&chatgpt, &uses_chatgpt) else {
+            // Codex that may be on a ChatGPT account whose vault cannot be
+            // read now is asked again once idle (row L6), like one whose
+            // account hands nothing.
+            let unknown = chatgpt.is_some() && uses_chatgpt.is_err();
             // The vault read and the audit write block: off the executor.
             let this = self.clone();
             return tokio::task::spawn_blocking(move || {
                 let operation_id = Uuid::new_v4().to_string();
-                match uses_chatgpt {
+                let handed = match uses_chatgpt {
                     Err(LoginsError::VaultLocked) => {
                         this.withheld(&operation_id, &environment, agent, &lease, Withheld::Locked)
                     }
@@ -661,17 +665,22 @@ impl SavedLoginsService {
                         Withheld::Unavailable,
                     ),
                     Ok(_) => this.login_for(&environment, agent, &lease),
+                };
+                match handed {
+                    Some(login) => Some(HandedLogin {
+                        login: Some(login),
+                        renew_by_ms: None,
+                        account: None,
+                    }),
+                    None if unknown => Some(HandedLogin::retry()),
+                    None => None,
                 }
-                .map(|login| HandedLogin {
-                    login: Some(login),
-                    renew_by_ms: None,
-                    account: None,
-                })
             })
             .await
             .ok()
             .flatten();
         };
+        let chatgpt = chatgpt.clone();
         let operation_id = Uuid::new_v4().to_string();
         // The policy first: a machine that may not receive logins never
         // costs a refresh.
@@ -704,7 +713,10 @@ impl SavedLoginsService {
                     login: Some(access.login),
                     renew_by_ms: Some(access.renew_by_ms),
                     account: Some(access.account),
-                }),
+                })
+                // A hand-off that could not be recorded hands nothing; asked
+                // again once idle.
+                .or(Some(HandedLogin::retry())),
             // Set aside a moment ago: the key, as if none were in use.
             Ok(None) => this
                 .login_for(&environment, agent, &lease)

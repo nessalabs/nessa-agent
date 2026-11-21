@@ -4778,7 +4778,8 @@ async fn renewing(
         .open(&lease(), &terms("codex"), binding(true).0)
         .await
         .unwrap_or_else(|_| panic!("granted"));
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    // Past a renewal's spacing (`RENEW_RETRY`), which a paused test skips.
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
         while saved.asked.load(Ordering::SeqCst) < asks {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
@@ -4795,7 +4796,7 @@ async fn renewing(
 /// the host for the harnesses already running and becomes the lease's. A
 /// login that no longer expires (the key, once the account is set aside)
 /// ends the renewals, and nothing is sent for it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_handed_login_is_renewed_on_the_host_until_it_no_longer_expires() {
     let (launcher, opened) = renewing(
         vec![

@@ -65,10 +65,11 @@ export interface CodexChatgptSignIn {
 }
 
 /** Over the gateway's `logins` methods; `open` hands an address to the
- * person's browser where the host can, `pause` waits between reads. */
+ * person's browser where the host can, `pause` waits between reads.
+ * `begin` signs in again the account named, or a new one. */
 export function codexChatgptSignIn(ports: {
   status: () => Promise<LoginsStatus>
-  begin: () => Promise<LoginsStatus>
+  begin: (accountId?: string) => Promise<LoginsStatus>
   open?: (url: string) => void
   pause: (ms: number) => Promise<void>
   pollMs?: number
@@ -85,16 +86,27 @@ export function codexChatgptSignIn(ports: {
     signIn: async (opened) => {
       let status: LoginsStatus
       try {
-        status = await ports.begin()
+        // The account in use signs in again when it needs to, so the card
+        // renews what Codex uses rather than adding an account beside it.
+        const before = await ports.status()
+        const again = before.chatgpt?.accounts.find(
+          (account) => account.inUse && account.needsSignIn,
+        )
+        status = await ports.begin(again?.id)
       } catch (cause) {
         throw new ChatgptSignInFailure({ cause })
       }
+      // The answer names the attempt this call started; the sign-in it
+      // shows may already be another window's.
+      const attempt = status.chatgpt?.started
       const started = status.chatgpt?.signIn
-      if (started?.state !== "waiting" || !started.authorizeUrl || !started.attempt)
-        return (
-          ended(status, started?.attempt) ?? Promise.reject(new ChatgptSignInFailure())
-        )
-      const attempt = started.attempt
+      if (!attempt) throw new ChatgptSignInFailure()
+      if (
+        started?.state !== "waiting" ||
+        started.attempt !== attempt ||
+        !started.authorizeUrl
+      )
+        return ended(status, attempt) ?? Promise.reject(new ChatgptSignInFailure())
       opened(started.authorizeUrl)
       try {
         ports.open?.(started.authorizeUrl)

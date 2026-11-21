@@ -83,13 +83,22 @@ pub(super) async fn dispatch(
             else {
                 return failure(&frame.id, "invalid_request");
             };
-            match logins.chatgpt() {
-                Ok(chatgpt) => match chatgpt.begin(caller, account).await {
-                    Ok(()) => logins.status(),
-                    Err(error) => Err(error),
-                },
+            let begun = match logins.chatgpt() {
+                Ok(chatgpt) => chatgpt.begin(caller, account).await,
                 Err(error) => Err(error),
-            }
+            };
+            // The answer names the attempt this call started: the status read
+            // after it may already show another window's.
+            return match begun.and_then(|started| Ok((started, logins.status()?))) {
+                Ok((started, status)) => {
+                    let mut answer = wire(&status);
+                    if let Some(chatgpt) = answer.chatgpt.as_mut() {
+                        chatgpt.started = Some(started);
+                    }
+                    success(&frame.id, &answer)
+                }
+                Err(error) => failure(&frame.id, code(error).as_str()),
+            };
         }
         "logins.chatgptCancel" => {
             if frame.params != json!({}) {
@@ -185,6 +194,7 @@ fn wire(status: &LoginsStatus) -> WireStatus {
 
 fn wire_chatgpt(status: &ChatgptStatus) -> WireChatgpt {
     WireChatgpt {
+        started: None,
         accounts: status
             .accounts
             .iter()

@@ -319,7 +319,8 @@ export function createDesktopDependencies(
     codexChatgptSignIn: source
       ? codexChatgptSignIn({
           status: async () => (await source.connected()).logins.status(),
-          begin: async () => (await source.connected()).logins.chatgptSignIn(),
+          begin: async (accountId) =>
+            (await source.connected()).logins.chatgptSignIn(accountId),
           open: options.openInBrowser,
           pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         })

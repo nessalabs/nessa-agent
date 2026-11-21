@@ -277,7 +277,7 @@ impl ChatgptLogins {
         self: &Arc<Self>,
         caller: LoginCaller,
         account: Option<AccountId>,
-    ) -> Result<(), LoginsError> {
+    ) -> Result<String, LoginsError> {
         // The host ID is kept before the first sign-in sends it.
         let (accounts, account) = {
             let _change = self.changes.lock().await;
@@ -316,9 +316,10 @@ impl ChatgptLogins {
             Ok(server) => server,
             Err(_) => {
                 self.ended(&operation_id, &caller, account_id, SignInEnd::ListenFailed);
-                return Ok(());
+                return Ok(operation_id);
             }
         };
+        let started = operation_id.clone();
         let attempt = Attempt {
             operation_id: operation_id.clone(),
             account,
@@ -376,7 +377,7 @@ impl ChatgptLogins {
         if let Some((operation_id, caller, account)) = replaced {
             self.record_end(&operation_id, &caller, account, SignInEnd::Replaced);
         }
-        Ok(())
+        Ok(started)
     }
 
     /// Stop the sign-in under way, if one is (row S14), recorded as

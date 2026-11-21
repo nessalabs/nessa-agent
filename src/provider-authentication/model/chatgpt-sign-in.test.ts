@@ -28,6 +28,12 @@ const idle = (last?: "signed_in" | "declined", attempt = ours): LoginsStatus => 
   },
 })
 
+/** The answer to `chatgptSignIn`: `status`, naming the attempt it started. */
+const begun = (status: LoginsStatus, started = ours): LoginsStatus => ({
+  ...status,
+  chatgpt: { ...status.chatgpt!, started },
+})
+
 describe("ChatGPT sign-in for Codex", () => {
   it("is offered only where the gateway keeps ChatGPT accounts", async () => {
     const pause = async () => {}
@@ -47,13 +53,13 @@ describe("ChatGPT sign-in for Codex", () => {
   })
 
   it("opens the browser on the sign-in and reads until it ends", async () => {
-    const reads = [waiting, waiting, idle("signed_in")]
+    const reads = [idle(), waiting, waiting, idle("signed_in")]
     const open = vi.fn()
     const opened = vi.fn()
     const pause = vi.fn(async () => {})
     const signIn = codexChatgptSignIn({
       status: async () => reads.shift() ?? idle(),
-      begin: async () => waiting,
+      begin: async () => begun(waiting),
       open,
       pause,
       pollMs: 7,
@@ -67,13 +73,48 @@ describe("ChatGPT sign-in for Codex", () => {
 
   it("never reports another window's sign-in as its own", async () => {
     const pause = async () => {}
-    for (const reads of [[waitingFor(theirs)], [idle("signed_in", theirs)]]) {
+    for (const reads of [
+      [idle(), waitingFor(theirs)],
+      [idle(), idle("signed_in", theirs)],
+    ]) {
       const signIn = codexChatgptSignIn({
         status: async () => reads.shift() ?? idle(),
-        begin: async () => waiting,
+        begin: async () => begun(waiting),
         pause,
       })
       expect(await signIn.signIn(() => {})).toBe("replaced")
+    }
+    // Another window's started just after this one: its sign-in is not ours
+    // to open, even in the answer to ours.
+    const opened = vi.fn()
+    const signIn = codexChatgptSignIn({
+      status: async () => idle(),
+      begin: async () => begun(waitingFor(theirs)),
+      pause,
+    })
+    expect(await signIn.signIn(opened)).toBe("replaced")
+    expect(opened).not.toHaveBeenCalled()
+  })
+
+  it("signs in again the account in use when it needs it, else a new one", async () => {
+    const pause = async () => {}
+    const account = "2a1b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e"
+    const needing = (needsSignIn: boolean): LoginsStatus => ({
+      ...base,
+      chatgpt: {
+        accounts: [{ id: account, email: "a@example.test", inUse: true, needsSignIn }],
+        signIn: { state: "idle" },
+      },
+    })
+    for (const [status, expected] of [
+      [needing(true), account],
+      [needing(false), undefined],
+    ] as const) {
+      const begin = vi.fn(async (_accountId?: string) => begun(idle("declined")))
+      await codexChatgptSignIn({ status: async () => status, begin, pause }).signIn(
+        () => {},
+      )
+      expect(begin).toHaveBeenCalledWith(expected)
     }
   })
 
@@ -82,7 +123,7 @@ describe("ChatGPT sign-in for Codex", () => {
     expect(
       await codexChatgptSignIn({
         status: async () => idle(),
-        begin: async () => idle("declined"),
+        begin: async () => begun(idle("declined")),
         pause,
       }).signIn(() => {}),
     ).toBe("declined")
@@ -100,7 +141,7 @@ describe("ChatGPT sign-in for Codex", () => {
         status: async () => {
           throw new Error("gone")
         },
-        begin: async () => waiting,
+        begin: async () => begun(waiting),
         pause,
       }).signIn(() => {}),
     ).rejects.toBeInstanceOf(ChatgptSignInFailure)

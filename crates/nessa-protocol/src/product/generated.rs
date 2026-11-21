@@ -4696,6 +4696,8 @@ pub struct ChatgptSignIn {
 pub struct ChatgptLogins {
     pub accounts: Vec<ChatgptAccount>,
     pub sign_in: ChatgptSignIn,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

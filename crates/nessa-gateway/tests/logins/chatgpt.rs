@@ -415,6 +415,16 @@ fn accounts_keep_at_most_eight_and_the_first_is_put_in_use() {
     assert!(accounts
         .with_signed_in(kept_account(ONE, "u", START))
         .is_err());
+    // With the key chosen, another sign-in leaves the key chosen.
+    let keyed = accounts.using(None).unwrap();
+    let again = keyed
+        .with_signed_in(kept_account(
+            "0b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d00",
+            "u",
+            START,
+        ))
+        .unwrap();
+    assert!(again.in_use().is_none());
     // The encoded entry reads back as it was, and a token is not in Debug.
     assert_eq!(
         ChatgptAccounts::decode(&accounts.encode()).unwrap(),
@@ -1219,6 +1229,18 @@ async fn codex_is_handed_the_account_in_use_and_never_the_key_in_its_place() {
     f.logins.use_account(caller(), None).await.unwrap();
     let handed = hand(&service, "lease-set-aside").await.unwrap();
     assert_eq!(handed.login.unwrap().expose(), "sk-codex-key");
+    // A locked vault cannot say whether an account is in use: nothing, never
+    // the key, and asked again once idle.
+    *f.store.locked.lock().unwrap() = true;
+    let handed = hand(&service, "lease-locked").await.unwrap();
+    assert_eq!((handed.login, handed.renew_by_ms), (None, Some(0)));
+    assert!(matches!(
+        handoff(&f, "lease-locked"),
+        Some(LoginEvent::NotSent {
+            why: Withheld::Locked,
+            ..
+        })
+    ));
 }
 
 /// Row S13: a browser that never comes back ends the sign-in after its
