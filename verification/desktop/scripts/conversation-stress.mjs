@@ -2089,6 +2089,36 @@ async function opensBeside(run, opened, name, listed, failures) {
     failures.push("ending the terminal opened beside left its pane")
 }
 
+/**
+ * A watched Run that ended stays open, its box no taller than what it
+ * printed; the bar's chevron folds the output away and brings it back.
+ */
+async function foldsItsOutput(block, failures) {
+  const output = block.locator("[data-run-output]")
+  const fold = block.locator("[data-run-fold]")
+  if (!(await output.count())) {
+    failures.push("a Run that ended while watched folded its output away")
+    return
+  }
+  const fitted = await waitFor(async () => {
+    const [box, grid] = await Promise.all([
+      output.boundingBox(),
+      output.locator('[data-slot="terminal-grid"]').boundingBox(),
+    ])
+    return box && grid && box.height < grid.height
+  }, 5_000)
+  if (!fitted) failures.push("an ended Run's box keeps the blank rows under its output")
+  await fold.click()
+  if (
+    !(await waitFor(async () => (await output.count()) === 0, 3_000)) ||
+    (await fold.getAttribute("aria-expanded")) !== "false"
+  )
+    failures.push("the Run bar's chevron did not fold the output away")
+  await fold.click()
+  if (!(await waitFor(async () => (await output.count()) === 1, 3_000)))
+    failures.push("the Run bar's chevron did not bring the output back")
+}
+
 async function terminalsBuilt(run, failures) {
   try {
     await run.client.terminals.list()
@@ -11757,6 +11787,8 @@ const steps = {
         failures.push("the gateway does not list the finished run as exited 0")
       if (!(await prints.locator("[data-run-button]").innerText()).includes("Run again"))
         failures.push("a finished Run does not offer Run again")
+      // The box stops at the last printed row, and the bar folds it away.
+      await foldsItsOutput(prints, failures)
       if (run.evidence)
         await message.screenshot({
           path: join(run.evidence, `run-${run.engine}-${step.index}.png`),
