@@ -373,7 +373,9 @@ jobs:
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
-        timeout-minutes: 20
+        # The run builds its VM fixture gateway first (about 4 minutes, with
+        # terminals), then 87 steps in about 16; 20 cut a run that held them all.
+        timeout-minutes: 30
       - name: Keep the evidence of a failed run
         if: failure()
         uses: actions/upload-artifact@v4
