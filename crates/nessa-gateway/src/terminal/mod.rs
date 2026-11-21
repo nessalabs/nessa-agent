@@ -31,6 +31,10 @@ pub use engine::GhosttyEngine;
 #[cfg(all(unix, feature = "terminals"))]
 static PREPARED: std::sync::OnceLock<Arc<pty_runtime::Runtime>> = std::sync::OnceLock::new();
 
+/// Why [`prepare`] made no runtime. It runs before logging starts, so the
+/// reason is kept here and logged by whoever composes the gateway.
+static UNPREPARED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Build pty-runtime's runtime for this process. pty-runtime stages its
 /// helper image by forking, so this runs on the main thread before any
 /// async runtime starts, and only in a process that serves the gateway.
@@ -51,9 +55,16 @@ pub fn prepare() {
             Ok(runtime) => {
                 let _ = PREPARED.set(Arc::new(runtime));
             }
-            Err(error) => tracing::warn!(?error, "terminals unavailable: runtime not built"),
+            Err(error) => {
+                let _ = UNPREPARED.set(format!("{error:?}"));
+            }
         }
     }
+}
+
+/// Why [`prepare`] made no runtime, when it tried and failed.
+pub fn unprepared_reason() -> Option<&'static str> {
+    UNPREPARED.get().map(String::as_str)
 }
 
 /// The engine [`prepare`] made, when it made one.

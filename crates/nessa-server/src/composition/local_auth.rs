@@ -665,6 +665,8 @@ pub(super) async fn product_state(
             Some(engine),
             Arc::new(crate::terminal::SystemTerminalClock),
         ));
+    } else if let Some(reason) = crate::terminal::unprepared_reason() {
+        tracing::warn!(reason, "terminals unavailable: pty runtime not built");
     }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
