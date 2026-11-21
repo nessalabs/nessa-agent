@@ -3996,6 +3996,9 @@ async function slowLaunch(run, failures) {
   return true
 }
 
+const unsignedSwitch = (...args) => steps.unsignedSwitchBody(...args)
+const failedModelControl = (...args) => steps.failedControlBody(...args)
+
 const steps = {
   /** The cloud for new thread VMs is picked in Settings › Connections ›
    * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
@@ -10306,6 +10309,14 @@ const steps = {
    * runs on the agent it was on.
    */
   async unsigned(run, step, failures) {
+    try {
+      await unsignedSwitch(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async unsignedSwitchBody(run, step, failures) {
     const other = otherAgent(run.stack.agent)
     const target = catalog.models.find((model) => model.modelId === MODELS[other])
     if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
@@ -10399,6 +10410,14 @@ const steps = {
    * completes.
    */
   async failedControl(run, step, failures) {
+    try {
+      await failedModelControl(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async failedControlBody(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " control")
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
