@@ -71,19 +71,25 @@ impl TerminalEngine for GhosttyEngine {
         // A login shell reads the person's profile, so PATH and the rest are
         // theirs, not the gateway's. TERM says which sequences it may send.
         let mut arguments: Vec<OsString> = vec!["-l".into()];
+        let mut environment: Vec<(OsString, OsString)> = vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("TERM_PROGRAM".into(), "Nessa".into()),
+        ];
         if let TerminalKind::Run { command } = &spec.kind {
-            arguments.extend(["-i".into(), "-c".into(), command.into()]);
+            // Drawn as it would be typed: the person's own prompt, the
+            // command, then what it prints. The text goes in the environment,
+            // never into the script, so no quoting can change what runs; eval
+            // keeps its exit status, and the profile's aliases.
+            arguments.extend(["-i".into(), "-c".into(), run_script(&spec.shell).into()]);
+            environment.push(("NESSA_RUN_COMMAND".into(), command.into()));
         }
         let command = CommandSpec::new(spec.shell.clone(), spec.folder.clone(), arguments)
             .and_then(|command| {
                 command.with_environment(
                     EnvironmentPolicy::Inherit,
                     vec!["NO_COLOR".into(), "FORCE_COLOR".into()],
-                    vec![
-                        ("TERM".into(), "xterm-256color".into()),
-                        ("COLORTERM".into(), "truecolor".into()),
-                        ("TERM_PROGRAM".into(), "Nessa".into()),
-                    ],
+                    environment,
                 )
             })
             .map_err(|error| TerminalError::Spawn(format!("{error:?}")))?;
@@ -526,4 +532,19 @@ fn deliver(id: &str, key: &ViewKey, target: &mut View, messages: Vec<String>) ->
         }
     }
     true
+}
+
+/// The script a Run's shell runs: its prompt as the person sees it, the
+/// command after it, then the command. zsh and bash expand their own prompt;
+/// another shell shows `$ `.
+fn run_script(shell: &std::path::Path) -> &'static str {
+    match shell.file_name().and_then(|name| name.to_str()) {
+        Some("zsh") => {
+            r#"print -rn -- "${(%)PROMPT}"; print -r -- "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND""#
+        }
+        Some("bash") => {
+            r#"if [ "${BASH_VERSINFO[0]}${BASH_VERSINFO[1]}" -ge 44 ] 2>/dev/null; then printf '%s' "${PS1@P}"; else printf '$ '; fi; printf '%s\n' "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND""#
+        }
+        _ => r#"printf '$ %s\n' "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND""#,
+    }
 }

@@ -128,7 +128,11 @@ export const RunBlock = memo(function RunBlock({
       </div>
       {run ? (
         <div className="workspace-run-output">
-          <TerminalView terminalId={run.id} label={`Output of ${run.title}`} />
+          <TerminalView
+            terminalId={run.id}
+            label={`Output of ${run.title}`}
+            scrollsHistory="focused"
+          />
         </div>
       ) : null}
     </div>

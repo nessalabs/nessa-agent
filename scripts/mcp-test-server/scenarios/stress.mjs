@@ -209,6 +209,9 @@ export const RUN_FENCES = [
 /** What the `run` turn's first fence prints when run. */
 export const RUN_PRINTS = "stress-run-42"
 
+/** The `run` turn's first fence's command, shown after the prompt when run. */
+export const RUN_COMMAND = "echo stress-run-$((6 * 7))"
+
 /** How long a `table` turn holds between its tables and the rest of its answer. */
 export const TABLE_HOLD_MS = 3000
 

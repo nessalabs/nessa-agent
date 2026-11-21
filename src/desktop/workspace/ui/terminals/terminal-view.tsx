@@ -14,12 +14,14 @@ export const TerminalView = memo(function TerminalView({
   autoFocus,
   className,
   onCopyText,
+  scrollsHistory,
 }: {
   terminalId: string
   label: string
   autoFocus?: boolean
   className?: string
   onCopyText?: ComponentProps<typeof Terminal>["onCopyText"]
+  scrollsHistory?: ComponentProps<typeof Terminal>["scrollsHistory"]
 }) {
   const source = useTerminalSource()
   // Made in an effect, so a view the page let go of is released, and one
@@ -59,6 +61,7 @@ export const TerminalView = memo(function TerminalView({
       onFocusView={view.focus}
       onHistory={view.history}
       onCopyText={onCopyText}
+      scrollsHistory={scrollsHistory}
     />
   )
 })

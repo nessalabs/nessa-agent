@@ -450,6 +450,7 @@ import {
   TABLE_HOLD_MS,
   TABLE_LINES,
   RUN_PRINTS,
+  RUN_COMMAND,
   CODE_LINES,
   MATH_LINES,
   TRACE_CALLS,
@@ -11635,6 +11636,20 @@ const steps = {
       if (!printed)
         failures.push(
           `Run's output does not show ${RUN_PRINTS}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()))}`,
+        )
+      // Scrolling the chat over the output scrolls the chat, not its history.
+      await grid.hover()
+      await run.page.mouse.wheel(0, -400)
+      await run.page.waitForTimeout(300)
+      if (await prints.locator('[data-slot="terminal-scrolled"]').count())
+        failures.push("scrolling the chat over Run's output scrolled the output back")
+      // As typed in a terminal: the prompt, then the command, above its output.
+      const rows = (await gridRows(grid)).map((row) => row.trimEnd())
+      const typedAt = rows.findIndex((row) => row.endsWith(RUN_COMMAND))
+      const printedAt = rows.findIndex((row) => row.trim() === RUN_PRINTS)
+      if (typedAt < 0 || printedAt <= typedAt)
+        failures.push(
+          `Run's output does not show the command after a prompt above what it printed: ${JSON.stringify(rows.filter((row) => row.trim()))}`,
         )
       const status = prints.locator("[data-run-exit]")
       const words = (await status.count()) ? await status.innerText() : ""
