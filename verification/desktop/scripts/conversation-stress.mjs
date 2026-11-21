@@ -2081,6 +2081,37 @@ async function reflowsToItsPane(page, grid, failures) {
   }
 }
 
+/**
+ * Opens a second shell with ⌘J (it takes the focused pane), then clicks the
+ * first terminal's row: the pane shows the first terminal again, `word` and
+ * all, with no click inside it. The second shell is ended through the
+ * gateway after. Whether the pane came back.
+ */
+async function switchesBack(run, grid, row, listed, opened, word) {
+  const page = run.page
+  await page.keyboard.press(keys.newTerminal)
+  const second = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  const away = await waitFor(
+    async () => !(await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  await row.click()
+  const back = await waitFor(
+    async () => (await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  if (second) await run.client.terminals.close(second.terminalId).catch(() => {})
+  return Boolean(second && away && back)
+}
+
 /** A terminal grid's rows as text, top to bottom. */
 async function gridRows(grid) {
   return grid
@@ -11534,6 +11565,12 @@ const steps = {
         failures.push("the session list has no row for the terminal")
       else if ((await row.innerText()).includes(opened.folder))
         failures.push("the terminal's session row shows its folder")
+      // Switching: a second ⌘J shell takes the pane; the first one's row
+      // brings it back, its own output showing without a click in the pane.
+      if (!(await switchesBack(run, grid, row, listed, opened, word)))
+        failures.push(
+          `the first terminal's row did not show its own output in the pane: ${JSON.stringify((await gridRows(grid)).filter((each) => each.trim()).slice(-3))}`,
+        )
       // The details popover names its folder and shell.
       await pane.getByRole("button", { name: "Terminal Details" }).click()
       const details = page.locator(".workspace-terminal-details")

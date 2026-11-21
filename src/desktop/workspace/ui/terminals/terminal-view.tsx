@@ -24,16 +24,18 @@ export const TerminalView = memo(function TerminalView({
   const source = useTerminalSource()
   // Made in an effect, so a view the page let go of is released, and one
   // mounted twice in development is two views, never one released twice.
-  const [view, setView] = useState<SourceView | null>(null)
+  const [held, setHeld] = useState<{ terminalId: string; view: SourceView } | null>(null)
   useEffect(() => {
     if (!source) return
-    const made = source.view(terminalId)
-    setView(made)
+    const made = { terminalId, view: source.view(terminalId) }
+    setHeld(made)
     return () => {
-      made.release()
-      setView((current) => (current === made ? null : current))
+      made.view.release()
+      setHeld((current) => (current === made ? null : current))
     }
   }, [source, terminalId])
+  // A view of another terminal, held until the effect swaps it, is never drawn.
+  const view = held?.terminalId === terminalId ? held.view : null
   const subscribe = useMemo(
     () => (listener: (message: TerminalMessage) => void) =>
       view
@@ -42,8 +44,12 @@ export const TerminalView = memo(function TerminalView({
     [view],
   )
   if (!view) return null
+  // One Terminal per view: a pane switched to another terminal mounts a
+  // fresh one, whose first measured fit attaches the new view. Kept, the
+  // old one's fit would be unchanged, so the new view would never attach.
   return (
     <Terminal
+      key={terminalId}
       aria-label={label}
       className={className}
       autoFocus={autoFocus}
