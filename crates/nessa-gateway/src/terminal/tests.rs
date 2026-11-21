@@ -365,3 +365,37 @@ fn a_full_output_queue_never_loses_a_list_change() {
         Some(TerminalSignal::Output { .. })
     ));
 }
+
+#[test]
+fn a_start_that_panics_releases_its_reservation() {
+    let (hub, engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    *engine.during_start.lock().unwrap() = Some(Box::new(|_, _| panic!("start failed")));
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        link.open(request(&owner("p"), "r1"), "/bin/sh".into())
+    }));
+    assert!(opened.is_err());
+    assert_eq!(hub.size_of(&owner("p"), "anything"), None);
+    let again = link
+        .open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap();
+    assert_eq!(engine.starts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(hub.list(&owner("p"))[0].id, again.id);
+}
+
+#[test]
+fn a_terminal_closed_while_starting_is_not_answered() {
+    let (hub, engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    let closer = Arc::clone(&hub);
+    *engine.during_start.lock().unwrap() = Some(Box::new(move |id, _| {
+        closer.close(&owner("p"), id).unwrap();
+    }));
+    assert_eq!(
+        link.open(request(&owner("p"), "r1"), "/bin/sh".into())
+            .map(|entry| entry.id),
+        Err(TerminalError::NotFound)
+    );
+    assert!(hub.list(&owner("p")).is_empty());
+    assert_eq!(engine.recorded.0.lock().unwrap().as_slice(), ["close"]);
+}

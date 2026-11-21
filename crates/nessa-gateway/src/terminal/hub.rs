@@ -204,7 +204,13 @@ impl TerminalHub {
             size: request.size,
         };
         let events: Arc<dyn EngineEvents> = Arc::new(HubEvents(self.me.clone()));
+        // A start that fails or panics takes its reservation with it.
+        let reservation = Reservation {
+            hub: self,
+            id: &entry.id,
+        };
         let started = engine.start(&entry.id, &spec, events);
+        std::mem::forget(reservation);
         let mut hub = self.lock();
         let index = hub
             .terminals
@@ -222,9 +228,9 @@ impl TerminalHub {
             }
         };
         let Some(index) = index else {
-            // Closed while it started.
+            // Closed while it started: it is not one of theirs any more.
             running.send(EngineCommand::Close);
-            return Ok(entry);
+            return Err(TerminalError::NotFound);
         };
         let live = &mut hub.terminals[index];
         let Process::Starting(waiting) =
@@ -559,6 +565,23 @@ impl Drop for TerminalLink {
         if let Some(hub) = self.hub.upgrade() {
             hub.disconnect(self.connection);
         }
+    }
+}
+
+/// A reservation `open` holds while the engine starts its program. Dropped
+/// by a panicking start, it removes the reservation so it neither counts
+/// toward the limit nor answers a retry forever.
+struct Reservation<'a> {
+    hub: &'a TerminalHub,
+    id: &'a str,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        let mut hub = self.hub.lock();
+        hub.terminals.retain(|live| {
+            live.entry.id != self.id || !matches!(live.running, Process::Starting(_))
+        });
     }
 }
 
