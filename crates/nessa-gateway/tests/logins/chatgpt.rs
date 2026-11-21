@@ -637,7 +637,7 @@ async fn a_sign_in_is_replaced_cancelled_or_never_starts() {
         .collect();
     assert_eq!(ends, [SignInEnd::Replaced]);
     // S14.
-    f.logins.cancel(&caller());
+    f.logins.cancel(&caller()).unwrap();
     assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
     // Nothing listens: ends at once.
     *f.listener.fails.lock().unwrap() = true;
@@ -1053,7 +1053,7 @@ async fn a_sign_in_ended_while_it_finishes_keeps_nothing() {
     f.logins.begin(caller(), None).await.unwrap();
     let back = come_back(&f, 0, f.state());
     exchanging(&f, 1).await;
-    f.logins.cancel(&caller());
+    f.logins.cancel(&caller()).unwrap();
     hold.add_permits(1);
     assert_ne!(back.await.unwrap(), Some(CallbackReply::SignedIn));
     assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
@@ -1259,4 +1259,46 @@ async fn a_sign_in_the_browser_never_finishes_times_out() {
             ..
         }
     )));
+}
+
+/// Row S12b: a sign-in whose end cannot be recorded keeps nothing and
+/// revokes the grant it got; a cancel that cannot be recorded still stops
+/// the sign-in, and says it was not recorded.
+#[tokio::test]
+async fn a_sign_in_or_cancel_that_cannot_be_recorded_says_so() {
+    let f = fixture();
+    *f.authority.subject.lock().unwrap() = "user-1".into();
+    f.logins.begin(caller(), None).await.unwrap();
+    let state = f.state();
+    let issued = f.authority.issued.lock().unwrap().clone();
+    *f.audit.refuses.lock().unwrap() = true;
+    let reply = f
+        .callback(&[("code", "c"), ("state", &state), ("client_id", &issued)])
+        .await;
+    assert!(matches!(reply, CallbackReply::Failed));
+    assert_eq!(f.ended().await, Some(SignInEnd::NotSaved));
+    assert!(f.store.accounts().accounts().is_empty());
+    assert_eq!(*f.authority.revoked.lock().unwrap(), ["refresh-1"]);
+    *f.audit.refuses.lock().unwrap() = false;
+    f.logins.begin(caller(), None).await.unwrap();
+    *f.audit.refuses.lock().unwrap() = true;
+    assert_eq!(
+        f.logins.cancel(&caller()),
+        Err(LoginsError::ChangeUnrecorded)
+    );
+    assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
+}
+
+/// Row A1b: removing an account while it signs in again ends that sign-in,
+/// and the account stays removed.
+#[tokio::test]
+async fn an_account_removed_while_it_signs_in_again_stays_removed() {
+    let f = fixture();
+    f.store.put(&with_one(START + 55 * MINUTE));
+    let one = AccountId::parse(ONE).unwrap();
+    f.logins.begin(caller(), Some(one.clone())).await.unwrap();
+    f.logins.remove(caller(), one).await.unwrap();
+    assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
+    assert!(f.store.accounts().accounts().is_empty());
+    assert!(f.store.accounts().in_use().is_none());
 }

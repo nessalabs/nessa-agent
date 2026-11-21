@@ -166,6 +166,7 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | S11 | waiting | vault write fails | ends `not_saved`; nothing saved |
 | S12 | waiting | all checks pass | saved, audit `signed_in`; idle with `last = signed_in`. The first account kept is put in use; a later one never changes which is in use, so a choice of the key (A2) stays |
 | S12a | waiting | a new sign-in names a subject already kept, or an account signs in again | that account is signed in again, not kept twice; the grant it replaced is revoked (best effort) |
+| S12b | waiting | signed in, but its end cannot be recorded | nothing kept: the accounts put back, the new grant revoked; idle with `last = not_saved`. A `chatgptCancel` whose end cannot be recorded still stops the sign-in and answers `change_unrecorded` |
 | S13 | waiting | 10 minutes pass | ends `timed_out` |
 | S14 | waiting | `chatgptCancel` | ends `cancelled`, recorded as the canceller's; a callback finishing at that moment keeps nothing |
 | S15 | any | gateway restarts | an attempt under way is forgotten; saved accounts stay |
@@ -188,6 +189,7 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | P1 | idle agent, past `renew_by` (renewals failing) | parking sweep | parked now, watched or not |
 | P2 | busy agent, past `renew_by` | parking sweep | left running; the turn may fail when the token expires |
 | A1 | account in use | `chatgptRemove` | removed from the vault, then revoked at OpenAI (best effort, recorded); a vault that refuses keeps it usable. Codex falls back to the API key |
+| A1b | that account signing in again | `chatgptRemove` | the sign-in ends `cancelled`; one finishing meanwhile finds the account gone and keeps nothing, so the account stays removed |
 | A2 | any | `chatgptUse {accountId: null}` | Codex uses the saved API key |
 
 ## Wire

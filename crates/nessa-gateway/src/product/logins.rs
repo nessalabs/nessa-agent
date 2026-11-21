@@ -105,10 +105,7 @@ pub(super) async fn dispatch(
                 return failure(&frame.id, "invalid_request");
             }
             match logins.chatgpt() {
-                Ok(chatgpt) => {
-                    chatgpt.cancel(&caller);
-                    logins.status()
-                }
+                Ok(chatgpt) => chatgpt.cancel(&caller).and_then(|()| logins.status()),
                 Err(error) => Err(error),
             }
         }

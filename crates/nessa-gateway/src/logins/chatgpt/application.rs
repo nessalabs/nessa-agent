@@ -377,20 +377,33 @@ impl ChatgptLogins {
             }
         };
         if let Some((operation_id, caller, account)) = replaced {
-            self.record_end(&operation_id, &caller, account, SignInEnd::Replaced);
+            let _ = self.record_end(&operation_id, &caller, account, SignInEnd::Replaced);
         }
         Ok(started)
     }
 
     /// Stop the sign-in under way, if one is (row S14), recorded as
     /// `caller`'s.
-    pub fn cancel(&self, caller: &LoginCaller) {
-        self.end_waiting(SignInEnd::Cancelled, None, Some(caller));
+    ///
+    /// # Errors
+    /// [`LoginsError::ChangeUnrecorded`]: it stopped, but its end could not
+    /// be recorded.
+    pub fn cancel(&self, caller: &LoginCaller) -> Result<(), LoginsError> {
+        match self.end_waiting(SignInEnd::Cancelled, None, Some(caller)) {
+            Some(false) => Err(LoginsError::ChangeUnrecorded),
+            _ => Ok(()),
+        }
     }
 
     /// End the attempt waiting now with `end`, recorded as `by`'s when
     /// given, else as its starter's; `only` limits it to that operation.
-    fn end_waiting(&self, end: SignInEnd, only: Option<&str>, by: Option<&LoginCaller>) {
+    /// Answers whether that end was recorded, or `None` when none waited.
+    fn end_waiting(
+        &self,
+        end: SignInEnd,
+        only: Option<&str>,
+        by: Option<&LoginCaller>,
+    ) -> Option<bool> {
         let ended = {
             let mut sign_in = self.sign_in.lock().unwrap();
             match &*sign_in {
@@ -418,9 +431,8 @@ impl ChatgptLogins {
                 _ => None,
             }
         };
-        if let Some((operation_id, caller, account)) = ended {
-            self.record_end(&operation_id, by.unwrap_or(&caller), account, end);
-        }
+        let (operation_id, caller, account) = ended?;
+        Some(self.record_end(&operation_id, by.unwrap_or(&caller), account, end))
     }
 
     /// An attempt that never started waiting ended with `end`; the sign-in
@@ -443,27 +455,29 @@ impl ChatgptLogins {
         self.record_end(operation_id, caller, account, end);
     }
 
+    /// Record how a sign-in ended; answers whether it was recorded.
     fn record_end(
         &self,
         operation_id: &str,
         caller: &LoginCaller,
         account: Option<AccountId>,
         end: SignInEnd,
-    ) {
-        if self
+    ) -> bool {
+        let recorded = self
             .record(
                 operation_id,
                 Some(caller),
                 LoginEvent::ChatgptSignInEnded { account, end },
             )
-            .is_err()
-        {
+            .is_ok();
+        if !recorded {
             tracing::error!(
                 operation_id,
                 end = end.name(),
                 "a ChatGPT sign-in's end could not be recorded"
             );
         }
+        recorded
     }
 
     /// Wait for the browser to come back to `server` for `attempt`, then
@@ -491,7 +505,7 @@ impl ChatgptLogins {
             });
             break end;
         };
-        self.end_waiting(end, Some(&attempt.operation_id), None);
+        let _ = self.end_waiting(end, Some(&attempt.operation_id), None);
     }
 
     /// Everything after the browser came back with this attempt's state.
@@ -551,6 +565,14 @@ impl ChatgptLogins {
             return SignInEnd::NotSaved;
         };
         let kept = kept.unwrap_or_default();
+        // An account removed while it signed in again stays removed (row A1b).
+        if attempt
+            .account
+            .as_ref()
+            .is_some_and(|account| kept.account(&account.id).is_none())
+        {
+            return SignInEnd::Cancelled;
+        }
         // A new sign-in of an account already kept signs that one in again,
         // so one ChatGPT account is never kept twice.
         let id = match &attempt.account {
@@ -603,17 +625,34 @@ impl ChatgptLogins {
             if self.write(&next).is_err() {
                 return SignInEnd::NotSaved;
             }
-            *sign_in = SignIn::Idle {
-                last: Some((SignInEnd::SignedIn, attempt.operation_id.clone())),
-            };
-            caller
+            // Kept only once recorded: an end that cannot be recorded puts
+            // the accounts back as they were, and the new grant is revoked
+            // below, so nothing changes unrecorded (row S12b).
+            let recorded = self.record_end(
+                &attempt.operation_id,
+                &caller,
+                Some(account.id.clone()),
+                SignInEnd::SignedIn,
+            );
+            if !recorded && self.write(&kept).is_err() {
+                tracing::error!(operation_id = %attempt.operation_id, "a ChatGPT sign-in was kept but not recorded");
+            }
+            if recorded {
+                *sign_in = SignIn::Idle {
+                    last: Some((SignInEnd::SignedIn, attempt.operation_id.clone())),
+                };
+            }
+            recorded
         };
-        self.record_end(
-            &attempt.operation_id,
-            &ended,
-            Some(account.id.clone()),
-            SignInEnd::SignedIn,
-        );
+        if !ended {
+            if let Some(tokens) = &account.tokens {
+                let _ = self
+                    .authority
+                    .revoke(&account.client_id, &tokens.refresh)
+                    .await;
+            }
+            return SignInEnd::NotSaved;
+        }
         if let Some((client_id, refresh)) = replaced {
             if self.authority.revoke(&client_id, &refresh).await.is_err() {
                 tracing::warn!(operation_id = %attempt.operation_id, "a replaced ChatGPT grant could not be revoked");
@@ -692,6 +731,15 @@ impl ChatgptLogins {
                 LoginEvent::ChatgptRemoveFailed { account },
             );
             return Err(error);
+        }
+        // A sign-in again of this account, waiting now, ends: there is no
+        // account left for it to sign in (row A1b).
+        let waiting_for_it = matches!(
+            &*self.sign_in.lock().unwrap(),
+            SignIn::Waiting { account: Some(waiting), .. } if *waiting == account
+        );
+        if waiting_for_it {
+            let _ = self.end_waiting(SignInEnd::Cancelled, None, Some(&caller));
         }
         let revoked = match &kept.tokens {
             Some(tokens) => self
