@@ -2,6 +2,7 @@
 //! that records what it is asked. The same rules as the TLA+ model in
 //! `docs/state/tla/services/desktop/workspace/share-a-terminal-between-views.tla`.
 use super::*;
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct Recorded(Mutex<Vec<String>>);
