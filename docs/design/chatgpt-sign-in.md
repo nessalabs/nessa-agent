@@ -199,7 +199,10 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
   address carries none (`login_hint`, not `id_token_hint`).
 - `logins.chatgptSignIn {accountId?}`, `logins.chatgptCancel {}`,
   `logins.chatgptUse {accountId | null}`, `logins.chatgptRemove {accountId}`:
-  grant `credential.manage`, each answering `LoginsStatus`.
+  grant `credential.manage`, each answering `LoginsStatus`. The answer to
+  `chatgptSignIn` also names the attempt that call `started`: the sign-in
+  it shows may already be another window's. The chat card signs in again
+  the account in use when it needs it, else a new one.
 - `lease::Login` holds up to 16 KiB, which an access token needs.
 - Lease frame `Renew {lease, login}` (gateway to machine), unanswered.
 
