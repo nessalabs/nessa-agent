@@ -248,9 +248,10 @@
 
 /*
  * Chat context, shown from the pane's header: a column on the pane's right,
- * inside the chat's own space, the conversation beside it. A hairline keeps
- * the two apart. In a pane too narrow for both it covers the conversation's
- * right side instead of squeezing it.
+ * part of the chat's own surface, the conversation beside it. No rule or
+ * material of its own sets it apart, so it reads as the chat's, not as a
+ * sidebar. In a pane too narrow for both it covers the conversation's right
+ * side instead of squeezing it.
  */
 .workspace-pane-body[data-context] {
   flex-direction: row;
@@ -262,14 +263,13 @@
 
 .workspace-pane-context {
   display: flex;
-  width: min(18rem, 45%);
-  min-width: 15rem;
+  width: min(22rem, 42%);
+  min-width: 16rem;
   flex: none;
   flex-direction: column;
   overflow: auto;
   overscroll-behavior: contain;
-  padding-top: var(--desktop-gutter);
-  border-left: 1px solid var(--hairline);
+  padding: var(--desktop-gutter) var(--desktop-gutter) 0 0;
 }
 
 @container workspace-pane (width < 40rem) {

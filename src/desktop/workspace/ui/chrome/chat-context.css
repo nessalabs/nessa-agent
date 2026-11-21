@@ -6,7 +6,7 @@
 .chat-context {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--desktop-gutter) * 2);
+  gap: calc(var(--desktop-gutter) * 2.5);
   padding: 0 var(--desktop-gutter) calc(var(--desktop-gutter) * 2);
   color: var(--foreground);
 }
