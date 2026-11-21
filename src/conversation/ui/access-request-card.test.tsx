@@ -207,6 +207,18 @@ it("waits for the turn's end, and ends when the change on its way is to another 
   expect(sent).toEqual([])
 })
 
+it("says a change the running turn already took, and that the answer waits for its end", async () => {
+  const { sent, draw } = host("taken")
+  draw({ ask: access, runsAt: "ask" })
+  await act(async () => button("Approve").click())
+  draw({ ask: access, runsAt: "full", working: true, revision: 2 })
+  expect(card()?.dataset.state).toBe("approving")
+  expect(container.textContent).toContain(
+    "Access changed. Your answer goes when the agent stops.",
+  )
+  expect(sent).toEqual([])
+})
+
 it("says another change is on its way, rather than a refusal", async () => {
   const { draw } = host("changing")
   draw({ ask: access, runsAt: "ask" })

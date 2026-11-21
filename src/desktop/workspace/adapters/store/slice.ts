@@ -324,14 +324,14 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
     ) => access.accessCaptured(state, payload),
-    accessPending: (
-      state,
-      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
-    ) => access.accessPending(state, payload),
     accessChanging: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
     ) => access.accessChanging(state, payload),
+    accessQueued: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessQueued(state, payload),
     accessTaken: (state, { payload }: Payload<{ sessionId: string; mode: AccessMode }>) =>
       access.accessTaken(state, payload),
     accessRefused: (

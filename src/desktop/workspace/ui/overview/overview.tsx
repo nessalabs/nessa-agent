@@ -99,8 +99,9 @@ const steps: Partial<Record<string, Step>> = {
  * finished unseen — and a peek at the chosen one, beside the list where
  * there is room (`split`) and beneath its row where there is not, to check
  * in on it without opening it. The keyboard walks the list with the arrows
- * (the peek follows), opens with ↩ and answers with ⌘↩, ⌥⌘↩ and ⌘⌫, moving on
- * to the next request as each one settles and leaves.
+ * (the peek follows), answers with ⌘↩, ⌥⌘↩ and ⌘⌫ — and with ↩ alone on a
+ * request that can be allowed now, whose default is Allow once — opens other
+ * rows with ↩, and moves on to the next request as each one settles and leaves.
  *
  * What it lists and which session is chosen are the workspace's
  * (`filterOverview`, `selectInOverview`), and an answer is the workspace's

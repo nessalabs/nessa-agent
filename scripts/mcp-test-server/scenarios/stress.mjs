@@ -22,6 +22,12 @@ export const STRESS = {
   listPermission: "stress compact version review",
   listPreview: "stress list preview",
   reviews: "stress reviews",
+  /**
+   * A turn of {@link RAISE_REVIEWS} reviews in a row, raised to Full while
+   * the first one waits: that one is allowed by the raise, and none after it
+   * is asked.
+   */
+  raise: "stress raise access",
   large: "stress large review",
   wait: "stress wait",
   pause: "stress pause",
@@ -124,6 +130,7 @@ export const SAYS = {
   allowed: "Allowed.",
   denied: "Denied.",
   reviewed: "All reviews answered.",
+  raised: "Finished at the raised access.",
   waiting: "Working until stopped.",
   pausing: "Pausing.",
   resumed: "Finished after the pause.",
@@ -292,6 +299,9 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
   'try{g=/^password=(.*)$/m.exec(x("git",["credential","fill"],{input:"protocol=https\\nhost=github.com\\n\\n",env:{...process.env,GIT_TERMINAL_PROMPT:"0",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},stdio:["pipe","pipe","ignore"],timeout:10000}).toString())?.[1]}catch{}',
   'process.stdout.write("token="+p(process.env.GH_TOKEN)+" git="+p(g))',
 ].join(";")}'`
+
+/** How many reviews the `raise` turn asks in a row. */
+export const RAISE_REVIEWS = 3
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -642,6 +652,20 @@ export function stressScenario({
       {
         when: STRESS.reviews,
         steps: [...many, { do: "text", chunks: [SAYS.reviewed] }, { do: "end" }],
+      },
+      {
+        when: STRESS.raise,
+        steps: [
+          ...Array.from({ length: RAISE_REVIEWS }, (_, index) =>
+            review(
+              `Raise ${index + 1} of ${RAISE_REVIEWS}`,
+              { index },
+              `Raised ${index + 1}.`,
+            ),
+          ),
+          { do: "text", chunks: [SAYS.raised] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.large,

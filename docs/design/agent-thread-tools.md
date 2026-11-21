@@ -123,7 +123,8 @@ message only once the conversation's view says it runs at that access: the
 end state, not the command's reply, so a change held for a turn's end or
 still on its way sends nothing yet, and an ask that leaves first sends
 nothing at all. The card stays to list what was allowed. Approve waits while
-a turn is at work, since access changes only between turns. The person can
+a turn is at work, since the Approve it sends goes as the person's next
+message. (The composer's own picker changes a running turn's access at once.) The person can
 still type "Approve", so the word is their answer and never the agent's
 access: the agent reads that from its next commands.
 

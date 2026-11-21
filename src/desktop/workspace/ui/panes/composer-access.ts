@@ -45,8 +45,8 @@ export function accessFor(value: ComposerAccessModeValue): AccessMode {
 
 /**
  * What the composer says when the source refused the shield's last choice:
- * a running turn in its own words, since the gateway changes access only
- * between turns, and any other refusal in the window's words for it.
+ * a running turn in its own words, and any other refusal in the window's
+ * words for it.
  */
 export function accessRefusalCopy(refusal: {
   readonly reason: WorkspaceFailureReason
@@ -86,10 +86,11 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
-    // A choice the running turn holds back says nothing: the shield already
-    // shows it, and it takes effect when the agent stops. Only a refusal is
-    // said, because then the shield's choice did not happen. A model change
-    // that moved the chat to Ask says so, since nobody picked Ask.
+    // Only a refusal is said, because then the shield's choice did not
+    // happen. A choice held back (one the running turn could not take now,
+    // or one queued behind a change on its way) says nothing: the shield
+    // already shows it, and the person asked for no line about it. A model
+    // change that moved the chat to Ask says so, since nobody picked Ask.
     const notice: ComposerAccess["notice"] =
       said?.state === "refused"
         ? { tone: "warning", text: accessRefusalCopy(said) }

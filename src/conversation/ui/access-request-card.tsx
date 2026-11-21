@@ -149,7 +149,11 @@ export function AccessRequestHost<Ask extends AccessAsk>({
       ? "Changing the access…"
       : approval?.state === "waiting"
         ? working
-          ? "Access changes when the agent stops."
+          ? // The chat may already run at it (the source changes a running
+            // turn's access); the answer still goes once the turn ends.
+            atLeast(runsAt, approval.mode)
+            ? "Access changed. Your answer goes when the agent stops."
+            : "Access changes when the agent stops."
           : "Waiting for the access to change."
         : approval?.state === "due" || approval?.state === "answering"
           ? "Sending your answer…"

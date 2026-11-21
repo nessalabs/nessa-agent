@@ -746,7 +746,11 @@ describe("the agents overview", () => {
     })
     expect(button(card("first"), "Allow")?.disabled).toBe(true)
     await press(card("first") as HTMLElement, "Enter", { command: true })
+    // ↩ alone, the row's Allow once, waits too: it neither answers again nor
+    // opens the session under the person's finger.
+    await press(card("first") as HTMLElement, "Enter")
     expect(source.calls.filter((call) => call[0] === "approve")).toHaveLength(1)
+    expect(host.querySelector(".agents-overview")).not.toBeNull()
     await act(async () => source.release("approve"))
     expect(await fromPane).toBe("sent")
   })
@@ -866,9 +870,30 @@ describe("the agents overview", () => {
   it("opens a session in the workspace and gives the chat area back", async () => {
     const { store } = await mount()
     await open()
-    await press(card("second") as HTMLElement, "Enter")
-    expect(selectFocusedSessionId(store.getState())).toBe("second")
+    await act(async () => row("run")?.focus())
+    await press(row("run") as HTMLElement, "Enter")
+    expect(selectFocusedSessionId(store.getState())).toBe("run")
     expect(host.querySelector(".agents-overview")).toBeNull()
+  })
+
+  it("allows a request once with ↩ alone, Allow once being the row's default", async () => {
+    const { source } = await mount()
+    await open()
+    const allow = card("first")?.querySelector<HTMLElement>("[data-default]")
+    expect(allow?.dataset.answer).toBe("once")
+    expect(allow?.getAttribute("aria-keyshortcuts")).toMatch(/^Enter /)
+    await press(card("first") as HTMLElement, "Enter")
+    expect(source.calls).toContainEqual([
+      "approve",
+      "first",
+      "first-ask",
+      "once",
+      "person",
+      "once",
+    ])
+    // It answers; it does not open the session.
+    expect(host.querySelector(".agents-overview")).not.toBeNull()
+    expect(document.activeElement).toBe(card("second"))
   })
 
   it("goes back to the workspace on Escape, the keyboard to the focused pane's composer", async () => {
@@ -1127,7 +1152,7 @@ describe("the agents overview", () => {
       ),
     ).toEqual([
       ["deny", "Control+Backspace", undefined],
-      ["once", "Control+Enter", undefined],
+      ["once", "Enter Control+Enter", undefined],
     ])
   })
 

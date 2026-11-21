@@ -53,7 +53,11 @@ import {
  *               sign-in for where the run was (Authenticate for a Boat VM,
  *               this computer's otherwise), and the next message retires it
  *   switch      the access shield picks another mode, sometimes mid-turn,
- *               where the change waits for the turn to end
+ *               where the gateway takes it at once
+ *   raise       the shield raises the main chat from Ask to Full while its
+ *               turn waits on the first of three reviews: the gateway runs it
+ *               at Full while the turn still runs, the open review is allowed
+ *               by the raise with no click, and the turn asks nothing more
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
  *               and started again; the turn is resumed and the window follows
  *   delegate    the agent creates a thread and messages it; the thread's
@@ -457,6 +461,7 @@ import {
   WATCH_CALLS,
   ASK,
   ACCESS,
+  RAISE_REVIEWS,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -549,6 +554,7 @@ import {
   requireStressCapabilities,
   elevatedAccessAfter,
 } from "./lib/stress-profile.mjs"
+import { raisedTurn } from "./lib/raise-evidence.mjs"
 
 const INSTANCE = "conversation-stress"
 /** The conversation metadata version this build writes (`schema.sql`'s last line). */
@@ -5175,9 +5181,10 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      // A change the running turn holds back says nothing: the shield shows
-      // the choice at once and the composer adds no line about it (Saurav
-      // asked for the "Access changes when the agent stops." line to go).
+      // A change made mid-turn says nothing: the shield shows the choice at
+      // once, the gateway takes it while the turn runs (the `raise` step
+      // checks the turn's next call is decided at it), and the composer adds
+      // no line about it.
       const chosen = await waitFor(
         async () =>
           (await dock(run.page)
@@ -5198,7 +5205,7 @@ const steps = {
       }
       if (said)
         failures.push(
-          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
+          `the composer spoke of the mid-turn access change: ${JSON.stringify(said)}`,
         )
       if (run.evidence && !run.accessHintShot) {
         run.accessHintShot = true
@@ -5221,6 +5228,86 @@ const steps = {
       failures.push(
         `the shield shows ${shield}, not ${composerControls.accessValue[step.to]}`,
       )
+    run.mode = step.to
+  },
+
+  async raise(run, step, failures) {
+    if (!(await accessIs(run, run.main.id, step.from)))
+      failures.push(`the raise does not start at ${step.from}`)
+    const recordingBefore = readFileSync(run.stack.acpRecording, "utf8")
+    const text = prompt(run, STRESS.raise, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const first = `Raise 1 of ${RAISE_REVIEWS}`
+    const asked = await untilTurn(
+      run,
+      run.main.id,
+      { text },
+      (_turn, current) => current.permissions.some((each) => each.title === first),
+      30,
+    )
+    if (!asked.view?.permissions?.some((each) => each.title === first)) {
+      failures.push("the raise turn did not ask its first review")
+      return
+    }
+    if (!(await card(run.page)))
+      failures.push("no card for the review open when access was raised")
+    // Raised while the turn waits on that card, as a person does who meant
+    // to give it full access and is asked anyway.
+    await pickAccess(run.page, step.to)
+    if (!(await accessIs(run, run.main.id, step.to)))
+      failures.push(`the gateway did not run the chat at ${step.to} after the raise`)
+    // The review open at the raise is allowed by it; none after it is asked,
+    // so the turn ends with nobody clicking anything.
+    const { turn, view } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    const said = (turn?.parts ?? []).map((part) => part.text ?? "").join("")
+    for (let n = 1; n <= RAISE_REVIEWS; n += 1)
+      if (!said.includes(`Raised ${n}.`))
+        failures.push(
+          `review ${n} of the raise turn was not allowed: ${JSON.stringify(said.slice(-120))}`,
+        )
+    if (!said.includes(SAYS.raised)) failures.push("the raise turn did not finish")
+    // On the agent's wire: the mode change went while the turn waited on its
+    // first review, that review was answered after it, and nothing more was
+    // asked (the turn runs fast once allowed, so a read of the view cannot
+    // tell this apart from a change held until the turn ended).
+    const wire = raisedTurn(
+      recordingBefore,
+      readFileSync(run.stack.acpRecording, "utf8"),
+      text,
+    )
+    if (!wire) failures.push("the raise turn's prompt is not in the agent's recording")
+    else {
+      if (!wire.modeChanged)
+        failures.push(
+          "the raise reached the agent only after its turn, not while it waited",
+        )
+      if (!wire.answeredAfterChange)
+        failures.push(
+          "the review open at the raise was answered before the agent took it",
+        )
+      if (wire.asked !== 1)
+        failures.push(
+          `the raised turn asked ${wire.asked} reviews, not only the one open at the raise`,
+        )
+    }
+    if (view?.permissions?.length)
+      failures.push(`${view.permissions.length} reviews still open after the raise`)
+    if (await card(run.page, 1_000))
+      failures.push("an approval card is still shown after the raise")
+    await expectShown(run.page, SAYS.raised, failures)
+    const shield = await dock(run.page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")
+      .catch(() => null)
+    if (shield !== composerControls.accessValue[step.to])
+      failures.push(`the shield shows ${shield} after the raise, not ${step.to}`)
     run.mode = step.to
   },
 
