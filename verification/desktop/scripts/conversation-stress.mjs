@@ -2028,10 +2028,19 @@ async function terminalsBuilt(run, failures) {
     return true
   } catch (error) {
     failures.push(
-      `the gateway has no terminals (${error.code ?? error.message}): build it with eval "$(scripts/terminal/ghostty.sh)" && cargo build -p nessa-server --features nessa-server/terminals`,
+      `the gateway has no terminals (${error.code ?? error.message}; it logged ${JSON.stringify(terminalLog(run))}): build it with eval "$(scripts/terminal/ghostty.sh)" && cargo build -p nessa-server --features nessa-server/terminals`,
     )
     return false
   }
+}
+
+/** What the gateway logged about terminals, last few lines: why one is unavailable. */
+function terminalLog(run) {
+  return run.stack.gateway
+    .log()
+    .split("\n")
+    .filter((line) => /terminal|pty/i.test(line))
+    .slice(-4)
 }
 
 /** A terminal grid's rows as text, top to bottom. */
@@ -11441,7 +11450,7 @@ const steps = {
       page.off("console", onConsole)
       if (!shown) {
         failures.push(
-          `⌘J showed no terminal in the focused pane${warned.length ? `: ${warned.join(" | ")}` : ""}`,
+          `⌘J showed no terminal in the focused pane${warned.length ? `: ${warned.join(" | ")}` : ""}; the gateway said ${JSON.stringify(terminalLog(run))}`,
         )
         return
       }
