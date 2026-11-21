@@ -45,6 +45,7 @@ import {
   closeInFront,
   focusPane,
   newSession,
+  newTerminal,
   nudgePane,
   openBeside,
   openChannel,
@@ -179,6 +180,11 @@ function useWorkspaceKeys(
         return
       case "newSession":
         dispatch(newSession())
+        return
+      case "newTerminal":
+        void dispatch(newTerminal()).catch((error: unknown) =>
+          console.warn("A terminal did not open", error),
+        )
         return
       case "newSessionBeside":
       case "splitRight":

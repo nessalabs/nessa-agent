@@ -372,6 +372,7 @@ function gatewayWithApp() {
         close: client.close,
         workspace: client.workspace,
         channels: client.channels,
+        terminals: client.terminals,
         mcpApps,
         ...settingsParts,
       })

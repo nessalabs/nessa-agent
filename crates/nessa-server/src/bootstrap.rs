@@ -60,6 +60,11 @@ fn run_protected() -> std::process::ExitCode {
         }
     };
     let launch = Launch::from_system(&command);
+    // pty-runtime forks to stage its helper image, so terminals are prepared
+    // here, single-threaded, and only by a process that serves the gateway.
+    if matches!(command, Command::Server(_) | Command::Desktop(_)) {
+        crate::terminal::prepare();
+    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

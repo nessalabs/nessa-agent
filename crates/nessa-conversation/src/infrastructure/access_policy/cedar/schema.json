@@ -547,6 +547,15 @@
             "type": "Ask"
           }
         }
+      },
+      "terminal.use": {
+        "appliesTo": {
+          "principalTypes": ["Person"],
+          "resourceTypes": ["Catalogue"],
+          "context": {
+            "type": "Ask"
+          }
+        }
       }
     }
   }

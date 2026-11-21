@@ -716,6 +716,51 @@
       "params": "VoiceStartCallParams",
       "grant": "conversation.write",
       "lane": "requests"
+    },
+    "terminal.open": {
+      "params": "TerminalOpenParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.list": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.attach": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.focus": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.fit": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.detach": {
+      "params": "TerminalDetachParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.input": {
+      "params": "TerminalInputParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.history": {
+      "params": "TerminalHistoryParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.close": {
+      "params": "TerminalCloseParams",
+      "grant": "credential.manage",
+      "lane": "requests"
     }
   },
   "events": {
@@ -729,7 +774,9 @@
     "grants.subscriptionEnded": "ConversationSubscriptionEnded",
     "permission.reviewWaiting": "PermissionReviewWaiting",
     "workspace.command": "WorkspaceCommand",
-    "conversation.events": "ConversationEvents"
+    "conversation.events": "ConversationEvents",
+    "terminal.output": "TerminalOutput",
+    "terminal.listed": "TerminalListed"
   },
   "handshakeMethod": "session.authenticate"
 }

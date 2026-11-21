@@ -1,0 +1,46 @@
+/* A shell fence with its Run bar, and the run's output under it. */
+.workspace-run-block {
+  margin-block: 0.75rem;
+}
+
+.workspace-run-block [data-slot="code-block"],
+.workspace-run-block > :first-child {
+  margin-block: 0;
+}
+
+.workspace-run-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.75rem;
+  margin-top: 0.375rem;
+  color: var(--desktop-muted);
+  font-size: 0.8125rem;
+}
+
+.workspace-run-status {
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-run-failure {
+  color: var(--destructive);
+}
+
+.workspace-run-spacer {
+  flex: 1;
+}
+
+/* Ten rows of output; the terminal scales down past what fits. */
+.workspace-run-output {
+  box-sizing: border-box;
+  height: calc(10 * 1.35 * var(--nessa-terminal-font-size, 13px) + 1.25rem);
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.375rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--desktop-hairline);
+}
+
+.workspace-run-output > * {
+  height: 100%;
+}

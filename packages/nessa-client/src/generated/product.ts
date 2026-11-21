@@ -3553,11 +3553,12 @@ export interface WorkspaceWidget {
   /** The widget's id within its plugin. */
   id: string
 }
-/** What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here. */
+/** What a pane shows: a conversation, a draft (a new conversation the person has not started yet), a widget, or one of the person's terminals (named by nothing: agents never read a terminal). Other kinds, such as an open file, are added here. */
 export const WorkspacePaneKind = {
   Conversation: "conversation",
   Draft: "draft",
   Widget: "widget",
+  Terminal: "terminal",
 } as const
 export type WorkspacePaneKind = (typeof WorkspacePaneKind)[keyof typeof WorkspacePaneKind]
 /** What one pane shows. A conversation names its conversationId, a widget its widget, and a draft neither. */
@@ -4254,6 +4255,100 @@ export interface ReplyStyleEffective {
   /** What a new thread here is told. */
   thread: ReplyStyleChoice
 }
+/** The gateway's id for one terminal. */
+export type TerminalId = string
+/** The window's id for one view of a terminal (a pane, or a Run block's output). Unique within this connection. */
+export type TerminalViewId = string
+/** Start a terminal for the person (terminal.open). channelId: a shell in that channel's folder and place (⌘J); conversationId with command: runs the command where that conversation's agent works (Run). Neither: a shell in the default channel. The gateway resolves the folder; a request never names one. */
+export interface TerminalOpenParams {
+  /** Stable action identifier; a retry answers the terminal the first call started. */
+  requestId: string
+  /** The channel the shell starts in; omitted is the default channel. */
+  channelId?: string
+  /** The conversation whose agent's folder a Run starts in. */
+  conversationId?: string
+  /** What Run runs, given to the person's login shell with -c. */
+  command?: string
+  /** Columns that fill the view. */
+  cols: number
+  /** Rows that fill the view. */
+  rows: number
+}
+/** One of the person's terminals. */
+export interface TerminalSummary {
+  terminalId: TerminalId
+  /** The shell's name, or the first line of what Run runs. */
+  title: string
+  /** shell: opened with ⌘J. run: started by Run in a reply. */
+  kind: "shell" | "run"
+  /** The channel it belongs to; omitted is the default channel. */
+  channelId?: string
+  /** The conversation whose Run started it. */
+  conversationId?: string
+  /** The terminal.open request that started it, so the window can match a Run block to its terminal. */
+  requestId: string
+  /** Where it started, on the machine it runs on. */
+  folder: string
+  /** The shell program. */
+  shell: string
+  /** The machine: here is the gateway's own. */
+  runsOn: "here"
+  startedAtMs: number
+  state: "running" | "exited"
+  /** The exit code once exited; omitted when it was ended by a signal or is running. */
+  exitStatus?: number
+  endedAtMs?: number
+}
+/** The terminal terminal.open started, or the one this requestId already started. */
+export interface TerminalOpenResult {
+  terminal: TerminalSummary
+}
+/** The person's terminals on this gateway, oldest first. After this answer the connection is sent terminal.listed whenever the list changes. */
+export interface TerminalListResult {
+  terminals: TerminalSummary[]
+}
+/** The person's terminals, whole, after a change (terminal.listed). Sent to a connection that has called terminal.list. */
+export interface TerminalListed {
+  terminals: TerminalSummary[]
+}
+/** Show a terminal in a view (terminal.attach), or make the view the size owner (terminal.focus), or report its new fit (terminal.fit). Attach sends a checkpoint of the screen then live terminal.output. Focus resizes the terminal to the view's fit when it differs; fit resizes it only when this view owns the size. */
+export interface TerminalViewParams {
+  terminalId: TerminalId
+  viewId: TerminalViewId
+  /** Columns that fill the view. */
+  cols: number
+  /** Rows that fill the view. */
+  rows: number
+}
+/** Stop showing a terminal in a view (terminal.detach). The terminal keeps running; if this view owned the size, the size is kept. */
+export interface TerminalDetachParams {
+  terminalId: TerminalId
+  viewId: TerminalViewId
+}
+/** Bytes the person typed or pasted, for the terminal's program (terminal.input). */
+export interface TerminalInputParams {
+  terminalId: TerminalId
+  /** The bytes, base64. */
+  data: string
+}
+/** Read retained rows for one view (terminal.history); the rows arrive as a history terminal.output for that view. Reading moves no other view. */
+export interface TerminalHistoryParams {
+  terminalId: TerminalId
+  viewId: TerminalViewId
+  start: number
+  count: number
+}
+/** End a terminal and remove it from the list (terminal.close): its program is hung up, then killed after 5 s. */
+export interface TerminalCloseParams {
+  terminalId: TerminalId
+}
+/** One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator. */
+export interface TerminalOutput {
+  terminalId: TerminalId
+  viewId: TerminalViewId
+  /** The protocol message as JSON text. */
+  message: string
+}
 export const vmLifetimeSeconds = { minimum: 1, maximum: 4294967295 } as const
 export const subscriptionLimits = {
   conversationTargets: 8,
@@ -4316,7 +4411,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 142,
+  maxReadyMethods: 151,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4682,6 +4777,15 @@ export const ProductMethod = {
   VoiceSaveKey: "voice.saveKey",
   VoiceForgetKey: "voice.forgetKey",
   VoiceStartCall: "voice.startCall",
+  TerminalOpen: "terminal.open",
+  TerminalList: "terminal.list",
+  TerminalAttach: "terminal.attach",
+  TerminalFocus: "terminal.focus",
+  TerminalFit: "terminal.fit",
+  TerminalDetach: "terminal.detach",
+  TerminalInput: "terminal.input",
+  TerminalHistory: "terminal.history",
+  TerminalClose: "terminal.close",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4695,6 +4799,8 @@ export const ProductEvent = {
   PermissionReviewWaiting: "permission.reviewWaiting",
   WorkspaceCommand: "workspace.command",
   ConversationEvents: "conversation.events",
+  TerminalOutput: "terminal.output",
+  TerminalListed: "terminal.listed",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
@@ -4840,6 +4946,15 @@ export const productReadyMethods = [
   "voice.saveKey",
   "voice.forgetKey",
   "voice.startCall",
+  "terminal.open",
+  "terminal.list",
+  "terminal.attach",
+  "terminal.focus",
+  "terminal.fit",
+  "terminal.detach",
+  "terminal.input",
+  "terminal.history",
+  "terminal.close",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -4986,6 +5101,15 @@ export const productMethodGrants = {
   "voice.saveKey": "credential.manage",
   "voice.forgetKey": "credential.manage",
   "voice.startCall": "conversation.write",
+  "terminal.open": "credential.manage",
+  "terminal.list": "credential.manage",
+  "terminal.attach": "credential.manage",
+  "terminal.focus": "credential.manage",
+  "terminal.fit": "credential.manage",
+  "terminal.detach": "credential.manage",
+  "terminal.input": "credential.manage",
+  "terminal.history": "credential.manage",
+  "terminal.close": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

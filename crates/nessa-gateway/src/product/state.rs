@@ -116,6 +116,14 @@ pub struct ProductRouteState {
     pub linking: LinkingRoutes,
     pub machines: MachineRoutes,
     pub accounts: AccountRoutes,
+    pub terminals: TerminalRoutes,
+}
+
+/// The person's terminals (`terminal.*`). Without a hub every method answers
+/// `terminal_unavailable`.
+#[derive(Clone, Default)]
+pub struct TerminalRoutes {
+    pub hub: Option<Arc<crate::terminal::TerminalHub>>,
 }
 
 /// The browser sign-in a socket or HTTP request arrived with, and the
@@ -397,10 +405,17 @@ impl ProductRouteState {
             linking: LinkingRoutes::default(),
             machines: MachineRoutes::default(),
             accounts: AccountRoutes::default(),
+            terminals: TerminalRoutes::default(),
             uptime_clock: dependencies.uptime_clock,
             view_clock: Arc::new(ProcessTimeline),
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
         }
+    }
+
+    /// Serve `terminal.*` from `hub`.
+    pub fn with_terminals(mut self, hub: Arc<crate::terminal::TerminalHub>) -> Self {
+        self.terminals.hub = Some(hub);
+        self
     }
 
     pub fn with_browser_sessions(

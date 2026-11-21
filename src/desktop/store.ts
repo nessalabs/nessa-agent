@@ -14,6 +14,8 @@ import { configureStore } from "@reduxjs/toolkit"
 import {
   carryOutWindowChange,
   initialWorkspaceFrom,
+  terminalsById,
+  terminalsListed,
   workspaceEffects,
   workspaceReducer,
   type WorkspaceDependencies,
@@ -34,6 +36,10 @@ export function makeDesktopStore(dependencies: WorkspaceDependencies) {
   // carried out as a click here would, for as long as the window runs.
   dependencies.windowCommands?.listen((change) =>
     carryOutWindowChange(store, change, after),
+  )
+  // The person's terminals, as the gateway lists them, for as long as the window runs.
+  dependencies.terminals?.follow((terminals) =>
+    store.dispatch(terminalsListed({ terminals: terminalsById(terminals) })),
   )
   return store
 }

@@ -112,6 +112,7 @@ function shownItem(state: WorkspaceState, key: string): ShownItem {
   // started in it, rather than leaving a column without the pane.
   if (item === null) return { kind: "draft" }
   if (item.kind === "widget") return { kind: "widget", widget: item.widget }
+  if (item.kind === "terminal") return { kind: "terminal" }
   // A draft stays one until the source lists it.
   if (draftOf(state, item.sessionId) && !sessionOf(state, item.sessionId))
     return { kind: "draft" }

@@ -543,6 +543,9 @@ describe("every key of the shared map does the same in both layouts", () => {
         return
       }
       expect(sidebar.after).toEqual(columns.after)
+      // ⌘J asks the gateway for a terminal; this window has no gateway, so it
+      // does nothing in either layout (`newTerminal`, terminal-commands.test.ts).
+      if (binding.command === "newTerminal") return
       // And it did something: every key in the map is one the window answers.
       expect(columns.after, binding.command).not.toEqual(columns.before)
     })

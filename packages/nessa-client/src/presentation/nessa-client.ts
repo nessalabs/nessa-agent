@@ -20,6 +20,7 @@ import { createConversationApi, type ConversationApi } from "./conversation-api.
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createWorkspaceApi, type WorkspaceApi } from "./workspace-api.js"
+import { createTerminalApi, type TerminalApi } from "./terminal-api.js"
 import { createChannelApi, type ChannelApi } from "./channel-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createVaultApi, type VaultApi } from "./vault-api.js"
@@ -135,6 +136,8 @@ export class NessaClient {
   readonly auth: AuthApi
   /** Tell the gateway what this window shows, for the person's agents to read. */
   readonly workspace: WorkspaceApi
+  /** The person's terminals: open, show in a view, type into, close. */
+  readonly terminals: TerminalApi
   /** Make a channel, with its folder and defaults, and list every channel. */
   readonly channels: ChannelApi
 
@@ -171,6 +174,7 @@ export class NessaClient {
     this.vault = createVaultApi(wire)
     this.auth = createAuthApi(wire)
     this.workspace = createWorkspaceApi(wire)
+    this.terminals = createTerminalApi(wire)
     this.channels = createChannelApi(wire)
   }
 

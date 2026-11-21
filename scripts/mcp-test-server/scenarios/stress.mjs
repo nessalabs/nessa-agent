@@ -54,6 +54,8 @@ export const STRESS = {
   closePane: "stress close-pane",
   panelTabs: "stress panel tabs",
   table: "stress table",
+  /** A reply with shell fences the person runs (`run` step). */
+  runBlock: "stress run block",
   paste: "stress paste",
   attach: "stress attach",
   trace: "stress trace",
@@ -149,6 +151,7 @@ export const SAYS = {
   control: "Controlled: ",
   panelTabs: "Panel tabs: ",
   table: "Tables: ",
+  runBlock: "Runnable: ",
   paste: "Images: ",
   attach: "Attached: ",
   trace: "Traced: ",
@@ -186,6 +189,25 @@ export const TABLE_LINES = [
   "| The Last Projectionist | Cineplex Scotiabank Theatre | Sat Oct 17 | 12:30 pm | 104 min | DCP | English | 42 |",
   "| Night Shift at the Lighthouse | CineCycle | Sat Oct 17 | 11:59 pm | 88 min | 16 mm | French, English subtitles | 9 |",
 ]
+
+/**
+ * The fences a `run` turn answers with: one that prints and ends, its word
+ * made by the shell's own arithmetic so only a run (not the source) shows
+ * it, and a console fence whose `$ ` line waits to be stopped.
+ */
+export const RUN_FENCES = [
+  "```bash",
+  "echo stress-run-$((6 * 7))",
+  "```",
+  "",
+  "```console",
+  "$ sleep 30",
+  "(it waits)",
+  "```",
+]
+
+/** What the `run` turn's first fence prints when run. */
+export const RUN_PRINTS = "stress-run-42"
 
 /** How long a `table` turn holds between its tables and the rest of its answer. */
 export const TABLE_HOLD_MS = 3000
@@ -499,6 +521,21 @@ export function stressScenario({
           },
           { do: "pause", ms: STREAM_HOLD_MS },
           { do: "text", chunks: [" ", SAYS.streamEnd] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.runBlock,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.runBlock,
+              "${prompt.text}",
+              "\n\n",
+              ...RUN_FENCES.map((line) => `${line}\n`),
+            ],
+          },
           { do: "end" },
         ],
       },

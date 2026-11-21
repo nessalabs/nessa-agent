@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 142,
+          "maxItems": 151,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2329,7 +2329,12 @@
           "type": "array",
           "minItems": 3,
           "maxItems": 3,
-          "items": { "type": "string", "minLength": 1, "maxLength": 200, "x-utf8MaxBytes": 200 },
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-utf8MaxBytes": 200
+          },
           "description": "What approving allows, one plain line each, in Nessa's words; shown once the person approves."
         }
       },
@@ -8882,8 +8887,8 @@
     },
     "WorkspacePaneKind": {
       "type": "string",
-      "enum": ["conversation", "draft", "widget"],
-      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here."
+      "enum": ["conversation", "draft", "widget", "terminal"],
+      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), a widget, or one of the person's terminals (named by nothing: agents never read a terminal). Other kinds, such as an open file, are added here."
     },
     "WorkspacePaneItem": {
       "type": "object",
@@ -10391,6 +10396,265 @@
         }
       },
       "description": "The style each role's new conversations start with."
+    },
+    "TerminalId": {
+      "type": "string",
+      "minLength": 34,
+      "maxLength": 34,
+      "pattern": "^t_[0-9a-f]{32}$",
+      "description": "The gateway's id for one terminal."
+    },
+    "TerminalViewId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "The window's id for one view of a terminal (a pane, or a Run block's output). Unique within this connection."
+    },
+    "TerminalOpenParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a terminal for the person (terminal.open). channelId: a shell in that channel's folder and place (⌘J); conversationId with command: runs the command where that conversation's agent works (Run). Neither: a shell in the default channel. The gateway resolves the folder; a request never names one.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier; a retry answers the terminal the first call started."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The channel the shell starts in; omitted is the default channel."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation whose agent's folder a Run starts in."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "What Run runs, given to the person's login shell with -c."
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "description": "Columns that fill the view."
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Rows that fill the view."
+        }
+      },
+      "required": ["requestId", "cols", "rows"]
+    },
+    "TerminalSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One of the person's terminals.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The shell's name, or the first line of what Run runs."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["shell", "run"],
+          "description": "shell: opened with ⌘J. run: started by Run in a reply."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The channel it belongs to; omitted is the default channel."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation whose Run started it."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The terminal.open request that started it, so the window can match a Run block to its terminal."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Where it started, on the machine it runs on."
+        },
+        "shell": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The shell program."
+        },
+        "runsOn": {
+          "type": "string",
+          "enum": ["here"],
+          "description": "The machine: here is the gateway's own."
+        },
+        "startedAtMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "state": { "type": "string", "enum": ["running", "exited"] },
+        "exitStatus": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "description": "The exit code once exited; omitted when it was ended by a signal or is running."
+        },
+        "endedAtMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "required": [
+        "terminalId",
+        "title",
+        "kind",
+        "requestId",
+        "folder",
+        "shell",
+        "runsOn",
+        "startedAtMs",
+        "state"
+      ]
+    },
+    "TerminalOpenResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The terminal terminal.open started, or the one this requestId already started.",
+      "properties": { "terminal": { "$ref": "#/$defs/TerminalSummary" } },
+      "required": ["terminal"]
+    },
+    "TerminalListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The person's terminals on this gateway, oldest first. After this answer the connection is sent terminal.listed whenever the list changes.",
+      "properties": {
+        "terminals": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalSummary" }
+        }
+      },
+      "required": ["terminals"]
+    },
+    "TerminalListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The person's terminals, whole, after a change (terminal.listed). Sent to a connection that has called terminal.list.",
+      "properties": {
+        "terminals": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalSummary" }
+        }
+      },
+      "required": ["terminals"]
+    },
+    "TerminalViewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Show a terminal in a view (terminal.attach), or make the view the size owner (terminal.focus), or report its new fit (terminal.fit). Attach sends a checkpoint of the screen then live terminal.output. Focus resizes the terminal to the view's fit when it differs; fit resizes it only when this view owns the size.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "viewId": { "$ref": "#/$defs/TerminalViewId" },
+        "cols": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "description": "Columns that fill the view."
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Rows that fill the view."
+        }
+      },
+      "required": ["terminalId", "viewId", "cols", "rows"]
+    },
+    "TerminalDetachParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stop showing a terminal in a view (terminal.detach). The terminal keeps running; if this view owned the size, the size is kept.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "viewId": { "$ref": "#/$defs/TerminalViewId" }
+      },
+      "required": ["terminalId", "viewId"]
+    },
+    "TerminalInputParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bytes the person typed or pasted, for the terminal's program (terminal.input).",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 43692,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "description": "The bytes, base64."
+        }
+      },
+      "required": ["terminalId", "data"]
+    },
+    "TerminalHistoryParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read retained rows for one view (terminal.history); the rows arrive as a history terminal.output for that view. Reading moves no other view.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "viewId": { "$ref": "#/$defs/TerminalViewId" },
+        "start": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 500 }
+      },
+      "required": ["terminalId", "viewId", "start", "count"]
+    },
+    "TerminalCloseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "End a terminal and remove it from the list (terminal.close): its program is hung up, then killed after 5 s.",
+      "properties": { "terminalId": { "$ref": "#/$defs/TerminalId" } },
+      "required": ["terminalId"]
+    },
+    "TerminalOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId" },
+        "viewId": { "$ref": "#/$defs/TerminalViewId" },
+        "message": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60000,
+          "x-utf8MaxBytes": 60000,
+          "description": "The protocol message as JSON text."
+        }
+      },
+      "required": ["terminalId", "viewId", "message"]
     }
   }
 }

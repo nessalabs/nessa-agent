@@ -21,6 +21,8 @@ import { workspaceActions } from "./slice"
 export const {
   focusPane,
   openSession,
+  openTerminal,
+  terminalsListed,
   resizePanes,
   equalizePanes,
   selectChannel,
@@ -65,6 +67,12 @@ export type WorkspaceCommand<Result = void> = ThunkAction<
 >
 
 export { followWorkspace, loadWorkspace } from "./index-commands"
+export {
+  closeTerminal,
+  interruptTerminal,
+  newTerminal,
+  runInConversation,
+} from "./terminal-commands"
 export {
   canNudge,
   canOpenBeside,

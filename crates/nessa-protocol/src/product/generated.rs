@@ -3792,6 +3792,8 @@ pub enum WorkspacePaneKind {
     Draft,
     #[serde(rename = "widget")]
     Widget,
+    #[serde(rename = "terminal")]
+    Terminal,
 }
 impl WorkspacePaneKind {
     pub fn as_str(self) -> &'static str {
@@ -3799,6 +3801,7 @@ impl WorkspacePaneKind {
             Self::Conversation => "conversation",
             Self::Draft => "draft",
             Self::Widget => "widget",
+            Self::Terminal => "terminal",
         }
     }
 }
@@ -4833,6 +4836,97 @@ pub struct ReplyStyleEffective {
     pub coordinator: ReplyStyleChoice,
     pub thread: ReplyStyleChoice,
 }
+pub type TerminalId = String;
+pub type TerminalViewId = String;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOpenParams {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub cols: u64,
+    pub rows: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSummary {
+    pub terminal_id: TerminalId,
+    pub title: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    pub request_id: String,
+    pub folder: String,
+    pub shell: String,
+    pub runs_on: String,
+    pub started_at_ms: u64,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOpenResult {
+    pub terminal: TerminalSummary,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalListResult {
+    pub terminals: Vec<TerminalSummary>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalListed {
+    pub terminals: Vec<TerminalSummary>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalViewParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub cols: u64,
+    pub rows: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalDetachParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalInputParams {
+    pub terminal_id: TerminalId,
+    pub data: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalHistoryParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub start: u64,
+    pub count: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalCloseParams {
+    pub terminal_id: TerminalId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOutput {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub message: String,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -5055,6 +5149,15 @@ pub mod product_method {
     pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
     pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
     pub const VOICE_START_CALL: &str = "voice.startCall";
+    pub const TERMINAL_OPEN: &str = "terminal.open";
+    pub const TERMINAL_LIST: &str = "terminal.list";
+    pub const TERMINAL_ATTACH: &str = "terminal.attach";
+    pub const TERMINAL_FOCUS: &str = "terminal.focus";
+    pub const TERMINAL_FIT: &str = "terminal.fit";
+    pub const TERMINAL_DETACH: &str = "terminal.detach";
+    pub const TERMINAL_INPUT: &str = "terminal.input";
+    pub const TERMINAL_HISTORY: &str = "terminal.history";
+    pub const TERMINAL_CLOSE: &str = "terminal.close";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -5068,6 +5171,8 @@ pub mod product_event {
     pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
     pub const WORKSPACE_COMMAND: &str = "workspace.command";
     pub const CONVERSATION_EVENTS: &str = "conversation.events";
+    pub const TERMINAL_OUTPUT: &str = "terminal.output";
+    pub const TERMINAL_LISTED: &str = "terminal.listed";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
@@ -5248,7 +5353,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 142
+                items.len() <= 151
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5415,6 +5520,15 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "voice.saveKey",
     "voice.forgetKey",
     "voice.startCall",
+    "terminal.open",
+    "terminal.list",
+    "terminal.attach",
+    "terminal.focus",
+    "terminal.fit",
+    "terminal.detach",
+    "terminal.input",
+    "terminal.history",
+    "terminal.close",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -5765,6 +5879,24 @@ pub enum ProductMethod {
     VoiceForgetKey,
     /// `voice.startCall`
     VoiceStartCall,
+    /// `terminal.open`
+    TerminalOpen,
+    /// `terminal.list`
+    TerminalList,
+    /// `terminal.attach`
+    TerminalAttach,
+    /// `terminal.focus`
+    TerminalFocus,
+    /// `terminal.fit`
+    TerminalFit,
+    /// `terminal.detach`
+    TerminalDetach,
+    /// `terminal.input`
+    TerminalInput,
+    /// `terminal.history`
+    TerminalHistory,
+    /// `terminal.close`
+    TerminalClose,
 }
 
 impl ProductMethod {
@@ -5913,6 +6045,15 @@ impl ProductMethod {
         ProductMethod::VoiceSaveKey,
         ProductMethod::VoiceForgetKey,
         ProductMethod::VoiceStartCall,
+        ProductMethod::TerminalOpen,
+        ProductMethod::TerminalList,
+        ProductMethod::TerminalAttach,
+        ProductMethod::TerminalFocus,
+        ProductMethod::TerminalFit,
+        ProductMethod::TerminalDetach,
+        ProductMethod::TerminalInput,
+        ProductMethod::TerminalHistory,
+        ProductMethod::TerminalClose,
     ];
 
     /// The method a frame names, or `None` when the manifest has none by
@@ -6068,6 +6209,15 @@ impl ProductMethod {
             "voice.saveKey" => Some(ProductMethod::VoiceSaveKey),
             "voice.forgetKey" => Some(ProductMethod::VoiceForgetKey),
             "voice.startCall" => Some(ProductMethod::VoiceStartCall),
+            "terminal.open" => Some(ProductMethod::TerminalOpen),
+            "terminal.list" => Some(ProductMethod::TerminalList),
+            "terminal.attach" => Some(ProductMethod::TerminalAttach),
+            "terminal.focus" => Some(ProductMethod::TerminalFocus),
+            "terminal.fit" => Some(ProductMethod::TerminalFit),
+            "terminal.detach" => Some(ProductMethod::TerminalDetach),
+            "terminal.input" => Some(ProductMethod::TerminalInput),
+            "terminal.history" => Some(ProductMethod::TerminalHistory),
+            "terminal.close" => Some(ProductMethod::TerminalClose),
             _ => None,
         }
     }
@@ -6220,6 +6370,15 @@ impl ProductMethod {
             ProductMethod::VoiceSaveKey => "voice.saveKey",
             ProductMethod::VoiceForgetKey => "voice.forgetKey",
             ProductMethod::VoiceStartCall => "voice.startCall",
+            ProductMethod::TerminalOpen => "terminal.open",
+            ProductMethod::TerminalList => "terminal.list",
+            ProductMethod::TerminalAttach => "terminal.attach",
+            ProductMethod::TerminalFocus => "terminal.focus",
+            ProductMethod::TerminalFit => "terminal.fit",
+            ProductMethod::TerminalDetach => "terminal.detach",
+            ProductMethod::TerminalInput => "terminal.input",
+            ProductMethod::TerminalHistory => "terminal.history",
+            ProductMethod::TerminalClose => "terminal.close",
         }
     }
 
@@ -6370,6 +6529,15 @@ impl ProductMethod {
             ProductMethod::VoiceSaveKey => Some("credential.manage"),
             ProductMethod::VoiceForgetKey => Some("credential.manage"),
             ProductMethod::VoiceStartCall => Some("conversation.write"),
+            ProductMethod::TerminalOpen => Some("credential.manage"),
+            ProductMethod::TerminalList => Some("credential.manage"),
+            ProductMethod::TerminalAttach => Some("credential.manage"),
+            ProductMethod::TerminalFocus => Some("credential.manage"),
+            ProductMethod::TerminalFit => Some("credential.manage"),
+            ProductMethod::TerminalDetach => Some("credential.manage"),
+            ProductMethod::TerminalInput => Some("credential.manage"),
+            ProductMethod::TerminalHistory => Some("credential.manage"),
+            ProductMethod::TerminalClose => Some("credential.manage"),
         }
     }
 
@@ -6519,6 +6687,15 @@ impl ProductMethod {
             ProductMethod::VoiceSaveKey => ProductLane::Requests,
             ProductMethod::VoiceForgetKey => ProductLane::Requests,
             ProductMethod::VoiceStartCall => ProductLane::Requests,
+            ProductMethod::TerminalOpen => ProductLane::Requests,
+            ProductMethod::TerminalList => ProductLane::Requests,
+            ProductMethod::TerminalAttach => ProductLane::Requests,
+            ProductMethod::TerminalFocus => ProductLane::Requests,
+            ProductMethod::TerminalFit => ProductLane::Requests,
+            ProductMethod::TerminalDetach => ProductLane::Requests,
+            ProductMethod::TerminalInput => ProductLane::Requests,
+            ProductMethod::TerminalHistory => ProductLane::Requests,
+            ProductMethod::TerminalClose => ProductLane::Requests,
         }
     }
 
@@ -7002,6 +7179,34 @@ impl ProductMethod {
             ProductMethod::VoiceStartCall => ProductParams::VoiceStartCall(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::TerminalOpen => ProductParams::TerminalOpen(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::TerminalList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::TerminalAttach => ProductParams::TerminalAttach(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalFocus => ProductParams::TerminalFocus(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalFit => ProductParams::TerminalFit(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalDetach => ProductParams::TerminalDetach(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalInput => ProductParams::TerminalInput(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalHistory => ProductParams::TerminalHistory(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalClose => ProductParams::TerminalClose(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
         })
     }
 }
@@ -7155,6 +7360,15 @@ pub enum ProductParams {
     VoiceSaveKey(VoiceSaveKeyParams),
     VoiceForgetKey,
     VoiceStartCall(VoiceStartCallParams),
+    TerminalOpen(TerminalOpenParams),
+    TerminalList,
+    TerminalAttach(TerminalViewParams),
+    TerminalFocus(TerminalViewParams),
+    TerminalFit(TerminalViewParams),
+    TerminalDetach(TerminalDetachParams),
+    TerminalInput(TerminalInputParams),
+    TerminalHistory(TerminalHistoryParams),
+    TerminalClose(TerminalCloseParams),
 }
 
 impl ProductParams {
@@ -7328,6 +7542,15 @@ impl ProductParams {
             ProductParams::VoiceSaveKey(_) => ProductMethod::VoiceSaveKey,
             ProductParams::VoiceForgetKey => ProductMethod::VoiceForgetKey,
             ProductParams::VoiceStartCall(_) => ProductMethod::VoiceStartCall,
+            ProductParams::TerminalOpen(_) => ProductMethod::TerminalOpen,
+            ProductParams::TerminalList => ProductMethod::TerminalList,
+            ProductParams::TerminalAttach(_) => ProductMethod::TerminalAttach,
+            ProductParams::TerminalFocus(_) => ProductMethod::TerminalFocus,
+            ProductParams::TerminalFit(_) => ProductMethod::TerminalFit,
+            ProductParams::TerminalDetach(_) => ProductMethod::TerminalDetach,
+            ProductParams::TerminalInput(_) => ProductMethod::TerminalInput,
+            ProductParams::TerminalHistory(_) => ProductMethod::TerminalHistory,
+            ProductParams::TerminalClose(_) => ProductMethod::TerminalClose,
         }
     }
 }

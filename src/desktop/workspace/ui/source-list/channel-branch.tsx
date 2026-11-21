@@ -25,11 +25,11 @@ import {
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { branchCap, statusLabels } from "../../model/session-groups"
-import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { WorkingWords } from "../chrome/working-words"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"
+import { NewInChannelButton } from "../terminals/new-menu"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
@@ -107,12 +107,7 @@ export const ChannelBranch = memo(function ChannelBranch({
       trailing={
         <>
           <ChannelSettingsButton channelId={channel.id} name={channel.name} />
-          <IconButton
-            icon="add"
-            label={label}
-            tabIndex={-1}
-            onClick={() => dispatch(newSession({ channelId: channel.id }))}
-          />
+          <NewInChannelButton channelId={channel.id} label={label} tabIndex={-1} />
         </>
       }
       showTrailingOnHover

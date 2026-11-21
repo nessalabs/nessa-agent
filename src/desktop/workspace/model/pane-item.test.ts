@@ -5,6 +5,7 @@ import {
   paneItemOf,
   roomProbeKey,
   sessionItem,
+  terminalItem,
   widgetItem,
   type PaneItem,
 } from "./pane-item"
@@ -20,6 +21,16 @@ const items: PaneItem[] = strings.flatMap((text, at) => [
 const valueOf = (item: PaneItem) => JSON.stringify(item)
 
 describe("a pane item's key", () => {
+  it("names a terminal by its gateway id, and reads back only such an id", () => {
+    const id = `t_${"0123456789abcdef".repeat(2)}`
+    expect(paneItemKey(terminalItem(id))).toBe(`t:${id}`)
+    expect(paneItemOf(`t:${id}`)).toEqual(terminalItem(id))
+    expect(paneItemOf("t:t_short")).toBeNull()
+    expect(paneItemOf(paneItemKey(sessionItem(`t:${id}`)))).toEqual(
+      sessionItem(`t:${id}`),
+    )
+  })
+
   it("names a session by its id and a widget by its plugin and id, encoded", () => {
     expect(paneItemKey(sessionItem("retry"))).toBe("s:retry")
     expect(paneItemKey(widgetItem({ plugin: "experiments", id: "run:1" }))).toBe(

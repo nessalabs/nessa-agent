@@ -24,6 +24,7 @@ import {
 import {
   sameListGroups,
   selectChannel,
+  selectChannelShells,
   selectFocusedSessionId,
   selectListGroups,
   selectSession,
@@ -44,6 +45,7 @@ import { ListRow } from "../../../ui/list-row"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
+import { TerminalRows } from "../terminals/terminal-rows"
 import "../../../ui/pill-ink.css"
 import {
   ContextMenu,
@@ -79,6 +81,9 @@ export const SessionList = memo(function SessionList() {
   const groups = useWorkspaceSelector(
     (state) => selectListGroups(state, query, runningFirst === "on"),
     sameListGroups,
+  )
+  const hasTerminals = useWorkspaceSelector(
+    (state) => !query && selectChannelShells(state, view.channelId).length > 0,
   )
   const listRef = useRef<HTMLDivElement>(null)
   useRowFocusKept(listRef, "[data-session-row]")
@@ -167,7 +172,7 @@ export const SessionList = memo(function SessionList() {
             aria-label="Sessions"
             onKeyDown={onKeyDown}
           >
-            {ordered.length === 0 ? (
+            {ordered.length === 0 && !hasTerminals ? (
               <EmptyState
                 className="workspace-list-empty desktop-pill-ink"
                 variant="compact"
@@ -206,6 +211,7 @@ export const SessionList = memo(function SessionList() {
                 ))}
               </div>
             ))}
+            {query ? null : <TerminalRows channelId={view.channelId} />}
           </div>
         </SwipeRowGroup>
       </div>

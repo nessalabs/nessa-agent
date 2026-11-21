@@ -449,6 +449,7 @@ import {
   STRESS,
   TABLE_HOLD_MS,
   TABLE_LINES,
+  RUN_PRINTS,
   CODE_LINES,
   MATH_LINES,
   TRACE_CALLS,
@@ -2017,6 +2018,44 @@ function carried(view, seen, text) {
  * behind a failure is followed to the turn that carries it on. `seen` are the
  * turns from before the send, left out of what a failure lists.
  */
+/**
+ * Whether the gateway was built with terminals; a failure naming how to
+ * build it when not (`scripts/terminal/ghostty.sh`).
+ */
+async function terminalsBuilt(run, failures) {
+  try {
+    await run.client.terminals.list()
+    return true
+  } catch (error) {
+    failures.push(
+      `the gateway has no terminals (${error.code ?? error.message}): build it with eval "$(scripts/terminal/ghostty.sh)" && cargo build -p nessa-server --features nessa-server/terminals`,
+    )
+    return false
+  }
+}
+
+/** A terminal grid's rows as text, top to bottom. */
+async function gridRows(grid) {
+  return grid
+    .locator('[data-slot="terminal-row"]')
+    .evaluateAll((rows) => rows.map((row) => row.textContent ?? ""))
+    .catch(() => [])
+}
+
+/** Shows the main conversation in the focused pane again, after a step put a terminal there. */
+async function showMainAgain(run, failures) {
+  const row = run.page.locator(selectorFor.sessionListRowFor(run.main.id))
+  await row.click({ timeout: 10_000 }).catch(() => {})
+  const shown = await dock(run.page)
+    .locator("textarea")
+    .waitFor({ timeout: 10_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  if (!shown) failures.push("the main conversation did not show again after the terminal")
+}
+
 async function settled(run, conversationId, seen, text, status, failures, seconds = 60) {
   const end = Date.now() + seconds * 1000
   let view
@@ -11376,6 +11415,195 @@ const steps = {
       await bubble.screenshot({
         path: join(run.evidence, `attach-${run.engine}-${step.index}-sent.png`),
       })
+  },
+  async terminal(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const word = `stress-terminal-r${step.index}-s${run.knobs.seed}`
+      const listed = await run.client.terminals.list()
+      // ⌘J opens a shell in the channel in front, in the focused pane.
+      await page.keyboard.press(keys.newTerminal)
+      const pane = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+      const grid = pane.locator('[data-slot="terminal-grid"]')
+      if (
+        !(await grid.waitFor({ timeout: 15_000 }).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        failures.push("⌘J showed no terminal in the focused pane")
+        return
+      }
+      const opened = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find(
+          (each) =>
+            each.kind === "shell" &&
+            !listed.some((old) => old.terminalId === each.terminalId),
+        )
+      }, 10_000)
+      if (!opened) {
+        failures.push("the gateway does not list the terminal ⌘J opened")
+        return
+      }
+      // A real shell: what is typed runs, and its output is a row of its own.
+      await grid.click()
+      await page.keyboard.type(`echo ${word}`)
+      await page.keyboard.press(keys.enter)
+      const ran = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === word),
+        15_000,
+      )
+      if (!ran)
+        failures.push(
+          `the terminal never printed ${word}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()).slice(-4))}`,
+        )
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `terminal-${run.engine}-${step.index}.png`),
+        })
+      // Listed in the channel's session list, with no path on the row.
+      const row = page.locator(`[data-terminal-row="${opened.terminalId}"]`)
+      if (
+        !(await row.waitFor({ timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list has no row for the terminal")
+      else if ((await row.innerText()).includes(opened.folder))
+        failures.push("the terminal's session row shows its folder")
+      // The details popover names its folder and shell.
+      await pane.getByRole("button", { name: "Terminal Details" }).click()
+      const details = page.locator(".workspace-terminal-details")
+      const said = await details.waitFor({ timeout: 5_000 }).then(
+        () => details.innerText(),
+        () => "",
+      )
+      for (const part of ["Runs on", opened.folder, opened.shell])
+        if (!said.includes(part))
+          failures.push(`the terminal's details do not say ${part}`)
+      await page.keyboard.press(keys.escape)
+      // The pane's × ends it: the gateway lists it no more, nor does the window.
+      await pane.getByRole("button", { name: "End Terminal" }).click()
+      const ended = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return !now.some((each) => each.terminalId === opened.terminalId)
+      }, 10_000)
+      if (!ended)
+        failures.push("the terminal is still listed after its pane's × ended it")
+      if (
+        !(await row.waitFor({ state: "detached", timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list still shows the ended terminal")
+      await showMainAgain(run, failures)
+    })
+  },
+  async run(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    const asked = prompt(run, STRESS.runBlock, step)
+    const seen = await send(run, run.main.id, asked, failures)
+    const { turn } = await settled(run, run.main.id, seen, asked, "completed", failures)
+    if (!turn) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.runBlock}${asked}` })
+      const blocks = message.locator("[data-run-block]")
+      if (!(await waitFor(async () => (await blocks.count()) === 2, 15_000))) {
+        failures.push(`the reply drew ${await blocks.count()} Run blocks, not 2`)
+        return
+      }
+      const [prints, waits] = [blocks.nth(0), blocks.nth(1)]
+      // Run: the output shows under the block, then its exit and time.
+      await prints.locator("[data-run-button]").click()
+      const finished = await waitFor(
+        async () => (await prints.getAttribute("data-run-state")) === "exited",
+        20_000,
+      )
+      if (!finished) {
+        failures.push("the first Run never ended")
+        return
+      }
+      const grid = prints.locator('[data-slot="terminal-grid"]')
+      const printed = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === RUN_PRINTS),
+        10_000,
+      )
+      if (!printed)
+        failures.push(
+          `Run's output does not show ${RUN_PRINTS}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()))}`,
+        )
+      const status = prints.locator("[data-run-exit]")
+      const words = (await status.count()) ? await status.innerText() : ""
+      if (!/^exit 0 · \d/.test(words))
+        failures.push(`the finished Run says ${JSON.stringify(words)}`)
+      const runs = (await run.client.terminals.list()).filter(
+        (each) => each.kind === "run" && each.conversationId === run.main.id,
+      )
+      if (!runs.some((each) => each.state === "exited" && each.exitStatus === 0))
+        failures.push("the gateway does not list the finished run as exited 0")
+      if (!(await prints.locator("[data-run-button]").innerText()).includes("Run again"))
+        failures.push("a finished Run does not offer Run again")
+      if (run.evidence)
+        await message.screenshot({
+          path: join(run.evidence, `run-${run.engine}-${step.index}.png`),
+        })
+      // The console fence runs its $ line only, and the stop icon interrupts it.
+      await waits.locator("[data-run-button]").click()
+      const running = await waitFor(
+        async () => (await waits.getAttribute("data-run-state")) === "running",
+        15_000,
+      )
+      if (!running) failures.push("the console fence's Run never started")
+      else {
+        await waits.getByRole("button", { name: "Stop" }).click()
+        const stopped = await waitFor(
+          async () => (await waits.getAttribute("data-run-state")) === "exited",
+          10_000,
+        )
+        const exit = stopped
+          ? await waits.locator("[data-run-exit]").getAttribute("data-run-exit")
+          : ""
+        if (!stopped) failures.push("Stop did not end the console fence's run")
+        else if (exit === "0") failures.push("a stopped run says it exited 0")
+      }
+      // Run again starts a new run under the same block; the terminal icon opens it in a pane.
+      await prints.locator("[data-run-button]").click()
+      const again = await waitFor(async () => {
+        const now = (await run.client.terminals.list()).filter(
+          (each) => each.kind === "run" && each.conversationId === run.main.id,
+        )
+        return now.length === runs.length + 2
+      }, 15_000)
+      if (!again) failures.push("Run again did not start a new run")
+      await prints.getByRole("button", { name: "Open in Pane" }).click()
+      const pane = page.locator(".workspace-terminal-pane")
+      if (
+        !(await pane
+          .first()
+          .waitFor({ timeout: 5_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push("the Run's terminal icon opened no pane")
+      else {
+        const close = pane.first().getByRole("button", { name: /^(Close|End Terminal)$/ })
+        await close.click()
+      }
+      // Leave no runs behind.
+      for (const each of await run.client.terminals.list())
+        if (each.kind === "run" && each.conversationId === run.main.id)
+          await run.client.terminals.close(each.terminalId).catch(() => {})
+      await showMainAgain(run, failures)
+    })
   },
   async table(run, step, failures) {
     // The answer repeats the question, so it names this chat by its id: the

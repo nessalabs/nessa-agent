@@ -26,6 +26,7 @@ import {
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
 import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
+import type { TerminalEntry } from "../model/terminal"
 import { sameWidget, type WidgetRef } from "../../widgets/model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
@@ -128,6 +129,8 @@ export interface WorkspaceState {
   readonly channels: readonly Channel[]
   readonly sessions: Readonly<Record<string, SessionSummary>>
   readonly drafts: Readonly<Record<string, Draft>>
+  /** The person's terminals, by id, as the gateway last listed them (`model/terminal.ts`). */
+  readonly terminals: Readonly<Record<string, TerminalEntry>>
   /**
    * The conversations as the source last gave them, by session: every one a
    * pane shows, and a few others (`model/retention.ts`).
@@ -453,6 +456,7 @@ export const initialWorkspace: WorkspaceState = {
   channels: [],
   sessions: {},
   drafts: {},
+  terminals: {},
   transcripts: {},
   heldSession: null,
   conversationRevisions: {},

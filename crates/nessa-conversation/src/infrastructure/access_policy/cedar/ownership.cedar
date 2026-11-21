@@ -303,3 +303,17 @@ when {
     principal.ownerInitiated &&
     resource.level == "agent_changes"
 };
+
+// The owner opens and types into terminals on their own machine, in their
+// own channels' folders (docs/design/terminals.md). A person only: an agent
+// turn never opens, reads or types into a terminal.
+@id("owner.terminal_use")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"terminal.use",
+    resource is NessaConversation::Catalogue
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};

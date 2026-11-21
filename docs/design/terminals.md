@@ -76,17 +76,17 @@ sequenceDiagram
     participant Gateway as Gateway (product/terminal.rs)
     participant Cedar
     participant Runtime as pty-runtime (projected)
-    Pane->>Gateway: terminal.open {requestId, channelId | conversationId+block}
-    Gateway->>Cedar: terminal.open on the channel or conversation
+    Pane->>Gateway: terminal.open {requestId, channelId | conversationId+command, cols, rows}
+    Gateway->>Cedar: terminal.use
     Gateway->>Runtime: spawn(login shell, folder, size)
-    Gateway-->>Pane: {terminal}
-    Pane->>Gateway: terminal.subscribe {terminalId}
-    Gateway-->>Pane: checkpoint frame (seq n), then live frames
-    Pane->>Gateway: terminal.input {terminalId, bytes}
+    Gateway-->>Pane: {terminal} (and terminal.listed to every follower)
+    Pane->>Gateway: terminal.attach {terminalId, viewId, cols, rows}
+    Gateway-->>Pane: terminal.output: checkpoint frame (seq n), then live frames
+    Pane->>Gateway: terminal.input {terminalId, bytes (base64, 32 KiB pieces)}
     Gateway->>Runtime: write
     Runtime-->>Gateway: frame (seq n+1)
     Gateway-->>Pane: frame (seq n+1)
-    Pane->>Gateway: terminal.focus {terminalId, cols, rows}
+    Pane->>Gateway: terminal.focus {terminalId, viewId, cols, rows}
     Gateway->>Runtime: resize_projected (only if the fit differs)
 ```
 
@@ -95,10 +95,13 @@ sequenceDiagram
 - **Cloud VMs** run it inside `env serve` through workspace-sdk's `Terminals`
   capability, which already depends on pty-runtime; frames travel on the
   existing workspace stream.
-- No platform build of the Ghostty model is qualified yet. Slice T0 builds it
-  in CI and the host builds; until it passes on a platform, that platform runs
-  pty-runtime in raw mode and the pane paints with xterm.js. The pane and the
-  protocol stay the same.
+- The Ghostty model is built by `scripts/terminal/ghostty.sh`, which clones
+  pty-runtime at the rev the gateway pins, builds the pinned libghostty-vt
+  and prints `export PTY_RUNTIME_GHOSTTY_SOURCE=…`. The gateway carries
+  terminals only when built with `--features nessa-server/terminals`; CI's
+  stress jobs and the app build (`scripts/desktop/prepare-runtime.mjs`, when
+  that variable is set) do. A gateway built without it answers
+  `terminal_unavailable`, and the window offers no terminal.
 
 Scrolling back reads pty-runtime's history rows for that view. Selection
 copies text from those rows, so a copy is exactly what is on screen.
@@ -136,6 +139,28 @@ program sees one terminal with one size, so:
 
 The state page with the TLA+ model is
 [Share a terminal between views](../state/services/desktop/workspace/share-a-terminal-between-views.md).
+
+## As built (T1 to T4)
+
+- Methods: `terminal.open`, `list`, `attach`, `focus`, `fit`, `detach`,
+  `input`, `history`, `close`; events `terminal.output` (`{terminalId,
+  viewId, message}`, one pty-runtime protocol message as JSON) and
+  `terminal.listed` (the whole list on each change). The gateway forgets a
+  connection's views and its listing when the connection goes; the window
+  lists and attaches every view again on the next one
+  (`adapters/gateway/terminal-gateway.ts`).
+- Only this Mac runs terminals so far. A channel or conversation placed on an
+  SSH host or a cloud VM is refused with `terminal_place_unsupported` until T5.
+- A Run starts `$SHELL -l -i -c <command>` in the conversation's folder. The
+  block finds its runs again by their open request id (`run <message> <part>
+  <fence> #<attempt>`, `model/run-block.ts`); more than 8 KiB is refused
+  before it is sent.
+- The pane kind on the wire is `"terminal"` with no id: an agent reading the
+  window sees that a pane shows a terminal, never which one or what it holds.
+- Terminals live in the gateway's memory only. A gateway restart ends them
+  and they leave the list; keeping them across restarts is a follow-up.
+- Audit is the `nessa::terminal` tracing target (open, exit, close, refusals);
+  input and output are never logged.
 
 ## Session lifecycle
 
