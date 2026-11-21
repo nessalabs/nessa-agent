@@ -34,7 +34,8 @@ import type { OnAnswer, Settling } from "./settling"
  * app's tool it is who asks for what; a refusal or a failed read takes its
  * place.
  * The review's answers wait at its end until the row is pointed at or has
- * the keyboard. Where the review offers always as well as once, holding ⌥
+ * the keyboard; with the keyboard on the row, Allow once is its default,
+ * drawn as pressed-to-be, and ↩ answers with it. Where the review offers always as well as once, holding ⌥
  * turns the once button into that answer, as ⌥ shows the other choice in a
  * Mac menu. The buttons say what they do and carry no tooltip; each names
  * its chord to assistive technology (`aria-keyshortcuts`). Answered and
@@ -136,18 +137,26 @@ export const RequestRow = memo(function RequestRow({
         return
       }
     }
-    if (command === "open") {
-      // On a button, ↩ presses it; on the row itself, it opens the session.
-      if (event.target !== event.currentTarget) return
+    // On a button, ↩ presses it. On the row itself, ↩ presses the row's
+    // default: Allow once, where the review can be allowed now, so a run of
+    // requests is unblocked with ↩ alone; otherwise it opens the session.
+    if (command === "open" && event.target !== event.currentTarget) return
+    const answers =
+      command === "open"
+        ? answerable && approval && optionOf(approval, "once")
+          ? "once"
+          : null
+        : command
+    if (command === "open" && answers === null) {
       event.preventDefault()
       onOpen(sessionId)
       return
     }
-    if (command !== "once" && command !== "always" && command !== "deny") return
+    if (answers !== "once" && answers !== "always" && answers !== "deny") return
     event.preventDefault()
     event.stopPropagation()
     // A chord names a choice, so it answers the first option of that choice.
-    const chosen = approval ? optionOf(approval, command) : undefined
+    const chosen = approval ? optionOf(approval, answers) : undefined
     if (answerable && chosen) onAnswer(summary, approval, chosen, event.timeStamp)
   }
 
@@ -247,9 +256,17 @@ export const RequestRow = memo(function RequestRow({
                       : undefined
                   }
                   data-primary
+                  // The row's default: ↩ on the row presses it.
+                  data-default={option === onceOptions[0] || undefined}
                   tabIndex={current && answerable ? 0 : -1}
                   disabled={!answerable}
-                  aria-keyshortcuts={shortcutOf(overviewKeys, "once")}
+                  aria-keyshortcuts={
+                    option === onceOptions[0]
+                      ? ["Enter", shortcutOf(overviewKeys, "once")]
+                          .filter(Boolean)
+                          .join(" ")
+                      : shortcutOf(overviewKeys, "once")
+                  }
                   onClick={(event) => {
                     if (!answerable) return
                     const chosen =

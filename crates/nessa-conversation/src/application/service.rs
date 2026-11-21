@@ -3209,7 +3209,7 @@ impl ConversationService {
                 Some(_) if mode == intent.prior => ConversationModeApplication::Applied,
                 Some(live) => match live
                     .agent
-                    .set_approval_mode(provider_approval_mode(mode), actor)
+                    .set_approval_mode(provider_approval_mode(mode), actor.clone())
                     .await
                 {
                     Ok(()) => ConversationModeApplication::Applied,
@@ -3291,6 +3291,19 @@ impl ConversationService {
             }
             if let Some(live) = live {
                 live.projection.lock().await.approval_mode(terminal.requested);
+                // Full never asks: what the running turn already asks is
+                // allowed as Full would have (`raised_access.rs`).
+                if terminal.requested == ConversationApprovalMode::Full
+                    && terminal.prior != ConversationApprovalMode::Full
+                {
+                    raised_access::allow_waiting_reviews(
+                        &id,
+                        &live,
+                        &actor,
+                        &terminal.request_id,
+                    )
+                    .await;
+                }
             }
             Ok(terminal.requested)
             }
@@ -8073,6 +8086,7 @@ mod event_read;
 mod handoffs;
 mod notes;
 mod parking;
+mod raised_access;
 use parking::ParkWhen;
 mod resumption;
 pub use environment_tools::{

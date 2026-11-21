@@ -4,7 +4,8 @@
  * chord that does something else.
  *
  * ⌘↩ is the Mac's "do the default thing" and ⌘⌫ its "delete, decline"; the
- * arrows walk the list, ↩ opens, ⌘R writes a reply in the peek, and Escape
+ * arrows walk the list, ↩ presses a row's default (Allow once on a request
+ * that can be allowed now, open otherwise), ⌘R writes a reply in the peek, and Escape
  * goes back to the panes. ⌘0, which opens the overview from anywhere in the
  * window as its sidebar entry does, is the window's (`ui/layouts/shortcuts.ts`).
  */

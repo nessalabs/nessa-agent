@@ -1,11 +1,13 @@
 /**
  * The composer's access command: the shield's choice, carried to whoever owns
  * the session's access (`usecases/access.ts`). A session the source has not
- * begun holds it for its first message. One begun asks the source, which
- * commits it for every review decided after it — but only between turns: a
- * choice made while the agent is at work is held as pending, and asked of the
- * source once a conversation arrives with no turn at work (`effects.ts`,
- * `applyPendingAccess`). A refusal shows the source's mode again, and says why.
+ * begun holds it for its first message. One begun asks the source at once,
+ * while the agent is at work too: the gateway changes a running turn's access,
+ * so the very next tool call is decided at the new mode. Only when the source
+ * cannot take it during that turn (a message queued behind it, say) is it held
+ * as pending, and asked again once a conversation arrives with no turn at work
+ * (`effects.ts`, `applyPendingAccess`). Any other refusal shows the source's
+ * mode again, and says why.
  *
  * ```ts
  * await store.dispatch(chooseAccess({ sessionId, mode: "full", initiator: "person" }))
@@ -23,12 +25,12 @@ import { entry } from "../../application/workspace-state"
 import type { WorkspaceCommand } from "./commands"
 import { workspaceActions } from "./slice"
 
-const { accessChosen, accessPending, accessChanging, accessTaken, accessRefused } =
-  workspaceActions
+const { accessChosen, accessChanging, accessTaken, accessRefused } = workspaceActions
 
 /**
  * What became of a choice: `chosen` and held for the session's first
- * message; `pending` until the agent stops; `taken` by the source; `refused`
+ * message; `pending` until the agent stops, when the running turn could not
+ * take it; `taken` by the source; `refused`
  * by it, or not known to be taken (`unavailable`); `changing` already — one
  * change at a time, and the one on its way settles first; or `not-asked`, no
  * such session.
@@ -41,7 +43,10 @@ function askSource(
   sessionId: string,
   mode: AccessMode,
   initiator: Initiator,
-  /** Sent from pending: a refusal because a turn began first puts it back. */
+  /**
+   * Sent while a turn may be at work: a refusal the turn caused puts it back
+   * as pending, to be asked again once that turn ends.
+   */
   requeue = false,
 ): WorkspaceCommand<Promise<AccessOutcome>> {
   return async (dispatch, getState, { workspace }) => {
@@ -87,11 +92,12 @@ export function chooseAccess({
         : "not-asked"
     }
     if (entry(state.accessChoices, sessionId)?.state === "changing") return "changing"
-    if (atWork(entry(state.transcripts, sessionId))) {
-      dispatch(accessPending({ sessionId, mode }))
-      return "pending"
-    }
-    return dispatch(askSource(sessionId, mode, initiator))
+    // Asked at once, at work or not: a person who raises access mid-turn
+    // wants the next tool call decided at it, not after the turn has asked
+    // them everything at the old one.
+    return dispatch(
+      askSource(sessionId, mode, initiator, atWork(entry(state.transcripts, sessionId))),
+    )
   }
 }
 

@@ -281,6 +281,10 @@ export const KNOBS = {
     default: 1,
     what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
   },
+  raises: {
+    default: 1,
+    what: "times the shield raises the main chat from Ask to Full while its turn waits on a review: the agent takes Full mid-turn, the open review is allowed by the raise, and the turn asks nothing more",
+  },
   accessRequests: {
     default: 1,
     what: "times an agent asks to raise its chat's access (`request_access`): the red card says Nessa's question and the agent's reason, Approve raises the chat to Auto by the person's own access command before Approve is sent, and the card then lists what was allowed",
@@ -421,6 +425,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.coordinators, () => ({ kind: "coordinator" }))
   add(knobs.asks, () => ({ kind: "ask" }))
   add(knobs.accessRequests, () => ({ kind: "accessRequest" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.raises, () => ({ kind: "raise" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
@@ -459,6 +465,16 @@ export function plan(knobs, accessScenario = "full") {
         mode = "ask"
       }
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
+    } else if (step.kind === "raise") {
+      // Where the model offers no Full there is nothing to raise to.
+      if (accessScenario === "ask-only") continue
+      // Raised from Ask, where the agent asks; Full afterwards.
+      if (mode !== "ask") {
+        out.push({ kind: "switch", from: mode, to: "ask", during: false })
+        mode = "ask"
+      }
+      out.push({ ...step, from: "ask", to: "full", mode: "ask" })
+      mode = "full"
     } else if (step.kind === "restart") {
       out.push({ kind: "restart", signal: next() < 0.5 ? "SIGKILL" : "SIGTERM" })
     } else {
@@ -483,7 +499,7 @@ export function describe(steps) {
   return steps
     .map((step) => {
       const extra =
-        step.kind === "switch" || step.kind === "refused-access"
+        step.kind === "switch" || step.kind === "refused-access" || step.kind === "raise"
           ? ` ${step.from}→${step.to}${step.during ? " during a turn" : ""}`
           : step.kind === "restart"
             ? ` ${step.signal}`

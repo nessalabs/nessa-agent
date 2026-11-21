@@ -86,26 +86,11 @@ export function accessChosen(
 }
 
 /**
- * Chosen while the session's agent is at work: held, shown as chosen, and
- * asked of the source once a conversation arrives with no turn at work
- * (`pendingAccess`). A later pick replaces it — the newest choice is the one
- * sent — and picking what the source already runs lets it go.
- */
-export function accessPending(
-  state: WorkspaceState,
-  { sessionId, mode }: Change,
-): WorkspaceState {
-  if (!accessAskedOfSource(state, sessionId)) return state
-  const source = entry(state.transcripts, sessionId)?.access
-  if (source && source.mode === mode && source.changing === undefined)
-    return withChoice(state, sessionId, undefined)
-  return withChoice(state, sessionId, { mode, state: "pending" })
-}
-
-/**
- * The pending choices whose conversation, as held, has no turn at work:
- * each is asked of the source now. The one owner of when a pending choice
- * goes — `effects.ts` asks after every change of state.
+ * The pending choices to ask of the source now: one a new session's
+ * conversation made pending (a pick after its first message) goes at once,
+ * mid-turn too; one a running turn could not take goes once a conversation
+ * newer than that refusal has no turn at work. The one owner of when a
+ * pending choice goes — `effects.ts` asks after every change of state.
  */
 export function pendingAccess(
   state: WorkspaceState,
@@ -115,8 +100,8 @@ export function pendingAccess(
     const transcript = entry(state.transcripts, sessionId)
     return choice?.state === "pending" &&
       transcript &&
-      !atWork(transcript) &&
-      (choice.after === undefined || transcript.revision > choice.after)
+      (choice.after === undefined ||
+        (!atWork(transcript) && transcript.revision > choice.after))
       ? [{ sessionId, mode: choice.mode }]
       : []
   })
@@ -173,14 +158,22 @@ export function accessRefused(
 ): WorkspaceState {
   const held = entry(state.accessChoices, sessionId)
   if (held?.state !== "changing" || held.mode !== mode) return state
-  // A pending choice sent as one turn ended, refused because the next turn
-  // began first, is still the person's: it waits for a conversation newer
-  // than the one held, so it is not sent again until that turn ends.
-  if (requeue && code === "turn_running")
+  // A choice the running turn could not take is still the person's: a turn
+  // that began first (`turn_running`), or one the agent could not change
+  // under while it was at work (`approval_mode_not_applied`, such as a
+  // message queued behind the turn). It waits for a conversation newer than
+  // the one held, so it is asked again only once that turn ends.
+  const transcript = entry(state.transcripts, sessionId)
+  const turnCaused =
+    code === "turn_running" ||
+    (code === "approval_mode_not_applied" &&
+      transcript !== undefined &&
+      atWork(transcript))
+  if (requeue && turnCaused)
     return withChoice(state, sessionId, {
       mode,
       state: "pending",
-      after: entry(state.transcripts, sessionId)?.revision ?? 0,
+      after: transcript?.revision ?? 0,
     })
   return withChoice(state, sessionId, {
     mode,

@@ -45,8 +45,8 @@ export function accessFor(value: ComposerAccessModeValue): AccessMode {
 
 /**
  * What the composer says when the source refused the shield's last choice:
- * a running turn in its own words, since the gateway changes access only
- * between turns, and any other refusal in the window's words for it.
+ * a running turn in its own words, and any other refusal in the window's
+ * words for it.
  */
 export function accessRefusalCopy(refusal: {
   readonly reason: WorkspaceFailureReason
