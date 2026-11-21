@@ -25,18 +25,19 @@ import { entry } from "../../application/workspace-state"
 import type { WorkspaceCommand } from "./commands"
 import { workspaceActions } from "./slice"
 
-const { accessChosen, accessChanging, accessTaken, accessRefused } = workspaceActions
+const { accessChosen, accessChanging, accessQueued, accessTaken, accessRefused } =
+  workspaceActions
 
 /**
  * What became of a choice: `chosen` and held for the session's first
  * message; `pending` until the agent stops, when the running turn could not
  * take it; `taken` by the source; `refused`
- * by it, or not known to be taken (`unavailable`); `changing` already — one
- * change at a time, and the one on its way settles first; or `not-asked`, no
- * such session.
+ * by it, or not known to be taken (`unavailable`); `queued` behind the
+ * change on its way — one change at a time, and this one is asked once that
+ * settles; or `not-asked`, no such session.
  */
 export type AccessOutcome =
-  "chosen" | "pending" | "taken" | "refused" | "changing" | "not-asked"
+  "chosen" | "pending" | "taken" | "refused" | "queued" | "not-asked"
 
 /** Asks the source for `mode`, the choice shown as on its way until it answers. */
 function askSource(
@@ -91,7 +92,10 @@ export function chooseAccess({
         ? "chosen"
         : "not-asked"
     }
-    if (entry(state.accessChoices, sessionId)?.state === "changing") return "changing"
+    if (entry(state.accessChoices, sessionId)?.state === "changing") {
+      dispatch(accessQueued({ sessionId, mode }))
+      return "queued"
+    }
     // Asked at once, at work or not: a person who raises access mid-turn
     // wants the next tool call decided at it, not after the turn has asked
     // them everything at the old one.

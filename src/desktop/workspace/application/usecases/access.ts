@@ -130,6 +130,26 @@ export function accessChanging(
 }
 
 /**
+ * Picked while a change is on its way: held beside it as the next to ask,
+ * so the latest pick stands. Picking the one on its way again drops the
+ * next. Nothing on its way, nothing is held.
+ */
+export function accessQueued(
+  state: WorkspaceState,
+  { sessionId, mode }: Change,
+): WorkspaceState {
+  const held = entry(state.accessChoices, sessionId)
+  if (held?.state !== "changing") return state
+  return withChoice(
+    state,
+    sessionId,
+    held.mode === mode
+      ? { mode, state: "changing" }
+      : { mode: held.mode, state: "changing", next: mode },
+  )
+}
+
+/**
  * The source committed it. Let go at once when the conversation held says it
  * already — its update arrived before the call resolved — and otherwise kept
  * until one does. Only the change on its way settles: a later choice is newer.
@@ -140,6 +160,9 @@ export function accessTaken(
 ): WorkspaceState {
   const held = entry(state.accessChoices, sessionId)
   if (held?.state !== "changing" || held.mode !== mode) return state
+  // A pick made meanwhile is the newer word: it goes next, at once.
+  if (held.next !== undefined)
+    return withChoice(state, sessionId, { mode: held.next, state: "pending" })
   const taken: AccessChoice = { mode, state: "taken" }
   const transcript = entry(state.transcripts, sessionId)
   return withChoice(state, sessionId, transcript ? settledBy(taken, transcript) : taken)
@@ -158,6 +181,9 @@ export function accessRefused(
 ): WorkspaceState {
   const held = entry(state.accessChoices, sessionId)
   if (held?.state !== "changing" || held.mode !== mode) return state
+  // A pick made meanwhile is the newer word, refusal or not: it goes next.
+  if (held.next !== undefined)
+    return withChoice(state, sessionId, { mode: held.next, state: "pending" })
   // A choice the running turn could not take is still the person's: a turn
   // that began first (`turn_running`), or one the agent could not change
   // under while it was at work (`approval_mode_not_applied`, such as a

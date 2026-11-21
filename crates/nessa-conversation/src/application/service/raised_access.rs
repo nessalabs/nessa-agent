@@ -19,6 +19,7 @@
 //! agent's classifier ask, so a review open under Ask stays the person's.
 use super::LiveConversation;
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::permissions::{
     is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot,
     PermissionAnswer,
@@ -30,8 +31,10 @@ use nessa_sdk::domain::agent_execution::permissions::{
 /// The mode name an answer made by raising to Full is recorded under.
 const FULL_ACCESS: &str = "full";
 
-/// The option Full answers `review` with: its first allow that is not a
-/// remembered rule, the card's Allow once. `None` when it offers no allow.
+/// The option Full answers `review` with: its first allow for this request
+/// alone, the card's Allow once — never a Nessa rule it would remember, nor a
+/// choice the harness keeps past this request (an `allow_always`), whatever
+/// order the harness lists them in. `None` when it offers no such allow.
 pub(super) fn allowed_once(review: &PendingReview) -> Option<&PermissionOptionId> {
     review
         .options
@@ -39,6 +42,7 @@ pub(super) fn allowed_once(review: &PendingReview) -> Option<&PermissionOptionId
         .iter()
         .find(|option| {
             option.decision().effect() == PermissionEffect::Allow
+                && !option.kept_by_harness()
                 && !is_remember_option(option.id().as_str())
         })
         .map(|option| option.id())
@@ -78,7 +82,9 @@ pub(super) async fn allow_waiting_reviews(
             .await;
         match answer {
             Ok(_) => allowed += 1,
-            Err(failure) => tracing::debug!(
+            // Answered or gone meanwhile: nothing left to allow.
+            Err(failure) if matches!(failure.error(), AgentError::StalePermission) => {}
+            Err(failure) => tracing::warn!(
                 conversation_id = %id,
                 permission_id = %review.id.as_str(),
                 error = %failure.into_parts().0,

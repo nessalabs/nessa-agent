@@ -36,7 +36,8 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
   // not one: the source has it, and its conversation says where it landed.
   const underway = useWorkspaceSelector((state) => {
     const choice = entry(state.workspace.accessChoices, sessionId)
-    if (choice?.state === "pending" || choice?.state === "changing") return choice.mode
+    if (choice?.state === "changing") return choice.next ?? choice.mode
+    if (choice?.state === "pending") return choice.mode
     return entry(state.workspace.transcripts, sessionId)?.access?.changing
   })
   const revision = useWorkspaceSelector(
@@ -65,10 +66,14 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
         revision={revision}
         raise={(mode) =>
           dispatch(chooseAccess({ sessionId, mode, initiator: "person" })).then(
+            // Queued behind a change on its way, it is asked once that
+            // settles: for the card, as good as pending.
             (outcome) =>
-              outcome === "taken" || outcome === "pending" || outcome === "changing"
-                ? outcome
-                : "refused",
+              outcome === "queued"
+                ? "pending"
+                : outcome === "taken" || outcome === "pending"
+                  ? outcome
+                  : "refused",
           )
         }
         answer={answer}

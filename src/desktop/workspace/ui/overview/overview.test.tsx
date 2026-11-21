@@ -746,7 +746,11 @@ describe("the agents overview", () => {
     })
     expect(button(card("first"), "Allow")?.disabled).toBe(true)
     await press(card("first") as HTMLElement, "Enter", { command: true })
+    // ↩ alone, the row's Allow once, waits too: it neither answers again nor
+    // opens the session under the person's finger.
+    await press(card("first") as HTMLElement, "Enter")
     expect(source.calls.filter((call) => call[0] === "approve")).toHaveLength(1)
+    expect(host.querySelector(".agents-overview")).not.toBeNull()
     await act(async () => source.release("approve"))
     expect(await fromPane).toBe("sent")
   })

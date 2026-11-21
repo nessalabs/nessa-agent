@@ -86,8 +86,9 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
-    // A choice the running turn holds back says nothing: the shield already
-    // shows it, and it takes effect when the agent stops. Only a refusal is
+    // A choice held back (one the running turn could not take now, or one
+    // queued behind a change on its way) says nothing: the shield already
+    // shows it, and it is asked again when it can be. Only a refusal is
     // said, because then the shield's choice did not happen. A model change
     // that moved the chat to Ask says so, since nobody picked Ask.
     const notice: ComposerAccess["notice"] =

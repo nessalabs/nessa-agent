@@ -34,7 +34,9 @@ export interface SessionAccess {
  * asked as soon as its conversation arrives, or one a running turn could not
  * take (one queued behind it, say), asked again once a conversation arrives
  * with no turn at work. `changing`: asked of the source — at once,
- * mid-turn too, since the gateway changes a running turn's access. `taken`: the
+ * mid-turn too, since the gateway changes a running turn's access; a pick
+ * made while it is on its way is held beside it as `next`, and asked once it
+ * settles, so the latest pick is the one that stands. `taken`: the
  * source committed it, and no conversation has said so yet. `refused`: the
  * source did not take it; the source's mode shows, and the refusal is said
  * until the next conversation with no turn at work, or the next pick.
@@ -52,7 +54,13 @@ export type AccessChoice =
     }
   | {
       readonly mode: AccessMode
-      readonly state: "changing" | "taken"
+      readonly state: "changing"
+      /** Picked while this one was on its way: asked once it settles. */
+      readonly next?: AccessMode
+    }
+  | {
+      readonly mode: AccessMode
+      readonly state: "taken"
     }
   | {
       readonly mode: AccessMode
@@ -80,6 +88,7 @@ export function shownAccess(
   source: SessionAccess | undefined,
   choice: AccessChoice | undefined,
 ): AccessMode {
+  if (choice?.state === "changing") return choice.next ?? choice.mode
   if (choice && choice.state !== "refused") return choice.mode
   return source?.mode ?? defaultAccess
 }

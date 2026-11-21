@@ -58,7 +58,7 @@ describe("choosing access", () => {
     })
   })
 
-  it("shows the change on its way, and asks for one change at a time", async () => {
+  it("shows the change on its way, and asks the latest pick once it settles", async () => {
     const { store, source } = await ready()
     source.hold("setAccess")
     const first = store.dispatch(
@@ -66,13 +66,57 @@ describe("choosing access", () => {
     )
     await settle()
     expect(selectAccess(store.getState(), "a")).toBe("full")
+    // One change at a time: the later picks wait behind it, the latest standing.
+    for (const mode of ["ask", "auto"] as const)
+      expect(
+        await store.dispatch(chooseAccess({ sessionId: "a", mode, initiator: "person" })),
+      ).toBe("queued")
+    expect(selectAccess(store.getState(), "a")).toBe("auto")
+    expect(source.calls.filter((call) => call[0] === "setAccess")).toHaveLength(1)
+    await source.release("setAccess")
+    expect(await first).toBe("taken")
+    await settle()
+    expect(
+      source.calls.filter((call) => call[0] === "setAccess").map((call) => call[2]),
+    ).toEqual(["full", "auto"])
+    expect(selectAccess(store.getState(), "a")).toBe("auto")
+  })
+
+  it("asks a pick made during a change the source then refuses", async () => {
+    const { store, source } = await ready()
+    source.hold("setAccess")
+    source.refuse("setAccess", "unavailable")
+    const first = store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+    )
+    await settle()
     expect(
       await store.dispatch(
         chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
       ),
-    ).toBe("changing")
+    ).toBe("queued")
+    await source.release("setAccess")
+    // Its own outcome is the refusal; the newer pick goes next all the same.
+    await first
+    await settle()
+    expect(
+      source.calls.filter((call) => call[0] === "setAccess").map((call) => call[2]),
+    ).toEqual(["full", "auto"])
+  })
+
+  it("drops a queued pick when the change on its way is picked again", async () => {
+    const { store, source } = await ready()
+    source.hold("setAccess")
+    const first = store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+    )
+    await settle()
+    for (const mode of ["auto", "full"] as const)
+      await store.dispatch(chooseAccess({ sessionId: "a", mode, initiator: "person" }))
+    expect(selectAccess(store.getState(), "a")).toBe("full")
     await source.release("setAccess")
     expect(await first).toBe("taken")
+    await settle()
     expect(source.calls.filter((call) => call[0] === "setAccess")).toHaveLength(1)
   })
 

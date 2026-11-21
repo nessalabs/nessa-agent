@@ -203,12 +203,23 @@ impl PermissionOfferPolicy {
 
 /// A specific review choice. Distinct scopes can share the same effect;
 /// answers select the option identity, never an ambiguous boolean or kind alone.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Equality is the offer's: id, label and decision. Whether the harness keeps
+/// the choice ([`Self::kept_by_harness`]) is known only to the live worker
+/// that admitted it, not to history, so a recorded option equals its live one.
+#[derive(Clone, Debug)]
 pub struct PermissionOption {
     id: PermissionOptionId,
     label: Box<str>,
     decision: PermissionDecision,
+    kept_by_harness: bool,
 }
+impl PartialEq for PermissionOption {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.label == other.label && self.decision == other.decision
+    }
+}
+impl Eq for PermissionOption {}
 impl PermissionOption {
     /// Own `id`, the display `label`, and its exact `decision`. Returns
     /// [`ExecutionError::EmptyValue`] for a blank label; preserves accepted text.
@@ -225,7 +236,20 @@ impl PermissionOption {
             id,
             label: label.into_boxed_str(),
             decision,
+            kept_by_harness: false,
         })
+    }
+    /// The same choice, marked as one the harness itself remembers past this
+    /// request (an ACP `allow_always` / `reject_always`): choosing it answers
+    /// this request and also changes what the harness asks later.
+    pub fn kept_by_the_harness(mut self) -> Self {
+        self.kept_by_harness = true;
+        self
+    }
+    /// Whether the harness remembers this choice past the request. Known only
+    /// on the live review the worker admitted; `false` on recorded history.
+    pub fn kept_by_harness(&self) -> bool {
+        self.kept_by_harness
     }
     /// Stable choice identity used by an answer to select this exact option.
     pub fn id(&self) -> &PermissionOptionId {
