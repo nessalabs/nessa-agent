@@ -480,7 +480,14 @@ async fn a_new_account_signs_in_with_its_issued_client_and_is_put_in_use() {
 #[tokio::test]
 async fn a_sign_in_that_does_not_pass_every_check_keeps_nothing() {
     // (end expected, how the browser comes back, how OpenAI is scripted)
-    let cases: Vec<(SignInEnd, Box<dyn Fn(&Authority)>, Vec<(&str, &str)>)> = vec![
+    /// A case: how it ends, how the fake authority is set up, and what the
+    /// browser comes back with.
+    type Case = (
+        SignInEnd,
+        Box<dyn Fn(&Authority)>,
+        Vec<(&'static str, &'static str)>,
+    );
+    let cases: Vec<Case> = vec![
         (
             SignInEnd::Declined,
             Box::new(|_| {}),

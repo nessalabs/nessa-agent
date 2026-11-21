@@ -199,10 +199,15 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 
 ## Checked by
 
-Unit tests under `crates/nessa-gateway/tests/logins/chatgpt.rs` (one per
-row above), `crates/nessa-env-serve/tests/launcher.rs` (the ChatGPT home and
-variables), `crates/nessa-conversation` parking tests (P1, P2), and the
-conversation stress step `chatgpt`: a fake OpenAI signs in two accounts from
-Settings, a worker's Codex launches record the token they were given, a
-refresh rotates the token, switching the account changes what the next launch
-gets, and no log or record holds a token.
+Unit tests under `crates/nessa-gateway/tests/logins/chatgpt.rs` (the
+sign-in, refresh, and account rows), `crates/nessa-env-serve/tests/launcher.rs`
+(the token file, its home, and its renewal), the
+`conversation/ssh_environment.rs` renewal tests (L1 to L3) and parking tests
+(P1, P2) in `crates/nessa-conversation`, and the conversation stress step
+`chatgpt` (`--chatgpts`): a fake OpenAI (`lib/fake-openai.mjs`) signs in two
+accounts from Settings › Accounts, a paired worker's Codex launches record the
+token file they were given and what it holds, the file is renewed in place
+while a followed conversation's lease runs, choosing the other account
+changes what the next launch gets and choosing the key hands no token, both
+accounts are revoked on removal, no rotated refresh token is used twice, and
+no log, record, Settings page or status answer holds a token.
