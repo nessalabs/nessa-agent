@@ -11422,17 +11422,27 @@ const steps = {
       const page = run.page
       const word = `stress-terminal-r${step.index}-s${run.knobs.seed}`
       const listed = await run.client.terminals.list()
+      // The main chat in front, so ⌘J opens in its (default) channel and not
+      // in one an earlier step left in front.
+      await showMainAgain(run, failures)
+      const warned = []
+      const onConsole = (message) => {
+        if (/terminal/i.test(message.text())) warned.push(message.text())
+      }
+      page.on("console", onConsole)
       // ⌘J opens a shell in the channel in front, in the focused pane.
       await page.keyboard.press(keys.newTerminal)
       const pane = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
       const grid = pane.locator('[data-slot="terminal-grid"]')
-      if (
-        !(await grid.waitFor({ timeout: 15_000 }).then(
-          () => true,
-          () => false,
-        ))
-      ) {
-        failures.push("⌘J showed no terminal in the focused pane")
+      const shown = await grid.waitFor({ timeout: 15_000 }).then(
+        () => true,
+        () => false,
+      )
+      page.off("console", onConsole)
+      if (!shown) {
+        failures.push(
+          `⌘J showed no terminal in the focused pane${warned.length ? `: ${warned.join(" | ")}` : ""}`,
+        )
         return
       }
       const opened = await waitFor(async () => {

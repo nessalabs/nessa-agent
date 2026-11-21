@@ -157,10 +157,34 @@ export function terminalGateway(options: {
     return binding
   }
 
+  // One line for everything the window says about terminals, each waiting
+  // for the last one's answer: the gateway runs requests side by side, so
+  // two in flight can land in either order. Keys reach the shell in the
+  // order they were typed, and a view is attached before its first keys.
+  let said: Promise<void> = Promise.resolve()
   const send = (what: string, act: (api: TerminalApi) => Promise<void>) => {
-    void client()
+    said = said
+      .then(() => client())
       .then((current) => act(current.terminals))
       .catch(warn(what))
+  }
+
+  // Keys typed while earlier ones are still on their way go together, as
+  // one input, when their turn comes: the gateway answers each request on
+  // its own, so only one input per terminal may be out at a time.
+  const typed = new Map<string, Uint8Array[]>()
+  const type = (terminalId: string, bytes: Uint8Array) => {
+    const waiting = typed.get(terminalId)
+    if (waiting) {
+      waiting.push(bytes)
+      return
+    }
+    typed.set(terminalId, [bytes])
+    send("input", (api) => {
+      const pieces = typed.get(terminalId) ?? []
+      typed.delete(terminalId)
+      return api.input(terminalId, joined(pieces))
+    })
   }
 
   return {
@@ -232,7 +256,7 @@ export function terminalGateway(options: {
           })
         },
         input(bytes) {
-          if (!released) send("input", (api) => api.input(terminalId, bytes))
+          if (!released) type(terminalId, bytes)
         },
         history(start, count) {
           if (!released && view.fit)
@@ -248,11 +272,22 @@ export function terminalGateway(options: {
       }
     },
     input(terminalId, bytes) {
-      send("input", (api) => api.input(terminalId, bytes))
+      type(terminalId, bytes)
     },
     async close(terminalId) {
       const current = await client()
       await current.terminals.close(terminalId)
     },
   }
+}
+
+function joined(pieces: readonly Uint8Array[]): Uint8Array {
+  if (pieces.length === 1) return pieces[0] as Uint8Array
+  const out = new Uint8Array(pieces.reduce((sum, piece) => sum + piece.length, 0))
+  let at = 0
+  for (const piece of pieces) {
+    out.set(piece, at)
+    at += piece.length
+  }
+  return out
 }
