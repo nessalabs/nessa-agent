@@ -135,8 +135,9 @@ export function createDependencies(
     }),
     // A ChatGPT account for Codex on other computers, kept by the same gateway.
     codexChatgptSignIn: codexChatgptSignIn({
-      status: () => connectedLogins().status(),
-      begin: (accountId) => connectedLogins().chatgptSignIn(accountId),
+      status: async () => (await connectedLogins().status()).chatgpt,
+      begin: async (accountId) =>
+        (await connectedLogins().chatgptSignIn(accountId)).chatgpt,
       pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     }),
     agentInstallations: gatewayAgentInstallations(

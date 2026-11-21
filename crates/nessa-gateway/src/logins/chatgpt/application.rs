@@ -162,7 +162,9 @@ impl ChatgptLogins {
     }
 
     fn write(&self, accounts: &ChatgptAccounts) -> Result<(), LoginsError> {
-        self.store.write(&accounts.encode()).map_err(store_error)
+        self.store
+            .write(&super::vault_entry::encode(accounts))
+            .map_err(store_error)
     }
 
     fn record(
@@ -185,7 +187,7 @@ impl ChatgptLogins {
     /// [`Self::write`], off the executor.
     async fn write_off(&self, accounts: &ChatgptAccounts) -> Result<(), LoginsError> {
         let store = self.store.clone();
-        let bytes = accounts.encode();
+        let bytes = super::vault_entry::encode(accounts);
         tokio::task::spawn_blocking(move || store.write(&bytes).map_err(store_error))
             .await
             .unwrap_or(Err(LoginsError::StorageUnavailable))
@@ -814,7 +816,7 @@ impl ChatgptLogins {
 fn read_accounts(store: &dyn SecretStore) -> Result<Option<ChatgptAccounts>, LoginsError> {
     match store.read().map_err(store_error)? {
         None => Ok(None),
-        Some(bytes) => ChatgptAccounts::decode(&bytes).map(Some).map_err(|_| {
+        Some(bytes) => super::vault_entry::decode(&bytes).map(Some).map_err(|_| {
             tracing::error!("the saved ChatGPT accounts are unreadable");
             LoginsError::StorageUnavailable
         }),

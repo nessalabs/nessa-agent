@@ -17,6 +17,7 @@ pub mod application;
 pub mod domain;
 pub mod infrastructure;
 pub mod ports;
+pub mod vault_entry;
 
 #[cfg(test)]
 #[path = "../../../tests/logins/chatgpt.rs"]

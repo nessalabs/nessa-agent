@@ -318,9 +318,9 @@ export function createDesktopDependencies(
     // A ChatGPT account for Codex on other computers, kept by the gateway.
     codexChatgptSignIn: source
       ? codexChatgptSignIn({
-          status: async () => (await source.connected()).logins.status(),
+          status: async () => (await (await source.connected()).logins.status()).chatgpt,
           begin: async (accountId) =>
-            (await source.connected()).logins.chatgptSignIn(accountId),
+            (await (await source.connected()).logins.chatgptSignIn(accountId)).chatgpt,
           open: options.openInBrowser,
           pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         })

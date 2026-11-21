@@ -1,37 +1,26 @@
 import { describe, expect, it, vi } from "vitest"
-import type { LoginsStatus } from "@nessa/client"
-import { ChatgptSignInFailure, codexChatgptSignIn } from "./chatgpt-sign-in"
+import {
+  ChatgptSignInFailure,
+  type ChatgptSignInState,
+  codexChatgptSignIn,
+} from "./chatgpt-sign-in"
 
-const base: LoginsStatus = {
-  logins: [
-    { agent: "claude", saved: false },
-    { agent: "codex", saved: false },
-    { agent: "opencode", saved: false },
-  ],
-  devicesOn: [],
-}
 const ours = "6c3f0a52-1d1e-4d0b-9a55-6b8f5a0c7e01"
 const theirs = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
-const waitingFor = (attempt: string): LoginsStatus => ({
-  ...base,
-  chatgpt: {
-    accounts: [],
-    signIn: { state: "waiting", attempt, authorizeUrl: "https://auth.example/a" },
-  },
+const waitingFor = (attempt: string): ChatgptSignInState => ({
+  accounts: [],
+  signIn: { state: "waiting", attempt, authorizeUrl: "https://auth.example/a" },
 })
 const waiting = waitingFor(ours)
-const idle = (last?: "signed_in" | "declined", attempt = ours): LoginsStatus => ({
-  ...base,
-  chatgpt: {
-    accounts: [],
-    signIn: { state: "idle", ...(last ? { last, attempt } : {}) },
-  },
+const idle = (last?: "signed_in" | "declined", attempt = ours): ChatgptSignInState => ({
+  accounts: [],
+  signIn: { state: "idle", ...(last ? { last, attempt } : {}) },
 })
 
 /** The answer to `chatgptSignIn`: `status`, naming the attempt it started. */
-const begun = (status: LoginsStatus, started = ours): LoginsStatus => ({
+const begun = (status: ChatgptSignInState, started = ours): ChatgptSignInState => ({
   ...status,
-  chatgpt: { ...status.chatgpt!, started },
+  started,
 })
 
 describe("ChatGPT sign-in for Codex", () => {
@@ -42,9 +31,13 @@ describe("ChatGPT sign-in for Codex", () => {
       await codexChatgptSignIn({ status: async () => idle(), begin, pause }).available(),
     ).toBe(true)
     expect(
-      await codexChatgptSignIn({ status: async () => base, begin, pause }).available(),
+      await codexChatgptSignIn({
+        status: async () => undefined,
+        begin,
+        pause,
+      }).available(),
     ).toBe(false)
-    const gone = async (): Promise<LoginsStatus> => {
+    const gone = async (): Promise<ChatgptSignInState> => {
       throw new Error("gone")
     }
     expect(await codexChatgptSignIn({ status: gone, begin, pause }).available()).toBe(
@@ -99,12 +92,9 @@ describe("ChatGPT sign-in for Codex", () => {
   it("signs in again the account in use when it needs it, else a new one", async () => {
     const pause = async () => {}
     const account = "2a1b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e"
-    const needing = (needsSignIn: boolean): LoginsStatus => ({
-      ...base,
-      chatgpt: {
-        accounts: [{ id: account, email: "a@example.test", inUse: true, needsSignIn }],
-        signIn: { state: "idle" },
-      },
+    const needing = (needsSignIn: boolean): ChatgptSignInState => ({
+      accounts: [{ id: account, inUse: true, needsSignIn }],
+      signIn: { state: "idle" },
     })
     for (const [status, expected] of [
       [needing(true), account],

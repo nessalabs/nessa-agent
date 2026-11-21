@@ -1,7 +1,6 @@
 //! The ChatGPT accounts Codex can use on other machines, as the gateway keeps
 //! them in one vault entry, and the rules for when an access token is handed
 //! as it is, refreshed, or replaced (`docs/design/chatgpt-sign-in.md`).
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use zeroize::Zeroize;
 
@@ -31,8 +30,7 @@ pub const REGISTRATION_CLIENT: &str = "dynamic_agent_client";
 pub const AGENT_NAME: &str = "Nessa";
 
 /// A token, never printed and wiped when dropped.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
 
 impl Secret {
@@ -58,8 +56,7 @@ impl Drop for Secret {
 
 /// An account's identity in this gateway: minted when it is first signed
 /// in, kept across later sign-ins and refreshes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AccountId(String);
 
 /// Not an account id: a UUID in its hyphenated lowercase form.
@@ -83,22 +80,8 @@ impl AccountId {
     }
 }
 
-impl TryFrom<String> for AccountId {
-    type Error = &'static str;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(&value).map_err(|_| "not an account id")
-    }
-}
-
-impl From<AccountId> for String {
-    fn from(id: AccountId) -> Self {
-        id.0
-    }
-}
-
 /// An account's current access and refresh tokens.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tokens {
     pub access: Secret,
     pub refresh: Secret,
@@ -130,8 +113,7 @@ fn millis(duration: Duration) -> u64 {
 /// One ChatGPT account: who it is, the client ID OpenAI issued for it, and
 /// its tokens. `tokens` is `None` once OpenAI refused its refresh token:
 /// it needs signing in again.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatgptAccount {
     pub id: AccountId,
     pub email: String,
@@ -154,9 +136,9 @@ pub struct UnknownAccount;
 pub struct Unreadable;
 
 /// Everything the vault entry `login.codex.chatgpt` holds: this gateway's
-/// host ID, the accounts, and which one Codex uses.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// host ID, the accounts, and which one Codex uses. Its bytes are
+/// `super::vault_entry`'s.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatgptAccounts {
     /// This gateway's `ext_agent_host_id`, made before its first sign-in
     /// and sent with every one after.
@@ -175,23 +157,47 @@ impl ChatgptAccounts {
         }
     }
 
+    /// Accounts as kept.
+    ///
     /// # Errors
-    /// [`Unreadable`] for anything [`Self::encode`] did not write, or more
-    /// accounts than [`MAX_ACCOUNTS`], or one in use that is not kept.
-    pub fn decode(bytes: &[u8]) -> Result<Self, Unreadable> {
-        let accounts: Self = serde_json::from_slice(bytes).map_err(|_| Unreadable)?;
+    /// [`Unreadable`] for more accounts than [`MAX_ACCOUNTS`], two with one
+    /// id, one in use that is not kept, or no host ID.
+    pub fn from_parts(
+        host_id: String,
+        in_use: Option<AccountId>,
+        accounts: Vec<ChatgptAccount>,
+    ) -> Result<Self, Unreadable> {
+        let accounts = Self {
+            host_id,
+            in_use,
+            accounts,
+        };
         let known = accounts
             .in_use
             .as_ref()
             .is_none_or(|id| accounts.account(id).is_some());
-        if accounts.accounts.len() > MAX_ACCOUNTS || !known || accounts.host_id.is_empty() {
+        let distinct = accounts
+            .accounts
+            .iter()
+            .enumerate()
+            .all(|(index, account)| {
+                accounts.accounts[..index]
+                    .iter()
+                    .all(|earlier| earlier.id != account.id)
+            });
+        if accounts.accounts.len() > MAX_ACCOUNTS
+            || !known
+            || !distinct
+            || accounts.host_id.is_empty()
+        {
             return Err(Unreadable);
         }
         Ok(accounts)
     }
 
-    pub fn encode(&self) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap_or_default()
+    /// The id of the account Codex uses, as kept.
+    pub fn in_use_id(&self) -> Option<&AccountId> {
+        self.in_use.as_ref()
     }
 
     pub fn host_id(&self) -> &str {

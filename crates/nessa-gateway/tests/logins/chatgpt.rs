@@ -66,10 +66,10 @@ impl SecretStore for Store {
 
 impl Store {
     fn accounts(&self) -> ChatgptAccounts {
-        ChatgptAccounts::decode(self.value.lock().unwrap().as_deref().unwrap()).unwrap()
+        super::vault_entry::decode(self.value.lock().unwrap().as_deref().unwrap()).unwrap()
     }
     fn put(&self, accounts: &ChatgptAccounts) {
-        *self.value.lock().unwrap() = Some(accounts.encode());
+        *self.value.lock().unwrap() = Some(super::vault_entry::encode(accounts));
     }
 }
 
@@ -427,11 +427,11 @@ fn accounts_keep_at_most_eight_and_the_first_is_put_in_use() {
     assert!(again.in_use().is_none());
     // The encoded entry reads back as it was, and a token is not in Debug.
     assert_eq!(
-        ChatgptAccounts::decode(&accounts.encode()).unwrap(),
+        super::vault_entry::decode(&super::vault_entry::encode(&accounts)).unwrap(),
         accounts
     );
     assert!(!format!("{accounts:?}").contains("eyJa.eyJb.old"));
-    assert!(ChatgptAccounts::decode(b"{}").is_err());
+    assert!(super::vault_entry::decode(b"{}").is_err());
 }
 
 // ---- sign-in ----

@@ -12,7 +12,39 @@
  *   ──▶ status read every pollMs ──▶ idle {last} ──▶ the card says how it ended
  * ```
  */
-import { ChatgptSignInEnd, type LoginsStatus } from "@nessa/client"
+
+/** How a ChatGPT sign-in ended, as the gateway names it. */
+export type ChatgptSignInEnd =
+  | "signed_in"
+  | "declined"
+  | "incomplete"
+  | "wrong_account"
+  | "exchange_failed"
+  | "invalid_identity"
+  | "plan_not_enabled"
+  | "too_many_accounts"
+  | "not_saved"
+  | "timed_out"
+  | "cancelled"
+  | "replaced"
+  | "listen_failed"
+
+/** What the card reads of the gateway's ChatGPT accounts and sign-in. */
+export interface ChatgptSignInState {
+  readonly accounts: readonly {
+    readonly id: string
+    readonly inUse: boolean
+    readonly needsSignIn: boolean
+  }[]
+  readonly signIn: {
+    readonly state: "idle" | "waiting"
+    readonly attempt?: string
+    readonly authorizeUrl?: string
+    readonly last?: ChatgptSignInEnd
+  }
+  /** Only in the answer to starting one: the attempt that call started. */
+  readonly started?: string
+}
 
 /**
  * How a ChatGPT sign-in ended, in the window's words: `undefined` for one
@@ -20,23 +52,20 @@ import { ChatgptSignInEnd, type LoginsStatus } from "@nessa/client"
  * The one table both the card and Settings say it from.
  */
 const endings: Record<ChatgptSignInEnd, string | undefined> = {
-  [ChatgptSignInEnd.SignedIn]: "Signed in with ChatGPT.",
-  [ChatgptSignInEnd.Declined]: "The sign-in was declined in the browser.",
-  [ChatgptSignInEnd.Incomplete]: "The browser came back without a sign-in. Try again.",
-  [ChatgptSignInEnd.WrongAccount]:
-    "That was a different ChatGPT account. Sign in with the same one.",
-  [ChatgptSignInEnd.ExchangeFailed]: "OpenAI didn’t finish the sign-in. Try again.",
-  [ChatgptSignInEnd.InvalidIdentity]:
-    "OpenAI’s answer couldn’t be checked, so it wasn’t kept.",
-  [ChatgptSignInEnd.PlanNotEnabled]: "This ChatGPT plan can’t be used for Codex here.",
-  [ChatgptSignInEnd.TooManyAccounts]:
+  signed_in: "Signed in with ChatGPT.",
+  declined: "The sign-in was declined in the browser.",
+  incomplete: "The browser came back without a sign-in. Try again.",
+  wrong_account: "That was a different ChatGPT account. Sign in with the same one.",
+  exchange_failed: "OpenAI didn’t finish the sign-in. Try again.",
+  invalid_identity: "OpenAI’s answer couldn’t be checked, so it wasn’t kept.",
+  plan_not_enabled: "This ChatGPT plan can’t be used for Codex here.",
+  too_many_accounts:
     "Nessa keeps up to 8 ChatGPT accounts. Remove one in Settings first.",
-  [ChatgptSignInEnd.NotSaved]: "Couldn’t keep the sign-in in Nessa. Try again.",
-  [ChatgptSignInEnd.TimedOut]: "The sign-in took too long. Try again.",
-  [ChatgptSignInEnd.Cancelled]: undefined,
-  [ChatgptSignInEnd.Replaced]: undefined,
-  [ChatgptSignInEnd.ListenFailed]:
-    "Nessa couldn’t wait for the browser on this computer. Try again.",
+  not_saved: "Couldn’t keep the sign-in in Nessa. Try again.",
+  timed_out: "The sign-in took too long. Try again.",
+  cancelled: undefined,
+  replaced: undefined,
+  listen_failed: "Nessa couldn’t wait for the browser on this computer. Try again.",
 }
 
 /** The sentence for how a ChatGPT sign-in ended, if it needs one. */
@@ -64,12 +93,13 @@ export interface CodexChatgptSignIn {
   signIn(opened: (authorizeUrl: string) => void): Promise<ChatgptSignInEnd>
 }
 
-/** Over the gateway's `logins` methods; `open` hands an address to the
- * person's browser where the host can, `pause` waits between reads.
- * `begin` signs in again the account named, or a new one. */
+/** Over the gateway's `logins` methods, each answering its ChatGPT part
+ * (`undefined` where the gateway keeps no accounts); `open` hands an
+ * address to the person's browser where the host can, `pause` waits
+ * between reads. `begin` signs in again the account named, or a new one. */
 export function codexChatgptSignIn(ports: {
-  status: () => Promise<LoginsStatus>
-  begin: (accountId?: string) => Promise<LoginsStatus>
+  status: () => Promise<ChatgptSignInState | undefined>
+  begin: (accountId?: string) => Promise<ChatgptSignInState | undefined>
   open?: (url: string) => void
   pause: (ms: number) => Promise<void>
   pollMs?: number
@@ -78,18 +108,18 @@ export function codexChatgptSignIn(ports: {
   return {
     available: async () => {
       try {
-        return (await ports.status()).chatgpt !== undefined
+        return (await ports.status()) !== undefined
       } catch {
         return false
       }
     },
     signIn: async (opened) => {
-      let status: LoginsStatus
+      let status: ChatgptSignInState | undefined
       try {
         // The account in use signs in again when it needs to, so the card
         // renews what Codex uses rather than adding an account beside it.
         const before = await ports.status()
-        const again = before.chatgpt?.accounts.find(
+        const again = before?.accounts.find(
           (account) => account.inUse && account.needsSignIn,
         )
         status = await ports.begin(again?.id)
@@ -98,8 +128,8 @@ export function codexChatgptSignIn(ports: {
       }
       // The answer names the attempt this call started; the sign-in it
       // shows may already be another window's.
-      const attempt = status.chatgpt?.started
-      const started = status.chatgpt?.signIn
+      const attempt = status?.started
+      const started = status?.signIn
       if (!attempt) throw new ChatgptSignInFailure()
       if (
         started?.state !== "waiting" ||
@@ -117,7 +147,7 @@ export function codexChatgptSignIn(ports: {
       // past that, the card stops waiting too.
       for (let waited = 0; waited <= 11 * 60_000; waited += pollMs) {
         await ports.pause(pollMs)
-        let now: LoginsStatus
+        let now: ChatgptSignInState | undefined
         try {
           now = await ports.status()
         } catch (cause) {
@@ -137,14 +167,12 @@ export function codexChatgptSignIn(ports: {
  * the card never reports someone else's sign-in as its own.
  */
 function ended(
-  status: LoginsStatus,
+  status: ChatgptSignInState | undefined,
   attempt: string | undefined,
 ): ChatgptSignInEnd | undefined {
-  const signIn = status.chatgpt?.signIn
+  const signIn = status?.signIn
   if (!signIn) return undefined
   if (signIn.attempt !== attempt)
-    return signIn.state === "idle" && !signIn.attempt
-      ? ChatgptSignInEnd.Cancelled
-      : ChatgptSignInEnd.Replaced
-  return signIn.state === "idle" ? (signIn.last ?? ChatgptSignInEnd.Cancelled) : undefined
+    return signIn.state === "idle" && !signIn.attempt ? "cancelled" : "replaced"
+  return signIn.state === "idle" ? (signIn.last ?? "cancelled") : undefined
 }
