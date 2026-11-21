@@ -261,6 +261,7 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
     case "agent-unsupported":
     case "conversations-not-configured":
     case "agent-startup-deadline":
+    case "agent-sign-in-required":
     case "sandbox-unavailable":
     case "environment-not-configured":
     case "environment-unavailable":

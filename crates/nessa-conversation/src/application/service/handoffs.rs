@@ -19,9 +19,9 @@
 //! gateway that stopped mid-switch carries it on at the next opening, and
 //! settles it there.
 use super::{
-    load_conversation, supervised, ActionContext, AgentEnd, ConversationCaller, ConversationError,
-    ConversationId, ConversationService, McpAppInitiator, RequestedAgent, RequestedConversation,
-    Slot,
+    load_conversation, supervised, ActionContext, AgentEnd, AgentError, ConversationCaller,
+    ConversationError, ConversationId, ConversationService, McpAppInitiator, RequestedAgent,
+    RequestedConversation, Slot,
 };
 use crate::application::{
     ConversationAgentSwitch, ConversationAgentSwitchState, ScheduleActor, SelectionChange,
@@ -200,7 +200,18 @@ impl ConversationService {
         }
         let settled = self.settle_switch(id, pending, actor, None).await?;
         if settled.state == ConversationAgentSwitchState::NotApplied {
-            opened?;
+            // The requested agent could not open because it is not signed in
+            // where the conversation runs: said so, rather than a bare "not
+            // made", since only signing it in there changes the answer.
+            let live = opened?;
+            let failure = live
+                .opening_failure
+                .lock()
+                .expect("opening failure")
+                .clone();
+            if let Some(error @ AgentError::AuthenticationRequired { .. }) = failure {
+                return Err(ConversationError::Agent(error));
+            }
         }
         Ok(settled)
     }

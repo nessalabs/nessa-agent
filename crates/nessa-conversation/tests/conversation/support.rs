@@ -1418,6 +1418,8 @@ pub struct ProviderFactory {
     pub model_updates: Mutex<Vec<ProviderIdentity>>,
     pub model_started: Notify,
     pub model_gate: Mutex<Option<Receiver<()>>>,
+    /// The next model control fails so, after it is recorded as asked.
+    pub model_failure: Mutex<Option<ProviderOperationFailure>>,
     pub mode_updates: Mutex<Vec<ApprovalMode>>,
     pub mode_failure: Mutex<Option<AgentError>>,
     pub mode_started: Notify,
@@ -2225,6 +2227,9 @@ impl ProviderSessionBackend for Backend {
             let gate = self.factory.model_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
+            }
+            if let Some(failure) = self.factory.model_failure.lock().unwrap().take() {
+                return Err(failure);
             }
             Ok(ModelChangeEffect::new(
                 change.after().clone(),

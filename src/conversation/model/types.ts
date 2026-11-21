@@ -202,6 +202,11 @@ export type CommandFailure =
   /** The channel a new conversation named is not one of the person's. */
   | "channel-not-found"
   | "agent-startup-deadline"
+  /**
+   * The agent is not signed in where the conversation runs (a VM or SSH host
+   * with no saved login for it); nothing was sent to it.
+   */
+  | "agent-sign-in-required"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"
   /** This conversation runs on an SSH host the gateway does not name any more. */

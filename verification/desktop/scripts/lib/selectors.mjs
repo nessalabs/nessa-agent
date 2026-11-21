@@ -560,6 +560,7 @@ export const keys = {
   end: "End",
   toggleSidebar: "Meta+KeyB",
   toggleSessionList: "Meta+Alt+KeyS",
+  togglePanel: "Meta+Alt+KeyB",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
   splitRight: "Meta+KeyD",
@@ -1118,6 +1119,10 @@ export const composerControls = {
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
   notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
+  /** Words of the model notice for a switch to an agent not signed in where the chat runs (`conversation.tsx`). */
+  signInRequired: "isn’t signed in where this chat runs",
+  /** Words of the model notices for a change the gateway has not settled (`conversation.tsx`). */
+  modelUnconfirmed: "model change is not confirmed",
 }
 
 /** Deterministic production-hook/component ordering fixture for #1087. */

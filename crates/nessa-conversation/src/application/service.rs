@@ -813,6 +813,9 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<AttachmentOwner>,
+    /// Why its attachment failed to open, once it has: what a caller that
+    /// waited for the opening (a switch to another agent) answers with.
+    opening_failure: Arc<std::sync::Mutex<Option<AgentError>>>,
     /// Its MCP Apps' state — the conversation's, kept by the service — and
     /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
@@ -2576,6 +2579,9 @@ impl ConversationService {
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
                             let readiness = configured.readiness.clone();
+                            let opening_failure: Arc<std::sync::Mutex<Option<AgentError>>> =
+                                Arc::default();
+                            let failed_opening = opening_failure.clone();
                             let owner = tokio::spawn(async move {
                                 if let Some(readiness) = readiness {
                                     let cancellation = authorization.cancellation();
@@ -2588,14 +2594,14 @@ impl ConversationService {
                                 if attachment_service.inner.retirement.get().is_some() {
                                     return;
                                 }
-                                match attachment.start_attachment(authorization) {
-                                    Ok(wait) => {
-                                        if let Err(error) = wait.wait().await {
-                                            report_opening_failure(&attachment_id, &error);
-                                        }
-                                    }
-                                    Err(AgentError::Closed) => {}
-                                    Err(error) => report_opening_failure(&attachment_id, &error),
+                                let failed = match attachment.start_attachment(authorization) {
+                                    Ok(wait) => wait.wait().await.err(),
+                                    Err(AgentError::Closed) => None,
+                                    Err(error) => Some(error),
+                                };
+                                if let Some(error) = failed {
+                                    report_opening_failure(&attachment_id, &error);
+                                    *failed_opening.lock().expect("opening failure") = Some(error);
                                 }
                                 // Attached or failed: the view's lifecycle
                                 // and capabilities follow the agent's.
@@ -2615,6 +2621,7 @@ impl ConversationService {
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
+                                opening_failure,
                                 app_reviews,
                                 app_epoch,
                                 publishes: Arc::default(),
@@ -3370,6 +3377,7 @@ impl ConversationService {
                     Err(error) => Err(error),
                 };
                 if let Err(error) = recovered {
+                    tracing::warn!(conversation_id = %id, %error, "a pending selection change could not be settled on opening; the view shows it pending");
                     // Read again after recovery: cleanup may have ended or
                     // replaced the owner a preceding view would have captured.
                     if let Some(read) = self.pending_change_view(&id, &caller).await? {

@@ -268,9 +268,10 @@ function useShownArrangement(region: SidebarRegion) {
 
 /**
  * A two-finger swipe across the chat, the sidebar or the session list folds
- * the open side column nearest the chat (swiped left) or opens the closed one nearest the window's edge (swiped
- * right), one per swipe, with a haptic tick when one moved
- * (`model/side-swipe.ts`), only while the chat reads one (`swipeReads`).
+ * the open sidebar nearest the chat (swiped left) or opens the closed one
+ * nearest the window's edge (swiped right), one per swipe, with a haptic tick
+ * when one moved (`model/side-swipe.ts`), only while the chat reads one
+ * (`swipeReads`). The rail and the right panel are not a swipe's.
  */
 function useSwipeColumns(
   root: RefObject<HTMLElement | null>,
@@ -281,14 +282,10 @@ function useSwipeColumns(
   const dispatch = useWorkspaceDispatch()
   const haptic = useHaptic()
   const columns = swipeColumnsOf({
-    railOffered: chrome.railOffered,
-    railDrawn: chrome.railDrawn,
-    railRoom: chrome.railRoom,
     sidebarOpen: chrome.sidebarOpen,
     listOffered: region.sessionList,
     listOpen: chrome.listOpen,
   })
-  const { toggleRail } = chrome
   useSideSwipe(
     root,
     swipeReads({
@@ -300,8 +297,7 @@ function useSwipeColumns(
       const column = columnToToggle(columns, direction)
       if (column === null) return
       const open = direction === "right"
-      if (column === "rail") toggleRail()
-      else if (column === "sidebar") dispatch(toggleSidebar({ open }))
+      if (column === "sidebar") dispatch(toggleSidebar({ open }))
       else dispatch(toggleSessionList({ open }))
       haptic()
     },

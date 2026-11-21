@@ -106,6 +106,8 @@ pub enum ConversationErrorCode {
     ModelChangeNotApplied,
     #[serde(rename = "model_change_uncertain")]
     ModelChangeUncertain,
+    #[serde(rename = "agent_sign_in_required")]
+    AgentSignInRequired,
     #[serde(rename = "approval_request_conflict")]
     ApprovalRequestConflict,
     #[serde(rename = "turn_running")]
@@ -237,6 +239,7 @@ impl ConversationErrorCode {
             Self::ApprovalModeUncertain => "approval_mode_uncertain",
             Self::ModelChangeNotApplied => "model_change_not_applied",
             Self::ModelChangeUncertain => "model_change_uncertain",
+            Self::AgentSignInRequired => "agent_sign_in_required",
             Self::ApprovalRequestConflict => "approval_request_conflict",
             Self::TurnRunning => "turn_running",
             Self::ConversationsNotConfigured => "conversations_not_configured",

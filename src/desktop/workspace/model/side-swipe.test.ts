@@ -13,60 +13,39 @@ import {
   type SwipeState,
 } from "./side-swipe"
 
-const all: SwipeColumns = { rail: "open", sidebar: "open", list: "open" }
+const all: SwipeColumns = { sidebar: "open", list: "open" }
 
 describe("columnToToggle", () => {
-  it("folds the open column nearest the chat on a swipe left, one at a time", () => {
+  it("folds the open sidebar nearest the chat on a swipe left, one at a time", () => {
     expect(columnToToggle(all, "left")).toBe("list")
     expect(columnToToggle({ ...all, list: "closed" }, "left")).toBe("sidebar")
-    expect(
-      columnToToggle({ rail: "open", sidebar: "closed", list: "closed" }, "left"),
-    ).toBe("rail")
-    expect(
-      columnToToggle({ rail: "closed", sidebar: "closed", list: "closed" }, "left"),
-    ).toBeNull()
+    expect(columnToToggle({ sidebar: "closed", list: "closed" }, "left")).toBeNull()
   })
 
-  it("opens the closed column nearest the window's edge on a swipe right", () => {
-    const none: SwipeColumns = { rail: "closed", sidebar: "closed", list: "closed" }
-    expect(columnToToggle(none, "right")).toBe("rail")
-    expect(columnToToggle({ ...none, rail: "open" }, "right")).toBe("sidebar")
-    expect(columnToToggle({ ...all, list: "closed" }, "right")).toBe("list")
-    // Everything open but the rail: the rail is what a swipe right brings.
-    expect(columnToToggle({ ...all, rail: "closed" }, "right")).toBe("rail")
+  it("opens the closed sidebar nearest the window's edge on a swipe right", () => {
+    const none: SwipeColumns = { sidebar: "closed", list: "closed" }
+    expect(columnToToggle(none, "right")).toBe("sidebar")
+    expect(columnToToggle({ ...none, sidebar: "open" }, "right")).toBe("list")
     expect(columnToToggle(all, "right")).toBeNull()
   })
 
   it("passes over a column the window cannot draw", () => {
-    const noRail: SwipeColumns = { rail: "absent", sidebar: "closed", list: "absent" }
-    expect(columnToToggle(noRail, "right")).toBe("sidebar")
-    expect(columnToToggle({ ...noRail, sidebar: "open" }, "left")).toBe("sidebar")
-    expect(columnToToggle({ ...noRail, sidebar: "open" }, "right")).toBeNull()
+    const noList: SwipeColumns = { sidebar: "closed", list: "absent" }
+    expect(columnToToggle(noList, "right")).toBe("sidebar")
+    expect(columnToToggle({ ...noList, sidebar: "open" }, "left")).toBe("sidebar")
+    expect(columnToToggle({ ...noList, sidebar: "open" }, "right")).toBeNull()
   })
 })
 
 describe("swipeColumnsOf", () => {
-  const drawn = {
-    railOffered: true,
-    railDrawn: true,
-    railRoom: true,
-    sidebarOpen: true,
-    listOffered: true,
-    listOpen: true,
-  }
+  const drawn = { sidebarOpen: true, listOffered: true, listOpen: true }
 
-  it("reads what the window draws", () => {
+  it("reads the two sidebars the window draws, never the rail or the panel", () => {
     expect(swipeColumnsOf(drawn)).toEqual(all)
-    expect(
-      swipeColumnsOf({ ...drawn, railDrawn: false, sidebarOpen: false, listOpen: false }),
-    ).toEqual({ rail: "closed", sidebar: "closed", list: "closed" })
-  })
-
-  it("holds the rail absent while its preview is off or it has no room", () => {
-    expect(swipeColumnsOf({ ...drawn, railOffered: false }).rail).toBe("absent")
-    expect(swipeColumnsOf({ ...drawn, railDrawn: false, railRoom: false }).rail).toBe(
-      "absent",
-    )
+    expect(swipeColumnsOf({ ...drawn, sidebarOpen: false, listOpen: false })).toEqual({
+      sidebar: "closed",
+      list: "closed",
+    })
   })
 
   it("holds the list absent in a layout without one", () => {

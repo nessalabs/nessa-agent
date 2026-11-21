@@ -92,7 +92,7 @@ const recorder = join(repoRoot, "scripts/mcp-test-server/acp-recorder.mjs")
  */
 export function scriptedLaunch(
   agent,
-  { tool, scenario, evidence, nativeContext, model = MODELS[agent] } = {},
+  { tool, scenario, evidence, nativeContext, refusals, model = MODELS[agent] } = {},
 ) {
   if (!scenario && !tool) throw new Error("a scripted launch names a tool or a scenario")
   const script = join(repoRoot, "scripts/mcp-test-server/scripted-agent.mjs")
@@ -112,6 +112,9 @@ export function scriptedLaunch(
       realpathSync(nativeContext.workspace),
     )
   }
+  // What the check asks the agent to refuse while the run goes on
+  // (`scripted-agent.mjs` `--refusals`).
+  if (refusals) semanticArgs.push("--refusals", refusals)
   let stagedRuntime = [script]
   let mcp = { command: process.execPath, args: [serverScript] }
   if (evidence) {
@@ -166,6 +169,7 @@ export async function startGatewayStack(
     scenario,
     evidence,
     nativeContext,
+    refusals,
     limits,
     native,
     webhooks,
@@ -187,6 +191,7 @@ export async function startGatewayStack(
           scenario,
           evidence,
           nativeContext,
+          refusals,
           model,
         })
       : null
@@ -199,6 +204,7 @@ export async function startGatewayStack(
         tool: scripted,
         scenario,
         nativeContext,
+        refusals,
       })
       return [
         other,

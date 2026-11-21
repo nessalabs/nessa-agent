@@ -125,10 +125,11 @@ import {
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
- *   swipe       with the rail on and every side column open, two-finger
- *               swipes over the chat fold the session list, the sidebar and
- *               the rail, one per swipe, a fling's momentum included, then
- *               open them back rail, sidebar, list; each move gives one
+ *   swipe       with the rail on, the right panel open and every side
+ *               column open, two-finger swipes over the chat fold the
+ *               session list then the sidebar, one per swipe, a fling's
+ *               momentum included, then open them back sidebar, list; the
+ *               rail and the right panel never move; each move gives one
  *               haptic tick and a swipe with nothing left to move gives
  *               none; over a wide table or a wide code block (its lines
  *               in a shadow root) the swipe scrolls it, and a vertical
@@ -754,6 +755,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
     page.evaluate(
       ({ frame, workspace }) => ({
         rail: document.querySelector(frame)?.dataset.rail,
+        panel: document.querySelector(workspace)?.dataset.panel,
         sidebar: document.querySelector(workspace)?.dataset.sidebar,
         list: document.querySelector(workspace)?.dataset.list,
         haptics: window.__fakeHostHaptics,
@@ -764,15 +766,20 @@ async function swipeColumns(run, step, message, port, code, failures) {
   const start = await columns()
   if (start.sidebar !== "open") await page.keyboard.press(keys.toggleSidebar)
   if (start.list !== "open") await page.keyboard.press(keys.toggleSessionList)
-  const all = { rail: "open", sidebar: "open", list: "open" }
+  // The right panel open too: a swipe moves neither it nor the rail.
+  if (start.panel !== "open") await page.keyboard.press(keys.togglePanel)
+  const open = { panel: "open", sidebar: "open", list: "open" }
   const at = async (want) => {
     const now = await columns()
-    return ["rail", "sidebar", "list"].every((each) => now[each] === want[each])
+    return Object.keys(want).every((each) => now[each] === want[each])
   }
-  if (!(await waitFor(() => at(all), 5_000))) {
+  if (!(await waitFor(() => at(open), 5_000))) {
     failures.push(`the side columns did not all open: ${JSON.stringify(await columns())}`)
     return
   }
+  // The rail as the window drew it beside the open panel, which no swipe
+  // changes.
+  const all = { ...open, rail: (await columns()).rail }
   // Two fingers over the reply's words: `x` positive is the fingers
   // moving left (the Mac's natural scrolling, which Chromium assumes).
   // On Chromium the events go in through the browser's input with their
@@ -910,26 +917,19 @@ async function swipeColumns(run, step, message, port, code, failures) {
   await swipe(words, 15, 0, 30)
   await expect("a fling left", { ...all, list: "closed" }, 1)
   await swipe(words, 15)
-  await expect(
-    "a second swipe left",
-    { rail: "open", sidebar: "closed", list: "closed" },
-    1,
-  )
+  const none = { ...all, sidebar: "closed", list: "closed" }
+  await expect("a second swipe left", none, 1)
+  // The rail and the right panel stay: nothing more for a swipe to fold.
   await swipe(words, 15)
-  const none = { rail: "closed", sidebar: "closed", list: "closed" }
-  await expect("a third swipe left", none, 1)
-  await swipe(words, 15)
-  await expect("a swipe left with nothing open", none, 0)
-  // Right: back in the order they went, the rail first.
+  await expect("a swipe left with both sidebars folded", none, 0)
+  // Right: back in the order they went, the sidebar first.
   await swipe(words, -15)
-  await expect("a swipe right", { ...none, rail: "open" }, 1)
+  await expect("a swipe right", { ...all, list: "closed" }, 1)
   // A vertical scroll that drifts sideways is a scroll.
   await swipe(words, 4, 30)
-  await expect("a vertical scroll", { ...none, rail: "open" }, 0)
+  await expect("a vertical scroll", { ...all, list: "closed" }, 0)
   await swipe(words, -15)
-  await expect("a second swipe right", { ...all, list: "closed" }, 1)
-  await swipe(words, -15)
-  await expect("a third swipe right", all, 1)
+  await expect("a second swipe right", all, 1)
   await swipe(words, -15)
   await expect("a swipe right with everything open", all, 0)
   // Two swipes with no pause between them, the second starting as the
@@ -938,11 +938,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
   // Every engine: this is what the shipping WKWebView is read for.
   const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
   await swipe(words, [...fling, ...fling])
-  await expect(
-    "two swipes left back to back",
-    { rail: "open", sidebar: "closed", list: "closed" },
-    2,
-  )
+  await expect("two swipes left back to back", none, 2)
   const back = fling.map((each) => -each)
   await swipe(words, [...back, ...back])
   await expect("two swipes right back to back", all, 2)
@@ -952,11 +948,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
   const fading = [15, 15, 15, 15, 15, 15, 12, 10, 8, 6, 5, 4, 3]
   const picking = [4, 8, 14, 18, 18, 18, 18, 18]
   await swipe(words, [...fading, ...picking])
-  await expect(
-    "a second swipe left while the first one's momentum fades",
-    { rail: "open", sidebar: "closed", list: "closed" },
-    2,
-  )
+  await expect("a second swipe left while the first one's momentum fades", none, 2)
   const neg = (xs) => xs.map((each) => -each)
   await swipe(words, [...neg(fading), ...neg(picking)])
   await expect("a second swipe right while the first one's momentum fades", all, 2)
@@ -1000,6 +992,8 @@ async function swipeColumns(run, step, message, port, code, failures) {
     failures.push(`a swipe right over an open session row left it ${await tray()}`)
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
+  // The panel as the step found it, for the steps after.
+  if (start.panel !== "open") await page.keyboard.press(keys.togglePanel)
   // The conversation still takes a message.
   await steps.reply(run, { ...step, extra: " after swiping" }, failures)
 }
@@ -4037,6 +4031,9 @@ async function slowLaunch(run, failures) {
   }
   return true
 }
+
+const unsignedSwitch = (...args) => steps.unsignedSwitchBody(...args)
+const failedModelControl = (...args) => steps.failedControlBody(...args)
 
 const steps = {
   /** The cloud for new thread VMs is picked in Settings › Connections ›
@@ -10373,6 +10370,246 @@ const steps = {
    * asked for. The window draws a line at the switch, and the fork opens
    * on the copied turns and a line after them.
    */
+  /**
+   * A switch to an agent that is not signed in where the conversation runs:
+   * the harness answers its session/new with "authentication required"
+   * (`--refusals`), as Codex on a VM with no saved login does. The send is
+   * refused before anything reaches either agent, the composer says why in
+   * words (not a bare model_change_not_applied), the picker goes back to the
+   * conversation's own model, no switch is recorded, and the next message
+   * runs on the agent it was on.
+   */
+  async unsigned(run, step, failures) {
+    try {
+      await unsignedSwitch(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async unsignedSwitchBody(run, step, failures) {
+    const other = otherAgent(run.stack.agent)
+    const target = catalog.models.find((model) => model.modelId === MODELS[other])
+    if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " unsigned")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const picker = dock(run.page).locator(css.modelChip)
+    const own = catalog.models.find((model) => model.modelId === before.model)
+    if (!own) throw new CannotRun(`the catalog has no ${before.model}`)
+    const refusal = join(run.stack.refusals, `${other}.session-new`)
+    writeFileSync(refusal, "")
+    try {
+      await pickModel(run.page, picker, target)
+      const refused = prompt(run, STRESS.reply, step, " refused switch")
+      await send(run, conversationId, refused, failures)
+      const said = await waitFor(async () => {
+        const notices = await dock(run.page)
+          .locator(composerControls.notice)
+          .allInnerTexts()
+          .catch(() => [])
+        return notices.find((each) => each.includes(composerControls.signInRequired))
+      }, 30_000)
+      if (!said) {
+        const notices = await dock(run.page)
+          .locator(composerControls.notice)
+          .allInnerTexts()
+          .catch(() => [])
+        failures.push(
+          `the composer did not say the agent isn't signed in: ${JSON.stringify(notices)}`,
+        )
+      }
+      if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `unsigned-${run.engine}.png`),
+          scale: "css",
+        })
+      if (
+        !(await waitFor(
+          async () =>
+            (await picker.getAttribute("aria-label"))?.includes(own.displayName),
+          5_000,
+        ))
+      )
+        failures.push("the picker did not go back to the conversation's own model")
+      const view = await run.client.conversation.read(conversationId)
+      if (view.model !== before.model || view.handoffs.length)
+        failures.push("a switch the agent could not open was recorded")
+      if (view.messages.some((each) => each.userText === refused))
+        failures.push("the message sent with the refused switch reached an agent")
+    } finally {
+      rmSync(refusal, { force: true })
+    }
+    const after = prompt(run, STRESS.reply, step, " after refused switch")
+    const seen = await send(run, conversationId, after, failures)
+    const { turn } = await settled(
+      run,
+      conversationId,
+      seen,
+      after,
+      "completed",
+      failures,
+    )
+    if (turn && turn.model && turn.model !== before.model)
+      failures.push(`the next message ran on ${turn.model}, not ${before.model}`)
+  },
+  /**
+   * A model change the agent fails while a turn runs: the harness answers
+   * its set_config_option with an internal error (`--refusals`), which ends
+   * the agent's worker and the turn with it, as Claude's adapter did for a
+   * real person. The change is settled without anyone asking again: nothing
+   * stays pending ("not confirmed yet" in the composer), the turn is not
+   * left at work with a Stop that stops nothing, and the next message
+   * completes.
+   */
+  async failedControl(run, step, failures) {
+    try {
+      await failedModelControl(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async failedControlBody(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " control")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    const current = catalog.models.find(
+      (model) => model.modelId === before.runtime?.model,
+    )
+    const target =
+      current &&
+      catalog.models.find(
+        (model) =>
+          model.provider === current.provider && model.modelId !== current.modelId,
+      )
+    if (!target)
+      throw new CannotRun("no second catalog model in this conversation's provider")
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    // Watched as a follower does, which opens and recovers nothing (a read
+    // would: an opening read settles a pending change itself, and would
+    // hide a gateway that never settles it on its own).
+    // A follower subscribes again from its last cursor when its view ends
+    // (the agent it followed was retired), as the product protocol says.
+    let latest = null
+    let cursor
+    let following = null
+    const follow = async () => {
+      following = await run.client.subscriptions.view(
+        conversationId,
+        {
+          view: (frame) => {
+            latest = frame.view
+            cursor = frame.cursor
+          },
+          ended: () => {
+            following = null
+          },
+        },
+        cursor ? { after: cursor } : {},
+      )
+    }
+    await follow()
+    const held = prompt(run, STRESS.pause, step, " control")
+    await send(run, conversationId, held, failures)
+    if (!(await stopShown(run.page)))
+      failures.push("Send did not turn into Stop while the turn ran")
+    const refusal = join(run.stack.refusals, `${run.stack.agent}.model`)
+    writeFileSync(refusal, "")
+    let answer
+    try {
+      answer = await run.client.conversation
+        .setModel(conversationId, target.modelId)
+        .then(
+          () => "applied",
+          (error) => error.code ?? error.message,
+        )
+    } finally {
+      rmSync(refusal, { force: true })
+    }
+    if (answer === "applied")
+      failures.push("a model control the agent failed was answered as applied")
+    const unsettled = (view) =>
+      view.modelChange || view.messages.some((each) => !ended(each))
+    const quiet = await waitFor(async () => {
+      if (!following) await follow().catch(() => {})
+      return latest && !unsettled(latest) ? latest : null
+    }, 90_000).finally(() => following?.close())
+    if (!quiet) {
+      const view = latest ?? { messages: [] }
+      failures.push(
+        `after a failed model control the conversation stayed unsettled: ${JSON.stringify(
+          {
+            modelChange: view.modelChange,
+            turns: view.messages.map((each) => each.status),
+          },
+        )}`,
+      )
+      return
+    }
+    const notices = () =>
+      dock(run.page)
+        .locator(composerControls.notice)
+        .allInnerTexts()
+        .catch(() => [])
+    const unconfirmed = (said) =>
+      said.some((each) => each.includes(composerControls.modelUnconfirmed))
+    const started = Date.now()
+    const cleared = await waitFor(async () => !unconfirmed(await notices()), 30_000)
+    log(`failed control: the composer's notice cleared after ${Date.now() - started} ms`)
+    const words = await notices()
+    if (!cleared)
+      failures.push(
+        `the composer still says the change is not confirmed: ${JSON.stringify(words)}`,
+      )
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `failed-control-${run.engine ?? "window"}-${step.index}.json`),
+        JSON.stringify(
+          { answer, before: current.modelId, after: quiet.runtime?.model },
+          null,
+          2,
+        ),
+      )
+    const after = prompt(run, STRESS.reply, step, " after failed control")
+    const seen = await send(run, conversationId, after, failures)
+    await settled(run, conversationId, seen, after, "completed", failures)
+  },
   async handoff(run, step, failures) {
     const other = otherAgent(run.stack.agent)
     const target = catalog.models.find((model) => model.modelId === MODELS[other])
@@ -14775,6 +15012,8 @@ async function startStack(options) {
       : null
     Object.assign(environment, vmFixture?.environment)
     let restoreReport = null
+    const refusals = join(directory, "refusals")
+    mkdirSync(refusals, { recursive: true })
     stack = await startGatewayStack(options, INSTANCE, {
       executable: vmFixture?.executable,
       vault: true,
@@ -14828,10 +15067,15 @@ async function startStack(options) {
       model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 || vmFixture ? PARK_IDLE_SECONDS : 0 },
+      // Where the `unsigned` and `failedControl` steps ask the scripted agents
+      // to refuse a call (`scripted-agent.mjs` `--refusals`).
+      refusals,
       // The agent a `handoff` step switches its conversation to.
       others: [
         ...new Set([
-          ...(knobs.handoffs > 0 ? [otherAgent(options.agent)] : []),
+          ...(knobs.handoffs > 0 || knobs.unsigned > 0
+            ? [otherAgent(options.agent)]
+            : []),
           ...(nativeContext && options.agent !== "claude" ? ["claude"] : []),
         ]),
       ],
@@ -14846,6 +15090,7 @@ async function startStack(options) {
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
     stack.vmFixture = vmFixture
+    stack.refusals = refusals
     stack.fakeSsh = fakeSsh
     // The PATH the gateway was started with: a step that changes it adds to
     // this one, so what another step put there (the `ssh` step's stand-in)

@@ -225,7 +225,20 @@ impl ConversationService {
             ConversationModelApplication::Applied(_) => ConversationModelRequestState::Applied,
             ConversationModelApplication::Refused => ConversationModelRequestState::NotApplied,
             ConversationModelApplication::Uncertain => {
-                let _ = self.recover_model_change(id, caller).await;
+                // Recovery retires this agent and opens the conversation
+                // again, and an agent's history stays leased while any handle
+                // to it is kept: holding this one would leave the reopening
+                // refused as busy and the change pending, with nothing left to
+                // settle it.
+                drop(live);
+                if let Err(error) = self.recover_model_change(id, caller).await {
+                    // The turn the failed control ended is owed, and its
+                    // agent is gone: no settle of its will ask for a retry,
+                    // so this does. The retry settles the change first
+                    // (`resume_owed`), then resumes the turn.
+                    tracing::warn!(conversation_id = %id, %error, "a model change left uncertain could not be settled yet; the owed work's retry settles it");
+                    self.schedule_retry(id, true).await;
+                }
                 return Err(ConversationError::ModelChangeUncertain);
             }
         };

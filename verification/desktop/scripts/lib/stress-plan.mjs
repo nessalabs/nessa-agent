@@ -113,6 +113,14 @@ export const KNOBS = {
     default: 1,
     what: "conversations switched to the other agent from the composer's picker (staged, taken back, picked again, made by the next send), then forked from a row's More menu, and forked again into one id by three racing requests (one fork made, its copied turns recorded once), each talked to after",
   },
+  unsigned: {
+    default: 1,
+    what: "conversations switched from the composer's picker to the other agent while it answers its opening as not signed in: the send is refused, the composer says the agent isn't signed in, no switch is recorded, and the next message runs on the agent it was on",
+  },
+  failedControls: {
+    default: 1,
+    what: "conversations whose model is changed while a turn runs and the agent fails the change (ending the turn with it): the change settles and the turn ends without anyone asking, the composer says nothing is unconfirmed, and the next message completes",
+  },
   deletes: {
     default: 1,
     what: "conversations deleted from a row's More menu, once asked",
@@ -364,6 +372,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.closes, () => ({ kind: "close" }))
   add(knobs.renames, () => ({ kind: "rename" }))
   add(knobs.handoffs, () => ({ kind: "handoff" }))
+  add(knobs.unsigned, () => ({ kind: "unsigned" }))
+  add(knobs.failedControls, () => ({ kind: "failedControl" }))
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
@@ -426,10 +436,14 @@ export function plan(knobs, accessScenario = "full") {
   // Preset checks keep their original model. Positive model changes (a
   // `model` step, and a `picker` step's bar) follow that work, using Ask
   // before their review; chaos keeps concurrent coverage.
-  // Handoffs come last of all: a switch stays in the metadata, and no older
+  // Handoffs come last of all (a refused one too): a switch stays in the metadata, and no older
   // build's file holds one, so the `upgrade` step runs before it.
   const last = (step) =>
-    step.kind === "handoff" ? 2 : step.kind === "model" || step.kind === "picker" ? 1 : 0
+    step.kind === "handoff" || step.kind === "unsigned"
+      ? 2
+      : step.kind === "model" || step.kind === "picker" || step.kind === "failedControl"
+        ? 1
+        : 0
   const sequence = [0, 1, 2].flatMap((rank) =>
     steps.filter((step) => last(step) === rank),
   )

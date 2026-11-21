@@ -18,7 +18,7 @@ import {
   selectComposerText,
   selectNextModel,
 } from "../../adapters/store/selectors"
-import type { ModelRef } from "../../model/workspace-index"
+import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import { useComposerVoice, VoiceDock } from "../../../voice"
@@ -213,12 +213,16 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         : modelChoice?.state === "recovery_required" ||
             modelChoice?.state === "acknowledged"
           ? "The model change is not confirmed. Send again to check and try."
-          : modelBusy
-            ? "Changing model…"
+          : // A change on its way says nothing: the picker already shows it,
+            // and Send waits for it (`onSend` below).
+            modelBusy
+            ? undefined
             : modelChoice?.state === "refused"
-              ? modelChoice.code === "model_change_not_applied"
-                ? "Model didn’t change. Choose again to try."
-                : "The model change wasn’t made. Choose again to try."
+              ? modelChoice.code === "agent_sign_in_required"
+                ? `${agentName(agentOf(modelChoice.model))} isn’t signed in where this chat runs. Save its login in Settings › Saved logins, then choose it again.`
+                : modelChoice.code === "model_change_not_applied"
+                  ? "Model didn’t change. Choose again to try."
+                  : "The model change wasn’t made. Choose again to try."
               : modelControl?.effect === "nextTurn"
                 ? "Model applies to the next turn."
                 : modelControl?.effect === "subsequentResponses"
