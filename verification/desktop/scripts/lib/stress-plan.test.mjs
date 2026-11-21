@@ -128,12 +128,14 @@ test("parent Stop appears once by default and at the raised flag or environment 
   assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
 })
 
-test("handoffs run last of all, after every upgrade, whatever the seed", () => {
+test("handoffs, refused ones too, run last of all, after every upgrade, whatever the seed", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
     const first = steps.findIndex((step) => step.kind === "handoff")
     assert.equal(steps.filter((step) => step.kind === "handoff").length, 2)
-    assert.ok(steps.slice(first).every((step) => step.kind === "handoff"))
+    assert.ok(
+      steps.slice(first).every((step) => ["handoff", "unsigned"].includes(step.kind)),
+    )
     assert.ok(first > steps.findLastIndex((step) => step.kind === "upgrade"))
   }
 })
@@ -149,7 +151,11 @@ test("positive model steps retain default and raised counts, run last but for ha
       assert.ok(
         steps
           .slice(first)
-          .every((step) => ["model", "picker", "handoff"].includes(step.kind)),
+          .every((step) =>
+            ["model", "picker", "failedControl", "handoff", "unsigned"].includes(
+              step.kind,
+            ),
+          ),
       )
       let mode = "ask"
       for (const step of steps) {
@@ -172,6 +178,8 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       {
         parentstops: "0",
         handoffs: "0",
+        unsigned: "0",
+        failedControls: "0",
         inputFiles: "0",
         backgroundTasks: "0",
         vmBackgroundTasks: "0",

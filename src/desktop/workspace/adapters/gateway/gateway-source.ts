@@ -2625,6 +2625,7 @@ function reasonFor(
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:
+    case ConversationErrorCode.AgentSignInRequired: // no retry differs until someone signs it in where it runs
     case ConversationErrorCode.UnknownMethod:
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.SubmissionConflict:

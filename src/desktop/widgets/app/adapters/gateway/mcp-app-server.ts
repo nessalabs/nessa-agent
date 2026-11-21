@@ -125,6 +125,7 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.SubmissionUnresolved]: "failed",
   [ConversationErrorCode.StalePermission]: "failed",
   [ConversationErrorCode.AgentStartupDeadline]: "failed",
+  [ConversationErrorCode.AgentSignInRequired]: "failed",
   [ConversationErrorCode.SandboxUnavailable]: "failed",
   [ConversationErrorCode.EnvironmentNotConfigured]: "failed",
   [ConversationErrorCode.EnvironmentUnavailable]: "failed",

@@ -335,11 +335,21 @@ impl ConversationService {
         if !self.holds_open(id, &live).await || stuck(&live).await {
             return false;
         }
-        // Its selection is not settled: normal configuration recovery must
-        // reconcile the journal before any owed turn resumes.
+        // Its selection is not settled: configuration recovery reconciles the
+        // journal before any owed turn resumes. Run here, under the lock it
+        // needs, rather than waited for: a change its caller gave up on (a
+        // model control the provider failed mid-turn, which ended the turn
+        // with it) is asked about by no one else, and the turn it left owed
+        // would wait on it for good. Recovery may retire this agent, so no
+        // handle to it is kept; the retry resumes on whichever agent the
+        // conversation holds once it is settled.
         if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None))
             || !matches!(self.inner.metadata.pending_model_change(id).await, Ok(None))
         {
+            let organization_id = live.organization_id.clone();
+            drop(live);
+            self.recover_selection_for_resumption(id, organization_id)
+                .await;
             return false;
         }
         // The live owed view includes retained decisions. A failed terminal
@@ -646,6 +656,37 @@ impl ConversationService {
             })
     }
 
+    /// Settle a model or mode change left pending, as an opening read does,
+    /// on the owner's behalf. A change that cannot be settled now stays
+    /// pending, and the next retry asks again.
+    async fn recover_selection_for_resumption(
+        &self,
+        id: &ConversationId,
+        organization_id: nessa_auth::domain::OrganizationId,
+    ) {
+        let Ok(Some(record)) = load_conversation(self.inner.metadata.as_ref(), id).await else {
+            return;
+        };
+        let caller = ConversationCaller {
+            organization_id,
+            principal_id: record.owner().clone(),
+            surface_id: "gateway".into(),
+            action_id: format!("resume_selection:{}", Uuid::new_v4()),
+        };
+        let recovered = match self.recover_model_change(id, &caller).await {
+            Ok(()) => self.recover_mode_change(id, &caller).await,
+            Err(error) => Err(error),
+        };
+        match recovered {
+            Ok(()) => {
+                tracing::info!(conversation_id = %id, "a pending selection change was settled before resuming owed work")
+            }
+            Err(error) => {
+                tracing::warn!(conversation_id = %id, %error, "a pending selection change could not be settled yet; the retry asks again")
+            }
+        }
+    }
+
     /// Close `live`, an agent that cannot take its retry, and let its slot go
     /// so the retry opens the conversation again; what it owed stays owed.
     /// The agent holds its history's lease while any handle to it is kept,
@@ -670,7 +711,7 @@ impl ConversationService {
     /// later settle neither puts it off nor counts as another failure. Nothing
     /// is done when `id` is not marked. A deferral that cannot be saved still
     /// runs in this process; after a restart the mark alone resumes it.
-    async fn schedule_retry(&self, id: &ConversationId, failed: bool) {
+    pub(super) async fn schedule_retry(&self, id: &ConversationId, failed: bool) {
         let (Some(marks), Some(backoff)) = (
             self.inner.unfinished_turns.get(),
             self.inner.failure_backoff.get(),

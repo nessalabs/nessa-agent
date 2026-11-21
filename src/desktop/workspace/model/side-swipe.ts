@@ -1,10 +1,10 @@
 /**
- * A two-finger sideways swipe across the chat or the side columns folds or opens the window's side
- * columns, one column per swipe. From the left edge the columns stand rail,
- * sidebar, session list. A swipe left folds the open one nearest the chat; a
- * swipe right opens the closed one nearest the window's edge, so the columns
- * come back in the order they went: list, sidebar, rail away; rail, sidebar,
- * list back.
+ * A two-finger sideways swipe across the chat or the side columns folds or
+ * opens the window's two sidebars, one per swipe: from the left edge the
+ * sidebar, then the session list. A swipe left folds the open one nearest the
+ * chat; a swipe right opens the closed one nearest the window's edge, so they
+ * come back in the order they went: list, sidebar away; sidebar, list back.
+ * The rail and the right panel are never a swipe's: each has its own button.
  *
  * Pure: the wheel events are read in `adapters/dom/side-swipe.ts`, and the
  * columns are toggled by the window (`use-workspace-window.ts`).
@@ -13,25 +13,19 @@
 /** Which way the fingers moved: left folds a column, right opens one. */
 export type SwipeDirection = "left" | "right"
 
-/** The side columns, from the window's left edge toward the chat. */
-export const SIDE_COLUMNS = ["rail", "sidebar", "list"] as const
+/** The columns a swipe moves, from the window's left edge toward the chat. */
+export const SIDE_COLUMNS = ["sidebar", "list"] as const
 export type SideColumn = (typeof SIDE_COLUMNS)[number]
 
 /**
  * Each column as a swipe sees it. `absent` is one this window cannot draw
- * now: the rail while its preview is off or the window has no room for it,
- * the session list in a layout without one.
+ * now: the session list in a layout without one.
  */
 export type ColumnState = "open" | "closed" | "absent"
 export type SwipeColumns = Readonly<Record<SideColumn, ColumnState>>
 
 /** What the window draws now, which a swipe reads its columns from. */
 export interface DrawnColumns {
-  /** The rail's preview is on (Settings › Advanced › Experimental). */
-  readonly railOffered: boolean
-  readonly railDrawn: boolean
-  /** The window has room for the rail beside what it holds open. */
-  readonly railRoom: boolean
   readonly sidebarOpen: boolean
   /** The layout has a session list at all. */
   readonly listOffered: boolean
@@ -41,13 +35,6 @@ export interface DrawnColumns {
 /** Each column as a swipe sees it: one the window cannot draw now is absent. */
 export function swipeColumnsOf(drawn: DrawnColumns): SwipeColumns {
   return {
-    rail: !drawn.railOffered
-      ? "absent"
-      : drawn.railDrawn
-        ? "open"
-        : drawn.railRoom
-          ? "closed"
-          : "absent",
     sidebar: drawn.sidebarOpen ? "open" : "closed",
     list: !drawn.listOffered ? "absent" : drawn.listOpen ? "open" : "closed",
   }

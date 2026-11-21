@@ -93,6 +93,8 @@ function nothingWasDone(
   switch (reason) {
     case "agent-startup-deadline":
       return "The agent was still starting and ran out of time, so nothing was done. Starting it is slowest the first time after an install or update; once the runtime is warm this normally works."
+    case "agent-sign-in-required":
+      return "The agent is not signed in on the machine this conversation runs on, so nothing was done. Save a login for it in Settings › Saved logins."
     // This conversation's agent specifically, and not the gateway's agents in
     // general: a gateway that runs none at all answers
     // `conversations-not-configured` below, and this code is raised only for an

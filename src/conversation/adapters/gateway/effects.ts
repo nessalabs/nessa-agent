@@ -193,6 +193,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversations_not_configured: "conversations-not-configured",
   channel_not_found: "channel-not-found",
   agent_startup_deadline: "agent-startup-deadline",
+  agent_sign_in_required: "agent-sign-in-required",
   sandbox_unavailable: "sandbox-unavailable",
   environment_not_configured: "environment-not-configured",
   environment_unavailable: "environment-unavailable",
@@ -340,6 +341,7 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   approval_mode_uncertain: "unavailable",
   model_change_not_applied: "unavailable",
   model_change_uncertain: "unavailable",
+  agent_sign_in_required: "unavailable",
   approval_request_conflict: "unavailable",
   turn_running: "unavailable",
   // An MCP App's calls answer these, never a read; written out so the table

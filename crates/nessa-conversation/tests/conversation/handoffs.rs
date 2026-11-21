@@ -776,6 +776,40 @@ async fn a_switch_whose_agent_cannot_open_is_not_made() {
     fixture.retire().await;
 }
 
+/// An agent that answers its opening with "authentication required" is not
+/// signed in where the conversation runs: the switch is refused with that
+/// reason, not a bare not-applied, and the conversation stays on its agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_switch_to_an_agent_not_signed_in_is_refused_as_sign_in_required() {
+    let fixture = Fixture::new();
+    let id = fixture.create().await;
+    fixture.turn(&id, "first").await;
+    *fixture.codex.open_failure.lock().unwrap() =
+        Some(AgentError::AuthenticationRequired { diagnostic: None });
+
+    let refused = fixture.switch(&id, "switch").await;
+    assert!(
+        matches!(
+            refused,
+            Err(ConversationError::Agent(
+                AgentError::AuthenticationRequired { .. }
+            ))
+        ),
+        "{refused:?}"
+    );
+    let settled = fixture
+        .metadata
+        .agent_switch(&id, "switch")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.state, ConversationAgentSwitchState::NotApplied);
+    assert_eq!(fixture.record(&id).await.agent(), Some(AgentId::Claude));
+    fixture.turn(&id, "second").await;
+    assert!(fixture.codex.messages.lock().unwrap().is_empty());
+    fixture.retire().await;
+}
+
 /// Row F3, and a target that already has turns: neither is created as a
 /// fork, and nothing is copied into a conversation that said something.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
