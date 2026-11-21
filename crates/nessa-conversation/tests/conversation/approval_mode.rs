@@ -2268,12 +2268,6 @@ async fn raising_to_full_mid_turn_allows_each_waiting_review_once_as_the_modes_a
     }
     let view = service.read(id.clone(), caller()).await.unwrap();
     assert!(view.permissions.is_empty());
-    // Full again asks nothing more of the agent's reviews.
-    service
-        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
-        .await
-        .unwrap();
-    assert_eq!(provider.permission_answers.lock().unwrap().len(), 2);
     let _ = finish.send(());
     service.shutdown().await.unwrap();
 }

@@ -106,8 +106,10 @@ export function chooseAccess({
 }
 
 /**
- * Asks the source for a pending choice, now that its conversation has no
- * turn at work. The person chose it, so it goes as theirs. A choice no longer
+ * Asks the source for a pending choice, when `pendingAccess` says it is due:
+ * at once for one queued behind a change or picked after a new session's
+ * first message, and once the turn ends for one a running turn could not
+ * take. The person chose it, so it goes as theirs. A choice no longer
  * pending — replaced, or let go — is not sent.
  */
 export function applyPendingAccess({

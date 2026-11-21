@@ -1,17 +1,20 @@
-//! Raising a conversation to Full access settles what it already asks.
+//! Raising a conversation to Full settles what it already asks.
 //!
-//! Full means the agent runs any command without asking. A review the agent
+//! Full means the agent runs commands without asking. A review the agent
 //! opened before the raise still waits on the person, and the turn waits on
 //! it, so the raise would not reach the very call that made the person raise
-//! it. Once the agent has taken Full, every review its running turn still
-//! waits on is allowed once, as Full would have allowed it, and the answer is
-//! recorded as the mode's (`ApprovalBasis::Mode`) for the person who raised it.
+//! it. The raise is the person's answer to what is waiting: once the agent has
+//! taken Full, every review its running turn still waits on is allowed once,
+//! and the answer is recorded as the mode's (`ApprovalBasis::Mode`, "full")
+//! for the person who raised it. It is allowed once, never remembered: a call
+//! the harness still asks for under Full (a write to its own settings, say)
+//! asks again next time.
 //!
 //! ```text
 //! setApprovalMode(full) ──▶ agent acknowledges Full ──▶ committed
 //!   ──▶ for each review the agent still waits on (oldest first):
-//!         its first allow option that is not a remembered rule ──▶ answered
-//!   ──▶ the turn carries on; its next calls are not asked (Full)
+//!         its first allow option that is not remembered ──▶ answered
+//!   ──▶ the turn carries on; its next calls are decided at Full
 //! ```
 //!
 //! Only the agent's own reviews: an MCP app's review is the gateway's own
@@ -25,7 +28,7 @@ use nessa_sdk::application::agent_execution::permissions::{
     PermissionAnswer,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PendingReview, PermissionEffect, PermissionOptionId,
+    PendingReview, PermissionEffect, PermissionOption, PermissionOptionId,
 };
 
 /// The mode name an answer made by raising to Full is recorded under.
@@ -34,11 +37,14 @@ const FULL_ACCESS: &str = "full";
 /// The option Full answers `review` with: its first allow for this request
 /// alone, the card's Allow once — never a Nessa rule it would remember, nor a
 /// choice the harness keeps past this request (an `allow_always`), whatever
-/// order the harness lists them in. `None` when it offers no such allow.
+/// order the harness lists them in. `None` when it offers no such allow, and
+/// the review stays the person's.
 pub(super) fn allowed_once(review: &PendingReview) -> Option<&PermissionOptionId> {
-    review
-        .options
-        .choices()
+    once_allow(review.options.choices())
+}
+
+fn once_allow(choices: &[PermissionOption]) -> Option<&PermissionOptionId> {
+    choices
         .iter()
         .find(|option| {
             option.decision().effect() == PermissionEffect::Allow
@@ -93,4 +99,43 @@ pub(super) async fn allow_waiting_reviews(
         }
     }
     allowed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::once_allow;
+    use nessa_sdk::application::agent_execution::permissions::REMEMBER_ALLOW;
+    use nessa_sdk::domain::agent_execution::permissions::{
+        PermissionDecision, PermissionEffect, PermissionOption, PermissionOptionId, PermissionScope,
+    };
+
+    fn option(id: &str, effect: PermissionEffect) -> PermissionOption {
+        PermissionOption::new(
+            PermissionOptionId::new(id).unwrap(),
+            id,
+            PermissionDecision::new(effect, PermissionScope::request()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn full_answers_with_the_first_allow_nothing_remembers() {
+        let choices = [
+            option("deny", PermissionEffect::Deny),
+            option("always", PermissionEffect::Allow).kept_by_the_harness(),
+            option(REMEMBER_ALLOW, PermissionEffect::Allow),
+            option("once", PermissionEffect::Allow),
+        ];
+        assert_eq!(once_allow(&choices).map(|id| id.as_str()), Some("once"));
+    }
+
+    #[test]
+    fn a_review_offering_only_remembered_allows_stays_the_persons() {
+        let choices = [
+            option("always", PermissionEffect::Allow).kept_by_the_harness(),
+            option(REMEMBER_ALLOW, PermissionEffect::Allow),
+            option("deny", PermissionEffect::Deny),
+        ];
+        assert_eq!(once_allow(&choices), None);
+    }
 }

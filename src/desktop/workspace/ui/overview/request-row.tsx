@@ -139,9 +139,10 @@ export const RequestRow = memo(function RequestRow({
     }
     // On a button, ↩ presses it. On the row itself, ↩ presses the row's
     // default: Allow once, where the review offers it, so a run of requests
-    // is unblocked with ↩ alone. While that answer cannot be given yet (still
-    // loading, on its way, settling) ↩ does nothing rather than open the
-    // session under the person's finger. A row with no Allow once opens.
+    // is unblocked with ↩ alone. While a listed approval's answer cannot be
+    // given yet (its content still loading, an answer on its way, settling)
+    // ↩ does nothing rather than open the session under the person's finger.
+    // A row with no Allow once — a question, or a request not read — opens.
     if (command === "open" && event.target !== event.currentTarget) return
     const answers =
       command === "open"

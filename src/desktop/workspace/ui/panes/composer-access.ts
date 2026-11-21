@@ -67,6 +67,15 @@ export function steppedAccessCopy(from: AccessMode): string {
   return `Access is now ${composerAccessModeLabels[shieldFor("ask")]}. This model doesn’t offer ${composerAccessModeLabels[shieldFor(from)]} here.`
 }
 
+/**
+ * What the composer says while a pick waits for the running turn to end: the
+ * source could not take it during this turn, so the shield's mode is not in
+ * effect yet, and the person is told rather than left to think it is.
+ */
+export function heldAccessCopy(mode: AccessMode): string {
+  return `Access changes to ${composerAccessModeLabels[shieldFor(mode)]} when the agent stops.`
+}
+
 /** The shield's value, its change handler, and what to say of its last choice, for a session's composer. */
 export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
@@ -86,17 +95,19 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
-    // A choice held back (one the running turn could not take now, or one
-    // queued behind a change on its way) says nothing: the shield already
-    // shows it, and it is asked again when it can be. Only a refusal is
-    // said, because then the shield's choice did not happen. A model change
-    // that moved the chat to Ask says so, since nobody picked Ask.
+    // A refusal is said, because then the shield's choice did not happen.
+    // So is a choice the running turn could not take, held for its end: the
+    // shield shows it, but the agent does not run at it yet. One merely on
+    // its way, or queued behind another, says nothing. A model change that
+    // moved the chat to Ask says so, since nobody picked Ask.
     const notice: ComposerAccess["notice"] =
       said?.state === "refused"
         ? { tone: "warning", text: accessRefusalCopy(said) }
-        : stepped
-          ? { tone: "neutral", text: steppedAccessCopy(stepped) }
-          : undefined
+        : said?.state === "pending" && said.after !== undefined
+          ? { tone: "neutral", text: heldAccessCopy(said.mode) }
+          : stepped
+            ? { tone: "neutral", text: steppedAccessCopy(stepped) }
+            : undefined
     return { value: shieldFor(mode), onChange, ...(notice ? { notice } : {}) }
   }, [mode, onChange, said, stepped])
 }

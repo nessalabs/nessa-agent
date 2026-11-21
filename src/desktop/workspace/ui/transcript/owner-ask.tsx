@@ -67,10 +67,11 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
         raise={(mode) =>
           dispatch(chooseAccess({ sessionId, mode, initiator: "person" })).then(
             // Queued behind a change on its way, it is asked once that
-            // settles: for the card, as good as pending.
+            // settles: for the card, a change on its way like any other
+            // (`underway` names where it is headed).
             (outcome) =>
               outcome === "queued"
-                ? "pending"
+                ? "taken"
                 : outcome === "taken" || outcome === "pending"
                   ? outcome
                   : "refused",
