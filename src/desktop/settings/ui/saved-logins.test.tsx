@@ -33,10 +33,15 @@ afterEach(async () => {
 
 const peer = `peer:${"ef".repeat(32)}`
 
-function fake() {
+function fake({ chatgpt = false }: { chatgpt?: boolean } = {}) {
   let logins: SavedLogins = {
     saved: { claude: false, codex: false, opencode: false },
     devicesOn: new Set(),
+    ...(chatgpt ? { chatgpt: { accounts: [], signIn: { kind: "idle" as const } } } : {}),
+  }
+  const accounts = () => logins.chatgpt?.accounts ?? []
+  const withChatgpt = (next: NonNullable<SavedLogins["chatgpt"]>) => {
+    logins = { ...logins, chatgpt: next }
   }
   const calls: unknown[][] = []
   let refuse: string | undefined
@@ -64,8 +69,55 @@ function fake() {
       logins = { ...logins, devicesOn }
       return answer()
     },
+    chatgptSignIn: (accountId?: string) => {
+      calls.push(["chatgptSignIn", accountId])
+      withChatgpt({
+        accounts: accounts(),
+        signIn: {
+          kind: "waiting",
+          authorizeUrl: "https://auth.example/authorize?state=s",
+          ...(accountId ? { accountId } : {}),
+        },
+      })
+      return answer()
+    },
+    chatgptCancel: () => {
+      calls.push(["chatgptCancel"])
+      withChatgpt({ accounts: accounts(), signIn: { kind: "idle", last: "cancelled" } })
+      return answer()
+    },
+    chatgptUse: (accountId: string | null) => {
+      calls.push(["chatgptUse", accountId])
+      withChatgpt({
+        accounts: accounts().map((each) => ({ ...each, inUse: each.id === accountId })),
+        signIn: { kind: "idle" },
+      })
+      return answer()
+    },
+    chatgptRemove: (accountId: string) => {
+      calls.push(["chatgptRemove", accountId])
+      withChatgpt({
+        accounts: accounts().filter((each) => each.id !== accountId),
+        signIn: { kind: "idle" },
+      })
+      return answer()
+    },
   }
-  return { gateway, calls, refuseWith: (sentence: string) => (refuse = sentence) }
+  /** The browser came back: the account is kept, in use when it is the first. */
+  const signedIn = (id: string, email: string) =>
+    withChatgpt({
+      accounts: [
+        ...accounts(),
+        { id, email, inUse: accounts().length === 0, needsSignIn: false },
+      ],
+      signIn: { kind: "idle", last: "signed_in" },
+    })
+  return {
+    gateway,
+    calls,
+    signedIn,
+    refuseWith: (sentence: string) => (refuse = sentence),
+  }
 }
 
 function need<T>(value: T | null | undefined): T {
@@ -236,4 +288,80 @@ it("shows how things stand after a change that was made but not recorded", async
   )
   expect(fact().getAttribute("data-device-logins")).toBe("on")
   expect(host.textContent).toContain("Changed, but Nessa couldn’t keep a record of it.")
+})
+
+const button = (selector: string) => need(host.querySelector<HTMLButtonElement>(selector))
+
+it("signs a ChatGPT account in from Codex's row, and reads until it ends", async () => {
+  const { gateway, calls, signedIn } = fake({ chatgpt: true })
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={gateway}>
+        <SavedLoginsGroup pollMs={5} />
+      </SavedLoginsProvider>,
+    ),
+  )
+  // Only Codex's row offers it.
+  expect(host.querySelectorAll("[data-chatgpt-continue]").length).toBe(1)
+  expect(row("codex").querySelector("[data-chatgpt-continue]")?.textContent).toBe(
+    "Continue with ChatGPT",
+  )
+  await act(async () => button("[data-chatgpt-continue]").click())
+  expect(calls).toEqual([["chatgptSignIn", undefined]])
+  expect(host.querySelector("[data-chatgpt-open]")?.getAttribute("href")).toBe(
+    "https://auth.example/authorize?state=s",
+  )
+  signedIn("0b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e", "me@example.com")
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 30)))
+  expect(host.querySelector("[data-chatgpt-open]")).toBeNull()
+  expect(host.querySelector('[data-chatgpt-account="me@example.com"]')).not.toBeNull()
+  expect(host.querySelector("[data-chatgpt-in-use]")?.textContent).toContain("In use")
+  expect(host.querySelector('[data-chatgpt-ended="signed_in"]')?.textContent).toBe(
+    "Signed in with ChatGPT.",
+  )
+  expect(button("[data-chatgpt-continue]").textContent).toBe(
+    "Add another ChatGPT account",
+  )
+})
+
+it("chooses, sets aside and removes ChatGPT accounts, and cancels a sign-in quietly", async () => {
+  const { gateway, calls, signedIn } = fake({ chatgpt: true })
+  const first = "0b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e"
+  const second = "1b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e"
+  signedIn(first, "one@example.com")
+  signedIn(second, "two@example.com")
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={gateway}>
+        <SavedLoginsGroup />
+      </SavedLoginsProvider>,
+    ),
+  )
+  await act(async () => button(`[data-chatgpt-use="${second}"]`).click())
+  expect(calls.at(-1)).toEqual(["chatgptUse", second])
+  expect(
+    host.querySelector("[data-chatgpt-in-use]")?.getAttribute("data-chatgpt-account"),
+  ).toBe("two@example.com")
+  await act(async () => button(`[data-chatgpt-stop-using="${second}"]`).click())
+  expect(calls.at(-1)).toEqual(["chatgptUse", null])
+  expect(host.textContent).toContain("Codex uses the key above.")
+  await act(async () => button(`[data-chatgpt-remove="${first}"]`).click())
+  expect(calls.at(-1)).toEqual(["chatgptRemove", first])
+  expect(host.querySelectorAll("[data-chatgpt-account]").length).toBe(1)
+  await act(async () => button("[data-chatgpt-continue]").click())
+  await act(async () => button("[data-chatgpt-cancel]").click())
+  expect(calls.at(-1)).toEqual(["chatgptCancel"])
+  expect(host.querySelector("[data-chatgpt-ended]")).toBeNull()
+})
+
+it("shows no ChatGPT accounts where the gateway keeps none", async () => {
+  const { gateway } = fake()
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={gateway}>
+        <SavedLoginsGroup />
+      </SavedLoginsProvider>,
+    ),
+  )
+  expect(host.querySelector("[data-chatgpt-accounts]")).toBeNull()
 })

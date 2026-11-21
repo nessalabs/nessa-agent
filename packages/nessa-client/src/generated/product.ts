@@ -4112,6 +4112,8 @@ export interface LoginsStatus {
   logins: SavedLogin[]
   /** The paired machines whose switch is on, by environment name, in name order. */
   devicesOn: string[]
+  /** The ChatGPT accounts Codex can use on other machines in place of its API key, and the sign-in. Absent when this gateway keeps none (ChatGPT sign-in is off this run). */
+  chatgpt?: ChatgptLogins
 }
 /** Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with. */
 export interface LoginsSaveParams {
@@ -4132,13 +4134,80 @@ export interface LoginsSetDeviceParams {
   /** Whether its agents may be handed the saved logins. */
   on: boolean
 }
-/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first. */
+/** One ChatGPT account kept for Codex. Its tokens are never returned. */
+export interface ChatgptAccount {
+  /** The account, as the other ChatGPT methods name it. */
+  id: string
+  /** The email the account signed in with, as OpenAI's ID token gave it; empty when it gave none. */
+  email: string
+  /** Whether Codex on other machines is handed this account's token. At most one account is. */
+  inUse: boolean
+  /** Whether OpenAI refused to refresh it, so it must be signed in again before it is used. */
+  needsSignIn: boolean
+}
+/** How a ChatGPT sign-in ended. signed_in: the account is kept. declined: it was declined in the browser. incomplete: the browser came back without what a sign-in gives. wrong_account: signing an account in again came back as another account. exchange_failed: OpenAI did not give tokens for the sign-in. invalid_identity: OpenAI's ID token did not verify. plan_not_enabled: the account's plan did not grant use of ChatGPT tokens. too_many_accounts: as many accounts as are kept already are. not_saved: the tokens could not be kept in the vault. timed_out: the browser did not come back in time. cancelled: it was cancelled. replaced: another sign-in started in its place. listen_failed: this computer could not listen for the browser's return. */
+export const ChatgptSignInEnd = {
+  SignedIn: "signed_in",
+  Declined: "declined",
+  Incomplete: "incomplete",
+  WrongAccount: "wrong_account",
+  ExchangeFailed: "exchange_failed",
+  InvalidIdentity: "invalid_identity",
+  PlanNotEnabled: "plan_not_enabled",
+  TooManyAccounts: "too_many_accounts",
+  NotSaved: "not_saved",
+  TimedOut: "timed_out",
+  Cancelled: "cancelled",
+  Replaced: "replaced",
+  ListenFailed: "listen_failed",
+} as const
+export type ChatgptSignInEnd = (typeof ChatgptSignInEnd)[keyof typeof ChatgptSignInEnd]
+/** Where the ChatGPT sign-in stands: waiting for the browser to come back from authorizeUrl, or idle with how the last one this run ended. */
+export interface ChatgptSignIn {
+  /** Whether a sign-in waits for the browser. */
+  state: "idle" | "waiting"
+  /** While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it. */
+  attempt?: string
+  /** While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to. */
+  authorizeUrl?: string
+  /** While waiting: the account signing in again; absent for a new account. */
+  accountId?: string
+  /** While idle: how the last sign-in this run ended, if one did. */
+  last?: ChatgptSignInEnd
+}
+/** The ChatGPT accounts kept for Codex, and the sign-in. */
+export interface ChatgptLogins {
+  /** The accounts, in the order they were first signed in. */
+  accounts: ChatgptAccount[]
+  /** The sign-in. */
+  signIn: ChatgptSignIn
+  /** Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile. */
+  started?: string
+}
+/** Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced. */
+export interface LoginsChatgptSignInParams {
+  /** The account to sign in again; absent for a new account. */
+  accountId?: string
+}
+/** Choose the ChatGPT account Codex on other machines uses (logins.chatgptUse), or none, so its API key is used again. Applies to agents opened after it. */
+export interface LoginsChatgptUseParams {
+  /** The account, or null for none. */
+  accountId: string | null
+}
+/** Forget a ChatGPT account (logins.chatgptRemove), revoking its refresh token at OpenAI when it can. Agents already open keep the token they opened with until it is renewed. */
+export interface LoginsChatgptRemoveParams {
+  /** The account. */
+  accountId: string
+}
+/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. logins_unknown_account: no ChatGPT account has that id. logins_chatgpt_not_configured: ChatGPT sign-in is off this run. vault_locked: unlock Nessa first. */
 export const LoginsErrorCode = {
   LoginsNotConfigured: "logins_not_configured",
   LoginsStorageUnavailable: "logins_storage_unavailable",
   LoginsAuditUnavailable: "logins_audit_unavailable",
   LoginsChangeUnrecorded: "logins_change_unrecorded",
   LoginsTooManyDevices: "logins_too_many_devices",
+  LoginsUnknownAccount: "logins_unknown_account",
+  LoginsChatgptNotConfigured: "logins_chatgpt_not_configured",
   VaultLocked: "vault_locked",
 } as const
 export type LoginsErrorCode = (typeof LoginsErrorCode)[keyof typeof LoginsErrorCode]
@@ -4317,7 +4386,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 142,
+  maxReadyMethods: 146,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4332,6 +4401,9 @@ export const bounds = {
   maxConfiguredAgents: 3,
   maxLoginDevicesOn: 256,
   loginDevicePattern: "^peer:[0-9a-f]{64}$",
+  maxChatgptAccounts: 8,
+  maxChatgptEmailBytes: 320,
+  maxChatgptAuthorizeUrlBytes: 8192,
   maxToolPolicyPatterns: 16,
   maxToolPatternBytes: 48,
   maxCommandHosts: 16,
@@ -4679,6 +4751,10 @@ export const ProductMethod = {
   LoginsSave: "logins.save",
   LoginsRemove: "logins.remove",
   LoginsSetDevice: "logins.setDevice",
+  LoginsChatgptSignIn: "logins.chatgptSignIn",
+  LoginsChatgptCancel: "logins.chatgptCancel",
+  LoginsChatgptUse: "logins.chatgptUse",
+  LoginsChatgptRemove: "logins.chatgptRemove",
   VoiceStatus: "voice.status",
   VoiceSaveKey: "voice.saveKey",
   VoiceForgetKey: "voice.forgetKey",
@@ -4837,6 +4913,10 @@ export const productReadyMethods = [
   "logins.save",
   "logins.remove",
   "logins.setDevice",
+  "logins.chatgptSignIn",
+  "logins.chatgptCancel",
+  "logins.chatgptUse",
+  "logins.chatgptRemove",
   "voice.status",
   "voice.saveKey",
   "voice.forgetKey",
@@ -4983,6 +5063,10 @@ export const productMethodGrants = {
   "logins.save": "credential.manage",
   "logins.remove": "credential.manage",
   "logins.setDevice": "credential.manage",
+  "logins.chatgptSignIn": "credential.manage",
+  "logins.chatgptCancel": "credential.manage",
+  "logins.chatgptUse": "credential.manage",
+  "logins.chatgptRemove": "credential.manage",
   "voice.status": "credential.manage",
   "voice.saveKey": "credential.manage",
   "voice.forgetKey": "credential.manage",

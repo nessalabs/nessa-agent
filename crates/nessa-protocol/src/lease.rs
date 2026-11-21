@@ -218,8 +218,9 @@ impl<'de> Deserialize<'de> for Data {
 #[derive(Clone, PartialEq, Eq)]
 pub struct Login(zeroize::Zeroizing<String>);
 
-/// The most bytes of a [`Login`].
-pub const MAX_LOGIN_BYTES: usize = 4096;
+/// The most bytes of a [`Login`]: room for a ChatGPT access token, a JWT
+/// that is larger than any API key or setup-token.
+pub const MAX_LOGIN_BYTES: usize = 16_384;
 
 /// A value no [`Login`] can be: empty, longer than [`MAX_LOGIN_BYTES`], or
 /// holding anything but visible ASCII.
@@ -279,9 +280,35 @@ pub fn login_variables(agent: crate::agents::AgentId) -> &'static [&'static str]
     }
 }
 
+/// Where Codex finds the file its ChatGPT access token is kept in for its
+/// lease: its ChatGPT provider's auth command reads it on each 401 and every
+/// few minutes, so a token the gateway renews ([`ToEnvironment::Renew`])
+/// reaches a harness already running (`docs/design/chatgpt-sign-in.md`).
+/// The token itself is never put in a launch variable.
+pub const CHATGPT_TOKEN_FILE_VARIABLE: &str = "NESSA_CHATGPT_TOKEN_FILE";
+
+/// Whether `login` is a ChatGPT access token rather than an API key: a JWT,
+/// three base64url parts joined by dots, its header a JSON object (`eyJ`).
+/// No OpenAI API key has that shape.
+#[must_use]
+pub fn is_chatgpt_access_token(login: &Login) -> bool {
+    let value = login.expose();
+    let parts: Vec<&str> = value.split('.').collect();
+    value.starts_with("eyJ")
+        && parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+}
+
 /// The one variable `login` is put in for `agent`: the first of
 /// [`login_variables`], except an Anthropic API key (`sk-ant-api…`), which
 /// Claude Code reads from `ANTHROPIC_API_KEY` and refuses as an OAuth token.
+/// A ChatGPT access token for Codex ([`is_chatgpt_access_token`]) is in no
+/// variable: it goes in a file ([`CHATGPT_TOKEN_FILE_VARIABLE`]).
 #[must_use]
 pub fn login_variable(agent: crate::agents::AgentId, login: &Login) -> &'static str {
     let variables = login_variables(agent);
@@ -695,6 +722,17 @@ pub enum ToEnvironment {
         grace_ms: u64,
         /// How long each forced step may take.
         kill_ms: u64,
+    },
+    /// A fresh login for the lease's harnesses, in place of the one their
+    /// `Start` carried: a ChatGPT access token the gateway refreshed before
+    /// the last one expired. Only under a lease granted `takes_login`; one
+    /// whose harnesses were not started with a ChatGPT token is ignored.
+    /// Nothing answers it.
+    Renew {
+        /// The lease's id.
+        lease: String,
+        /// The new login.
+        login: Login,
     },
     /// End the lease: stop everything still running under it and answer what
     /// that took.
@@ -1146,6 +1184,7 @@ impl ToEnvironment {
             | Self::Input { lease, .. }
             | Self::InputClosed { lease, .. }
             | Self::Stop { lease, .. }
+            | Self::Renew { lease, .. }
             | Self::End { lease }
             | Self::Account { lease }
             | Self::Collected { lease, .. }
