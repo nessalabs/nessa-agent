@@ -45,6 +45,7 @@ import {
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { Draft } from "../../model/session-lifecycle"
+import { channelShells, type TerminalEntry } from "../../model/terminal"
 import { atWork, type Message, type Transcript } from "../../model/transcript"
 import {
   channelOf,
@@ -55,6 +56,8 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
+  itemIn,
+  paneShowingItem,
   windowWidget,
   contentKind,
   answerOf,
@@ -65,7 +68,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
-import { paneItemKey, widgetItem } from "../../model/pane-item"
+import { paneItemKey, terminalItem, widgetItem } from "../../model/pane-item"
 import { sameWidget, type WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
@@ -298,6 +301,34 @@ export const selectFocusedSessionId = (state: Root): string | null => {
 }
 
 /** The session a pane shows; none when it shows a widget. */
+/** The terminal a pane shows, if it shows one. */
+export const selectPaneTerminal = (state: Root, pane: PaneKey): string | null => {
+  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
+  const item = shown ? itemIn(shown) : null
+  return item?.kind === "terminal" ? item.terminalId : null
+}
+
+/** The ids of a channel's shells, newest first, as its session list shows them. */
+export const selectChannelShells = (state: Root, channelId: string): string[] =>
+  channelShells(state.workspace.terminals, channelId).map((terminal) => terminal.id)
+
+/** Whether a pane shows the terminal, and whether it is the focused pane. */
+export const selectTerminalShown = (
+  state: Root,
+  terminalId: string,
+): "focused" | "open" | null => {
+  const panes = state.workspace.panes
+  const pane = panes ? paneShowingItem(panes, terminalItem(terminalId)) : undefined
+  if (!pane || !panes) return null
+  return panes.focused === pane.key ? "focused" : "open"
+}
+
+/** A terminal as the gateway last listed it. */
+export const selectTerminal = (
+  state: Root,
+  terminalId: string,
+): TerminalEntry | undefined => entry(state.workspace.terminals, terminalId)
+
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null => {
   const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
   return (shown && sessionIn(shown)) ?? null

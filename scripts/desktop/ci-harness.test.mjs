@@ -842,13 +842,13 @@ test("the stress check and its companion checks run on two runners with the same
   const stress = jobs["conversation-stress"]
   const checks = jobs["conversation-checks"]
   assert.ok(stress && checks, "both stress jobs exist")
-  // Each builds the same gateway and installs the same browsers, so a check
+  // Each builds the same gateway, with terminals, and installs the same browsers, so a check
   // moved from one to the other runs against what it did before.
   for (const job of [stress, checks]) {
     assert.match(job, /needs: changes\r?\n/)
     assert.match(
       job,
-      /- id: gateway-build\r?\n\s+run: cargo build -p nessa-server -p nessa-mcp\r?\n/,
+      /- id: gateway-build\r?\n\s+run: \|\r?\n\s+eval "\$\(scripts\/terminal\/ghostty\.sh\)"\r?\n\s+cargo build -p nessa-server --features nessa-server\/terminals -p nessa-mcp\r?\n/,
     )
     assert.match(job, /run: cargo build -p nessa-client-core --example read_only_sync/)
     assert.match(job, /pnpm exec playwright install --with-deps chromium webkit/)

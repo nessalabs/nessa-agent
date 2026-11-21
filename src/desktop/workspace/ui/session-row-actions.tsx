@@ -134,13 +134,16 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
  * typed; Escape keeps the title as it was. Nothing in it reaches the row: a
  * key or a click here is the field's, never the row's opening.
  */
-function RenameField({
+export function RenameField({
   title,
   draft,
   onDraft,
   onDone,
+  label = "Session title",
 }: {
   title: string
+  /** What the field is called, for assistive tech. */
+  label?: string
   /** What is typed so far, held by the window. */
   draft: string
   onDraft: (draft: string) => void
@@ -167,7 +170,7 @@ function RenameField({
     <Input
       ref={input}
       className="workspace-rename"
-      aria-label="Session title"
+      aria-label={label}
       data-session-rename=""
       value={draft}
       spellCheck={false}

@@ -373,6 +373,7 @@ pub use service::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
     WINDOW_ANSWER_TIMEOUT,
 };
+pub use service::{TerminalOrigin, TerminalPlace};
 pub use session_key::conversation_session;
 pub use share_grants::{
     binding_of, note_candidates, paired_facts, GrantLogEntry, GrantSnapshotEntry, GrantStream,

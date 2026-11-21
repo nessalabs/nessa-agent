@@ -26,6 +26,11 @@ path = "src/backup_plan_main.rs"
 name = "nessa-backup-restore"
 path = "src/backup_restore_main.rs"
 
+[features]
+# Terminals in the gateway (docs/design/terminals.md); needs the pinned Ghostty
+# library, named by PTY_RUNTIME_GHOSTTY_SOURCE (scripts/terminal/ghostty.sh).
+terminals = ["nessa-gateway/terminals"]
+
 [dependencies]
 # The request path this crate composes and starts.
 nessa-gateway = { path = "../nessa-gateway" }

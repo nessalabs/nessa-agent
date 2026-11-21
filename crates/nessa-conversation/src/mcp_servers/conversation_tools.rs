@@ -1467,7 +1467,7 @@ fn window_view(source: &ConversationId, reading: &WindowReading) -> Value {
                         }
                         mine_here |= mine;
                     }
-                    PaneContent::Draft => {}
+                    PaneContent::Draft | PaneContent::Terminal => {}
                     PaneContent::Widget(widget) => {
                         pane["widget"] = json!({"plugin": widget.plugin(), "id": widget.id()});
                     }

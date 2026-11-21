@@ -14,7 +14,7 @@ pub use nessa_gateway::workspaces;
 pub use nessa_gateway::{
     agent_warm_up, agents, app, attachments, backup, browser_session, cli, core, desktop_runtime,
     device_pairing, devices, env, external_events, github, github_relay, health, limits, logins,
-    mcp_servers, product, relay, secrets, server, timer, vault, voice, webhooks,
+    mcp_servers, product, relay, secrets, server, terminal, timer, vault, voice, webhooks,
 };
 
 pub use bootstrap::run;

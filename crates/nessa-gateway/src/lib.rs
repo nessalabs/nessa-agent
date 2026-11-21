@@ -27,6 +27,7 @@ pub mod product;
 pub mod relay;
 pub mod secrets;
 pub mod server;
+pub mod terminal;
 pub use nessa_conversation::timer;
 pub mod voice;
 pub mod webhooks;

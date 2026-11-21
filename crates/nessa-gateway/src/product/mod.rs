@@ -71,6 +71,7 @@ mod pairing;
 mod peers;
 mod pool;
 mod reply_style;
+mod terminal;
 mod voice;
 
 pub use github::GithubRoutes;

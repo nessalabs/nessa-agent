@@ -15,6 +15,7 @@ mod pool_preferences;
 mod records;
 mod reply_styles;
 mod scheduled_messages;
+mod terminals;
 mod thread_report_admission;
 mod thread_reports;
 mod turn_origins;
@@ -148,6 +149,7 @@ use std::{
     },
     time::Duration,
 };
+pub use terminals::{TerminalOrigin, TerminalPlace};
 #[cfg(test)]
 pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
@@ -986,6 +988,8 @@ struct Inner {
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
     workspace_windows: Arc<super::WorkspaceWindows>,
+    /// Where each open conversation's agent works, for a Run in it.
+    workplaces: terminals::AgentWorkplaces,
     /// Where each window change is recorded; unbound, every change is refused.
     window_control_audit: OnceLock<Arc<dyn super::WindowControlAudit>>,
     /// Agent sends waiting to report their thread's finished turn.
@@ -1560,6 +1564,7 @@ impl ConversationService {
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
+                workplaces: Default::default(),
                 window_control_audit: OnceLock::new(),
                 thread_reports: Default::default(),
                 ownership: OnceLock::new(),
@@ -2384,6 +2389,7 @@ impl ConversationService {
                             }
                             let tool_source = checked_source(agent);
                             let workspace = channels::working_folder(opening.workspace.as_ref(), configured.workspace.as_ref(), place.place.as_ref(), service.inner.workspace.as_ref());
+                            service.note_workplace(&id, &opening.terms.environment, workspace.as_ref());
                             let background_target = match &opening.terms.environment {
                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
                                 EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),

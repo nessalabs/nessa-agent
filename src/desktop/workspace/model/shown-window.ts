@@ -21,6 +21,8 @@ export type ShownItem =
   /** A new session the person has not started yet. */
   | { readonly kind: "draft" }
   | { readonly kind: "widget"; readonly widget: WidgetRef }
+  /** One of the person's terminals, named by nothing: agents never read one. */
+  | { readonly kind: "terminal" }
 
 export interface ShownPane {
   /** Its share of its column's height, in whole percent. */

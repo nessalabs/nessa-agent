@@ -7,7 +7,8 @@ import { WorkspaceSendFailure } from "../send-failure"
 import { act, StrictMode, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import {
   answerQuestion,
   loadWorkspace,
@@ -102,6 +103,10 @@ const conversation: TranscriptValue = {
 
 /** The host's clipboard, as every test's window supplies it. */
 const clipboardWrite = vi.fn((_text: string) => Promise.resolve())
+
+// Replies parse with a module loaded on first draw; on a loaded machine the
+// first test's assertions can run before it lands, so it loads up front.
+beforeAll(() => preloadReplyMarkdown())
 
 async function shown(
   source = fakeSource(),

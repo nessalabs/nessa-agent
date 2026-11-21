@@ -679,7 +679,7 @@ impl ConversationService {
         }
     }
 
-    async fn channel_for_action(
+    pub(super) async fn channel_for_action(
         &self,
         caller: &ConversationCaller,
         id: &ChannelId,

@@ -11,6 +11,10 @@ description = "The Nessa gateway's request path: sockets, product routes, admiss
 test-support = [
     "nessa-conversation/test-support",
 ]
+# Terminals (docs/design/terminals.md): pty-runtime sessions read through
+# Ghostty's terminal model. Needs the pinned Ghostty library built first
+# (scripts/terminal/ghostty.sh), named by PTY_RUNTIME_GHOSTTY_SOURCE.
+terminals = ["dep:pty-runtime", "dep:pty-runtime-infrastructure"]
 
 [dependencies]
 # Sets the in-memory credential store in a saved Codex key's home config by
@@ -118,6 +122,8 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = ["
 dbus-secret-service = { version = "=4.1.0", default-features = false, features = ["crypto-rust", "vendored"] }
 
 [target.'cfg(unix)'.dependencies]
+pty-runtime = { git = "https://github.com/nessalabs/pty-runtime", rev = "c68837e2b7bf1c9009e1a4587a1a58107ec0425c", optional = true, default-features = false, features = ["ghostty"] }
+pty-runtime-infrastructure = { git = "https://github.com/nessalabs/pty-runtime", rev = "c68837e2b7bf1c9009e1a4587a1a58107ec0425c", optional = true, features = ["ghostty"] }
 workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "7aea78061bdde4fa1f600674e6f37fa951f162f3" }
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"

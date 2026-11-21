@@ -159,11 +159,14 @@ pub enum AccessAction {
     /// Change one Nessa setting, as far as its level lets the subject: the
     /// owner any, a turn the owner started only one an agent may change.
     SettingChange,
+    /// Open and drive a terminal on the owner's machine, on their catalogue.
+    /// A person only: no agent turn opens or types into one.
+    TerminalUse,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::AgentTools,
         Self::ReadTurns,
         Self::CloseCreated,
@@ -191,6 +194,7 @@ impl AccessAction {
         Self::ChannelUse,
         Self::ChannelSettings,
         Self::SettingChange,
+        Self::TerminalUse,
     ];
 
     /// The action's name, as the policy spells it.
@@ -223,6 +227,7 @@ impl AccessAction {
             Self::ChannelUse => "channel.use",
             Self::ChannelSettings => "channel.settings",
             Self::SettingChange => "setting.change",
+            Self::TerminalUse => "terminal.use",
         }
     }
 }

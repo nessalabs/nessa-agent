@@ -347,6 +347,7 @@ fn content(item: WorkspacePaneItem) -> Result<PaneContent, WindowRefusal> {
             .map(PaneContent::Conversation)
             .map_err(|_| WindowRefusal::Shape),
         (WorkspacePaneKind::Draft, None, None) => Ok(PaneContent::Draft),
+        (WorkspacePaneKind::Terminal, None, None) => Ok(PaneContent::Terminal),
         (WorkspacePaneKind::Widget, None, Some(widget)) => {
             Ok(PaneContent::Widget(widget_ref(widget)?))
         }
