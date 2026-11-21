@@ -4276,6 +4276,7 @@ export interface TerminalOpenParams {
 }
 /** One of the person's terminals. */
 export interface TerminalSummary {
+  /** The terminal's id. */
   terminalId: TerminalId
   /** The shell's name, or the first line of what Run runs. */
   title: string
@@ -4293,27 +4294,35 @@ export interface TerminalSummary {
   shell: string
   /** The machine: here is the gateway's own. */
   runsOn: "here"
+  /** When it started, in milliseconds since the Unix epoch. */
   startedAtMs: number
+  /** running until the program ends, then exited. */
   state: "running" | "exited"
   /** The exit code once exited; omitted when it was ended by a signal or is running. */
   exitStatus?: number
+  /** When it ended, in milliseconds since the Unix epoch; only once exited. */
   endedAtMs?: number
 }
 /** The terminal terminal.open started, or the one this requestId already started. */
 export interface TerminalOpenResult {
+  /** The terminal that opened, or the one the same requestId opened before. */
   terminal: TerminalSummary
 }
 /** The person's terminals on this gateway, oldest first. After this answer the connection is sent terminal.listed whenever the list changes. */
 export interface TerminalListResult {
+  /** The person's terminals, oldest first. */
   terminals: TerminalSummary[]
 }
 /** The person's terminals, whole, after a change (terminal.listed). Sent to a connection that has called terminal.list. */
 export interface TerminalListed {
+  /** The whole list after the change, oldest first. */
   terminals: TerminalSummary[]
 }
 /** Show a terminal in a view (terminal.attach), or make the view the size owner (terminal.focus), or report its new fit (terminal.fit). Attach sends a checkpoint of the screen then live terminal.output. Focus resizes the terminal to the view's fit when it differs; fit resizes it only when this view owns the size. */
 export interface TerminalViewParams {
+  /** The terminal. */
   terminalId: TerminalId
+  /** The view, chosen by the window, unique per connection. */
   viewId: TerminalViewId
   /** Columns that fill the view. */
   cols: number
@@ -4322,29 +4331,39 @@ export interface TerminalViewParams {
 }
 /** Stop showing a terminal in a view (terminal.detach). The terminal keeps running; if this view owned the size, the size is kept. */
 export interface TerminalDetachParams {
+  /** The terminal. */
   terminalId: TerminalId
+  /** The view, chosen by the window, unique per connection. */
   viewId: TerminalViewId
 }
 /** Bytes the person typed or pasted, for the terminal's program (terminal.input). */
 export interface TerminalInputParams {
+  /** The terminal. */
   terminalId: TerminalId
   /** The bytes, base64. */
   data: string
 }
 /** Read retained rows for one view (terminal.history); the rows arrive as a history terminal.output for that view. Reading moves no other view. */
 export interface TerminalHistoryParams {
+  /** The terminal. */
   terminalId: TerminalId
+  /** The view, chosen by the window, unique per connection. */
   viewId: TerminalViewId
+  /** The first history row to read, counted from the oldest kept. */
   start: number
+  /** How many rows to read. */
   count: number
 }
 /** End a terminal and remove it from the list (terminal.close): its program is hung up, then killed after 5 s. */
 export interface TerminalCloseParams {
+  /** The terminal. */
   terminalId: TerminalId
 }
 /** One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator. */
 export interface TerminalOutput {
+  /** The terminal. */
   terminalId: TerminalId
+  /** The view, chosen by the window, unique per connection. */
   viewId: TerminalViewId
   /** The protocol message as JSON text. */
   message: string
