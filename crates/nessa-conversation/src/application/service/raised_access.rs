@@ -20,7 +20,13 @@
 //! Only the agent's own reviews: an MCP app's review is the gateway's own
 //! policy, which Full does not lift. Only a raise to Full: Auto still lets the
 //! agent's classifier ask, so a review open under Ask stays the person's.
+//!
+//! An answer is audited like the person's own. One that fails — its audit
+//! above all — fails the raise as the person's answer would fail, after the
+//! other reviews are tried: the mode the agent took stays taken, but the
+//! raise never reports success over an answer that could not be audited.
 use super::LiveConversation;
+use crate::application::ConversationError;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::permissions::{
@@ -55,20 +61,23 @@ fn once_allow(choices: &[PermissionOption]) -> Option<&PermissionOptionId> {
 }
 
 /// Allows once every review `live`'s agent still waits on, for `actor`'s raise
-/// to Full under `request_id`. Best effort: a review answered or gone
-/// meanwhile is stale and skipped, and nothing here fails the raise, which
-/// the agent has already taken.
+/// to Full under `request_id`, and says how many it allowed. A review
+/// answered or gone meanwhile is stale and skipped.
+///
+/// # Errors
+/// The first answer that failed otherwise (an audit failure, say), as
+/// [`ConversationError::PermissionAnswer`], once every review was tried.
 pub(super) async fn allow_waiting_reviews(
     id: &ConversationId,
     live: &LiveConversation,
     actor: &ActionContext,
     request_id: &str,
-) -> usize {
-    let Ok(snapshot) = ApprovalModeSnapshot::new(FULL_ACCESS, request_id) else {
-        return 0;
-    };
+) -> Result<usize, ConversationError> {
+    let snapshot = ApprovalModeSnapshot::new(FULL_ACCESS, request_id)
+        .map_err(|_| ConversationError::InvalidInput)?;
     let reviews = live.agent.pending_reviews().unwrap_or_default();
     let mut allowed = 0;
+    let mut failed = None;
     for review in &reviews {
         let Some(option_id) = allowed_once(review) else {
             continue;
@@ -90,15 +99,19 @@ pub(super) async fn allow_waiting_reviews(
             Ok(_) => allowed += 1,
             // Answered or gone meanwhile: nothing left to allow.
             Err(failure) if matches!(failure.error(), AgentError::StalePermission) => {}
-            Err(failure) => tracing::warn!(
-                conversation_id = %id,
-                permission_id = %review.id.as_str(),
-                error = %failure.into_parts().0,
-                "a review open when access was raised to full was not allowed",
-            ),
+            Err(failure) => {
+                let (error, selection) = failure.into_parts();
+                tracing::warn!(
+                    conversation_id = %id,
+                    permission_id = %review.id.as_str(),
+                    error = %error,
+                    "a review open when access was raised to full was not allowed",
+                );
+                failed.get_or_insert(ConversationError::PermissionAnswer { error, selection });
+            }
         }
     }
-    allowed
+    failed.map_or(Ok(allowed), Err)
 }
 
 #[cfg(test)]

@@ -2273,6 +2273,40 @@ async fn raising_to_full_mid_turn_allows_each_waiting_review_once_as_the_modes_a
 }
 
 #[tokio::test]
+async fn a_full_raise_whose_answer_cannot_be_audited_fails_after_trying_every_review() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    // The agent takes Full, then neither answer can be audited.
+    provider.answer_succeeds.store(false, Ordering::SeqCst);
+    *provider.answer_failure.lock().unwrap() = Some((
+        AgentError::AuditFailure,
+        nessa_sdk::application::agent_execution::permissions::PermissionSelectionState::Pending,
+    ));
+    let raised = service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
+        .await;
+    assert!(
+        matches!(
+            raised,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::AuditFailure,
+                ..
+            })
+        ),
+        "{raised:?}"
+    );
+    // Each review was tried, and the mode the agent took stays taken.
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 2);
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn raising_to_auto_mid_turn_leaves_waiting_reviews_to_the_person() {
     let (service, provider, _, _, _) = mode_fixture();
     let (id, finish) = two_waiting_reviews(&service, &provider).await;

@@ -3300,17 +3300,22 @@ impl ConversationService {
                 live.projection.lock().await.approval_mode(terminal.requested);
                 // A raise to Full is the person's answer to what the running
                 // turn waits on: each agent review is allowed once
-                // (`raised_access.rs`).
+                // (`raised_access.rs`). An answer that could not be audited
+                // fails the raise, though the mode stays taken.
                 if terminal.requested == ConversationApprovalMode::Full
                     && terminal.prior != ConversationApprovalMode::Full
                 {
-                    raised_access::allow_waiting_reviews(
+                    let allowed = raised_access::allow_waiting_reviews(
                         &id,
                         &live,
                         &actor,
                         &terminal.request_id,
                     )
                     .await;
+                    // Answers change live authority without an execution
+                    // event: wake readers, failed or not.
+                    service.inner.live_changes.publish(&id);
+                    allowed?;
                 }
             }
             Ok(terminal.requested)
