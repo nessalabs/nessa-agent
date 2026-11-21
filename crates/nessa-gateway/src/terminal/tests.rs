@@ -5,14 +5,20 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
-struct Recorded(Mutex<Vec<String>>);
+struct Recorded(
+    Mutex<Vec<String>>,
+    Mutex<Vec<tokio::sync::mpsc::Sender<TerminalSignal>>>,
+);
 
 struct FakeRunning(Arc<Recorded>);
 
 impl RunningTerminal for FakeRunning {
     fn send(&self, command: EngineCommand) {
         let line = match command {
-            EngineCommand::Attach { key, .. } => format!("attach {}", key.view),
+            EngineCommand::Attach { key, out } => {
+                self.0 .1.lock().unwrap().push(out);
+                format!("attach {}", key.view)
+            }
             EngineCommand::Detach { key } => format!("detach {}", key.view),
             EngineCommand::Input(bytes) => format!("input {}", String::from_utf8_lossy(&bytes)),
             EngineCommand::Resize(size) => format!("resize {}x{}", size.cols, size.rows),
@@ -25,20 +31,31 @@ impl RunningTerminal for FakeRunning {
     }
 }
 
+/// Run while a terminal starts, with its id and where it reports.
+type DuringStart = Box<dyn FnOnce(&str, Arc<dyn EngineEvents>) + Send>;
+
 #[derive(Default)]
 struct FakeEngine {
     recorded: Arc<Recorded>,
     events: Mutex<Option<Arc<dyn EngineEvents>>>,
+    starts: std::sync::atomic::AtomicUsize,
+    during_start: Mutex<Option<DuringStart>>,
 }
 
 impl TerminalEngine for FakeEngine {
     fn start(
         &self,
-        _id: &str,
+        id: &str,
         _spec: &StartSpec,
         events: Arc<dyn EngineEvents>,
     ) -> Result<Box<dyn RunningTerminal>, TerminalError> {
-        *self.events.lock().unwrap() = Some(events);
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *self.events.lock().unwrap() = Some(events.clone());
+        let during = self.during_start.lock().unwrap().take();
+        if let Some(during) = during {
+            during(id, events);
+        }
         Ok(Box::new(FakeRunning(self.recorded.clone())))
     }
 }
@@ -202,10 +219,10 @@ fn an_ended_program_is_listed_and_refuses_input() {
         .open(request(&owner("p"), "r1"), "/bin/sh".into())
         .unwrap()
         .id;
-    assert_eq!(out.try_recv(), Ok(TerminalSignal::Listed));
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
     let events = engine.events.lock().unwrap().clone().unwrap();
     events.exited(&id, Some(3));
-    assert_eq!(out.try_recv(), Ok(TerminalSignal::Listed));
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
     let entry = &hub.list(&owner("p"))[0];
     assert_eq!(
         entry.ended,
@@ -253,4 +270,98 @@ fn a_terminal_takes_the_name_its_person_gives_it() {
     assert_eq!(super::named("a\u{7}b"), None);
     assert_eq!(super::named(&"x".repeat(81)), None);
     assert!(super::named(&"x".repeat(80)).is_some());
+}
+
+#[test]
+fn a_retry_while_the_first_starts_answers_it_and_starts_nothing() {
+    let (hub, engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    let retry = Arc::clone(&hub);
+    let answered = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&answered);
+    *engine.during_start.lock().unwrap() = Some(Box::new(move |_, _| {
+        *seen.lock().unwrap() = Some(retry.open(request(&owner("p"), "r1"), "/bin/sh".into()));
+    }));
+    let first = link
+        .open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap();
+    let retried = answered.lock().unwrap().take().unwrap().unwrap();
+    assert_eq!(retried.id, first.id);
+    assert_eq!(engine.starts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(hub.list(&owner("p")).len(), 1);
+}
+
+#[test]
+fn a_terminal_still_starting_counts_toward_the_limit() {
+    let (hub, engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    for n in 1..MAX_TERMINALS_PER_OWNER {
+        link.open(request(&owner("p"), &format!("r{n}")), "/bin/sh".into())
+            .unwrap();
+    }
+    let other = Arc::clone(&hub);
+    let answered = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&answered);
+    *engine.during_start.lock().unwrap() = Some(Box::new(move |_, _| {
+        *seen.lock().unwrap() = Some(other.open(request(&owner("p"), "other"), "/bin/sh".into()));
+    }));
+    link.open(request(&owner("p"), "last"), "/bin/sh".into())
+        .unwrap();
+    assert_eq!(
+        answered
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .map(|entry| entry.id),
+        Err(TerminalError::Limit)
+    );
+}
+
+#[test]
+fn an_exit_while_starting_is_kept() {
+    let (hub, engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    *engine.during_start.lock().unwrap() = Some(Box::new(|id, events| {
+        events.exited(id, Some(0));
+    }));
+    link.open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap();
+    assert_eq!(
+        hub.list(&owner("p"))[0].ended,
+        Some(TerminalEnd {
+            status: Some(0),
+            at_ms: 1_000
+        })
+    );
+}
+
+#[test]
+fn a_full_output_queue_never_loses_a_list_change() {
+    let (hub, engine) = setup();
+    let (link, mut out) = hub.connect(owner("p"));
+    link.list().unwrap();
+    let id = link
+        .open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap()
+        .id;
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+    link.attach(&id, "v1", size(80, 24)).unwrap();
+    let sender = engine.recorded.1.lock().unwrap()[0].clone();
+    while sender
+        .try_send(TerminalSignal::Output {
+            terminal_id: id.clone(),
+            view_id: "v1".into(),
+            message: String::new(),
+        })
+        .is_ok()
+    {}
+    link.rename(&id, "build".into()).unwrap();
+    link.close(&id).unwrap();
+    // Two changes while the queue was full: one word that the list changed.
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+    assert!(matches!(
+        out.try_recv(),
+        Some(TerminalSignal::Output { .. })
+    ));
 }

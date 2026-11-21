@@ -1514,7 +1514,7 @@ async fn forward_window_commands(
 /// Send each terminal event for this connection, in the order its views
 /// were given them. A `Listed` reads the owner's list as it is now.
 async fn forward_terminal_signals(
-    mut signals: mpsc::Receiver<crate::terminal::TerminalSignal>,
+    mut signals: crate::terminal::TerminalSignals,
     hub: Arc<crate::terminal::TerminalHub>,
     owner: crate::terminal::TerminalOwner,
     send: mpsc::Sender<QueuedResponse>,

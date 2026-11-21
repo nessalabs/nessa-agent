@@ -661,10 +661,13 @@ pub(super) async fn product_state(
     // none, every `terminal.*` answers terminal_unavailable, list included,
     // so no window offers a terminal it cannot open.
     if let Some(engine) = crate::terminal::prepared_engine() {
-        product = product.with_terminals(crate::terminal::TerminalHub::new(
-            Some(engine),
-            Arc::new(crate::terminal::SystemTerminalClock),
-        ));
+        product = product.with_terminals(
+            crate::terminal::TerminalHub::new(
+                Some(engine),
+                Arc::new(crate::terminal::SystemTerminalClock),
+            ),
+            Arc::new(crate::terminal::SystemTerminalHost),
+        );
     } else if let Some(reason) = crate::terminal::unprepared_reason() {
         tracing::warn!(reason, "terminals unavailable: pty runtime not built");
     }

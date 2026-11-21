@@ -23,7 +23,6 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde::de::DeserializeOwned;
-use std::path::PathBuf;
 
 /// Answer one `terminal.*` request on the connection that holds `link`.
 pub(super) async fn dispatch(
@@ -123,7 +122,7 @@ async fn open(
     link: &TerminalLink,
 ) -> OutgoingMessage {
     let id = frame.id.clone();
-    let Some(service) = &state.conversation.service else {
+    let (Some(service), Some(host)) = (&state.conversation.service, &state.terminals.host) else {
         return failure(&id, "terminal_unavailable");
     };
     let Some(params) = decode::<TerminalOpenParams>(&frame) else {
@@ -169,10 +168,8 @@ async fn open(
         Err(ConversationError::NotFound) => return failure(&id, "conversation_not_found"),
         Err(_) => return failure(&id, "terminal_unavailable"),
     };
-    // The runtime opens the folder by its real path, one step at a time.
-    let folder = match std::fs::canonicalize(&folder) {
-        Ok(folder) if folder.is_dir() => folder,
-        _ => return failure(&id, "terminal_folder_missing"),
+    let Some(folder) = host.folder(&folder) else {
+        return failure(&id, "terminal_folder_missing");
     };
     let request = OpenRequest {
         owner: link.owner().clone(),
@@ -183,7 +180,7 @@ async fn open(
         kind,
         size,
     };
-    match link.open(request, login_shell()) {
+    match link.open(request, host.login_shell()) {
         Ok(entry) => {
             tracing::info!(
                 target: "nessa::terminal",
@@ -245,32 +242,4 @@ pub(super) fn summary(entry: &TerminalEntry) -> TerminalSummary {
         exit_status: entry.ended.and_then(|end| end.status).map(i64::from),
         ended_at_ms: entry.ended.map(|end| end.at_ms),
     }
-}
-
-/// The person's login shell: theirs from the account database, then
-/// `$SHELL`, then `/bin/sh`. A gateway started by launchd has no `$SHELL`.
-fn login_shell() -> PathBuf {
-    #[cfg(unix)]
-    {
-        // SAFETY: getpwuid returns a pointer into static storage or null;
-        // it is read at once, on this thread, before any other call.
-        let from_account = unsafe {
-            let entry = libc::getpwuid(libc::getuid());
-            if entry.is_null() || (*entry).pw_shell.is_null() {
-                None
-            } else {
-                std::ffi::CStr::from_ptr((*entry).pw_shell)
-                    .to_str()
-                    .ok()
-                    .map(PathBuf::from)
-            }
-        };
-        if let Some(shell) = from_account.filter(|shell| shell.is_absolute() && shell.exists()) {
-            return shell;
-        }
-    }
-    std::env::var_os("SHELL")
-        .map(PathBuf::from)
-        .filter(|shell| shell.is_absolute() && shell.exists())
-        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }

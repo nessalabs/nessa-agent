@@ -1,6 +1,7 @@
-//! The seams the hub runs on: the engine that starts terminals, the events
-//! it reports back, and the clock.
+//! The seams terminals run on: the engine that starts them, the events it
+//! reports back, the clock, and the machine's folders and login shell.
 use super::*;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// What an engine tells the hub about a terminal it runs.
@@ -40,4 +41,12 @@ impl TerminalClock for SystemTerminalClock {
             .map(|elapsed| elapsed.as_millis() as u64)
             .unwrap_or(0)
     }
+}
+
+/// What `terminal.open` reads from this machine before a terminal starts.
+pub trait TerminalHost: Send + Sync {
+    /// `folder` by its real path, when it is a folder that is there.
+    fn folder(&self, folder: &Path) -> Option<PathBuf>;
+    /// The person's login shell.
+    fn login_shell(&self) -> PathBuf;
 }

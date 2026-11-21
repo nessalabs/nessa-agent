@@ -32,12 +32,14 @@ mod hub;
 mod model;
 mod ports;
 mod runtime;
+mod system_host;
 mod title;
 
 pub use hub::*;
 pub use model::*;
 pub use ports::*;
 pub use runtime::*;
+pub use system_host::SystemTerminalHost;
 #[cfg(test)]
 use title::run_title;
 pub use title::*;

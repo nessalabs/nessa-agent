@@ -516,6 +516,34 @@ fn owner_act_admits_the_owner_until_the_conversation_is_deleted() {
 }
 
 #[test]
+fn owner_terminal_run_admits_the_owner_until_the_conversation_is_deleted() {
+    let policy = policy();
+    assert_eq!(
+        allowed_by(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation("org", "owner", false),
+            "org",
+            "owner"
+        )),
+        Some(&["owner.terminal_run".to_owned()][..])
+    );
+    for (conversation, org, who) in [
+        (conversation("org", "owner", true), "org", "owner"),
+        (conversation("org", "owner", false), "org", "someone"),
+        (conversation("org", "owner", false), "other", "owner"),
+    ] {
+        assert!(!allowed(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation,
+            org,
+            who
+        )));
+    }
+}
+
+#[test]
 fn owner_erase_admits_only_the_owner_of_a_tombstone() {
     let policy = policy();
     let deleted = conversation("org", "owner", true);

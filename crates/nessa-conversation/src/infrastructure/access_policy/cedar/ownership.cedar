@@ -317,3 +317,17 @@ when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
 };
+
+// Run opens a terminal where one of the owner's conversations works, until
+// that conversation is deleted. A person only, as above.
+@id("owner.terminal_run")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"terminal.use",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};

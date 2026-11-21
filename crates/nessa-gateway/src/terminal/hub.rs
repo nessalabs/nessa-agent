@@ -7,10 +7,26 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 
+/// The engine side of a terminal: reserved while its program starts, with
+/// what it was asked meanwhile, then running.
+enum Process {
+    Starting(Vec<EngineCommand>),
+    Started(Box<dyn RunningTerminal>),
+}
+
+impl Process {
+    fn send(&mut self, command: EngineCommand) {
+        match self {
+            Self::Starting(waiting) => waiting.push(command),
+            Self::Started(running) => running.send(command),
+        }
+    }
+}
+
 struct Live {
     owner: TerminalOwner,
     entry: TerminalEntry,
-    running: Box<dyn RunningTerminal>,
+    running: Process,
     /// Each attached view's fit.
     views: HashMap<ViewKey, GridSize>,
     /// The view whose fit the terminal has; `None` once it went.
@@ -21,8 +37,9 @@ struct Live {
 #[derive(Default)]
 struct Hub {
     terminals: Vec<Live>,
-    /// Connections that asked for the list, by connection id.
-    links: HashMap<u64, (TerminalOwner, mpsc::Sender<TerminalSignal>)>,
+    /// Connections that asked for the list, by connection id, with the
+    /// counter that tells each one the list changed.
+    links: HashMap<u64, (TerminalOwner, Arc<watch::Sender<u64>>)>,
 }
 
 /// The person's terminals on this gateway.
@@ -85,16 +102,24 @@ impl TerminalHub {
     }
 
     /// A place for one connection: what its views are sent through.
-    pub fn connect(&self, owner: TerminalOwner) -> (TerminalLink, mpsc::Receiver<TerminalSignal>) {
-        let (out, receiver) = mpsc::channel(CONNECTION_QUEUE);
+    pub fn connect(&self, owner: TerminalOwner) -> (TerminalLink, TerminalSignals) {
+        let (out, output) = mpsc::channel(CONNECTION_QUEUE);
+        let (listed, list_changes) = watch::channel(0);
         let link = TerminalLink {
             hub: self.me.clone(),
             connection: self.next_connection.fetch_add(1, Ordering::Relaxed),
             owner,
             out,
+            listed: Arc::new(listed),
             listening: AtomicBool::new(false),
         };
-        (link, receiver)
+        (
+            link,
+            TerminalSignals {
+                output,
+                listed: Some(list_changes),
+            },
+        )
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Hub> {
@@ -103,25 +128,52 @@ impl TerminalHub {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The owner's terminals, oldest first.
+    /// The owner's terminals, oldest first; one still starting is not one
+    /// yet.
     pub fn list(&self, owner: &TerminalOwner) -> Vec<TerminalEntry> {
         self.lock()
             .terminals
             .iter()
-            .filter(|live| &live.owner == owner)
+            .filter(|live| &live.owner == owner && matches!(live.running, Process::Started(_)))
             .map(|live| live.entry.clone())
             .collect()
     }
 
     /// Start a terminal, or answer the one `request.request_id` started.
+    ///
+    /// The request is reserved, under the lock, before its program starts:
+    /// a retry that races it answers the same terminal and starts nothing,
+    /// and the limit counts it. What its views ask, and an exit the engine
+    /// reports, while it starts are kept on the reservation.
     pub fn open(
         &self,
         request: OpenRequest,
         shell: PathBuf,
     ) -> Result<TerminalEntry, TerminalError> {
         let engine = self.engine.clone().ok_or(TerminalError::Unavailable)?;
+        let shell_name = shell
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("shell")
+            .to_owned();
+        let title = match &request.kind {
+            TerminalKind::Shell => shell_name,
+            TerminalKind::Run { command } => run_title(command),
+        };
+        let entry = TerminalEntry {
+            id: format!("t_{}", uuid::Uuid::new_v4().simple()),
+            request_id: request.request_id.clone(),
+            title,
+            kind: request.kind.clone(),
+            channel_id: request.channel_id.clone(),
+            conversation_id: request.conversation_id.clone(),
+            folder: request.folder.to_string_lossy().into_owned(),
+            shell: shell.to_string_lossy().into_owned(),
+            started_at_ms: self.clock.now_ms(),
+            ended: None,
+        };
         {
-            let hub = self.lock();
+            let mut hub = self.lock();
             if let Some(live) = hub.terminals.iter().find(|live| {
                 live.owner == request.owner && live.entry.request_id == request.request_id
             }) {
@@ -136,55 +188,54 @@ impl TerminalHub {
             {
                 return Err(TerminalError::Limit);
             }
+            hub.terminals.push(Live {
+                owner: request.owner.clone(),
+                entry: entry.clone(),
+                running: Process::Starting(Vec::new()),
+                views: HashMap::new(),
+                size_owner: None,
+                size: request.size,
+            });
         }
-        let id = format!("t_{}", uuid::Uuid::new_v4().simple());
         let spec = StartSpec {
-            folder: request.folder.clone(),
-            shell: shell.clone(),
-            kind: request.kind.clone(),
+            folder: request.folder,
+            shell,
+            kind: request.kind,
             size: request.size,
         };
         let events: Arc<dyn EngineEvents> = Arc::new(HubEvents(self.me.clone()));
-        let running = engine.start(&id, &spec, events)?;
-        let shell_name = shell
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("shell")
-            .to_owned();
-        let title = match &request.kind {
-            TerminalKind::Shell => shell_name,
-            TerminalKind::Run { command } => run_title(command),
-        };
-        let entry = TerminalEntry {
-            id,
-            request_id: request.request_id,
-            title,
-            kind: request.kind,
-            channel_id: request.channel_id,
-            conversation_id: request.conversation_id,
-            folder: request.folder.to_string_lossy().into_owned(),
-            shell: shell.to_string_lossy().into_owned(),
-            started_at_ms: self.clock.now_ms(),
-            ended: None,
-        };
+        let started = engine.start(&entry.id, &spec, events);
         let mut hub = self.lock();
-        // A retry that raced this one: keep the first, end this one.
-        if let Some(live) = hub
+        let index = hub
             .terminals
             .iter()
-            .find(|live| live.owner == request.owner && live.entry.request_id == entry.request_id)
-        {
+            .position(|live| live.entry.id == entry.id);
+        let running = match started {
+            Ok(running) => running,
+            Err(error) => {
+                // A retry may have been answered with this reservation; it
+                // goes, and that retry's terminal is not found from now on.
+                if let Some(index) = index {
+                    hub.terminals.remove(index);
+                }
+                return Err(error);
+            }
+        };
+        let Some(index) = index else {
+            // Closed while it started.
             running.send(EngineCommand::Close);
-            return Ok(live.entry.clone());
+            return Ok(entry);
+        };
+        let live = &mut hub.terminals[index];
+        let Process::Starting(waiting) =
+            std::mem::replace(&mut live.running, Process::Started(running))
+        else {
+            unreachable!("only this open starts its reservation");
+        };
+        for command in waiting {
+            live.running.send(command);
         }
-        hub.terminals.push(Live {
-            owner: request.owner.clone(),
-            entry: entry.clone(),
-            running,
-            views: HashMap::new(),
-            size_owner: None,
-            size: request.size,
-        });
+        let entry = live.entry.clone();
         self.announce(&mut hub, &request.owner);
         Ok(entry)
     }
@@ -207,10 +258,10 @@ impl TerminalHub {
     /// Tell each listening connection of `owner` that the list changed.
     fn announce(&self, hub: &mut Hub, owner: &TerminalOwner) {
         self.changes.send_modify(|tick| *tick += 1);
-        for (listener, out) in hub.links.values() {
+        for (listener, listed) in hub.links.values() {
             if listener == owner {
-                // A full queue already holds a Listed, or soon reads one.
-                let _ = out.try_send(TerminalSignal::Listed);
+                // A counter, not a queue: busy output never crowds it out.
+                listed.send_modify(|tick| *tick = tick.wrapping_add(1));
             }
         }
     }
@@ -363,9 +414,12 @@ impl TerminalHub {
             .iter()
             .position(|live| live.entry.id == id && &live.owner == owner)
             .ok_or(TerminalError::NotFound)?;
-        let live = hub.terminals.remove(index);
+        let mut live = hub.terminals.remove(index);
+        let listed = matches!(live.running, Process::Started(_));
         live.running.send(EngineCommand::Close);
-        self.announce(&mut hub, owner);
+        if listed {
+            self.announce(&mut hub, owner);
+        }
         Ok(())
     }
 
@@ -421,6 +475,7 @@ pub struct TerminalLink {
     connection: u64,
     owner: TerminalOwner,
     out: mpsc::Sender<TerminalSignal>,
+    listed: Arc<watch::Sender<u64>>,
     listening: AtomicBool,
 }
 
@@ -444,9 +499,10 @@ impl TerminalLink {
     pub fn list(&self) -> Result<Vec<TerminalEntry>, TerminalError> {
         let hub = self.hub()?;
         if !self.listening.swap(true, Ordering::AcqRel) {
-            hub.lock()
-                .links
-                .insert(self.connection, (self.owner.clone(), self.out.clone()));
+            hub.lock().links.insert(
+                self.connection,
+                (self.owner.clone(), Arc::clone(&self.listed)),
+            );
         }
         Ok(hub.list(&self.owner))
     }
@@ -503,5 +559,43 @@ impl Drop for TerminalLink {
         if let Some(hub) = self.hub.upgrade() {
             hub.disconnect(self.connection);
         }
+    }
+}
+
+/// What one connection is sent: its views' output, in order, and word that
+/// the owner's list changed. Several changes while nobody reads are one.
+pub struct TerminalSignals {
+    output: mpsc::Receiver<TerminalSignal>,
+    /// `None` once the link went.
+    listed: Option<watch::Receiver<u64>>,
+}
+
+impl TerminalSignals {
+    /// The next signal; `None` once the connection's link went.
+    pub async fn recv(&mut self) -> Option<TerminalSignal> {
+        loop {
+            let Some(listed) = self.listed.as_mut() else {
+                return self.output.recv().await;
+            };
+            tokio::select! {
+                biased;
+                changed = listed.changed() => match changed {
+                    Ok(()) => return Some(TerminalSignal::Listed),
+                    Err(_) => self.listed = None,
+                },
+                signal = self.output.recv() => return signal,
+            }
+        }
+    }
+
+    /// The next signal waiting now, if any.
+    pub fn try_recv(&mut self) -> Option<TerminalSignal> {
+        if let Some(listed) = self.listed.as_mut() {
+            if listed.has_changed().unwrap_or(false) {
+                listed.borrow_and_update();
+                return Some(TerminalSignal::Listed);
+            }
+        }
+        self.output.try_recv().ok()
     }
 }

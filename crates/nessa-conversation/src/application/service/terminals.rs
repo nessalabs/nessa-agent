@@ -74,9 +74,10 @@ impl ConversationService {
 
     /// Where a terminal `caller` asks for from `origin` runs.
     ///
-    /// Only a person may open one, on their own catalogue (Cedar
-    /// `terminal.use`), and only in a channel they may use or a conversation
-    /// they own: a terminal runs as the owner, in the owner's folder.
+    /// Cedar `terminal.use` decides: a person, on their own catalogue for a
+    /// channel's terminal (which must also be a channel they may use), or on
+    /// a conversation of theirs for Run. A terminal runs as the owner, in the
+    /// owner's folder.
     ///
     /// # Errors
     /// `NotFound` when the policy refuses or the conversation is not the
@@ -87,20 +88,23 @@ impl ConversationService {
         caller: &ConversationCaller,
         origin: &TerminalOrigin,
     ) -> Result<TerminalPlace, ConversationError> {
-        self.admit_terminal(caller)?;
         match origin {
             TerminalOrigin::Channel(channel) => {
+                self.admit_terminal(
+                    caller,
+                    AccessResource::Catalogue {
+                        organization: &caller.organization_id,
+                        owner: &caller.principal_id,
+                    },
+                )?;
                 self.channel_terminal_place(caller, channel.as_ref()).await
             }
             TerminalOrigin::Conversation(id) => {
                 let record = load_conversation(self.inner.metadata.as_ref(), id)
                     .await?
                     .ok_or(ConversationError::NotFound)?;
-                if record.organization() != &caller.organization_id
-                    || record.owner() != &caller.principal_id
-                {
-                    return Err(ConversationError::NotFound);
-                }
+                // Cedar decides on the conversation's own facts.
+                self.admit_terminal(caller, AccessResource::of(&record))?;
                 if let Some(place) = self.inner.workplaces.get(id) {
                     return Ok(place);
                 }
@@ -139,17 +143,18 @@ impl ConversationService {
         }
     }
 
-    fn admit_terminal(&self, caller: &ConversationCaller) -> Result<(), ConversationError> {
+    fn admit_terminal(
+        &self,
+        caller: &ConversationCaller,
+        resource: AccessResource<'_>,
+    ) -> Result<(), ConversationError> {
         let ask = AccessAsk {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
                 principal: &caller.principal_id,
             },
             action: AccessAction::TerminalUse,
-            resource: AccessResource::Catalogue {
-                organization: &caller.organization_id,
-                owner: &caller.principal_id,
-            },
+            resource,
             held: None,
             request: RequestShape::default(),
             target: None,

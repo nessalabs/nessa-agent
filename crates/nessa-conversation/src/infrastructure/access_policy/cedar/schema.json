@@ -551,7 +551,7 @@
       "terminal.use": {
         "appliesTo": {
           "principalTypes": ["Person"],
-          "resourceTypes": ["Catalogue"],
+          "resourceTypes": ["Catalogue", "Conversation"],
           "context": {
             "type": "Ask"
           }

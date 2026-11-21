@@ -124,6 +124,8 @@ pub struct ProductRouteState {
 #[derive(Clone, Default)]
 pub struct TerminalRoutes {
     pub hub: Option<Arc<crate::terminal::TerminalHub>>,
+    /// The machine's folders and login shell, read before a terminal starts.
+    pub host: Option<Arc<dyn crate::terminal::TerminalHost>>,
 }
 
 /// The browser sign-in a socket or HTTP request arrived with, and the
@@ -412,9 +414,14 @@ impl ProductRouteState {
         }
     }
 
-    /// Serve `terminal.*` from `hub`.
-    pub fn with_terminals(mut self, hub: Arc<crate::terminal::TerminalHub>) -> Self {
+    /// Serve `terminal.*` from `hub`, starting terminals on `host`.
+    pub fn with_terminals(
+        mut self,
+        hub: Arc<crate::terminal::TerminalHub>,
+        host: Arc<dyn crate::terminal::TerminalHost>,
+    ) -> Self {
         self.terminals.hub = Some(hub);
+        self.terminals.host = Some(host);
         self
     }
 
