@@ -327,16 +327,10 @@ impl ConversationService {
         let Some(live) = waiting.upgrade() else {
             return false;
         };
-        // A close or a stop that held the lock first let this agent go, and
-        // a closed agent's lifecycle opens again for work no one will run:
-        // a turn given to it would hold its history until a restart
-        // (`a_close_while_a_resumed_agent_opens_lets_its_history_go`). The
-        // agent the conversation holds now resumes it, when it opens.
-        if !self.holds_open(id, &live).await || stuck(&live).await {
-            return false;
-        }
         // Its selection is not settled: configuration recovery reconciles the
-        // journal before any owed turn resumes. Run here, under the lock it
+        // journal before any owed turn resumes, and before this agent is
+        // asked whether it can take one: a change that failed mid-turn leaves
+        // its agent retiring, which only that recovery finishes. Run here, under the lock it
         // needs, rather than waited for: a change its caller gave up on (a
         // model control the provider failed mid-turn, which ended the turn
         // with it) is asked about by no one else, and the turn it left owed
@@ -350,6 +344,14 @@ impl ConversationService {
             drop(live);
             self.recover_selection_for_resumption(id, organization_id)
                 .await;
+            return false;
+        }
+        // A close or a stop that held the lock first let this agent go, and
+        // a closed agent's lifecycle opens again for work no one will run:
+        // a turn given to it would hold its history until a restart
+        // (`a_close_while_a_resumed_agent_opens_lets_its_history_go`). The
+        // agent the conversation holds now resumes it, when it opens.
+        if !self.holds_open(id, &live).await || stuck(&live).await {
             return false;
         }
         // The live owed view includes retained decisions. A failed terminal

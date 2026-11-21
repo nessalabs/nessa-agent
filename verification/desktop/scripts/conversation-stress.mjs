@@ -10450,6 +10450,30 @@ const steps = {
       conversationId,
       await titleOf(run, conversationId),
     )
+    // Watched as a follower does, which opens and recovers nothing (a read
+    // would: an opening read settles a pending change itself, and would
+    // hide a gateway that never settles it on its own).
+    // A follower subscribes again from its last cursor when its view ends
+    // (the agent it followed was retired), as the product protocol says.
+    let latest = null
+    let cursor
+    let following = null
+    const follow = async () => {
+      following = await run.client.subscriptions.view(
+        conversationId,
+        {
+          view: (frame) => {
+            latest = frame.view
+            cursor = frame.cursor
+          },
+          ended: () => {
+            following = null
+          },
+        },
+        cursor ? { after: cursor } : {},
+      )
+    }
+    await follow()
     const held = prompt(run, STRESS.pause, step, " control")
     await send(run, conversationId, held, failures)
     if (!(await stopShown(run.page)))
@@ -10472,11 +10496,11 @@ const steps = {
     const unsettled = (view) =>
       view.modelChange || view.messages.some((each) => !ended(each))
     const quiet = await waitFor(async () => {
-      const view = await readWithReviews(run.client, conversationId)
-      return unsettled(view) ? null : view
-    }, 90_000)
+      if (!following) await follow().catch(() => {})
+      return latest && !unsettled(latest) ? latest : null
+    }, 90_000).finally(() => following?.close())
     if (!quiet) {
-      const view = await readWithReviews(run.client, conversationId)
+      const view = latest ?? { messages: [] }
       failures.push(
         `after a failed model control the conversation stayed unsettled: ${JSON.stringify(
           {
