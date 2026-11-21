@@ -75,7 +75,11 @@ it("reads the ChatGPT accounts and where a sign-in stands", async () => {
       ...status,
       chatgpt: {
         accounts: [account],
-        signIn: { state: "waiting", authorizeUrl: "https://auth.example/a" },
+        signIn: {
+          state: "waiting",
+          attempt: "9e8d7c6b-5a49-4382-a716-152433425160",
+          authorizeUrl: "https://auth.example/a",
+        },
       },
     }),
   ).chatgptSignIn()
@@ -86,7 +90,14 @@ it("reads the ChatGPT accounts and where a sign-in stands", async () => {
   const ended = await over(() =>
     Promise.resolve({
       ...status,
-      chatgpt: { accounts: [], signIn: { state: "idle", last: "timed_out" } },
+      chatgpt: {
+        accounts: [],
+        signIn: {
+          state: "idle",
+          attempt: "9e8d7c6b-5a49-4382-a716-152433425160",
+          last: "timed_out",
+        },
+      },
     }),
   ).read()
   expect(ended.kind === "read" && ended.logins.chatgpt?.signIn).toEqual({

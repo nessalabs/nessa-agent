@@ -284,6 +284,13 @@ fn a_chatgpt_access_token_uses_the_chatgpt_provider_in_its_own_home() {
     assert!(!renew_chatgpt_token(&sessions, "lease-2", &renewed));
     forget_chatgpt_token(&sessions, "lease-1");
     assert!(!file.exists());
+    // As serving starts, a file a crash left behind is removed.
+    let left =
+        write_chatgpt_token(&root.path().join("codex-chatgpt"), "lease-3", &renewed).unwrap();
+    let mut starting = ConfiguredLauncher::new("/srv/work".into(), HashMap::new());
+    starting.codex_sessions(sessions.clone());
+    starting.forget_chatgpt_tokens();
+    assert!(!left.exists());
     // The key's home keeps OpenAI's own provider.
     let key_config = std::fs::read_to_string(key_home.join("config.toml")).unwrap();
     assert!(!key_config.contains("nessa_chatgpt"));

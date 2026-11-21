@@ -90,8 +90,11 @@ export function codexChatgptSignIn(ports: {
         throw new ChatgptSignInFailure({ cause })
       }
       const started = status.chatgpt?.signIn
-      if (started?.state !== "waiting" || !started.authorizeUrl)
-        return ended(status) ?? Promise.reject(new ChatgptSignInFailure())
+      if (started?.state !== "waiting" || !started.authorizeUrl || !started.attempt)
+        return (
+          ended(status, started?.attempt) ?? Promise.reject(new ChatgptSignInFailure())
+        )
+      const attempt = started.attempt
       opened(started.authorizeUrl)
       try {
         ports.open?.(started.authorizeUrl)
@@ -108,7 +111,7 @@ export function codexChatgptSignIn(ports: {
         } catch (cause) {
           throw new ChatgptSignInFailure({ cause })
         }
-        const end = ended(now)
+        const end = ended(now, attempt)
         if (end) return end
       }
       throw new ChatgptSignInFailure()
@@ -116,9 +119,20 @@ export function codexChatgptSignIn(ports: {
   }
 }
 
-function ended(status: LoginsStatus): ChatgptSignInEnd | undefined {
+/**
+ * How `attempt` ended, once it has: its own end, or replaced when another
+ * attempt (another window's, say) is the one waiting or last ended now, so
+ * the card never reports someone else's sign-in as its own.
+ */
+function ended(
+  status: LoginsStatus,
+  attempt: string | undefined,
+): ChatgptSignInEnd | undefined {
   const signIn = status.chatgpt?.signIn
-  return signIn?.state === "idle"
-    ? (signIn.last ?? ChatgptSignInEnd.Cancelled)
-    : undefined
+  if (!signIn) return undefined
+  if (signIn.attempt !== attempt)
+    return signIn.state === "idle" && !signIn.attempt
+      ? ChatgptSignInEnd.Cancelled
+      : ChatgptSignInEnd.Replaced
+  return signIn.state === "idle" ? (signIn.last ?? ChatgptSignInEnd.Cancelled) : undefined
 }

@@ -10203,6 +10203,11 @@
           "enum": ["idle", "waiting"],
           "description": "Whether a sign-in waits for the browser."
         },
+        "attempt": {
+          "type": "string",
+          "format": "uuid",
+          "description": "While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it."
+        },
         "authorizeUrl": {
           "type": "string",
           "maxLength": 8192,

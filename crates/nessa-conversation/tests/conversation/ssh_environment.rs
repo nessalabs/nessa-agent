@@ -4467,8 +4467,9 @@ async fn a_saved_login_is_asked_for_and_sent_only_where_the_host_takes_one() {
                 .push((environment.name(), agent, lease.to_owned()));
             Box::pin(async {
                 Some(super::HandedLogin {
-                    login: nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap(),
+                    login: Some(nessa_protocol::lease::Login::new("sk-ant-oat-x".into()).unwrap()),
                     renew_by_ms: None,
+                    account: None,
                 })
             })
         }
@@ -4743,10 +4744,16 @@ impl super::SavedLogins for Handing {
     }
 }
 
-fn handed(token: &str, renew_by_ms: Option<u64>) -> Option<super::HandedLogin> {
+/// A token of ChatGPT account `account`, or the key when `None`.
+fn handed(
+    token: &str,
+    renew_by_ms: Option<u64>,
+    account: Option<&str>,
+) -> Option<super::HandedLogin> {
     Some(super::HandedLogin {
-        login: nessa_protocol::lease::Login::new(token.into()).unwrap(),
+        login: Some(nessa_protocol::lease::Login::new(token.into()).unwrap()),
         renew_by_ms,
+        account: account.map(str::to_owned),
     })
 }
 
@@ -4792,9 +4799,9 @@ async fn renewing(
 async fn a_handed_login_is_renewed_on_the_host_until_it_no_longer_expires() {
     let (launcher, opened) = renewing(
         vec![
-            handed("eyJ.first.x", Some(1_000)),
-            handed("eyJ.second.x", Some(1_001)),
-            handed("sk-key", None),
+            handed("eyJ.first.x", Some(1_000), Some("a")),
+            handed("eyJ.second.x", Some(1_001), Some("a")),
+            handed("sk-key", None, None),
         ],
         3,
     )
@@ -4811,10 +4818,50 @@ async fn a_handed_login_is_renewed_on_the_host_until_it_no_longer_expires() {
 /// nothing and leaves the lease's login as it was.
 #[tokio::test]
 async fn a_renewal_with_nothing_new_sends_nothing() {
-    for again in [None, handed("eyJ.first.x", Some(1_000))] {
-        let (launcher, opened) = renewing(vec![handed("eyJ.first.x", Some(1_000)), again], 2).await;
+    for again in [None, handed("eyJ.first.x", Some(1_000), Some("a"))] {
+        let (launcher, opened) = renewing(
+            vec![handed("eyJ.first.x", Some(1_000), Some("a")), again],
+            2,
+        )
+        .await;
         assert!(launcher.renewed.lock().unwrap().is_empty());
         assert_eq!(opened.hold.renew_by(), Some(1_000));
         opened.hold.end(LeaseEndCause::Closed).await;
     }
+}
+
+/// Row L3 for another account: once a different ChatGPT account is in
+/// use, a running harness is never handed its token; renewals stop.
+#[tokio::test]
+async fn a_renewal_never_swaps_a_running_harness_to_another_account() {
+    let (launcher, opened) = renewing(
+        vec![
+            handed("eyJ.first.x", Some(1_000), Some("a")),
+            handed("eyJ.other.x", Some(1_001), Some("b")),
+        ],
+        2,
+    )
+    .await;
+    assert!(launcher.renewed.lock().unwrap().is_empty());
+    assert_eq!(opened.hold.renew_by(), Some(1_000));
+    opened.hold.end(LeaseEndCause::Closed).await;
+}
+
+/// Row L6: an account in use that could hand nothing when the lease opened
+/// leaves the lease due at once, so its idle agent is parked and the next
+/// message asks again; nothing renews it meanwhile.
+#[tokio::test]
+async fn a_lease_handed_nothing_by_an_account_in_use_is_due_at_once() {
+    let (launcher, opened) = renewing(
+        vec![Some(super::HandedLogin {
+            login: None,
+            renew_by_ms: Some(0),
+            account: None,
+        })],
+        1,
+    )
+    .await;
+    assert_eq!(opened.hold.renew_by(), Some(0));
+    assert!(launcher.renewed.lock().unwrap().is_empty());
+    opened.hold.end(LeaseEndCause::Closed).await;
 }

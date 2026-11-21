@@ -23,14 +23,19 @@ use crate::application::EnvironmentFuture;
 use nessa_protocol::{agents::AgentId, lease::Login};
 use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 
-/// A login handed to one lease, and when its agent should be started again
-/// with a fresh one: Unix milliseconds, set for a ChatGPT access token
-/// (`docs/design/chatgpt-sign-in.md`), `None` for a login that does not
-/// expire under the agent.
+/// What one lease is handed (`docs/design/chatgpt-sign-in.md`): a login;
+/// when its agent should be started again with a fresh one, in Unix
+/// milliseconds, set for a ChatGPT access token and `None` for a login that
+/// does not expire under the agent; and the ChatGPT account it is, so a
+/// renewal never swaps a running harness to another account. No `login`
+/// with a `renew_by_ms` is an account in use that could hand nothing now:
+/// already due, so the idle agent is parked and the next message asks again
+/// (row L6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandedLogin {
-    pub login: Login,
+    pub login: Option<Login>,
     pub renew_by_ms: Option<u64>,
+    pub account: Option<String>,
 }
 
 /// The saved login a harness of `agent` started on `environment` is given,

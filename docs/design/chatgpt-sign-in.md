@@ -53,8 +53,9 @@ sequenceDiagram
 A new account registers with `client_id=dynamic_agent_client`, and the
 callback names the client ID OpenAI issued; that one is kept and used for
 the exchange and every refresh. Signing in again to a saved account uses its
-issued client ID and `id_token_hint`, and is refused if the ID token names a
-different subject. A sign-in whose scopes lack `chatgpt.tokens.use.direct`
+issued client ID and its email as `login_hint` (never `id_token_hint`: the
+address is shown to every `logins.status` reader, so it carries no token), and
+is refused if the ID token names a different subject. A sign-in whose scopes lack `chatgpt.tokens.use.direct`
 ends `plan_not_enabled` and saves nothing: Codex could not use it. The first
 account saved becomes the one Codex uses.
 
@@ -114,7 +115,8 @@ command that prints the file (`[model_providers.nessa_chatgpt.auth]`,
 `refresh_interval_ms = 300000`), and keeps its credential store ephemeral.
 Codex 0.154 runs that command again on any 401 and every five minutes, so a
 token replaced in the file is used by a harness already running. The file
-is removed when the lease ends. Its `sessions/` is a link to the API-key home's,
+is removed when the lease ends, and every one left is removed when
+`nessa env serve` starts. Its `sessions/` is a link to the API-key home's,
 so a thread started under one login resumes under the other. Codex sends the
 token as `Authorization: Bearer` to `/v1/responses`, and the adapter sees no
 sign-in to ask for.
@@ -125,15 +127,22 @@ An access token lasts an hour (OpenAI's limit), so an agent that works for
 days needs a new one every hour. The gateway hands a token with at least 50
 minutes left (it refreshes one with less, once OpenAI's
 `earliest_refresh_at` has passed). The lease remembers when that token should
-be replaced (`renew_by`, ten minutes before it expires). At `renew_by` the
-lease asks for the login again and sends it to the machine as `Renew`; the
-machine replaces the lease's token file and Codex picks it up on its next
-read, mid-turn included. A renewal that fails is asked again every minute.
+be replaced (`renew_by`, ten minutes before it expires). Two minutes before
+`renew_by` the lease asks for the login again, so a renewal that succeeds has
+replaced `renew_by` before the parking sweep reads it (half the time left, for
+a token that lasts only minutes), and sends it to the
+machine as `Renew`; the machine replaces the lease's token file and Codex
+picks it up on its next read, mid-turn included. A renewal that fails is
+asked again every minute. A renewal is only ever the same account's: once
+another account, or the key, is in use, renewals stop and the harnesses
+keep their token until a restart starts them on what is in use.
 
 If renewals keep failing past `renew_by` (OpenAI unreachable, the account
 needing a sign-in), the parking sweep parks the agent once it is idle,
 watched or not, and the next message opens it again with whatever the
-gateway can hand. A turn already running when the old token expires fails
+gateway can hand. A lease that opens while the account in use can hand
+nothing is handed no login and is due at once (`renew_by` 0), so the same
+sweep parks it once idle and the next message asks again. A turn already running when the old token expires fails
 as a model error.
 
 The gateway has to be up to renew. That is no new dependency: when its
@@ -145,7 +154,7 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | # | State | Event | Result |
 | --- | --- | --- | --- |
 | S1 | no sign-in | `chatgptSignIn` | audit requested; listen; waiting with an authorize URL. Audit refused: nothing starts |
-| S2 | waiting | `chatgptSignIn` again | the earlier attempt is cancelled (recorded `replaced`); a new one starts |
+| S2 | waiting | `chatgptSignIn` again (two at once included) | the attempt waiting when the new one starts to wait is ended `replaced`, recorded once; one finishing meanwhile keeps nothing (only the attempt still waiting saves, in the same step as it ends) |
 | S3 | waiting | callback with the wrong `state` | answered 400, ignored; still waiting |
 | S4 | waiting | callback with `error` | ends `declined`; nothing saved |
 | S5 | waiting | callback, new registration without `client_id` | ends `incomplete`; nothing saved |
@@ -156,9 +165,9 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | S10 | waiting | scopes lack `chatgpt.tokens.use.direct` | ends `plan_not_enabled`; nothing saved |
 | S11 | waiting | vault write fails | ends `not_saved`; nothing saved |
 | S12 | waiting | all checks pass | saved, audit `signed_in`; idle with `last = signed_in`. The first account kept is put in use |
-| S12a | waiting | a new sign-in names a subject already kept | that account is signed in again, not kept twice |
+| S12a | waiting | a new sign-in names a subject already kept, or an account signs in again | that account is signed in again, not kept twice; the grant it replaced is revoked (best effort) |
 | S13 | waiting | 10 minutes pass | ends `timed_out` |
-| S14 | waiting | `chatgptCancel` | ends `cancelled` |
+| S14 | waiting | `chatgptCancel` | ends `cancelled`, recorded as the canceller's; a callback finishing at that moment keeps nothing |
 | S15 | any | gateway restarts | an attempt under way is forgotten; saved accounts stay |
 | R1 | token with 50 minutes or more left | lease asks | handed as it is |
 | R2 | less left, before `earliest_refresh_at` | lease asks | handed as it is |
@@ -167,23 +176,27 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 | R5 | refresh refused as unusable | lease asks | account marked to sign in again, tokens dropped, nothing handed, audit `refresh_failed` |
 | R6 | refresh unreachable | lease asks | tokens kept, nothing handed, audit `refresh_failed` |
 | R7 | refreshed, vault write fails | lease asks | nothing handed, audit `refresh_failed` (`not_saved`); the old refresh token is spent, so the next refresh is refused and marks the account to sign in again |
-| R8 | no account in use | lease asks | the saved API key, if any, as before |
-| R9 | account in use needs a sign-in | lease asks | nothing handed, audit `sign_in_needed`; the key is not used in its place |
+| R8 | no account in use, or the one in use set aside meanwhile | lease asks | the saved API key, if any, as before |
+| R9 | account in use needs a sign-in | lease asks | nothing handed, audit `sign_in_needed`; the key is not used in its place; the lease is due at once (L6) |
 | L1 | lease handed a ChatGPT token | `renew_by` passes | login asked again; `Renew` sent; the lease's token and `renew_by` replaced |
 | L2 | renewal | gateway hands nothing (refresh failed, sign-in needed, locked), or the same token again | asked again after a minute; token on the machine unchanged |
-| L3 | renewal | account set aside, the key handed instead | renewals stop; running harnesses keep their token until it expires |
+| L3 | renewal | account set aside or another chosen: the key or another account's token handed | renewals stop, nothing sent; running harnesses keep their token until it expires |
 | L4 | renewal waiting | lease ends or its connection goes | renewal stops; the machine removes the token file |
-| L5 | machine | `Renew` for a lease whose harness has no token file, or not granted `takesLogin` | ignored, logged |
+| L5 | machine | `Renew` for a lease whose harness has no token file, or not granted `takesLogin`, or not held | ignored, logged |
+| L6 | lease opens | an account is in use but hands nothing (refresh failed, sign-in needed, locked) | started without a login, `renew_by` 0: parked once idle (P1), watched or not; the next message asks again |
+| L7 | machine | `nessa env serve` starts (after a crash, say) | every token file left behind is removed before any lease is taken |
 | P1 | idle agent, past `renew_by` (renewals failing) | parking sweep | parked now, watched or not |
 | P2 | busy agent, past `renew_by` | parking sweep | left running; the turn may fail when the token expires |
-| A1 | account in use | `chatgptRemove` | revoked at OpenAI (best effort, recorded), removed; Codex falls back to the API key |
+| A1 | account in use | `chatgptRemove` | removed from the vault, then revoked at OpenAI (best effort, recorded); a vault that refuses keeps it usable. Codex falls back to the API key |
 | A2 | any | `chatgptUse {accountId: null}` | Codex uses the saved API key |
 
 ## Wire
 
 - `LoginsStatus.chatgpt`: the accounts (`id`, `email`, `inUse`,
   `needsSignIn`) and the sign-in (`idle` with how the last one ended, or
-  `waiting` with its `authorizeUrl`). Never a token.
+  `waiting` with its `authorizeUrl`), each naming its `attempt`, so a
+  window follows only the sign-in it started. Never a token: the authorize
+  address carries none (`login_hint`, not `id_token_hint`).
 - `logins.chatgptSignIn {accountId?}`, `logins.chatgptCancel {}`,
   `logins.chatgptUse {accountId | null}`, `logins.chatgptRemove {accountId}`:
   grant `credential.manage`, each answering `LoginsStatus`.
@@ -202,7 +215,7 @@ its harnesses anyway, and the conversation resumes when the gateway is back.
 Unit tests under `crates/nessa-gateway/tests/logins/chatgpt.rs` (the
 sign-in, refresh, and account rows), `crates/nessa-env-serve/tests/launcher.rs`
 (the token file, its home, and its renewal), the
-`conversation/ssh_environment.rs` renewal tests (L1 to L3) and parking tests
+`conversation/ssh_environment.rs` renewal tests (L1 to L3, L6), the env-serve `serve.rs` frame tests (L1, L4, L5) and parking tests
 (P1, P2) in `crates/nessa-conversation`, and the conversation stress step
 `chatgpt` (`--chatgpts`): a fake OpenAI (`lib/fake-openai.mjs`) signs in two
 accounts from Settings › Accounts, a paired worker's Codex launches record the

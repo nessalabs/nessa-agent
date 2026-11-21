@@ -4166,6 +4166,8 @@ export type ChatgptSignInEnd = (typeof ChatgptSignInEnd)[keyof typeof ChatgptSig
 export interface ChatgptSignIn {
   /** Whether a sign-in waits for the browser. */
   state: "idle" | "waiting"
+  /** While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it. */
+  attempt?: string
   /** While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to. */
   authorizeUrl?: string
   /** While waiting: the account signing in again; absent for a new account. */

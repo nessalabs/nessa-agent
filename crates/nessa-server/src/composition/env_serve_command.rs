@@ -212,6 +212,9 @@ pub(super) async fn compose() -> Result<Composed, (Unavailability, RunError)> {
             return Err(not_configured(RunError::Agent(error.to_string())))
         }
     };
+    // Held alone now: a token file left by a process that ended without
+    // its leases' ends is no lease's any more.
+    launcher.forget_chatgpt_tokens();
     let ledger = FileLedger::open(directory.join("leases.jsonl"))
         .map_err(|error| not_configured(RunError::Agent(error.to_string())))?;
     // Short whatever the data directory is called: a socket's path is

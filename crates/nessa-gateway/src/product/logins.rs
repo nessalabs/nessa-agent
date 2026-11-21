@@ -97,7 +97,7 @@ pub(super) async fn dispatch(
             }
             match logins.chatgpt() {
                 Ok(chatgpt) => {
-                    chatgpt.cancel();
+                    chatgpt.cancel(&caller);
                     logins.status()
                 }
                 Err(error) => Err(error),
@@ -196,17 +196,20 @@ fn wire_chatgpt(status: &ChatgptStatus) -> WireChatgpt {
             })
             .collect(),
         sign_in: match &status.sign_in {
-            SignInStatus::Idle { last } => WireSignIn {
+            SignInStatus::Idle { last, attempt } => WireSignIn {
                 state: "idle".into(),
+                attempt: attempt.clone(),
                 authorize_url: None,
                 account_id: None,
                 last: last.map(wire_end),
             },
             SignInStatus::Waiting {
+                attempt,
                 authorize_url,
                 account,
             } => WireSignIn {
                 state: "waiting".into(),
+                attempt: Some(attempt.clone()),
                 authorize_url: Some(authorize_url.clone()),
                 account_id: account.as_ref().map(|account| account.as_str().to_owned()),
                 last: None,

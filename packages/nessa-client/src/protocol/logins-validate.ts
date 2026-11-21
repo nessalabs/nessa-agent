@@ -66,17 +66,25 @@ function chatgptAccount(value: unknown): ChatgptAccount {
 }
 
 function chatgptSignIn(value: unknown): ChatgptSignIn {
-  const item = record(value, ["state", "authorizeUrl", "accountId", "last"])
+  const item = record(value, ["state", "attempt", "authorizeUrl", "accountId", "last"])
   const state = own(item, "state")
   if (state === "idle") {
     if (Object.hasOwn(item, "authorizeUrl") || Object.hasOwn(item, "accountId"))
       invalid("chatgpt sign-in")
+    // An end names the attempt it was; no end, no attempt.
+    if (Object.hasOwn(item, "last") !== Object.hasOwn(item, "attempt"))
+      invalid("chatgpt sign-in attempt")
     if (!Object.hasOwn(item, "last")) return { state }
     const last = own(item, "last")
     if (typeof last !== "string" || !ends.has(last)) invalid("chatgpt sign-in end")
-    return { state, last: last as ChatgptSignInEnd }
+    return {
+      state,
+      attempt: accountId(own(item, "attempt"), "chatgpt sign-in attempt"),
+      last: last as ChatgptSignInEnd,
+    }
   }
   if (state !== "waiting" || Object.hasOwn(item, "last")) invalid("chatgpt sign-in")
+  const attempt = accountId(own(item, "attempt"), "chatgpt sign-in attempt")
   const authorizeUrl = own(item, "authorizeUrl")
   if (
     typeof authorizeUrl !== "string" ||
@@ -84,9 +92,10 @@ function chatgptSignIn(value: unknown): ChatgptSignIn {
     !/^https?:\/\//.test(authorizeUrl)
   )
     invalid("chatgpt authorizeUrl")
-  if (!Object.hasOwn(item, "accountId")) return { state, authorizeUrl }
+  if (!Object.hasOwn(item, "accountId")) return { state, attempt, authorizeUrl }
   return {
     state,
+    attempt,
     authorizeUrl,
     accountId: accountId(own(item, "accountId"), "chatgpt sign-in account"),
   }

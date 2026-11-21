@@ -717,9 +717,11 @@ impl Environment for SshEnvironment {
                     }
                     _ => None,
                 };
+                // Renewed on the machine only when a token was handed; one
+                // that could not be is asked for again by parking (row L6).
                 let renews = saved
                     .as_ref()
-                    .is_some_and(|handed| handed.renew_by_ms.is_some());
+                    .is_some_and(|handed| handed.login.is_some() && handed.renew_by_ms.is_some());
                 *login
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = saved;
@@ -1216,6 +1218,9 @@ struct Renewal {
 
 /// How long a failed renewal waits before asking again.
 const RENEW_RETRY: Duration = Duration::from_secs(60);
+/// How long before `renew_by` a renewal asks, at most half the time left,
+/// so one that succeeds has replaced it before the parking sweep reads it.
+const RENEW_AHEAD: Duration = Duration::from_secs(120);
 
 /// Keep a lease's expiring login fresh while the lease is routed
 /// (`docs/design/chatgpt-sign-in.md`, rows L1 to L4): at its `renew_by`, ask
@@ -1227,12 +1232,12 @@ const RENEW_RETRY: Duration = Duration::from_secs(60);
 /// `renew_by` the idle agent is parked meanwhile.
 async fn renew_login(mut renewal: Renewal) {
     loop {
-        let Some(by) = renewal
+        let Some((by, account)) = renewal
             .login
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .and_then(|handed| handed.renew_by_ms)
+            .and_then(|handed| Some((handed.renew_by_ms?, handed.account.clone())))
         else {
             return;
         };
@@ -1241,7 +1246,13 @@ async fn renew_login(mut renewal: Renewal) {
             .map_or(0, |elapsed| {
                 u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
             });
-        let wait = Duration::from_millis(by.saturating_sub(now));
+        // Never more than half the time left ahead, so a token that lasts
+        // only minutes is not renewed over and over at once.
+        let left = by.saturating_sub(now);
+        let ahead = u64::try_from(RENEW_AHEAD.as_millis())
+            .unwrap_or(u64::MAX)
+            .min(left / 2);
+        let wait = Duration::from_millis(left - ahead);
         tokio::select! {
             _ = renewal.gone.changed() => return,
             () = clock::sleep(wait) => {}
@@ -1251,29 +1262,32 @@ async fn renew_login(mut renewal: Renewal) {
             .login(&renewal.environment, renewal.agent, &renewal.lease)
             .await;
         let renewed = match fresh {
-            // The same token again (OpenAI's `earliest_refresh_at` not yet
-            // passed): nothing to send; asked again after a while.
-            Some(handed) if handed.renew_by_ms.is_some_and(|next| next <= by) => false,
-            Some(handed) if handed.renew_by_ms.is_some() => {
-                if renewal
-                    .link
-                    .renew(&renewal.lease, handed.login.clone())
-                    .await
-                {
+            // Another account, or the key, now (row L3): the harnesses keep
+            // their token until a restart starts them on what is in use.
+            Some(handed) if handed.login.is_some() && handed.account != account => return,
+            Some(HandedLogin {
+                login: Some(login),
+                renew_by_ms: Some(next),
+                account,
+            }) if next > by => {
+                if renewal.link.renew(&renewal.lease, login.clone()).await {
                     *renewal
                         .login
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handed);
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(HandedLogin {
+                        login: Some(login),
+                        renew_by_ms: Some(next),
+                        account,
+                    });
                     true
                 } else {
                     // Not queued: the lease is ending or its connection gone.
                     return;
                 }
             }
-            // The account in use was set aside: the harnesses keep their
-            // token until it is renewed by a restart.
-            Some(_) => return,
-            None => false,
+            // The same token again (OpenAI's `earliest_refresh_at` not yet
+            // passed), or nothing now (row L2): asked again after a while.
+            _ => false,
         };
         if !renewed {
             tracing::warn!(
@@ -1322,7 +1336,7 @@ impl HarnessHost for LeaseHost {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .as_ref()
-                    .map(|handed| handed.login.clone()),
+                    .and_then(|handed| handed.login.clone()),
             )
             .map_err(|error| match error {
                 StartError::Closed => AgentError::Closed,

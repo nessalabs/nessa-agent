@@ -223,12 +223,28 @@ pub struct LoginsStatus {
     pub chatgpt: Option<ChatgptStatus>,
 }
 
-/// A login handed to one lease, and when its agent should be started
-/// again: a ChatGPT access token's, ten minutes before it expires.
+/// What one lease is handed: a login, when its agent should be started
+/// again, and which ChatGPT account it is. A ChatGPT access token's
+/// `renew_by_ms` is ten minutes before it expires. With no `login`, a
+/// ChatGPT account is in use but could hand nothing now: `renew_by_ms` is
+/// then already due, so the idle agent is parked and the next message asks
+/// again (row L6 in `docs/design/chatgpt-sign-in.md`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandedLogin {
-    pub login: Login,
+    pub login: Option<Login>,
     pub renew_by_ms: Option<u64>,
+    pub account: Option<AccountId>,
+}
+
+impl HandedLogin {
+    /// Nothing now, from a ChatGPT account in use: asked again once idle.
+    fn retry() -> Self {
+        Self {
+            login: None,
+            renew_by_ms: Some(0),
+            account: None,
+        }
+    }
 }
 
 pub struct SavedLoginsService {
@@ -647,8 +663,9 @@ impl SavedLoginsService {
                     Ok(_) => this.login_for(&environment, agent, &lease),
                 }
                 .map(|login| HandedLogin {
-                    login,
+                    login: Some(login),
                     renew_by_ms: None,
+                    account: None,
                 })
             })
             .await
@@ -684,23 +701,34 @@ impl SavedLoginsService {
                     Some(access.account.clone()),
                 )
                 .then_some(HandedLogin {
-                    login: access.login,
+                    login: Some(access.login),
                     renew_by_ms: Some(access.renew_by_ms),
+                    account: Some(access.account),
                 }),
-            // Chosen a moment ago, gone now: as if none were.
-            Ok(None) => None,
-            Err(refused) => this.withheld(
-                &operation_id,
-                &environment,
-                agent,
-                &lease,
-                match refused {
-                    AccessRefused::Locked => Withheld::Locked,
-                    AccessRefused::Unavailable => Withheld::Unavailable,
-                    AccessRefused::SignInNeeded => Withheld::SignInNeeded,
-                    AccessRefused::Refresh(_) => Withheld::RefreshFailed,
-                },
-            ),
+            // Set aside a moment ago: the key, as if none were in use.
+            Ok(None) => this
+                .login_for(&environment, agent, &lease)
+                .map(|login| HandedLogin {
+                    login: Some(login),
+                    renew_by_ms: None,
+                    account: None,
+                }),
+            // Never the key in its place (row R9); asked again once idle.
+            Err(refused) => {
+                let _: Option<()> = this.withheld(
+                    &operation_id,
+                    &environment,
+                    agent,
+                    &lease,
+                    match refused {
+                        AccessRefused::Locked => Withheld::Locked,
+                        AccessRefused::Unavailable => Withheld::Unavailable,
+                        AccessRefused::SignInNeeded => Withheld::SignInNeeded,
+                        AccessRefused::Refresh(_) => Withheld::RefreshFailed,
+                    },
+                );
+                Some(HandedLogin::retry())
+            }
         })
         .await
         .ok()

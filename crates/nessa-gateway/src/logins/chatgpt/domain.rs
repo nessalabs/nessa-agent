@@ -138,8 +138,6 @@ pub struct ChatgptAccount {
     /// The ID token's verified `sub`.
     pub subject: String,
     pub client_id: String,
-    /// The last ID token, sent as `id_token_hint` when signing in again.
-    pub id_token: Secret,
     pub tokens: Option<Tokens>,
 }
 

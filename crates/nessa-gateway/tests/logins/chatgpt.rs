@@ -119,6 +119,10 @@ struct Authority {
     revoked: Mutex<Vec<String>>,
     /// Holds each refresh until a permit is added, to race two leases.
     hold: Option<Arc<tokio::sync::Semaphore>>,
+    /// Holds each exchange until a permit is added, counting those held, to
+    /// race a cancel or a new sign-in with the end of one.
+    exchange_hold: Option<Arc<tokio::sync::Semaphore>>,
+    exchanging: AtomicUsize,
     last_authorize: Mutex<Option<String>>,
 }
 
@@ -134,6 +138,8 @@ impl Default for Authority {
             refreshed: AtomicUsize::new(0),
             revoked: Mutex::new(Vec::new()),
             hold: None,
+            exchange_hold: None,
+            exchanging: AtomicUsize::new(0),
             last_authorize: Mutex::new(None),
         }
     }
@@ -167,6 +173,10 @@ impl ChatgptAuthority for Authority {
         _verifier: &str,
         _redirect_uri: &str,
     ) -> Result<TokenAnswer, AuthorityFailure> {
+        if let Some(hold) = &self.exchange_hold {
+            self.exchanging.fetch_add(1, Ordering::SeqCst);
+            hold.acquire().await.unwrap().forget();
+        }
         if *self.exchange_fails.lock().unwrap() {
             return Err(AuthorityFailure::Refused);
         }
@@ -327,7 +337,7 @@ impl Fixture {
 
     async fn ended(&self) -> Option<SignInEnd> {
         for _ in 0..200 {
-            if let SignInStatus::Idle { last } = self.logins.status().unwrap().sign_in {
+            if let SignInStatus::Idle { last, .. } = self.logins.status().unwrap().sign_in {
                 return last;
             }
             tokio::task::yield_now().await;
@@ -353,7 +363,6 @@ fn kept_account(id: &str, subject: &str, expires_at_ms: u64) -> ChatgptAccount {
         email: format!("{subject}@example.com"),
         subject: subject.into(),
         client_id: "oaiapp_one".into(),
-        id_token: Secret::new("id".into()),
         tokens: Some(Tokens {
             access: Secret::new("eyJa.eyJb.old".into()),
             refresh: Secret::new("refresh-old".into()),
@@ -423,12 +432,15 @@ async fn a_new_account_signs_in_with_its_issued_client_and_is_put_in_use() {
     // S1: requested, and waiting with an authorize URL that registers.
     f.logins.begin(caller(), None).await.unwrap();
     let SignInStatus::Waiting {
+        attempt,
         authorize_url,
         account,
     } = f.logins.status().unwrap().sign_in
     else {
         panic!("not waiting");
     };
+    // Its end names the same attempt, so the window that started it knows.
+    let started = attempt;
     assert!(authorize_url.contains(&format!("client_id={REGISTRATION_CLIENT}")));
     assert!(authorize_url.contains("register=true"));
     assert_eq!(account, None);
@@ -454,6 +466,10 @@ async fn a_new_account_signs_in_with_its_issued_client_and_is_put_in_use() {
         CallbackReply::SignedIn
     );
     assert_eq!(f.ended().await, Some(SignInEnd::SignedIn));
+    assert!(matches!(
+        f.logins.status().unwrap().sign_in,
+        SignInStatus::Idle { attempt: Some(ended), .. } if ended == started
+    ));
     let accounts = f.store.accounts();
     let kept = accounts.in_use().unwrap();
     assert_eq!(kept.client_id, "oaiapp_one");
@@ -582,8 +598,11 @@ async fn signing_in_again_must_be_the_same_account() {
 async fn a_new_sign_in_of_an_account_already_kept_signs_that_one_in_again() {
     let f = fixture();
     assert_eq!(f.sign_in("user-1").await, SignInEnd::SignedIn);
+    assert!(f.authority.revoked.lock().unwrap().is_empty());
     assert_eq!(f.sign_in("user-1").await, SignInEnd::SignedIn);
     assert_eq!(f.store.accounts().accounts().len(), 1);
+    // The grant it replaced is revoked.
+    assert_eq!(*f.authority.revoked.lock().unwrap(), ["refresh-1"]);
     assert_eq!(f.sign_in("user-2").await, SignInEnd::SignedIn);
     let accounts = f.store.accounts();
     assert_eq!(accounts.accounts().len(), 2);
@@ -608,7 +627,7 @@ async fn a_sign_in_is_replaced_cancelled_or_never_starts() {
         .collect();
     assert_eq!(ends, [SignInEnd::Replaced]);
     // S14.
-    f.logins.cancel();
+    f.logins.cancel(&caller());
     assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
     // Nothing listens: ends at once.
     *f.listener.fails.lock().unwrap() = true;
@@ -814,7 +833,6 @@ async fn an_account_is_chosen_set_aside_and_removed_with_its_token_revoked() {
 #[test]
 fn the_authorize_url_carries_every_parameter_encoded() {
     let base = url::Url::parse("https://auth.openai.com/api/accounts/authorize").unwrap();
-    let hint = Secret::new("id.token".into());
     let url = authorize_url(
         &base,
         &Authorize {
@@ -825,7 +843,6 @@ fn the_authorize_url_carries_every_parameter_encoded() {
             state: "s",
             nonce: "n",
             challenge: "c",
-            id_token_hint: Some(&hint),
             login_hint: Some("me@example.com"),
         },
     );
@@ -838,7 +855,8 @@ fn the_authorize_url_carries_every_parameter_encoded() {
     assert_eq!(query["code_challenge_method"], "S256");
     assert_eq!(query["resource"], "https://api.openai.com/v1");
     assert!(query["scope"].contains(PLAN_SCOPE) && query["scope"].contains("offline_access"));
-    assert_eq!(query["id_token_hint"], "id.token");
+    // The address is shown to every status reader: it carries no token.
+    assert!(!query.contains_key("id_token_hint"));
     assert_eq!(query["login_hint"], "me@example.com");
 }
 
@@ -976,4 +994,247 @@ fn only_a_get_of_the_callback_path_is_read() {
     assert_eq!(params["state"], "s");
     assert_eq!(callback_params("/other?code=c"), None);
     assert_eq!(callback_params("/auth/callback").unwrap().len(), 0);
+}
+
+/// The browser comes back to the attempt that listened `nth`, its answer
+/// awaited in a task of its own: `None` when the attempt was stopped before
+/// it answered.
+fn come_back(
+    f: &Fixture,
+    nth: usize,
+    state: String,
+) -> tokio::task::JoinHandle<Option<CallbackReply>> {
+    let sender = f.listener.servers.lock().unwrap()[nth].clone();
+    tokio::spawn(async move {
+        let (reply, answer) = oneshot::channel();
+        let params: BTreeMap<String, String> = [
+            ("state".to_owned(), state),
+            ("code".to_owned(), "code-1".to_owned()),
+            ("client_id".to_owned(), "oaiapp_one".to_owned()),
+        ]
+        .into();
+        sender.send(Callback { params, reply }).await.unwrap();
+        answer.await.ok()
+    })
+}
+
+/// Wait until `count` exchanges are held.
+async fn exchanging(f: &Fixture, count: usize) {
+    for _ in 0..500 {
+        if f.authority.exchanging.load(Ordering::SeqCst) >= count {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("no exchange started");
+}
+
+/// Rows S2 and S14 at the end of a sign-in: one cancelled, or replaced by
+/// another, while it talks to OpenAI keeps nothing, and its end is recorded
+/// once, as the cancel or the replacement.
+#[tokio::test]
+async fn a_sign_in_ended_while_it_finishes_keeps_nothing() {
+    let hold = Arc::new(tokio::sync::Semaphore::new(0));
+    // Cancelled.
+    let f = fixture_with(Authority {
+        exchange_hold: Some(hold.clone()),
+        ..Authority::default()
+    });
+    f.logins.begin(caller(), None).await.unwrap();
+    let back = come_back(&f, 0, f.state());
+    exchanging(&f, 1).await;
+    f.logins.cancel(&caller());
+    hold.add_permits(1);
+    assert_ne!(back.await.unwrap(), Some(CallbackReply::SignedIn));
+    assert_eq!(f.ended().await, Some(SignInEnd::Cancelled));
+    assert!(f.logins.status().unwrap().accounts.is_empty());
+    // The permit the stopped exchange never took is not the next one's.
+    if let Ok(permit) = hold.try_acquire() {
+        permit.forget();
+    }
+    // Replaced by a sign-in begun meanwhile, which then waits.
+    f.logins.begin(caller(), None).await.unwrap();
+    let back = come_back(&f, 1, f.state());
+    exchanging(&f, 2).await;
+    f.logins.begin(caller(), None).await.unwrap();
+    hold.add_permits(1);
+    assert_ne!(back.await.unwrap(), Some(CallbackReply::SignedIn));
+    assert!(f.logins.status().unwrap().accounts.is_empty());
+    assert!(matches!(
+        f.logins.status().unwrap().sign_in,
+        SignInStatus::Waiting { .. }
+    ));
+    let ends: Vec<SignInEnd> = f
+        .audit
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            LoginEvent::ChatgptSignInEnded { end, .. } => Some(end),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, [SignInEnd::Cancelled, SignInEnd::Replaced]);
+}
+
+/// The saved-logins service over this fixture's accounts, with `key` saved
+/// for Codex, the checked-in policy, and this fixture's audit.
+async fn handing(
+    f: &Fixture,
+    key: Option<&str>,
+) -> Arc<crate::logins::application::SavedLoginsService> {
+    use nessa_protocol::agents::AgentId;
+    let service = Arc::new(
+        crate::logins::application::SavedLoginsService::new(
+            AgentId::ALL
+                .iter()
+                .map(|agent| (*agent, Arc::new(Store::default()) as Arc<dyn SecretStore>))
+                .collect(),
+            Arc::new(Store::default()),
+            Arc::new(
+                crate::logins::infrastructure::cedar::CedarLoginPolicyEvaluator::new().unwrap(),
+            ),
+            f.audit.clone(),
+        )
+        .with_chatgpt(f.logins.clone()),
+    );
+    if let Some(key) = key {
+        service
+            .save(
+                caller(),
+                AgentId::Codex,
+                nessa_protocol::lease::Login::new(key.into()).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    service
+}
+
+/// What `service` hands Codex on an SSH host for `lease`.
+async fn hand(
+    service: &Arc<crate::logins::application::SavedLoginsService>,
+    lease: &str,
+) -> Option<crate::logins::application::HandedLogin> {
+    service
+        .clone()
+        .hand(
+            nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Ssh(
+                nessa_sdk::domain::agent_execution::leases::SshDestination::new("studio").unwrap(),
+            ),
+            nessa_protocol::agents::AgentId::Codex,
+            lease.into(),
+        )
+        .await
+}
+
+/// The last hand-off record for `lease`: what was sent, or why not.
+fn handoff(f: &Fixture, lease: &str) -> Option<LoginEvent> {
+    f.audit
+        .events()
+        .into_iter()
+        .rev()
+        .find(|event| match event {
+            LoginEvent::Sent { lease: each, .. } | LoginEvent::NotSent { lease: each, .. } => {
+                each == lease
+            }
+            _ => false,
+        })
+}
+
+/// Rows R8, R9, R5/R6 and the policy at the hand-off: with no account in
+/// use Codex is handed its key; with one, that account's token and when to
+/// renew it, recorded with the account; one that needs signing in again, or
+/// whose refresh fails now, hands nothing (never the key in its place) and
+/// leaves the lease due so it is asked again; and a machine the policy
+/// refuses costs no refresh.
+#[tokio::test]
+async fn codex_is_handed_the_account_in_use_and_never_the_key_in_its_place() {
+    use crate::logins::application::Withheld;
+    let f = fixture();
+    let service = handing(&f, Some("sk-codex-key")).await;
+    // R8: no account in use.
+    let handed = hand(&service, "lease-key").await.unwrap();
+    assert_eq!(handed.login.unwrap().expose(), "sk-codex-key");
+    assert_eq!((handed.renew_by_ms, handed.account), (None, None));
+    // An account signed in is in use: its token.
+    assert_eq!(f.sign_in("user-1").await, SignInEnd::SignedIn);
+    let handed = hand(&service, "lease-token").await.unwrap();
+    let account = f.logins.status().unwrap().accounts[0].id.clone();
+    assert_eq!(handed.login.unwrap().expose(), "eyJa.eyJb.access-1");
+    assert_eq!(handed.account, Some(account.clone()));
+    assert!(handed.renew_by_ms.is_some());
+    assert!(matches!(
+        handoff(&f, "lease-token"),
+        Some(LoginEvent::Sent { chatgpt: Some(sent), .. }) if sent == account
+    ));
+    // The policy refuses this gateway's own machine before any refresh.
+    let refreshed = f.authority.refreshed.load(Ordering::SeqCst);
+    f.time.0.fetch_add(15 * MINUTE, Ordering::SeqCst);
+    let here = service
+        .clone()
+        .hand(
+            nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here,
+            nessa_protocol::agents::AgentId::Codex,
+            "lease-here".into(),
+        )
+        .await;
+    assert_eq!(here, None);
+    assert_eq!(f.authority.refreshed.load(Ordering::SeqCst), refreshed);
+    // R5/R6: due for a refresh that fails now.
+    f.authority
+        .refreshes
+        .lock()
+        .unwrap()
+        .push_back(Err(RefreshFailure::Unreachable));
+    let handed = hand(&service, "lease-unreached").await.unwrap();
+    assert_eq!((handed.login, handed.renew_by_ms), (None, Some(0)));
+    assert!(matches!(
+        handoff(&f, "lease-unreached"),
+        Some(LoginEvent::NotSent {
+            why: Withheld::RefreshFailed,
+            ..
+        })
+    ));
+    // R9: refused for good, so it needs signing in again: still not the key.
+    f.authority
+        .refreshes
+        .lock()
+        .unwrap()
+        .push_back(Err(RefreshFailure::Unusable));
+    let handed = hand(&service, "lease-refused").await.unwrap();
+    assert_eq!((handed.login, handed.renew_by_ms), (None, Some(0)));
+    assert!(matches!(
+        handoff(&f, "lease-refused"),
+        Some(LoginEvent::NotSent {
+            why: Withheld::SignInNeeded,
+            ..
+        })
+    ));
+    let handed = hand(&service, "lease-again").await.unwrap();
+    assert!(
+        handed.login.is_none(),
+        "the key is never handed in its place"
+    );
+    // Set aside: the key again.
+    f.logins.use_account(caller(), None).await.unwrap();
+    let handed = hand(&service, "lease-set-aside").await.unwrap();
+    assert_eq!(handed.login.unwrap().expose(), "sk-codex-key");
+}
+
+/// Row S13: a browser that never comes back ends the sign-in after its
+/// wait, recorded, and keeps nothing.
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_the_browser_never_finishes_times_out() {
+    let f = fixture();
+    f.logins.begin(caller(), None).await.unwrap();
+    tokio::time::sleep(super::domain::SIGN_IN_WAIT + Duration::from_secs(1)).await;
+    assert_eq!(f.ended().await, Some(SignInEnd::TimedOut));
+    assert!(f.logins.status().unwrap().accounts.is_empty());
+    assert!(f.audit.events().iter().any(|event| matches!(
+        event,
+        LoginEvent::ChatgptSignInEnded {
+            end: SignInEnd::TimedOut,
+            ..
+        }
+    )));
 }

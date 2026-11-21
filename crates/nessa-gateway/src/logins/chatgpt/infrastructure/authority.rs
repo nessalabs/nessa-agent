@@ -273,9 +273,6 @@ pub fn authorize_url(base: &Url, request: &Authorize<'_>) -> String {
             query.append_pair("agent_name_hint", AGENT_NAME);
         }
         query.append_pair("ext_agent_host_id", request.host_id);
-        if let Some(hint) = request.id_token_hint {
-            query.append_pair("id_token_hint", hint.expose());
-        }
         if let Some(hint) = request.login_hint.filter(|hint| !hint.is_empty()) {
             query.append_pair("login_hint", hint);
         }

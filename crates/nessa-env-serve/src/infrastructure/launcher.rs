@@ -77,6 +77,14 @@ impl ConfiguredLauncher {
     pub fn codex_sessions(&mut self, path: PathBuf) {
         self.codex_sessions = Some(path);
     }
+    /// Remove every lease's ChatGPT token file: called as `env serve`
+    /// starts, when no lease is held yet, so a token a crash left behind
+    /// does not outlive the lease it was for.
+    pub fn forget_chatgpt_tokens(&self) {
+        if let Some(home) = self.codex_sessions.as_deref().and_then(chatgpt_home) {
+            let _ = std::fs::remove_dir_all(home.join(TOKENS_DIRECTORY));
+        }
+    }
     /// `workspace` is absolute and UTF-8, which composition checks.
     pub fn new(workspace: String, agents: HashMap<AgentId, LaunchSpec>) -> Self {
         Self {

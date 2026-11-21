@@ -10,16 +10,22 @@ const base: LoginsStatus = {
   ],
   devicesOn: [],
 }
-const waiting: LoginsStatus = {
+const ours = "6c3f0a52-1d1e-4d0b-9a55-6b8f5a0c7e01"
+const theirs = "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d"
+const waitingFor = (attempt: string): LoginsStatus => ({
   ...base,
   chatgpt: {
     accounts: [],
-    signIn: { state: "waiting", authorizeUrl: "https://auth.example/a" },
+    signIn: { state: "waiting", attempt, authorizeUrl: "https://auth.example/a" },
   },
-}
-const idle = (last?: "signed_in" | "declined"): LoginsStatus => ({
+})
+const waiting = waitingFor(ours)
+const idle = (last?: "signed_in" | "declined", attempt = ours): LoginsStatus => ({
   ...base,
-  chatgpt: { accounts: [], signIn: { state: "idle", ...(last ? { last } : {}) } },
+  chatgpt: {
+    accounts: [],
+    signIn: { state: "idle", ...(last ? { last, attempt } : {}) },
+  },
 })
 
 describe("ChatGPT sign-in for Codex", () => {
@@ -57,6 +63,18 @@ describe("ChatGPT sign-in for Codex", () => {
     expect(open).toHaveBeenCalledWith("https://auth.example/a")
     expect(pause).toHaveBeenCalledTimes(3)
     expect(pause).toHaveBeenCalledWith(7)
+  })
+
+  it("never reports another window's sign-in as its own", async () => {
+    const pause = async () => {}
+    for (const reads of [[waitingFor(theirs)], [idle("signed_in", theirs)]]) {
+      const signIn = codexChatgptSignIn({
+        status: async () => reads.shift() ?? idle(),
+        begin: async () => waiting,
+        pause,
+      })
+      expect(await signIn.signIn(() => {})).toBe("replaced")
+    }
   })
 
   it("says how one ended at once, and fails when it cannot start or be read", async () => {

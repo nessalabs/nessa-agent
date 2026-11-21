@@ -23,7 +23,6 @@ pub struct Authorize<'a> {
     /// The PKCE challenge (S256).
     pub challenge: &'a str,
     /// A saved account's last ID token, signing it in again.
-    pub id_token_hint: Option<&'a Secret>,
     pub login_hint: Option<&'a str>,
 }
 

@@ -4683,6 +4683,8 @@ impl ChatgptSignInEnd {
 pub struct ChatgptSignIn {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorize_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,

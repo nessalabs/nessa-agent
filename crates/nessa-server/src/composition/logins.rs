@@ -113,6 +113,7 @@ impl crate::conversation::infrastructure::ssh_environment::SavedLogins for Servi
                 crate::conversation::infrastructure::ssh_environment::HandedLogin {
                     login: handed.login,
                     renew_by_ms: handed.renew_by_ms,
+                    account: handed.account.map(|account| account.as_str().to_owned()),
                 }
             })
         })
