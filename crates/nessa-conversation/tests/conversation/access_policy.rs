@@ -261,7 +261,8 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             AccessAction::List
             | AccessAction::Write
             | AccessAction::ChannelCreate
-            | AccessAction::ChannelList => AccessResource::Catalogue {
+            | AccessAction::ChannelList
+            | AccessAction::TerminalUse => AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
             },
