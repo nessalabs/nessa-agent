@@ -494,9 +494,15 @@ impl TerminalHub {
             }
             live.views.insert(key.clone(), fit);
             live.running.send(EngineCommand::Attach {
-                key,
+                key: key.clone(),
                 out: link.out.clone(),
             });
+            // Nobody sizes it (its owner closed, or it was never focused):
+            // this view does, so a pane that comes back after its old view
+            // went is not left showing a grid sized for a box that is gone.
+            if live.size_owner.is_none() {
+                Self::take_size(live, key, fit);
+            }
             Ok(())
         })
     }
@@ -515,16 +521,22 @@ impl TerminalHub {
                 return Err(TerminalError::NotFound);
             }
             live.views.insert(key.clone(), fit);
-            live.size_owner = Some(key);
-            if live.size != fit {
-                live.size = fit;
-                live.running.send(EngineCommand::Resize(fit));
-            }
+            Self::take_size(live, key, fit);
             Ok(())
         })
     }
 
-    /// The view's box changed; only the size owner's change resizes.
+    /// `key` owns the size from now on; the terminal takes its fit.
+    fn take_size(live: &mut Live, key: ViewKey, fit: GridSize) {
+        live.size_owner = Some(key);
+        if live.size != fit {
+            live.size = fit;
+            live.running.send(EngineCommand::Resize(fit));
+        }
+    }
+
+    /// The view's box changed. The size owner's change resizes; an unowned
+    /// terminal is taken by the view whose box changed.
     fn fit(
         &self,
         link: &TerminalLink,
@@ -538,9 +550,9 @@ impl TerminalHub {
                 return Err(TerminalError::NotFound);
             }
             live.views.insert(key.clone(), fit);
-            if live.size_owner.as_ref() == Some(&key) && live.size != fit {
-                live.size = fit;
-                live.running.send(EngineCommand::Resize(fit));
+            match &live.size_owner {
+                Some(owner) if owner != &key => {}
+                _ => Self::take_size(live, key, fit),
             }
             Ok(())
         })

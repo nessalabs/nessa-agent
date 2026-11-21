@@ -116,7 +116,10 @@ program sees one terminal with one size, so:
   size. If its fit differs from the terminal's size, the gateway resizes the
   terminal to that fit. Every other view scales the grid to its own box and
   never resizes. When the owner closes, the size is kept until another view
-  takes focus.
+  takes focus, opens, or has its box change: an unowned terminal is taken by
+  the next of those, so a pane laid out again (a new view for the same
+  terminal) sizes it without a click. A view whose box holds the keyboard
+  reports its fit as focus.
 - **The cursor is the server's.** Cursor, colours and grid come from the
   frames. A view paints frames in `seq` order and drops any frame older than
   the one it shows. A view that opens gets a checkpoint of the current screen,
@@ -127,12 +130,13 @@ program sees one terminal with one size, so:
 
 | State | Event | Next state | Effect |
 | --- | --- | --- | --- |
-| Unowned | View opens | Unowned | checkpoint, then live frames to it |
-| Unowned | View focused | Owned by it | resize to its fit if different |
+| Unowned | View opens | Owned by it | checkpoint, then live frames to it; resize to its fit if different |
+| Unowned | View focused, or its box changes | Owned by it | resize to its fit if different |
 | Owned by A | B focused or typed into | Owned by B | resize to B's fit if different; all views rescale |
 | Owned by A | A's box changes | Owned by A | resize to A's new fit |
 | Owned by A | B's box changes | Owned by A | B rescales only |
 | Owned by A | Output | Owned by A | one frame to every open view |
+| Owned by A | B opens | Owned by A | checkpoint, then live frames to B |
 | Owned by A | A closes | Unowned | size kept |
 | any | Scroll in a view | same | history read for that view |
 | any | Program exits | Exited | `exit` to every view; input refused |

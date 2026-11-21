@@ -108,20 +108,19 @@ fn a_retried_open_answers_the_first_terminal() {
 }
 
 #[test]
-fn only_the_focused_view_sets_the_size_and_the_size_is_kept_when_it_goes() {
+fn the_focused_view_sets_the_size_and_an_unowned_terminal_is_taken_by_the_next_view() {
     let (hub, engine) = setup();
     let (link, _out) = hub.connect(owner("p"));
     let id = link
         .open(request(&owner("p"), "r1"), "/bin/sh".into())
         .unwrap()
         .id;
+    // Nobody owns a new terminal: the first view to open takes it.
     link.attach(&id, "a", size(120, 40)).unwrap();
     link.attach(&id, "b", size(60, 20)).unwrap();
-    assert_eq!(log(&engine), ["attach a", "attach b"]);
+    assert_eq!(log(&engine), ["attach a", "resize 120x40", "attach b"]);
+    assert_eq!(hub.size_of(&owner("p"), &id).unwrap().1, size(120, 40));
 
-    // Opening a view does not resize; focusing one does, to its fit.
-    link.focus(&id, "a", size(120, 40)).unwrap();
-    assert_eq!(log(&engine), ["resize 120x40"]);
     // Another view's box changing only rescales that view.
     link.fit(&id, "b", size(70, 20)).unwrap();
     assert!(log(&engine).is_empty());
@@ -138,8 +137,18 @@ fn only_the_focused_view_sets_the_size_and_the_size_is_kept_when_it_goes() {
     link.detach(&id, "b").unwrap();
     assert_eq!(log(&engine), ["detach b"]);
     assert_eq!(hub.size_of(&owner("p"), &id), Some((None, size(70, 20))));
+    // The next box change takes it, as a pane laid out again does.
     link.fit(&id, "a", size(90, 30)).unwrap();
-    assert!(log(&engine).is_empty());
+    assert_eq!(log(&engine), ["resize 90x30"]);
+    // A view that comes back while another owns it does not take it.
+    link.attach(&id, "c", size(40, 10)).unwrap();
+    assert_eq!(log(&engine), ["attach c"]);
+    // A pane laid out again (its old view gone, a new one opened) takes the
+    // size on open, though another view is still open.
+    link.detach(&id, "a").unwrap();
+    link.attach(&id, "d", size(50, 25)).unwrap();
+    assert_eq!(log(&engine), ["detach a", "attach d", "resize 50x25"]);
+    assert_eq!(hub.size_of(&owner("p"), &id).unwrap().1, size(50, 25));
 }
 
 #[test]

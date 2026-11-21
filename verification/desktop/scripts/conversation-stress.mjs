@@ -2043,6 +2043,44 @@ function terminalLog(run) {
     .slice(-4)
 }
 
+/**
+ * Whether the terminal in `grid` reflows to its pane: with the window made
+ * narrower, the grid draws at full size (no scale) and holds fewer columns,
+ * which only a resize of the terminal itself gives. A pane that never took
+ * the terminal's size scales it down instead.
+ */
+async function reflowsToItsPane(page, grid, failures) {
+  const look = () =>
+    grid.evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      scaled: getComputedStyle(element).transform !== "none",
+    }))
+  const settled = await waitFor(
+    async () => (await look()).width > 0 && !(await look()).scaled,
+    5_000,
+  )
+  if (!settled) {
+    failures.push("the terminal opened scaled down: its pane never took its size")
+    return
+  }
+  const before = await look()
+  const size = page.viewportSize()
+  if (!size) return
+  await page.setViewportSize({ width: size.width - 320, height: size.height })
+  try {
+    const reflowed = await waitFor(async () => {
+      const now = await look()
+      return !now.scaled && now.width < before.width - 100 ? now : null
+    }, 5_000)
+    if (!reflowed)
+      failures.push(
+        `a narrower window did not reflow the terminal (${JSON.stringify({ before, after: await look() })})`,
+      )
+  } finally {
+    await page.setViewportSize(size)
+  }
+}
+
 /** A terminal grid's rows as text, top to bottom. */
 async function gridRows(grid) {
   return grid
@@ -11466,6 +11504,9 @@ const steps = {
         failures.push("the gateway does not list the terminal ⌘J opened")
         return
       }
+      // The pane sizes the terminal before anyone clicks it: a narrower
+      // window reflows the shell to the pane, never shrinks its text.
+      await reflowsToItsPane(page, grid, failures)
       // A real shell: what is typed runs, and its output is a row of its own.
       await grid.click()
       await page.keyboard.type(`echo ${word}`)
