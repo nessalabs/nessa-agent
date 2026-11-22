@@ -1002,6 +1002,26 @@ describe("VoiceController", () => {
       expect(opened[1].told().at(-1)).toBe("Agent reply:\nAll green.")
     })
 
+    it("V21: a turn seen open while paused, then gone from the window, has ended", async () => {
+      const { controller, opened, conversation } = reconnecting()
+      await controller.start("s-1")
+      says(opened[0], "i1", "Run the tests.")
+      calls(opened[0], "send_to_agent", "c1")
+      // Paused before the send is answered: the turn starts while paused.
+      controller.pause()
+      await settle()
+      expect(conversation.sent).toEqual(["Run the tests."])
+      // Seen open while paused, then it leaves the window.
+      conversation.changed()
+      conversation.gone.add("turn-1")
+      conversation.changed()
+      await controller.resume()
+      expect(opened[1].told().at(-1)).toBe(
+        "Agent reply:\n(The agent finished without saying anything.)",
+      )
+      expect(controller.snapshot().phase).not.toBe("working")
+    })
+
     it("V19: speech not yet written down when the call pauses is nothing heard", async () => {
       const { controller, opened, conversation, clock } = reconnecting()
       await controller.start("s-1")

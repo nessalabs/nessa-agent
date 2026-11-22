@@ -751,9 +751,9 @@ export class VoiceController {
    * still on its way), what they said is handed to the voice, once.
    */
   private replied(call: Call): void {
-    // Kept while paused, and while a resume still connects: handed over
-    // once there is a connection to hand it to.
-    if (call.waiting.length === 0 || call.paused || !call.connection) return
+    if (call.waiting.length === 0) return
+    // Looked at whatever the call is doing, so a turn seen open while paused
+    // still counts as ended once it leaves the window.
     for (const turn of call.waiting) {
       if (call.ends.has(turn)) continue
       const state = call.conversation.turnState(turn)
@@ -763,6 +763,9 @@ export class VoiceController {
       else if (call.seen.has(turn)) call.ends.set(turn, { text: "", ended: "finished" })
     }
     if (call.pending > 0 || call.waiting.some((turn) => !call.ends.has(turn))) return
+    // Kept while paused, and while a resume still connects: handed over
+    // once there is a connection to hand it to.
+    if (call.paused || !call.connection) return
     const ends = call.waiting.map((turn) => call.ends.get(turn))
     call.waiting.length = 0
     call.ends.clear()
