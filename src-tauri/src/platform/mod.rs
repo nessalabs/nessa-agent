@@ -14,7 +14,6 @@
 //! | Lifecycle | accessory app, stays open when focus moves away | taskbar window, shown on launch | default window |
 //! | Provider login | Terminal CLI login | unavailable | unavailable |
 //! | Clicked link | `/usr/bin/open` | `xdg-open` | refused, with a reason |
-//! | Haptic tick | `NSHapticFeedbackManager` | none | none |
 
 use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
 
@@ -142,14 +141,6 @@ pub trait Host: Send + Sync {
         Ok(())
     }
 
-    /// One haptic tick on the trackpad, for a gesture that changed something
-    /// one step (a swipe that folded or opened one side column). Felt only
-    /// while a finger is on a Force Touch trackpad; a no-op on hosts with
-    /// no haptics.
-    fn perform_haptic(&self, _window: &WebviewWindow) -> Result<(), String> {
-        Ok(())
-    }
-
     /// OS-specific window events. Shared close-to-hide lives in `main`.
     fn on_window_event(&self, _window: &Window, _event: &WindowEvent) {}
 
@@ -239,14 +230,6 @@ pub fn panel_size(window: WebviewWindow) -> Result<PanelSize, String> {
 #[tauri::command]
 pub fn flush_compositor(window: WebviewWindow) -> Result<(), String> {
     current().flush_compositor(&window)
-}
-
-/// The page's swipe across the chat folded or opened a side column: the host
-/// answers with one haptic tick (`Host::perform_haptic`). The page decides
-/// when; the host only knows how.
-#[tauri::command]
-pub fn perform_haptic(window: WebviewWindow) -> Result<(), String> {
-    current().perform_haptic(&window)
 }
 
 /// The display the panel is on, falling back to the primary one — the same
