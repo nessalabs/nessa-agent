@@ -100,7 +100,7 @@ export const css = {
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
   lifted: "[data-drag-lifted]",
   dragging: "[data-workspace][data-drag-carrying], [data-workspace][data-drag-card]",
-  dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
+  dropAnnouncer: "[data-workspace] .split-panes-announcer", // class: the drag's live region (`split-panes/adapters/dom/drag.ts`)
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws

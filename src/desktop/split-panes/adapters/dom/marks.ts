@@ -83,6 +83,8 @@ export const classes = {
   placeholder: "split-panes-placeholder",
   /** Over the page while carrying. */
   shield: "split-panes-shield",
+  /** The live region that says where a drop would land. */
+  announcer: "split-panes-announcer",
 } as const
 
 /**
