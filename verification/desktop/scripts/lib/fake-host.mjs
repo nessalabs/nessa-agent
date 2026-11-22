@@ -51,10 +51,6 @@ export const STARTING = {
  * `nessa://paths-dragging`, `nessa://paths-drop-began` and
  * `nessa://paths-dropped` (`__fakeHostEmit`).
  *
- * Each haptic tick a window asks for (`perform_haptic`, a swipe that moved a
- * side column) is counted in `window.__fakeHostHaptics`; one with arguments
- * is refused, as the real command takes none.
- *
  * Every window may ask for setup again (`replay_onboarding`, from Settings),
  * which is counted in `window.__fakeHostReplays`. Given `setup`, the page is
  * the setup window the real host opens for that ask: the host says it started
@@ -115,7 +111,6 @@ export function gatewayHost({
   window.__fakeHostAskTimes = []
   window.__fakeHostStillStarting = 0
   window.__fakeHostReplays = 0
-  window.__fakeHostHaptics = 0
   window.__fakeHostSetupFinishes = []
   window.__fakeHostTrayAsks = 0
   window.__fakeHostPicks = { folders: [], resources: [] }
@@ -227,11 +222,6 @@ export function gatewayHost({
       }
       if (command === "call_pill_drag") {
         pillArgs(command, args, [])
-        return Promise.resolve(null)
-      }
-      if (command === "perform_haptic") {
-        pillArgs(command, args, [])
-        window.__fakeHostHaptics++
         return Promise.resolve(null)
       }
       if (command === "replay_onboarding") {

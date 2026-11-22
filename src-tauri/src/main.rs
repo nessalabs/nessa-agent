@@ -125,7 +125,6 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
-            platform::perform_haptic,
             panel::finish_setup,
             panel::retry_setup_record,
             panel::chosen_agent,

@@ -33,9 +33,6 @@ import {
   useFocusFollowsPane,
 } from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
-import { useSideSwipe } from "../../adapters/dom/side-swipe"
-import { useHaptic } from "../../../ui/haptics"
-import { columnToToggle, swipeColumnsOf, swipeReads } from "../../model/side-swipe"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { drawn } from "../../../model/side-column"
 import {
@@ -272,44 +269,6 @@ function useShownArrangement(region: SidebarRegion) {
       dispatch(arrangementShown({ arrangement: null }))
     }
   }, [dispatch, region.arrangement])
-}
-
-/**
- * A two-finger swipe across the chat, the sidebar or the session list folds
- * the open sidebar nearest the chat (swiped left) or opens the closed one
- * nearest the window's edge (swiped right), one per swipe, with a haptic tick
- * when one moved (`model/side-swipe.ts`), only while the chat reads one
- * (`swipeReads`). The rail and the right panel are not a swipe's.
- */
-function useSwipeColumns(
-  root: RefObject<HTMLElement | null>,
-  region: SidebarRegion,
-  browserSurface: boolean,
-  chrome: ReturnType<typeof useWorkspaceChrome>,
-) {
-  const dispatch = useWorkspaceDispatch()
-  const haptic = useHaptic()
-  const columns = swipeColumnsOf({
-    sidebarOpen: chrome.sidebarOpen,
-    listOffered: region.sessionList,
-    listOpen: chrome.listOpen,
-  })
-  useSideSwipe(
-    root,
-    swipeReads({
-      browserSurface,
-      fullView: chrome.shownRailItem !== undefined,
-      panelMaximized: chrome.panelMaximized,
-    }),
-    (direction) => {
-      const column = columnToToggle(columns, direction)
-      if (column === null) return
-      const open = direction === "right"
-      if (column === "sidebar") dispatch(toggleSidebar({ open }))
-      else dispatch(toggleSessionList({ open }))
-      haptic()
-    },
-  )
 }
 
 /** The layout says whether the right panel is drawn, for the person's agents. */
@@ -696,7 +655,6 @@ export function useWorkspaceWindow({
     chrome.dockPanel,
   )
   usePanelEscape(root, chrome.panelMaximized, chrome.setPanelMaximized)
-  useSwipeColumns(root, region, browserSurface, chrome)
   const panelDrag = usePanelDrag(chrome.panelWidth, chrome.resizePanel, chrome.closePanel)
   useFocusFollowsPane(store, root, performanceFocusClock)
   // The panes' drag spans the window: sessions are picked up from its lists.

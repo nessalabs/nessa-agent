@@ -130,18 +130,14 @@ import {
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
  *   swipe       with the rail on, the right panel open and every side
- *               column open, two-finger swipes over the chat fold the
- *               session list then the sidebar, one per swipe, a fling's
- *               momentum included, then open them back sidebar, list; the
- *               rail and the right panel never move; each move gives one
- *               haptic tick and a swipe with nothing left to move gives
- *               none; over a wide table or a wide code block (its lines
- *               in a shadow root) the swipe scrolls it, and a vertical
- *               scroll that drifts sideways folds nothing; over the
- *               sidebar and the session list's head a swipe moves the
- *               columns as over the chat, and over a session row it is
- *               the row's own (its actions open and close, no column
- *               moves)
+ *               column open, two-finger swipes left and right (one, a
+ *               fling, two back to back) over the chat, the sidebar and
+ *               the session list's head move no column: a sideways swipe
+ *               is no way to switch columns or the panel; with the
+ *               sidebar and the list folded by their keys a swipe right
+ *               opens nothing; a wide table and a wide code block (its
+ *               lines in a shadow root) still scroll under a swipe, and a
+ *               session row's own swipe still opens and closes its actions
  *   touchId     the vault is sealed and Settings › Accounts asks for it,
  *               with a fake Touch ID on: the dialog offers Touch ID ticked
  *               and keeps the typed passphrase; the next unlock is the
@@ -758,12 +754,12 @@ const ended = (turn) => turnEnded(turn.status)
 
 /**
  * The `swipe` step's swipes, with the rail on and the wide table drawn in
- * `message` (its scroller `port`) beside the wide code block `code`: every
- * column open, folded one per swipe left, nothing more to fold, the table and
- * the code scrolled and a vertical scroll left alone, then opened one per
- * swipe right, a haptic tick for each move.
+ * `message` (its scroller `port`) beside the wide code block `code`: a
+ * sideways two-finger swipe moves no side column and not the right panel,
+ * whether everything is open or the sidebars are folded, while the table,
+ * the code and a session row still take their own swipes.
  */
-async function swipeColumns(run, step, message, port, code, failures) {
+async function sidewaysSwipes(run, step, message, port, code, failures) {
   const page = run.page
   const columns = () =>
     page.evaluate(
@@ -772,7 +768,6 @@ async function swipeColumns(run, step, message, port, code, failures) {
         panel: document.querySelector(workspace)?.dataset.panel,
         sidebar: document.querySelector(workspace)?.dataset.sidebar,
         list: document.querySelector(workspace)?.dataset.list,
-        haptics: window.__fakeHostHaptics,
       }),
       { frame: css.workspaceWindow, workspace: css.workspace },
     )
@@ -780,7 +775,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
   const start = await columns()
   if (start.sidebar !== "open") await page.keyboard.press(keys.toggleSidebar)
   if (start.list !== "open") await page.keyboard.press(keys.toggleSessionList)
-  // The right panel open too: a swipe moves neither it nor the rail.
+  // The right panel open too: a swipe moves none of them.
   if (start.panel !== "open") await page.keyboard.press(keys.togglePanel)
   const open = { panel: "open", sidebar: "open", list: "open" }
   const at = async (want) => {
@@ -791,8 +786,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
     failures.push(`the side columns did not all open: ${JSON.stringify(await columns())}`)
     return
   }
-  // The rail as the window drew it beside the open panel, which no swipe
-  // changes.
+  // The rail as the window drew it beside the open panel.
   const all = { ...open, rail: (await columns()).rail }
   // Two fingers over the reply's words: `x` positive is the fingers
   // moving left (the Mac's natural scrolling, which Chromium assumes).
@@ -874,17 +868,14 @@ async function swipeColumns(run, step, message, port, code, failures) {
       }
     await page.waitForTimeout(400)
   }
-  let ticks = (await columns()).haptics
-  const expect = async (label, want, ticked) => {
-    const landed = await waitFor(() => at(want), 5_000)
+  // Each swipe has waited out its gesture (`swipe`'s pause), so the
+  // columns read now are the ones it left.
+  const expect = async (label, want) => {
     const now = await columns()
-    if (!landed)
+    if (!(await at(want)))
       failures.push(
         `${label}: the columns are ${JSON.stringify(now)}, not ${JSON.stringify(want)}`,
       )
-    if (now.haptics !== ticks + ticked)
-      failures.push(`${label}: ${now.haptics - ticks} haptic ticks, not ${ticked}`)
-    ticks = now.haptics
   }
   // Over the wide table the swipe is the table's: it scrolls, nothing folds.
   // First, with every column open, where the reply is narrowest.
@@ -892,7 +883,7 @@ async function swipeColumns(run, step, message, port, code, failures) {
   if (hidden <= 1) failures.push(`the wide table does not scroll (${hidden} px hidden)`)
   const scrolled = await port.evaluate((each) => each.scrollLeft)
   await swipe(port, 15)
-  await expect("a swipe over the wide table", all, 0)
+  await expect("a swipe over the wide table", all)
   if ((await port.evaluate((each) => each.scrollLeft)) <= scrolled)
     failures.push("a swipe over the wide table did not scroll it")
   // Over a wide code block the same. The highlighter draws its lines in a
@@ -922,63 +913,41 @@ async function swipeColumns(run, step, message, port, code, failures) {
   else {
     const before = await codeScroll()
     await swipe(code, 15)
-    await expect("a swipe over the wide code block", all, 0)
+    await expect("a swipe over the wide code block", all)
     if ((await codeScroll()) <= before)
       failures.push("a swipe over the wide code block did not scroll it")
   }
-  // Left: the column nearest the chat goes first, one per swipe; a
-  // fling's momentum is the same swipe.
-  await swipe(words, 15, 0, 30)
-  await expect("a fling left", { ...all, list: "closed" }, 1)
-  await swipe(words, 15)
-  const none = { ...all, sidebar: "closed", list: "closed" }
-  await expect("a second swipe left", none, 1)
-  // The rail and the right panel stay: nothing more for a swipe to fold.
-  await swipe(words, 15)
-  await expect("a swipe left with both sidebars folded", none, 0)
-  // Right: back in the order they went, the sidebar first.
-  await swipe(words, -15)
-  await expect("a swipe right", { ...all, list: "closed" }, 1)
-  // A vertical scroll that drifts sideways is a scroll.
-  await swipe(words, 4, 30)
-  await expect("a vertical scroll", { ...all, list: "closed" }, 0)
-  await swipe(words, -15)
-  await expect("a second swipe right", all, 1)
-  await swipe(words, -15)
-  await expect("a swipe right with everything open", all, 0)
-  // Two swipes with no pause between them, the second starting as the
-  // first one's momentum dies down: each folds a column, with its own tick.
-  // The pointer stays where it was, as two fingers on a trackpad leave it.
-  // Every engine: this is what the shipping WKWebView is read for.
+  // Over the reply's words a swipe either way moves nothing: one swipe, a
+  // fling, two back to back, and one picking up as the last one's momentum
+  // fades. The rail and the right panel stay too.
   const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
-  await swipe(words, [...fling, ...fling])
-  await expect("two swipes left back to back", none, 2)
-  const back = fling.map((each) => -each)
-  await swipe(words, [...back, ...back])
-  await expect("two swipes right back to back", all, 2)
-  // The second swipe while the first one's momentum is still slowing, a
-  // few pixels an event and never down to nothing: read as the fingers
-  // pick up, not after the momentum has died away.
   const fading = [15, 15, 15, 15, 15, 15, 12, 10, 8, 6, 5, 4, 3]
   const picking = [4, 8, 14, 18, 18, 18, 18, 18]
-  await swipe(words, [...fading, ...picking])
-  await expect("a second swipe left while the first one's momentum fades", none, 2)
   const neg = (xs) => xs.map((each) => -each)
-  await swipe(words, [...neg(fading), ...neg(picking)])
-  await expect("a second swipe right while the first one's momentum fades", all, 2)
-  // Over the side columns as over the chat: over the sidebar a swipe left
-  // folds the list and one right opens it back, and over the list's head
-  // a swipe left folds the list it is in.
+  for (const [label, x, events] of [
+    ["a swipe left", 15, 8],
+    ["a fling left", 15, 30],
+    ["two swipes left back to back", [...fling, ...fling]],
+    ["a second swipe left as the first one's momentum fades", [...fading, ...picking]],
+    ["a swipe right", -15, 8],
+    ["two swipes right back to back", neg([...fling, ...fling])],
+  ]) {
+    await swipe(words, x, 0, events)
+    await expect(`${label} over the chat`, all)
+  }
+  // Over the side columns the same: the sidebar and the list's head.
   const inSidebar = page.locator(css.overviewEntry).first()
-  await swipe(inSidebar, 15)
-  await expect("a swipe left over the sidebar", { ...all, list: "closed" }, 1)
-  await swipe(inSidebar, -15)
-  await expect("a swipe right over the sidebar", all, 1)
-  await swipe(page.locator(`${css.sessionList} .desktop-column-title`).first(), 15)
-  await expect("a swipe left over the session list", { ...all, list: "closed" }, 1)
-  await swipe(words, -15)
-  await expect("a swipe right to open the session list again", all, 1)
-  // A session row's own two-finger swipe stays the row's: left uncovers
+  const listHead = page.locator(`${css.sessionList} .desktop-column-title`).first()
+  for (const [label, over] of [
+    ["the sidebar", inSidebar],
+    ["the session list", listHead],
+  ]) {
+    await swipe(over, 15)
+    await expect(`a swipe left over ${label}`, all)
+    await swipe(over, -15)
+    await expect(`a swipe right over ${label}`, all)
+  }
+  // A session row's own two-finger swipe is still the row's: left uncovers
   // its Archive and Delete, right covers them again, and no column moves.
   // The row ends a wheel swipe after 140 ms without an event by its own
   // clock, which a slow round trip from here would open, so each swipe
@@ -997,13 +966,34 @@ async function swipeColumns(run, step, message, port, code, failures) {
     await page.waitForTimeout(400)
   }
   await rowSwipe(40)
-  await expect("a swipe left over a session row", all, 0)
+  await expect("a swipe left over a session row", all)
   if (!(await waitFor(async () => (await tray()) === "open", 3_000)))
     failures.push(`a swipe left over a session row left it ${await tray()}, not open`)
   await rowSwipe(-40)
-  await expect("a swipe right over an open session row", all, 0)
+  await expect("a swipe right over an open session row", all)
   if (!(await waitFor(async () => (await tray()) === null, 3_000)))
     failures.push(`a swipe right over an open session row left it ${await tray()}`)
+  // Folded by their keys, the sidebar and the list stay folded under a
+  // swipe right, as they once would have opened.
+  await page.keyboard.press(keys.toggleSessionList)
+  await page.keyboard.press(keys.toggleSidebar)
+  const none = { ...all, sidebar: "closed", list: "closed" }
+  if (!(await waitFor(() => at(none), 5_000)))
+    failures.push(
+      `the sidebars did not fold by their keys: ${JSON.stringify(await columns())}`,
+    )
+  else {
+    await swipe(words, -15)
+    await expect("a swipe right with the sidebars folded", none)
+    await swipe(words, -15, 0, 30)
+    await expect("a fling right with the sidebars folded", none)
+  }
+  await page.keyboard.press(keys.toggleSidebar)
+  await page.keyboard.press(keys.toggleSessionList)
+  if (!(await waitFor(() => at(all), 5_000)))
+    failures.push(
+      `the sidebars did not open by their keys: ${JSON.stringify(await columns())}`,
+    )
   if (run.evidence)
     await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
   // The panel as the step found it, for the steps after.
@@ -12876,7 +12866,7 @@ const steps = {
     await run.exclusive(async () => {
       const page = run.page
       // An answer with a table wider than the reply: its panel scrolls
-      // sideways, which a swipe begun over it must leave to it.
+      // sideways, and a swipe over it scrolls it.
       const text = prompt(run, STRESS.table, step)
       const seen = await send(run, run.main.id, text, failures)
       const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
@@ -12900,7 +12890,7 @@ const steps = {
       if (failures.length) return
       try {
         const code = message.locator('[data-slot="code-block"]').nth(1)
-        await swipeColumns(run, step, message, port, code, failures)
+        await sidewaysSwipes(run, step, message, port, code, failures)
       } finally {
         // Back as the other steps expect it, whatever failed: the rail off.
         await setSideRail(page, false, failures)

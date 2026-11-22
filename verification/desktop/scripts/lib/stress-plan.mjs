@@ -287,7 +287,7 @@ export const KNOBS = {
   },
   swipes: {
     default: 1,
-    what: "times the side columns are swiped away over the chat with two fingers, one per swipe (session list, sidebar, rail), and back (rail, sidebar, session list), each with one haptic tick; a fling toggles once, and a swipe over a wide table or a wide code block, or a vertical scroll, toggles nothing",
+    what: "times two-finger sideways swipes over the chat, the sidebar and the session list are checked to move no side column and not the right panel (all open, or the sidebars folded), while a wide table, a wide code block and a session row still take their own swipes",
   },
   styles: {
     default: 1,

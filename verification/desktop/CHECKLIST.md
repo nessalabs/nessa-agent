@@ -2385,10 +2385,10 @@ row.
   row.
 - [ ] **The Archive button archives without opening the row.** _Check:_
   `archive`.
-- [ ] **A row's two-finger swipe is the row's, not the columns'.** The side
-  columns fold and open from a swipe over the chat, the sidebar or the session
-  list, but one over a session row only moves the row: no column moves and no
-  haptic ticks. _Check:_ `conversation-stress` step `swipe`.
+- [ ] **A sideways swipe moves no side column.** A two-finger swipe over the
+  chat, the sidebar or the session list leaves the sidebar, the list, the rail
+  and the right panel as they were, open or folded; one over a session row
+  only moves the row. _Check:_ `conversation-stress` step `swipe`.
 - [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
   _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
   pane) and right-click opens the row's own menu; a swipe rests the row open,

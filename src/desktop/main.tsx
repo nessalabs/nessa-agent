@@ -21,7 +21,6 @@ import {
   homeFolder,
   openGatewayConfig,
   onPathsDragged,
-  performHaptic,
   host,
   loadAssignedGatewayEndpoint,
   onCallPillPress,
@@ -60,7 +59,6 @@ import {
   VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
-import { HapticProvider } from "./ui/haptics"
 import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
@@ -283,9 +281,6 @@ if (voice) {
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
-// A tick the host could not give is not felt, and nothing else changes.
-const hapticTick = () => void performHaptic().catch(() => {})
-
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
@@ -376,17 +371,15 @@ createRoot(container).render(
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
                                                       <CodeBlockProvider mode="dark">
-                                                        <HapticProvider tick={hapticTick}>
-                                                          <DesktopWindow
-                                                            hostKind={host.kind}
-                                                            browserSurface={
-                                                              host.kind === "browser"
-                                                            }
-                                                            inspectable={
-                                                              import.meta.env.DEV
-                                                            }
-                                                          />
-                                                        </HapticProvider>
+                                                        <DesktopWindow
+                                                          hostKind={host.kind}
+                                                          browserSurface={
+                                                            host.kind === "browser"
+                                                          }
+                                                          inspectable={
+                                                            import.meta.env.DEV
+                                                          }
+                                                        />
                                                       </CodeBlockProvider>
                                                     </VoiceProvider>
                                                   </SavedLoginsProvider>
