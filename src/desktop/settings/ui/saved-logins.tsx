@@ -77,19 +77,29 @@ function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
     }
   }, [gateway, take, vaultSettled])
   // While a ChatGPT sign-in waits for the browser, how it ends is read again.
+  // Polls are serialized so a slow gateway read cannot be starved by the next tick.
   const waiting = logins?.chatgpt?.signIn.kind === "waiting"
   useEffect(() => {
     if (!gateway || !waiting) return
     let current = true
-    const timer = window.setInterval(() => {
-      const revision = ++reads.current
-      void gateway.read().then((outcome) => {
-        if (current && revision === reads.current) take(outcome)
-      })
-    }, pollMs)
+    let timer: number | undefined
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        const revision = ++reads.current
+        void gateway
+          .read()
+          .then((outcome) => {
+            if (current && revision === reads.current) take(outcome)
+          })
+          .finally(() => {
+            if (current) schedule()
+          })
+      }, pollMs)
+    }
+    schedule()
     return () => {
       current = false
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [gateway, waiting, take, pollMs])
   /**

@@ -447,3 +447,31 @@ it("re-reads saved logins and voice key once the vault unlocks", async () => {
   expect(host.textContent).toContain("Not connected")
   expect(host.textContent).not.toContain("Nessa is locked.")
 })
+
+it("applies a slow ChatGPT polling response even when read latency exceeds pollMs", async () => {
+  const { gateway, signedIn } = fake({ chatgpt: true })
+  let reads = 0
+  const slowGateway: SavedLoginsGateway = {
+    ...gateway,
+    read: () => {
+      reads += 1
+      if (reads === 1) return gateway.read()
+      return new Promise((resolve) => {
+        setTimeout(() => void gateway.read().then(resolve), 40)
+      })
+    },
+  }
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={slowGateway}>
+        <SavedLoginsGroup pollMs={10} />
+      </SavedLoginsProvider>,
+    ),
+  )
+  await act(async () => button("[data-chatgpt-continue]").click())
+  expect(host.querySelector("[data-chatgpt-open]")).not.toBeNull()
+  signedIn("2b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e", "slow@example.com")
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 90)))
+  expect(host.querySelector("[data-chatgpt-open]")).toBeNull()
+  expect(host.querySelector('[data-chatgpt-account="slow@example.com"]')).not.toBeNull()
+})
