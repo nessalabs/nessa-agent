@@ -89,6 +89,24 @@ async function conversation(source: FakeSource = fakeSource()) {
 const shownModel = () =>
   host.querySelector(".desktop-chip-model")?.getAttribute("aria-label") ?? ""
 const field = () => host.querySelector('textarea[aria-label="Message"]')
+/** What the picker says, as its tooltip, and whether it marks a warning. */
+const pickerAnchor = () =>
+  host.querySelector(".desktop-chip-model")?.closest(".desktop-tip-anchor")
+const pickerSays = () => pickerAnchor()?.getAttribute("data-tooltip")
+const pickerWarns = () => pickerAnchor()?.getAttribute("data-attention") === "warning"
+/** The composer holds the draft and its row of controls, and nothing that says anything. */
+const composerSaysNothing = () => {
+  const form = host.querySelector(".desktop-composer")
+  return (
+    !!form &&
+    [...form.children].every((child) =>
+      ["desktop-composer-body", "desktop-composer-row", "desktop-composer-wake"].some(
+        (name) => child.classList.contains(name),
+      ),
+    ) &&
+    !form.querySelector('[role="status"], [role="alert"], [aria-live]')
+  )
+}
 
 /** The model the source was asked to send the last message with. */
 async function sentWith(store: Store, source: FakeSource, sessionId: string) {
@@ -167,7 +185,7 @@ describe("a pane's composer shows the model the next message is sent with", () =
     expect(await sentWith(store, source, draftId)).toEqual(astra)
   })
 
-  it("says the chat cannot be reopened when the model change was refused as a configuration change", async () => {
+  it("says the chat cannot be reopened on the picker, never in the composer", async () => {
     const { store } = await conversation()
     const choice = { requestId: "r", model: astra }
     await act(async () => {
@@ -189,9 +207,9 @@ describe("a pane's composer shows the model the next message is sent with", () =
         }),
       )
     })
-    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
-      "This chat can't be reopened.",
-    )
+    expect(pickerSays()).toBe("This chat can’t be reopened.")
+    expect(pickerWarns()).toBe(true)
+    expect(composerSaysNothing()).toBe(true)
     await act(async () => {
       store.dispatch(
         workspaceActions.modelChoiceSettled({
@@ -205,9 +223,8 @@ describe("a pane's composer shows the model the next message is sent with", () =
         }),
       )
     })
-    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
-      "This chat can't be reopened.",
-    )
+    expect(pickerSays()).toBe("This chat can’t be reopened.")
+    // Settled unconfirmed: the next send asks again, and says nothing now.
     await act(async () => {
       store.dispatch(
         workspaceActions.modelChoiceSettled({
@@ -216,17 +233,17 @@ describe("a pane's composer shows the model the next message is sent with", () =
         }),
       )
     })
-    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
-      "The model change is not confirmed. Send again to check and try.",
-    )
+    expect(pickerSays()).toBe("Model and thinking")
+    expect(pickerWarns()).toBe(false)
+    expect(composerSaysNothing()).toBe(true)
   })
   it("says nothing of an access pick on its way or held for the turn's end, only the shield shows it", async () => {
     const { store } = await conversation()
-    const notice = () => host.querySelector(".desktop-composer-notice")?.textContent
+    const shield = () => host.querySelector('[data-slot="composer-access-mode"]')
     await act(async () => {
       store.dispatch(workspaceActions.accessChanging({ sessionId: "a", mode: "full" }))
     })
-    expect(notice()).toBeUndefined()
+    expect(shield()?.getAttribute("data-tooltip")).toBe("Access")
     await act(async () => {
       store.dispatch(
         workspaceActions.accessRefused({
@@ -238,11 +255,13 @@ describe("a pane's composer shows the model the next message is sent with", () =
         }),
       )
     })
-    expect(notice()).toBeUndefined()
+    expect(shield()?.getAttribute("data-tooltip")).toBe("Access")
+    expect(shield()?.hasAttribute("data-attention")).toBe(false)
+    expect(composerSaysNothing()).toBe(true)
     expect(store.getState().workspace.accessChoices.a?.state).toBe("pending")
   })
-  it("asks for no send while the source settles a model change it holds", async () => {
-    const { store } = await conversation()
+  it("sends while the source still has to settle a model change it holds: the send settles it", async () => {
+    const { store, source } = await conversation()
     await act(async () => {
       store.dispatch(
         workspaceActions.transcriptLoaded({
@@ -264,12 +283,13 @@ describe("a pane's composer shows the model the next message is sent with", () =
       )
       store.dispatch(setComposerText({ sessionId: "a", text: "next" }))
     })
-    expect(host.querySelector(".desktop-composer-notice")?.textContent).toBe(
-      "The model change is not confirmed yet. You can send once it settles.",
-    )
-    expect(
-      host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled,
-    ).toBe(true)
+    expect(composerSaysNothing()).toBe(true)
+    expect(pickerSays()).toBe("Model and thinking")
+    const send = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
+    expect(send?.disabled).toBe(false)
+    await act(async () => send?.click())
+    await settle()
+    expect(source.calls.filter((call) => call[0] === "send")).toHaveLength(1)
   })
 })
 

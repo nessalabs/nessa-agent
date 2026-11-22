@@ -519,3 +519,64 @@ it("marks itself empty until anything is typed or attached, and its circle takes
     await act(async () => root.unmount())
   }
 })
+
+it("says nothing of its own: every note is its control's tooltip, and the form holds only the draft and its row", async () => {
+  const root = createRoot(host)
+  const warning = (text: string) => ({ tone: "warning" as const, text })
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        onSend={() => {}}
+        text="a draft"
+        onTextChange={() => {}}
+        model={undefined}
+        onModelChange={() => {}}
+        modelNote={warning("Model didn’t change. Choose again to try.")}
+        access={{
+          value: "ask-approval",
+          onChange: () => {},
+          note: warning("This model doesn’t offer that access."),
+        }}
+        images={{
+          images: [],
+          onPaste: () => {},
+          onRemove: () => {},
+          note: warning("An image can be 5 MiB at most."),
+        }}
+      />,
+    ),
+  )
+  const form = host.querySelector(".desktop-composer")
+  if (!form) throw new Error("no composer")
+  // Whatever a control has to say, the form itself has three children: the
+  // draft, its row of controls, and the circle a quiet pane folds it to.
+  expect([...form.children].map((child) => child.className)).toEqual([
+    "desktop-composer-body",
+    "desktop-composer-row",
+    "desktop-composer-wake",
+  ])
+  expect(form.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull()
+  const said = (selector: string) => {
+    const control = form.querySelector(selector)
+    return [
+      control?.getAttribute("data-tooltip"),
+      control?.getAttribute("data-attention"),
+    ]
+  }
+  expect(said('button[aria-label="Attach files"]')).toEqual([
+    "An image can be 5 MiB at most.",
+    "warning",
+  ])
+  expect(said("[data-access-mode]")).toEqual([
+    "This model doesn’t offer that access.",
+    "warning",
+  ])
+  const picker = form.querySelector(".desktop-chip-model")?.closest(".desktop-tip-anchor")
+  expect([
+    picker?.getAttribute("data-tooltip"),
+    picker?.getAttribute("data-attention"),
+  ]).toEqual(["Model didn’t change. Choose again to try.", "warning"])
+  await act(async () => root.unmount())
+})

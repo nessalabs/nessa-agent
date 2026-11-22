@@ -1360,39 +1360,24 @@ html:not(.dark) [data-surface] {
 }
 
 /*
- * What the composer says of the draft, its model or its access, on a quiet
- * line of its own above the controls. Its words start where the draft's text
- * starts; a warning's mark hangs in the padding to their left, and a neutral
- * notice draws no mark at all, so the line reads as a hint, not a list item.
+ * A composer control with a warning to give (`ComposerNote`): the words are
+ * its tooltip, and a dot in its corner says there is something to read. The
+ * composer itself has no line for status.
  */
-.desktop-composer-notice {
-  display: flex;
-  margin-top: 6px;
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.5;
-  color: var(--muted-foreground);
-  animation: desktop-composer-notice-in var(--desktop-fast) ease-out;
+.desktop-composer [data-attention="warning"] {
+  position: relative;
 }
 
-.desktop-composer-notice[data-tone="warning"] {
-  color: var(--foreground);
-}
-
-.desktop-composer-notice [data-slot="status-label-mark"] {
-  /* The mark is 12px and sits 6px before the words. */
-  margin-inline-start: -18px;
-}
-
-@keyframes desktop-composer-notice-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .desktop-composer-notice {
-    animation: none;
-  }
+.desktop-composer [data-attention="warning"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--desktop-radius-pill);
+  background: var(--destructive);
+  pointer-events: none;
 }
 
 .desktop-composer-row {

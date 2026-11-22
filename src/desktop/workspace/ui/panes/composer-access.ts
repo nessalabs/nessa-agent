@@ -44,7 +44,7 @@ export function accessFor(value: ComposerAccessModeValue): AccessMode {
 }
 
 /**
- * What the composer says when the source refused the shield's last choice:
+ * What the shield says when the source refused its last choice:
  * a running turn in its own words, and any other refusal in the window's
  * words for it.
  */
@@ -60,14 +60,14 @@ export function accessRefusalCopy(refusal: {
 }
 
 /**
- * What the composer says when a model change moved the chat to Ask, because
+ * What the shield says when a model change moved the chat to Ask, because
  * the new model is not offered at its access here.
  */
 export function steppedAccessCopy(from: AccessMode): string {
   return `Access is now ${composerAccessModeLabels[shieldFor("ask")]}. This model doesn’t offer ${composerAccessModeLabels[shieldFor(from)]} here.`
 }
 
-/** The shield's value, its change handler, and what to say of its last choice, for a session's composer. */
+/** The shield's value, its change handler, and what it says of its last choice, for a session's composer. */
 export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
   const modeLive = useWorkspaceSelector((state) => selectAccess(state, sessionId))
@@ -86,17 +86,17 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
-    // Only a refusal is said, because then the shield's choice did not
-    // happen. A choice held back (one the running turn could not take now,
-    // or one queued behind a change on its way) says nothing: the shield
-    // already shows it, and the person asked for no line about it. A model
-    // change that moved the chat to Ask says so, since nobody picked Ask.
-    const notice: ComposerAccess["notice"] =
+    // Only a refusal is said, by the shield, because then its choice did
+    // not happen. A choice held back (one the running turn could not take
+    // now, or one queued behind a change on its way) says nothing: the shield
+    // already shows it. A model change that moved the chat to Ask says so,
+    // since nobody picked Ask. Neither is a line in the composer.
+    const note: ComposerAccess["note"] =
       said?.state === "refused"
         ? { tone: "warning", text: accessRefusalCopy(said) }
         : stepped
           ? { tone: "neutral", text: steppedAccessCopy(stepped) }
           : undefined
-    return { value: shieldFor(mode), onChange, ...(notice ? { notice } : {}) }
+    return { value: shieldFor(mode), onChange, ...(note ? { note } : {}) }
   }, [mode, onChange, said, stepped])
 }

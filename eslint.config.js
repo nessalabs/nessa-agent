@@ -121,6 +121,49 @@ export default tseslint.config(
     },
   },
   {
+    // The desktop composer says nothing of its own: a control with something
+    // to say says it as its tooltip (`ComposerNote` in the file). A status
+    // line between the draft and its controls is what these refuse, in any
+    // of the ways one has been written there; `composer.test.tsx` checks the
+    // rendered form holds nothing but the draft and its row.
+    files: ["src/desktop/ui/composer.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            ...tauriSeam["no-restricted-imports"][1].paths,
+            {
+              name: "@nessa-ui/react/status-label",
+              message:
+                "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+            },
+          ],
+          patterns: tauriSeam["no-restricted-imports"][1].patterns,
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "JSXAttribute[name.name='role'][value.value=/^(status|alert|log|note)$/]",
+          message:
+            "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+        {
+          selector: "JSXAttribute[name.name='aria-live']",
+          message:
+            "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+        {
+          selector: "Literal[value=/notice/i]",
+          message:
+            "The composer has no notices. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+      ],
+    },
+  },
+  {
     files: ["src/panel/ui/app.tsx"],
     rules: {
       "no-restricted-syntax": [

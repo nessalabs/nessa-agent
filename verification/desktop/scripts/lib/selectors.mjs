@@ -1119,11 +1119,16 @@ export const composerControls = {
   },
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
-  notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
-  /** Words of the model notice for a switch to an agent not signed in where the chat runs (`conversation.tsx`). */
+  /**
+   * Anything in the composer but the draft, its row of controls and the
+   * circle a quiet pane folds it to. The composer says nothing of its own
+   * (`ComposerNote` in `src/desktop/ui/composer.tsx`): this matches nothing.
+   */
+  said: ".desktop-composer > :not(.desktop-composer-body, .desktop-composer-row, .desktop-composer-wake), .desktop-composer [role=status], .desktop-composer [role=alert], .desktop-composer [aria-live]",
+  /** The model picker's tooltip anchor, which says the picker's note (`modelPickerNote`). */
+  pickerNote: '.desktop-tip-anchor:has(> [data-slot="model-level-picker-trigger"])',
+  /** Words of the picker's note for a switch to an agent not signed in where the chat runs (`composer-model.ts`). */
   signInRequired: "isn’t signed in where this chat runs",
-  /** Words of the model notices for a change the gateway has not settled (`conversation.tsx`). */
-  modelUnconfirmed: "model change is not confirmed",
 }
 
 /** Deterministic production-hook/component ordering fixture for #1087. */

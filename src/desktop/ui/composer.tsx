@@ -5,7 +5,6 @@ import {
 } from "@nessa-ui/react/composer-access-mode"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
-import { StatusLabel } from "@nessa-ui/react/status-label"
 import { pastedFiles } from "../adapters/pasted-files"
 import type { DraftImage } from "../workspace/model/draft-images"
 import { defaultThinkingLevel } from "../model/composer-options"
@@ -31,15 +30,31 @@ function draftLines(textarea: HTMLTextAreaElement): number {
 }
 
 /**
+ * What a composer control has to say of itself: said by that control, as its
+ * tooltip in place of its name, and marked on it when it is a `warning`.
+ *
+ * The composer itself never says anything. A line of status under the draft
+ * pushed the controls down, sat between the person and Send, and outlived
+ * what it described; so the composer holds only the draft and its row of
+ * controls, and whatever one of them needs to say travels with that control.
+ * `composer.test.tsx` and the `no-restricted-*` rules for this file in
+ * `eslint.config.js` keep it that way.
+ */
+export interface ComposerNote {
+  readonly tone: "neutral" | "warning"
+  readonly text: string
+}
+
+/**
  * The shield, held by whoever owns the session's access
  * (`workspace/ui/panes/composer-access.ts`): what it shows, told of a pick,
- * and what to say of the last pick — waiting for the agent to stop
- * (`neutral`), or refused (`warning`).
+ * and what it says of the last pick (a refusal, or a model change that moved
+ * the chat to Ask).
  */
 export interface ComposerAccess {
   readonly value: ComposerAccessModeValue
   readonly onChange: (value: ComposerAccessModeValue) => void
-  readonly notice?: { readonly tone: "neutral" | "warning"; readonly text: string }
+  readonly note?: ComposerNote
 }
 
 /**
@@ -47,14 +62,14 @@ export interface ComposerAccess {
  * (`workspace/ui/panes/composer-images.ts`): shown as tiles above the text —
  * an image as its picture, any other file as its name — each with a button
  * that takes it off (`onRemove`); files pasted (`pastedFiles`) or picked with
- * the Attach button are offered to `onPaste`, and `notice` says why the last
- * ones offered were not taken.
+ * the Attach button are offered to `onPaste`, and `note`, said by the Attach
+ * button, is why the last ones offered were not taken.
  */
 export interface ComposerImages {
   readonly images: readonly DraftImage[]
   readonly onPaste: (files: File[]) => void
   readonly onRemove: (imageId: string) => void
-  readonly notice?: string
+  readonly note?: ComposerNote
 }
 
 /**
@@ -86,7 +101,7 @@ export function Composer({
   model: shown,
   onModelChange,
   modelDisabled = false,
-  modelNotice,
+  modelNote,
   onSend,
   onStop,
   access,
@@ -108,7 +123,8 @@ export function Composer({
   /** Told when the person picks another model; the owner decides what is shown. */
   onModelChange?: (model: { provider: string; modelId: string }) => void
   modelDisabled?: boolean
-  modelNotice?: string
+  /** What the model picker says of the model: its tooltip, and marked on it as a warning. */
+  modelNote?: ComposerNote
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
   /**
@@ -246,40 +262,19 @@ export function Composer({
           }}
         />
       </div>
-      {attached?.notice ? (
-        <StatusLabel role="status" tone="warning" className="desktop-composer-notice">
-          {attached.notice}
-        </StatusLabel>
-      ) : null}
-      {modelNotice ? (
-        <StatusLabel
-          role="status"
-          tone="neutral"
-          icon={null}
-          className="desktop-composer-notice"
-        >
-          {modelNotice}
-        </StatusLabel>
-      ) : null}
-      {access?.notice ? (
-        <StatusLabel
-          tone={access.notice.tone}
-          role="status"
-          icon={access.notice.tone === "neutral" ? null : undefined}
-          className="desktop-composer-notice"
-        >
-          {access.notice.text}
-        </StatusLabel>
-      ) : null}
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
-          {attached ? <AttachButton onFiles={attached.onPaste} /> : null}
+          {attached ? (
+            <AttachButton onFiles={attached.onPaste} note={attached.note} />
+          ) : null}
           <span
             className="desktop-tip-anchor"
+            {...said(modelNote)}
             {...tooltip(
-              onModelChange
-                ? "Model and thinking"
-                : "Thinking. Start a new conversation to choose another model",
+              modelNote?.text ??
+                (onModelChange
+                  ? "Model and thinking"
+                  : "Thinking. Start a new conversation to choose another model"),
               { side: "above" },
             )}
           >
@@ -319,9 +314,13 @@ export function Composer({
             contentClassName="desktop-popover"
             // The window's own tooltip names it; no second, system one.
             title=""
-            {...tooltip(access ? "Access" : "Chat isn’t connected yet", {
-              side: "above",
-            })}
+            {...said(access?.note)}
+            {...tooltip(
+              access?.note?.text ?? (access ? "Access" : "Chat isn’t connected yet"),
+              {
+                side: "above",
+              },
+            )}
           />
           {/* Settings to its left, what acts to its right. */}
           <span className="desktop-composer-divider" aria-hidden="true" />
@@ -379,6 +378,18 @@ export function Composer({
   )
 }
 
+/**
+ * A control's note, for whoever cannot hover it: its words as the control's
+ * description, and a warning marked on it (`data-attention`, `styles.css`).
+ */
+function said(note: ComposerNote | undefined) {
+  if (!note) return {}
+  return {
+    "aria-description": note.text,
+    ...(note.tone === "warning" ? { "data-attention": "warning" } : {}),
+  }
+}
+
 /** The voice button, or a call's speaker, microphone and end. */
 function VoiceControls({ voice }: { voice: ComposerVoice }) {
   if (!voice.active)
@@ -432,7 +443,13 @@ function VoiceControls({ voice }: { voice: ComposerVoice }) {
  * every file picked to `onFiles`, as a paste of them would be. The input is
  * emptied after each pick, so picking the same file again is a pick too.
  */
-function AttachButton({ onFiles }: { onFiles: (files: File[]) => void }) {
+function AttachButton({
+  onFiles,
+  note,
+}: {
+  onFiles: (files: File[]) => void
+  note?: ComposerNote
+}) {
   const input = useRef<HTMLInputElement>(null)
   return (
     <>
@@ -454,7 +471,8 @@ function AttachButton({ onFiles }: { onFiles: (files: File[]) => void }) {
         type="button"
         className="desktop-chip desktop-composer-attach"
         aria-label="Attach files"
-        {...tooltip("Attach files", { side: "above" })}
+        {...said(note)}
+        {...tooltip(note?.text ?? "Attach files", { side: "above" })}
         onClick={() => input.current?.click()}
       >
         <DesktopIcon name="attach" />

@@ -19,10 +19,15 @@ import { workspaceActions } from "./slice"
 
 /**
  * Whether a model or access change is on its way, so a send waits: one this
- * window is asking, or one the source holds as pending, which no send could
- * settle (the source refuses a model request until it ends). A change this
- * window asked for that settled unconfirmed does not hold a send: the send
- * asks again first (`modelUnsettled`, `applyStagedModel`).
+ * window is asking, or an access change the source holds. A model change the
+ * source holds as pending does not hold a send: the source settles it before
+ * it takes the message (`recover_model_change` ahead of every submission),
+ * and a change it cannot settle refuses the message, which then says why and
+ * offers Retry. Holding the send instead waited on a settle nothing asked
+ * for, and a chat whose change was left unconfirmed could never send again.
+ * A change this window asked for that settled unconfirmed does not hold a
+ * send either: the send asks again first (`modelUnsettled`,
+ * `applyStagedModel`).
  */
 export function modelChanging(state: WorkspaceState, sessionId: string): boolean {
   const choice = entry(state.modelChoices, sessionId)
@@ -33,7 +38,6 @@ export function modelChanging(state: WorkspaceState, sessionId: string): boolean
     !!entry(state.stagedModels, sessionId) || modelUnsettled(state, sessionId)
   return (
     choice?.state === "asking" ||
-    !!source?.modelControl?.pending ||
     !!source?.access?.changing ||
     (applying && entry(state.accessChoices, sessionId)?.state === "changing")
   )

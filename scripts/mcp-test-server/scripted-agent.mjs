@@ -31,10 +31,12 @@
  * With `--refusals <directory>`, a check can make this harness refuse what
  * a real one refuses, without a restart: while `<agent>.session-new` is in
  * the directory, `session/new` answers ACP's `-32000` Authentication
- * required, as a signed-out harness does; while `<agent>.model` is there, a
- * `session/set_config_option` for the model fails with a generic `-32603`
- * Internal error and changes nothing, as Claude's harness answered a model
- * it would not take while a turn ran. Each file is read at the call.
+ * required, as a signed-out harness does; while `<agent>.session-resume` is
+ * there, `session/resume` fails with a generic `-32603` Internal error, as a
+ * harness that cannot carry its session on answers; while `<agent>.model` is
+ * there, a `session/set_config_option` for the model fails with a generic
+ * `-32603` Internal error and changes nothing, as Claude's harness answered
+ * a model it would not take while a turn ran. Each file is read at the call.
  *
  * Paired --native-context-directory and --native-context-workspace absolute
  * paths opt one Claude workspace into native-history checks (#1164, C13).
@@ -458,6 +460,7 @@ const handlers = {
    * is what continues the work.
    */
   "session/resume": async (params) => {
+    if (refuses("session-resume")) throw new Error("Internal error")
     if (typeof params.sessionId !== "string" || params.sessionId === "")
       throw new Error("session/resume names no session")
     if (sessions.has(params.sessionId))
