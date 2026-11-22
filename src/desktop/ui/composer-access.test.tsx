@@ -48,8 +48,9 @@ it("shows the owner's access, and says a refused change as its tooltip, marked",
   expect(shield?.getAttribute("data-tooltip")).toBe(words)
   expect(shield?.getAttribute("aria-description")).toBe(words)
   expect(shield?.getAttribute("data-attention")).toBe("warning")
-  // Said by the shield, not by a line in the composer.
-  expect(host.querySelector('[role="status"]')).toBeNull()
+  // Said by the shield, not by a line in the composer, and read aloud beside it.
+  expect(host.querySelector('.desktop-composer [role="status"]')).toBeNull()
+  expect(host.querySelector(".desktop-composer-spoken")?.textContent).toBe(words)
   await act(async () => root.unmount())
 })
 
@@ -67,6 +68,6 @@ it("says a neutral note without marking the shield", async () => {
 it("disables the shield, and says nothing, when no owner keeps the choice", async () => {
   const { root, shield } = await shown(undefined)
   expect(shield?.disabled).toBe(true)
-  expect(host.querySelector('[role="status"]')).toBeNull()
+  expect(host.querySelector(".desktop-composer-spoken")?.textContent).toBe("")
   await act(async () => root.unmount())
 })

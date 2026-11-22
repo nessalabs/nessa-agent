@@ -2742,7 +2742,7 @@ async function pickerStep(run, step, failures) {
     )
   // The chat goes to Auto where its model offers it. A target not offered at
   // Auto on this platform (only Ask is verified for every model) takes the
-  // chat to Ask in the same change, and the composer says so; one offered at
+  // chat to Ask in the same change, and the shield says so; one offered at
   // Auto keeps it.
   const { agents } = await run.client.agents.list()
   const offered = (modelId) =>
@@ -10965,8 +10965,8 @@ const steps = {
    * A switch to an agent that is not signed in where the conversation runs:
    * the harness answers its session/new with "authentication required"
    * (`--refusals`), as Codex on a VM with no saved login does. The send is
-   * refused before anything reaches either agent, the composer says why in
-   * words (not a bare model_change_not_applied), the picker goes back to the
+   * refused before anything reaches either agent, the picker says why in
+   * words (not a bare model_change_not_applied) and the composer nothing, the picker goes back to the
    * conversation's own model, no switch is recorded, and the next message
    * runs on the agent it was on.
    */
@@ -11023,6 +11023,11 @@ const steps = {
         30_000,
       )
       await composerSaysNothing(run.page, "of the refused switch", failures)
+      if (run.evidence)
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `unsigned-${run.engine}.png`) })
+          .catch(() => {})
       if (!said) {
         failures.push(
           `the picker did not say the agent isn't signed in: ${JSON.stringify(await pickerSays())}`,
@@ -11067,7 +11072,7 @@ const steps = {
    * its set_config_option with an internal error (`--refusals`), which ends
    * the agent's worker and the turn with it, as Claude's adapter did for a
    * real person. The change is settled without anyone asking again: nothing
-   * stays pending ("not confirmed yet" in the composer), the turn is not
+   * stays pending, the composer says nothing of it, the turn is not
    * left at work with a Stop that stops nothing, and the next message
    * completes.
    */
@@ -11253,7 +11258,23 @@ const steps = {
     }
     const next = prompt(run, STRESS.reply, step, " after stuck control")
     const seen = await send(run, conversationId, next, failures)
-    const { view } = await settled(run, conversationId, seen, next, "completed", failures)
+    const shown = await dock(run.page)
+      .locator(css.modelChip)
+      .getAttribute("aria-label")
+      .catch(() => null)
+    const { view, turn } = await settled(
+      run,
+      conversationId,
+      seen,
+      next,
+      "completed",
+      failures,
+    )
+    const ran = catalog.models.find((model) => model.modelId === turn?.model)
+    if (ran && shown && !shown.includes(ran.displayName))
+      failures.push(
+        `the picker showed "${shown}" and the message ran on ${ran.displayName}`,
+      )
     if (view?.modelChange)
       failures.push(
         `the send did not settle the unconfirmed change: ${JSON.stringify(view.modelChange)}`,

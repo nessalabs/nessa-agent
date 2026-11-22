@@ -126,6 +126,7 @@ export default tseslint.config(
     // line between the draft and its controls is what these refuse, in any
     // of the ways one has been written there; `composer.test.tsx` checks the
     // rendered form holds nothing but the draft and its row.
+    // Its one voice is `composer-spoken.tsx`: read aloud beside it, never drawn.
     files: ["src/desktop/ui/composer.tsx"],
     rules: {
       "no-restricted-imports": [
@@ -149,6 +150,22 @@ export default tseslint.config(
             "JSXAttribute[name.name='role'][value.value=/^(status|alert|log|note)$/]",
           message:
             "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='role'] Literal[value=/^(status|alert|log|note)$/]",
+          message:
+            "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+        {
+          selector: "JSXOpeningElement[name.name='output']",
+          message:
+            "The composer has no status line. Give the control it concerns a ComposerNote: its tooltip says it.",
+        },
+        {
+          selector: "TemplateElement[value.raw=/notice/i]",
+          message:
+            "The composer has no notices. Give the control it concerns a ComposerNote: its tooltip says it.",
         },
         {
           selector: "JSXAttribute[name.name='aria-live']",

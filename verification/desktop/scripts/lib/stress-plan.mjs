@@ -115,7 +115,7 @@ export const KNOBS = {
   },
   unsigned: {
     default: 1,
-    what: "conversations switched from the composer's picker to the other agent while it answers its opening as not signed in: the send is refused, the composer says the agent isn't signed in, no switch is recorded, and the next message runs on the agent it was on",
+    what: "conversations switched from the composer's picker to the other agent while it answers its opening as not signed in: the send is refused, the picker says the agent isn't signed in (the composer says nothing), no switch is recorded, and the next message runs on the agent it was on",
   },
   failedControls: {
     default: 1,

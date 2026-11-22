@@ -95,7 +95,7 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
       said?.state === "refused"
         ? { tone: "warning", text: accessRefusalCopy(said) }
         : stepped
-          ? { tone: "neutral", text: steppedAccessCopy(stepped) }
+          ? { tone: "warning", text: steppedAccessCopy(stepped) }
           : undefined
     return { value: shieldFor(mode), onChange, ...(note ? { note } : {}) }
   }, [mode, onChange, said, stepped])

@@ -14,6 +14,7 @@ import {
   findComposerModel,
   ModelMark,
 } from "./catalogue-model-picker"
+import { ComposerSpoken } from "./composer-spoken"
 import { DesktopIcon } from "./icons"
 import { IconButton } from "./icon-button"
 import { tooltip } from "./tooltip"
@@ -186,195 +187,202 @@ export function Composer({
   const [fast, setFast] = useState(false)
 
   return (
-    <form
-      ref={formRef}
-      className="desktop-composer"
-      // A turn is running: the composer offers Stop (a quiet pane shows only that).
-      data-running={onStop ? "" : undefined}
-      // Nothing typed or attached: a quiet pane folds it to a circle (`conversation.css`).
-      data-empty={draft === "" && images.length === 0 ? "" : undefined}
-      onSubmit={(event) => {
-        event.preventDefault()
-        send()
-      }}
-    >
-      <div
-        className="desktop-composer-body"
-        // The page's empty space below the text still places the caret.
-        onMouseDown={(event) => {
-          if (event.target !== event.currentTarget) return
+    <>
+      <form
+        ref={formRef}
+        className="desktop-composer"
+        // A turn is running: the composer offers Stop (a quiet pane shows only that).
+        data-running={onStop ? "" : undefined}
+        // Nothing typed or attached: a quiet pane folds it to a circle (`conversation.css`).
+        data-empty={draft === "" && images.length === 0 ? "" : undefined}
+        onSubmit={(event) => {
           event.preventDefault()
-          textareaRef.current?.focus()
+          send()
         }}
       >
-        {images.length ? (
-          <ul className="desktop-composer-images" aria-label="Attachments to send">
-            {images.map((image) => (
-              <li
-                key={image.id}
-                className="desktop-composer-image"
-                data-kind={image.kind}
-              >
-                {image.kind === "image" ? (
-                  <ChatAttachmentTile label={image.name} imageSrc={image.url} />
-                ) : (
-                  <ChatAttachmentTile
-                    label={image.name}
-                    icon={<DesktopIcon name="file" />}
-                  />
-                )}
-                <button
-                  type="button"
-                  className="desktop-composer-image-remove"
-                  aria-label={`Remove ${image.name}`}
-                  {...tooltip(`Remove ${image.name}`, { side: "above" })}
-                  onClick={() => attached?.onRemove(image.id)}
+        <div
+          className="desktop-composer-body"
+          // The page's empty space below the text still places the caret.
+          onMouseDown={(event) => {
+            if (event.target !== event.currentTarget) return
+            event.preventDefault()
+            textareaRef.current?.focus()
+          }}
+        >
+          {images.length ? (
+            <ul className="desktop-composer-images" aria-label="Attachments to send">
+              {images.map((image) => (
+                <li
+                  key={image.id}
+                  className="desktop-composer-image"
+                  data-kind={image.kind}
                 >
-                  <DesktopIcon name="close" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <textarea
-          ref={textareaRef}
-          aria-label="Message"
-          placeholder={placeholder}
-          rows={2}
-          value={draft}
-          onChange={(event) => onTextChange(event.target.value)}
-          onPaste={(event) => {
-            if (!attached) return
-            const files = pastedFiles(event.clipboardData)
-            if (files.length === 0) return
-            // Files and no text: nothing for the field to insert.
-            event.preventDefault()
-            attached.onPaste(files)
-          }}
-          onKeyDown={(event) => {
-            // Return sends; Shift-Return, and Return while composing an IME word, do not.
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing)
-              return
-            event.preventDefault()
-            // One press, one act: a held key's repeats do nothing
-            // (`takesAnswerKey` in `workspace/model/overview/walk.ts` owns the rule).
-            if (!event.repeat) send()
-          }}
-        />
-      </div>
-      <div className="desktop-composer-row">
-        <div className="desktop-composer-controls">
-          {attached ? (
-            <AttachButton onFiles={attached.onPaste} note={attached.note} />
+                  {image.kind === "image" ? (
+                    <ChatAttachmentTile label={image.name} imageSrc={image.url} />
+                  ) : (
+                    <ChatAttachmentTile
+                      label={image.name}
+                      icon={<DesktopIcon name="file" />}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    className="desktop-composer-image-remove"
+                    aria-label={`Remove ${image.name}`}
+                    {...tooltip(`Remove ${image.name}`, { side: "above" })}
+                    onClick={() => attached?.onRemove(image.id)}
+                  >
+                    <DesktopIcon name="close" />
+                  </button>
+                </li>
+              ))}
+            </ul>
           ) : null}
-          <span
-            className="desktop-tip-anchor"
-            {...said(modelNote)}
-            {...tooltip(
-              modelNote?.text ??
-                (onModelChange
-                  ? "Model and thinking"
-                  : "Thinking. Start a new conversation to choose another model"),
-              { side: "above" },
-            )}
-          >
-            <ComposerModelPicker
-              disabled={modelDisabled}
-              value={shown}
-              onModelChange={onModelChange}
-              thinking={thinking}
-              onThinkingChange={setThinking}
-              fast={{ pressed: fast, onPressedChange: setFast }}
-              className="desktop-chip desktop-chip-model"
-            />
-          </span>
-          <span
-            className="desktop-tip-anchor"
-            {...tooltip(model?.fastMode ? "Fast mode" : "This model has no Fast mode", {
-              side: "above",
-            })}
-          >
-            {/* Fast is remembered while switching models, but only on for one that has it. */}
-            <ModelFastMode
-              pressed={fast && model?.fastMode === true}
-              onPressedChange={setFast}
-              disabled={!model?.fastMode}
-              className="desktop-chip desktop-composer-fast"
-            />
-          </span>
-        </div>
-        <div className="desktop-composer-controls">
-          <ComposerAccessMode
-            value={access?.value ?? "ask-approval"}
-            onValueChange={access?.onChange}
-            // Its menu ends where the composer ends, not past it.
-            alignTo={formRef}
-            disabled={!access}
-            className="desktop-chip"
-            contentClassName="desktop-popover"
-            // The window's own tooltip names it; no second, system one.
-            title=""
-            {...said(access?.note)}
-            {...tooltip(
-              access?.note?.text ?? (access ? "Access" : "Chat isn’t connected yet"),
-              {
-                side: "above",
-              },
-            )}
+          <textarea
+            ref={textareaRef}
+            aria-label="Message"
+            placeholder={placeholder}
+            rows={2}
+            value={draft}
+            onChange={(event) => onTextChange(event.target.value)}
+            onPaste={(event) => {
+              if (!attached) return
+              const files = pastedFiles(event.clipboardData)
+              if (files.length === 0) return
+              // Files and no text: nothing for the field to insert.
+              event.preventDefault()
+              attached.onPaste(files)
+            }}
+            onKeyDown={(event) => {
+              // Return sends; Shift-Return, and Return while composing an IME word, do not.
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing
+              )
+                return
+              event.preventDefault()
+              // One press, one act: a held key's repeats do nothing
+              // (`takesAnswerKey` in `workspace/model/overview/walk.ts` owns the rule).
+              if (!event.repeat) send()
+            }}
           />
-          {/* Settings to its left, what acts to its right. */}
-          <span className="desktop-composer-divider" aria-hidden="true" />
-          {voice ? <VoiceControls voice={voice} /> : null}
-          {onStop ? (
-            <button
-              key="stop"
-              type="button"
-              className="desktop-send"
-              aria-label="Stop"
-              {...tooltip("Stop", { side: "above" })}
-              disabled={onStop.stopping === true}
-              onClick={onStop.stop}
+        </div>
+        <div className="desktop-composer-row">
+          <div className="desktop-composer-controls">
+            {attached ? (
+              <AttachButton onFiles={attached.onPaste} note={attached.note} />
+            ) : null}
+            <span
+              className="desktop-tip-anchor"
+              {...said(modelNote)}
+              {...tooltip(
+                modelNote?.text ??
+                  (onModelChange
+                    ? "Model and thinking"
+                    : "Thinking. Start a new conversation to choose another model"),
+                { side: "above" },
+              )}
             >
-              <DesktopIcon name="stop" />
-            </button>
-          ) : (
-            <button
-              key="send"
-              type="submit"
-              className="desktop-send"
-              aria-label="Send"
-              {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
-                shortcut: onSend ? "↩" : undefined,
+              <ComposerModelPicker
+                disabled={modelDisabled}
+                value={shown}
+                onModelChange={onModelChange}
+                thinking={thinking}
+                onThinkingChange={setThinking}
+                fast={{ pressed: fast, onPressedChange: setFast }}
+                className="desktop-chip desktop-chip-model"
+              />
+            </span>
+            <span
+              className="desktop-tip-anchor"
+              {...tooltip(model?.fastMode ? "Fast mode" : "This model has no Fast mode", {
                 side: "above",
               })}
-              disabled={!onSend || empty}
             >
-              <DesktopIcon name="send" />
-            </button>
-          )}
+              {/* Fast is remembered while switching models, but only on for one that has it. */}
+              <ModelFastMode
+                pressed={fast && model?.fastMode === true}
+                onPressedChange={setFast}
+                disabled={!model?.fastMode}
+                className="desktop-chip desktop-composer-fast"
+              />
+            </span>
+          </div>
+          <div className="desktop-composer-controls">
+            <ComposerAccessMode
+              value={access?.value ?? "ask-approval"}
+              onValueChange={access?.onChange}
+              // Its menu ends where the composer ends, not past it.
+              alignTo={formRef}
+              disabled={!access}
+              className="desktop-chip"
+              contentClassName="desktop-popover"
+              // The window's own tooltip names it; no second, system one.
+              title=""
+              {...said(access?.note)}
+              {...tooltip(
+                access?.note?.text ?? (access ? "Access" : "Chat isn’t connected yet"),
+                {
+                  side: "above",
+                },
+              )}
+            />
+            {/* Settings to its left, what acts to its right. */}
+            <span className="desktop-composer-divider" aria-hidden="true" />
+            {voice ? <VoiceControls voice={voice} /> : null}
+            {onStop ? (
+              <button
+                key="stop"
+                type="button"
+                className="desktop-send"
+                aria-label="Stop"
+                {...tooltip("Stop", { side: "above" })}
+                disabled={onStop.stopping === true}
+                onClick={onStop.stop}
+              >
+                <DesktopIcon name="stop" />
+              </button>
+            ) : (
+              <button
+                key="send"
+                type="submit"
+                className="desktop-send"
+                aria-label="Send"
+                {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
+                  shortcut: onSend ? "↩" : undefined,
+                  side: "above",
+                })}
+                disabled={!onSend || empty}
+              >
+                <DesktopIcon name="send" />
+              </button>
+            )}
+          </div>
         </div>
-      </div>
-      {/*
-       * Shown only where a quiet pane folds an empty composer to a circle
-       * (`conversation.css`): focus on it focuses the pane, whose caret lands
-       * in the field, and the whole composer grows back out of this corner.
-       */}
-      <button
-        type="button"
-        className="desktop-composer-wake"
-        aria-label="Write a message"
-        {...tooltip("Write a message", { side: "above" })}
-        // Focus on the circle is focus into the pane: the pane takes it, and
-        // the caret follows into the field (`workspace/adapters/dom/focus.ts`).
-        onClick={(event) => event.currentTarget.focus()}
-      >
-        {shown && model ? (
-          <ModelMark provider={shown.provider} />
-        ) : (
-          <DesktopIcon name="edit" />
-        )}
-      </button>
-    </form>
+        {/*
+         * Shown only where a quiet pane folds an empty composer to a circle
+         * (`conversation.css`): focus on it focuses the pane, whose caret lands
+         * in the field, and the whole composer grows back out of this corner.
+         */}
+        <button
+          type="button"
+          className="desktop-composer-wake"
+          aria-label="Write a message"
+          {...tooltip("Write a message", { side: "above" })}
+          // Focus on the circle is focus into the pane: the pane takes it, and
+          // the caret follows into the field (`workspace/adapters/dom/focus.ts`).
+          onClick={(event) => event.currentTarget.focus()}
+        >
+          {shown && model ? (
+            <ModelMark provider={shown.provider} />
+          ) : (
+            <DesktopIcon name="edit" />
+          )}
+        </button>
+      </form>
+      <ComposerSpoken notes={[modelNote, access?.note, attached?.note]} />
+    </>
   )
 }
 

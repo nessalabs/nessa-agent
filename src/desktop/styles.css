@@ -1359,16 +1359,29 @@ html:not(.dark) [data-surface] {
   outline-offset: 2px;
 }
 
+/* Read aloud beside the composer (`composer-spoken.tsx`), never drawn. */
+.desktop-composer-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /*
  * A composer control with a warning to give (`ComposerNote`): the words are
  * its tooltip, and a dot in its corner says there is something to read. The
  * composer itself has no line for status.
  */
-.desktop-composer [data-attention="warning"] {
+/* The model picker's anchor draws no box (`display: contents`): its chip wears the dot. */
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor),
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > * {
   position: relative;
 }
 
-.desktop-composer [data-attention="warning"]::after {
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after,
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after {
   content: "";
   position: absolute;
   top: 2px;
