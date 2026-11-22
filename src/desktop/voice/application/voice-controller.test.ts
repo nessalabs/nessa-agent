@@ -978,6 +978,71 @@ describe("VoiceController", () => {
       expect(opened[0].responses()).toBe(0)
     })
 
+    it("V21: a reply that ends while a resume still connects is handed over once it opens", async () => {
+      const opened: FakeConnection[] = []
+      let open: ((connection: FakeConnection) => void) | null = null
+      const { controller, conversation } = setup({
+        connect: () =>
+          new Promise((resolve) => {
+            const next = new FakeConnection()
+            opened.push(next)
+            if (opened.length === 1) resolve(next)
+            else open = () => resolve(next)
+          }),
+      })
+      await controller.start("s-1")
+      await sends(opened[0], "Run the tests")
+      controller.pause()
+      const resuming = controller.resume()
+      await settle()
+      expect(controller.snapshot().phase).toBe("connecting")
+      conversation.end({ text: "All green.", ended: "finished" })
+      open!(opened[1])
+      await resuming
+      expect(opened[1].told().at(-1)).toBe("Agent reply:\nAll green.")
+    })
+
+    it("V19: speech not yet written down when the call pauses is nothing heard", async () => {
+      const { controller, opened, conversation, clock } = reconnecting()
+      await controller.start("s-1")
+      // Heard and committed, its transcript still on its way, and sent.
+      opened[0].emit({ type: "input_audio_buffer.committed", item_id: "i1" })
+      calls(opened[0], "send_to_agent", "c1")
+      controller.pause()
+      await settle()
+      // Not waited out: the send went on at once with nothing to say.
+      expect(clock.pending.size).toBe(0)
+      expect(conversation.sent).toEqual([])
+      // After resume a send does not wait for it either.
+      await controller.resume()
+      says(opened[1], "i2", "Fix the lint.")
+      calls(opened[1], "send_to_agent", "c2")
+      await settle()
+      expect(conversation.sent).toEqual(["Fix the lint."])
+    })
+
+    it("V19: a tool answer from before the pause never reaches the resumed connection", async () => {
+      let release!: () => void
+      const { controller, opened, conversation } = reconnecting()
+      conversation.send = async (text: string) => {
+        await new Promise<void>((done) => (release = done))
+        conversation.sent.push(text)
+        conversation.turnsSent.push("turn-1")
+        return { result: "sent" as const, turn: "turn-1" }
+      }
+      await controller.start("s-1")
+      says(opened[0], "i1", "Fix the lint.")
+      calls(opened[0], "send_to_agent", "c1")
+      await settle()
+      controller.pause()
+      await controller.resume()
+      release()
+      await settle()
+      expect(conversation.sent).toEqual(["Fix the lint."])
+      expect(opened[1].outputs()).toEqual([])
+      expect(opened[0].outputs()).toEqual([])
+    })
+
     it("V22: paused while it connects, the late connection is closed and the call stays paused", async () => {
       let open!: (connection: RealtimeConnection) => void
       const late = new FakeConnection()

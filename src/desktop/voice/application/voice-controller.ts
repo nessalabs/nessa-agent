@@ -280,6 +280,11 @@ export class VoiceController {
     }
     call.connection?.close()
     call.connection = null
+    // Speech the old connection had not written down never will be: it is
+    // nothing heard, so a send waiting on it goes on at once (V9) and a
+    // later send does not wait for it.
+    for (const heard of call.heard.values()) if (heard.text === null) heard.text = ""
+    for (const wake of [...call.waiters]) wake()
     // A response asked of the old connection is not answered there now.
     call.responding = false
     call.awaitingCreated = null
@@ -367,6 +372,7 @@ export class VoiceController {
     })
     connection.setMicrophone(this.state.microphoneOn)
     connection.setSpeaker(this.state.speakerOn)
+    if (resumed) this.update(call, { hint: null })
     const context = call.conversation.recentTurns().trim()
     if (context) this.tell(call, `Chat so far:\n${context}`)
     if (resumed && call.recap.length > 0)
@@ -409,7 +415,14 @@ export class VoiceController {
     if (!this.current(call) || !connection || call.heardSpeech || muted()) return
     const mutes = call.mutes
     const found = await connection.check().catch(() => null)
-    if (!found || !this.current(call) || call.heardSpeech) return
+    // A check of a connection since paused says nothing of the call now.
+    if (
+      !found ||
+      !this.current(call) ||
+      call.connection !== connection ||
+      call.heardSpeech
+    )
+      return
     if (muted() || call.mutes !== mutes) return
     console.warn("Voice: nothing heard yet", found)
     const hint = hearingHint(found)
@@ -628,6 +641,8 @@ export class VoiceController {
   }
 
   private async toolCalled(call: Call, name: string, callId: string): Promise<void> {
+    // The connection that asked: its call id means nothing to a later one.
+    const asked = call.connection
     let outcome: ToolOutcome
     switch (name) {
       case VoiceToolName.SendToAgent:
@@ -644,7 +659,9 @@ export class VoiceController {
       default:
         outcome = "unknown_tool"
     }
-    if (!this.current(call)) return
+    // Ended, or paused since: the answer has no one to go to. What the tool
+    // did stands, and a resume hands over what it led to.
+    if (!this.current(call) || call.connection !== asked) return
     call.connection?.send({
       type: "conversation.item.create",
       item: { type: "function_call_output", call_id: callId, output: outcome },
@@ -734,8 +751,9 @@ export class VoiceController {
    * still on its way), what they said is handed to the voice, once.
    */
   private replied(call: Call): void {
-    // Kept while paused: handed over once the call resumes.
-    if (call.waiting.length === 0 || call.paused) return
+    // Kept while paused, and while a resume still connects: handed over
+    // once there is a connection to hand it to.
+    if (call.waiting.length === 0 || call.paused || !call.connection) return
     for (const turn of call.waiting) {
       if (call.ends.has(turn)) continue
       const state = call.conversation.turnState(turn)

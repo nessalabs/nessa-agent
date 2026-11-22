@@ -90,7 +90,9 @@ pub(super) async fn dispatch(
 /// the one the owner's window chose for it, and the first thing the person
 /// says starts it, as the first typed message would. Only the owner may call
 /// about a chat not yet there, since only the owner may start one anywhere;
-/// a phone or a paired device must name one that exists.
+/// a phone or a paired device must name one that exists. Their admission
+/// above already refuses an id it cannot find; the last arm below holds the
+/// rule here too, so it does not rest on how they are admitted.
 async fn admit_call(
     state: &ProductRouteState,
     session: &AuthenticatedSession,

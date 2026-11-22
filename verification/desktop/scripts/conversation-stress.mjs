@@ -7122,6 +7122,11 @@ const steps = {
         failures.push("Pause on the pill left the provider's call open")
       if (!(await pillSays("Paused")))
         failures.push("the paused call's pill does not say Paused")
+      else if (run.evidence)
+        await pill.screenshot({
+          path: join(run.evidence, "voice-pill-paused.png"),
+          omitBackground: true,
+        })
       if (
         !(await pane
           .getByRole("button", { name: "Resume call", exact: true })
