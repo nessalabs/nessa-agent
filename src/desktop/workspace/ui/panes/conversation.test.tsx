@@ -284,7 +284,11 @@ describe("a pane's composer shows the model the next message is sent with", () =
       store.dispatch(setComposerText({ sessionId: "a", text: "next" }))
     })
     expect(composerSaysNothing()).toBe(true)
-    expect(pickerSays()).toBe("Model and thinking")
+    // The picker says the send checks it, since the send may run on that model.
+    expect(pickerSays()).toBe(
+      "The change to GPT-6 Astra isn’t confirmed. Sending checks it first.",
+    )
+    expect(pickerWarns()).toBe(true)
     const send = host.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
     expect(send?.disabled).toBe(false)
     await act(async () => send?.click())

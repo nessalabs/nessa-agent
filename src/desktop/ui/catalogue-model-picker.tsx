@@ -44,6 +44,11 @@ export function ModelMark({ provider }: { provider: string }) {
 }
 
 /** The catalog's entry for a model, if it lists it. */
+/** A catalogue model by its id alone, as a source names a model it was asked for. */
+export function composerModelById(modelId: string): ComposerModel | undefined {
+  return composerModels.find((model) => model.modelId === modelId)
+}
+
 export function findComposerModel(
   providerId: string,
   modelId: string,

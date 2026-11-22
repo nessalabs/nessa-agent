@@ -24,10 +24,10 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
   const ask = useWorkspaceSelector((state) => selectSession(state, sessionId)?.ask)
   const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
-  // An answer waits while the session's access or model is still changing,
-  // or a model change is left unconfirmed: the chat runs at nothing settled
-  // until then, and settling the change may move it to Ask. (A composer's
-  // message does not wait for an unconfirmed change: its send settles it.)
+  // Approve waits while the session's access or model is still changing, or
+  // a model change is left unconfirmed: the chat runs at nothing settled
+  // until then, and settling the change may move it to Ask. (A message does
+  // not wait for an unconfirmed change: its send settles it.)
   const runsAt = useWorkspaceSelector((state) => {
     if (
       modelChanging(state.workspace, sessionId) ||

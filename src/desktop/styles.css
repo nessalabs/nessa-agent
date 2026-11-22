@@ -1375,13 +1375,16 @@ html:not(.dark) [data-surface] {
  * composer itself has no line for status.
  */
 /* The model picker's anchor draws no box (`display: contents`): its chip wears the dot. */
+/* A quiet pane folds its composer to a circle (`conversation.css`), which wears the dot then. */
 .desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor),
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > * {
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *,
+.desktop-composer:has([data-attention="warning"]) > .desktop-composer-wake {
   position: relative;
 }
 
 .desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after,
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after {
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after,
+.desktop-composer:has([data-attention="warning"]) > .desktop-composer-wake::after {
   content: "";
   position: absolute;
   top: 2px;

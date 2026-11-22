@@ -1,12 +1,15 @@
 import type { ComposerNote } from "../../../ui/composer"
 import type { ModelChoice, ModelControl } from "../../model/model-choice"
 import { agentName, agentOf } from "../../model/workspace-index"
+import { composerModelById } from "../../../ui/catalogue-model-picker"
 
 /**
  * What the model picker says of the session's model, in its tooltip: why
- * the last pick was not made, or when a made one takes effect. A change on
- * its way, or one the source still has to settle, says nothing: the picker
- * already shows it, and a send settles it first (`modelChanging`).
+ * the last pick was not made, when a made one takes effect, or that a change
+ * the source left unconfirmed is settled by the next send, which may then run
+ * on the model it asked for rather than the one shown. A change on its way
+ * says nothing: the picker already shows it, and Send waits for it
+ * (`modelChanging`).
  */
 export function modelPickerNote(
   choice: ModelChoice | undefined,
@@ -19,7 +22,15 @@ export function modelPickerNote(
     choice.code === "conversation_configuration_changed"
   )
     return { tone: "warning", text: "This chat can’t be reopened." }
-  if (busy || control?.pending) return undefined
+  if (busy) return undefined
+  if (control?.pending?.status === "recovery_required") {
+    const asked = composerModelById(control.pending.requestedModel)
+    return {
+      tone: "warning",
+      text: `The change to ${asked?.displayName ?? control.pending.requestedModel} isn’t confirmed. Sending checks it first.`,
+    }
+  }
+  if (control?.pending) return undefined
   if (choice?.state === "refused")
     return {
       tone: "warning",

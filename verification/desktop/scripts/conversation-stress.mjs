@@ -11247,6 +11247,12 @@ const steps = {
           "Send was held while the gateway waited for a send to settle the change",
         )
       await composerSaysNothing(run.page, "while the change was unconfirmed", failures)
+      const warns = await dock(run.page)
+        .locator(composerControls.pickerNote)
+        .getAttribute("data-attention")
+        .catch(() => null)
+      if (warns !== "warning")
+        failures.push("the picker did not mark the change it will check on the next send")
       if (run.evidence)
         await dock(run.page)
           .screenshot({ path: join(run.evidence, `stuck-control-${run.engine}.png`) })
@@ -11257,11 +11263,12 @@ const steps = {
       rmSync(resume, { force: true })
     }
     const next = prompt(run, STRESS.reply, step, " after stuck control")
-    const seen = await send(run, conversationId, next, failures)
+    // Read before Send: the picker shows the settled model once the send settles it.
     const shown = await dock(run.page)
       .locator(css.modelChip)
       .getAttribute("aria-label")
       .catch(() => null)
+    const seen = await send(run, conversationId, next, failures)
     const { view, turn } = await settled(
       run,
       conversationId,
