@@ -16,6 +16,18 @@ impl TerminalHost for SystemTerminalHost {
     fn login_shell(&self) -> PathBuf {
         login_shell()
     }
+
+    fn ssh_program(&self) -> PathBuf {
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                let candidate = dir.join("ssh");
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+        PathBuf::from("/usr/bin/ssh")
+    }
 }
 
 /// The person's login shell: theirs from the account database, then

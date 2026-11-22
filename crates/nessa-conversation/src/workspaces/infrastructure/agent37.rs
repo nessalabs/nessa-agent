@@ -21,7 +21,6 @@ use crate::workspaces::{
 use async_trait::async_trait;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use workspace_sdk::{
-    infrastructure::FileStateRepository,
     ports::SocketForward,
     providers::{
         agent37::{
@@ -30,7 +29,7 @@ use workspace_sdk::{
         },
         SupervisorDeployment,
     },
-    AttachRequest, ProviderId, WorkspaceId, WorkspaceSdk,
+    AttachRequest, WorkspaceId,
 };
 
 /// How long making a thread's VM ready may take: a start or wake, and the
@@ -80,9 +79,6 @@ impl Agent37Provider {
         thread: &str,
         vm: &str,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        // An attachment for this connection only: Nessa's assignments are
-        // the VM's record, so the SDK's is made here and dropped with it.
-        let records = tempfile::tempdir().map_err(|_| Failure::Storage)?;
         let provider = sdk::Agent37Provider::new(
             self.config(account)?,
             identity(account)?,
@@ -90,13 +86,6 @@ impl Agent37Provider {
                 executable: VM_SUPERVISOR.into(),
             },
         )
-        .map_err(|_| Failure::Provider)?;
-        let sdk = WorkspaceSdk::builder(Arc::new(
-            FileStateRepository::new(records.path()).map_err(|_| Failure::Storage)?,
-        ))
-        .provider(Arc::new(provider))
-        .map_err(|_| Failure::Provider)?
-        .build()
         .map_err(|_| Failure::Provider)?;
         let request = AttachRequest::new(
             WorkspaceId::new(thread).map_err(|_| Failure::InvalidInput)?,
@@ -106,17 +95,15 @@ impl Agent37Provider {
             },
         )
         .map_err(|_| Failure::Provider)?;
-        let workspace = sdk
-            .attach(
-                &ProviderId::new("agent37").map_err(|_| Failure::Provider)?,
-                request,
-            )
+        let backend = workspace_sdk::IProvider::attach(&provider, request)
             .await
             .map_err(|_| Failure::Provider)?;
-        let root = workspace.descriptor().root;
+        let root = backend.descriptor().root;
         let forward =
             SocketForward::new(self.relay_socket.clone()).map_err(|_| Failure::InvalidInput)?;
-        let link = workspace
+        let link = backend
+            .connections()
+            .ok_or(Failure::Provider)?
             .connection(Some(forward))
             .await
             .map_err(|_| Failure::Provider)?;
@@ -125,11 +112,16 @@ impl Agent37Provider {
             link,
             self.relay_socket.clone(),
             self.relay_program.clone(),
-            root,
+            root.clone(),
             vm,
             DATA_DIR,
         )?;
-        Ok(Arc::new(super::runtime::BoatRuntime { access }))
+        Ok(Arc::new(super::runtime::BoatRuntime {
+            access,
+            backend,
+            cloud: crate::workspaces::domain::Cloud::Agent37,
+            workspace_root: root,
+        }))
     }
 }
 

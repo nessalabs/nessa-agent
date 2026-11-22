@@ -4362,8 +4362,8 @@ export interface TerminalSummary {
   folder: string
   /** The shell program. */
   shell: string
-  /** The machine: here is the gateway's own. */
-  runsOn: "here"
+  /** The machine: here is the gateway's own, boat or agent37 for a cloud VM, or an SSH host name. */
+  runsOn: string
   /** When it started, in milliseconds since the Unix epoch. */
   startedAtMs: number
   /** running until the program ends, then exited. */

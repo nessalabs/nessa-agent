@@ -161,32 +161,126 @@ async fn open(
         _ => return failure(&id, "invalid_request"),
     };
     let caller = super::conversation::caller(session, params.request_id.clone());
-    let folder = match service.terminal_place(&caller, &origin).await {
-        Ok(TerminalPlace::Here { folder }) => folder,
-        Ok(TerminalPlace::Elsewhere) => return failure(&id, "terminal_place_unsupported"),
+    let place = match service.terminal_place(&caller, &origin).await {
+        Ok(place) => place,
         Err(ConversationError::ChannelNotFound) => return failure(&id, "channel_not_found"),
         Err(ConversationError::NotFound) => return failure(&id, "conversation_not_found"),
         Err(_) => return failure(&id, "terminal_unavailable"),
     };
-    let Some(folder) = host.folder(&folder) else {
-        return failure(&id, "terminal_folder_missing");
+    let opened = match place {
+        TerminalPlace::Here { folder } => {
+            let Some(folder) = host.folder(&folder) else {
+                return failure(&id, "terminal_folder_missing");
+            };
+            let request = OpenRequest {
+                owner: link.owner().clone(),
+                request_id: params.request_id,
+                channel_id: params.channel_id,
+                conversation_id: params.conversation_id,
+                folder,
+                runs_on: "here".into(),
+                kind,
+                size,
+            };
+            link.open(request, host.login_shell())
+        }
+        TerminalPlace::Ssh {
+            host: ssh_host,
+            folder,
+        } => {
+            let runs_on = ssh_host.as_str().to_owned();
+            let target = crate::terminal::StartTarget::Ssh {
+                ssh_program: host.ssh_program(),
+                host: runs_on.clone(),
+                folder: folder.clone(),
+            };
+            let request = OpenRequest {
+                owner: link.owner().clone(),
+                request_id: params.request_id,
+                channel_id: params.channel_id,
+                conversation_id: params.conversation_id,
+                folder,
+                runs_on,
+                kind,
+                size,
+            };
+            link.open_target(request, target, "$SHELL".into())
+        }
+        #[cfg(unix)]
+        TerminalPlace::CloudVm {
+            conversation,
+            channel,
+            cloud,
+            folder,
+        } => {
+            let Some(workspaces) = state.machines.workspaces.clone() else {
+                return failure(&id, "terminal_unavailable");
+            };
+            let runs_on = cloud
+                .map(|c| c.as_str().to_owned())
+                .unwrap_or_else(|| "boat".into());
+            let run_command = match &kind {
+                TerminalKind::Shell => None,
+                TerminalKind::Run { command } => Some(command.clone()),
+            };
+            let requested_folder = folder.map(|path| path.to_string_lossy().into_owned());
+            let request = OpenRequest {
+                owner: link.owner().clone(),
+                request_id: params.request_id,
+                channel_id: params.channel_id,
+                conversation_id: params.conversation_id,
+                folder: requested_folder
+                    .as_deref()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_default(),
+                runs_on,
+                kind,
+                size,
+            };
+            link.open_with(
+                request,
+                "/bin/bash",
+                move |terminal_id, events, engine| async move {
+                    let runtime = workspaces
+                        .open(conversation, true, channel, cloud)
+                        .await
+                        .map_err(|error| TerminalError::Spawn(error.cause().as_str().to_owned()))?;
+                    let remote = runtime
+                        .terminal(crate::workspaces::application::WorkspaceTerminalSpec {
+                            id: terminal_id.clone(),
+                            folder: requested_folder,
+                            command: run_command,
+                            cols: size.cols,
+                            rows: size.rows,
+                        })
+                        .await
+                        .map_err(|error| TerminalError::Spawn(error.cause().as_str().to_owned()))?;
+                    let runs_on = remote.runs_on().to_owned();
+                    let folder = remote.folder().to_owned();
+                    let shell = remote.shell().to_owned();
+                    let running = engine.start_remote(&terminal_id, size, remote, events)?;
+                    Ok(crate::terminal::StartedTerminal {
+                        running,
+                        folder: Some(folder),
+                        shell: Some(shell),
+                        runs_on: Some(runs_on),
+                    })
+                },
+            )
+            .await
+        }
+        #[cfg(not(unix))]
+        TerminalPlace::CloudVm { .. } => return failure(&id, "terminal_place_unsupported"),
+        TerminalPlace::Elsewhere => return failure(&id, "terminal_place_unsupported"),
     };
-    let request = OpenRequest {
-        owner: link.owner().clone(),
-        request_id: params.request_id,
-        channel_id: params.channel_id,
-        conversation_id: params.conversation_id,
-        folder: folder.clone(),
-        kind,
-        size,
-    };
-    match link.open(request, host.login_shell()) {
+    match opened {
         Ok(entry) => {
             tracing::info!(
                 target: "nessa::terminal",
                 terminal = %entry.id,
                 principal = %link.owner().principal,
-                folder = %folder.display(),
+                runs_on = %entry.runs_on,
+                folder = %entry.folder,
                 run = matches!(entry.kind, TerminalKind::Run { .. }),
                 "terminal opened"
             );
@@ -232,7 +326,7 @@ pub(super) fn summary(entry: &TerminalEntry) -> TerminalSummary {
         request_id: entry.request_id.clone(),
         folder: entry.folder.clone(),
         shell: entry.shell.clone(),
-        runs_on: "here".into(),
+        runs_on: entry.runs_on.clone(),
         started_at_ms: entry.started_at_ms,
         state: if entry.ended.is_some() {
             "exited".into()

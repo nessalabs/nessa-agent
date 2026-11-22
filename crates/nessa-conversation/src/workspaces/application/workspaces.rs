@@ -23,6 +23,63 @@ pub struct WorkspaceStream {
     pub output: Box<dyn AsyncRead + Send + Unpin>,
     pub owner: Box<dyn Send>,
 }
+/// What a cloud VM terminal is asked to start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceTerminalSpec {
+    /// Gateway terminal id, used as the supervisor's stable run id.
+    pub id: String,
+    /// Optional working folder inside the VM; `None` starts in the workspace root.
+    pub folder: Option<String>,
+    /// `None` starts a login shell; `Some(cmd)` runs `cmd` in the login shell (Run block).
+    pub command: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// One byte-preserving output read from a cloud VM terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceTerminalOutput {
+    pub bytes: Vec<u8>,
+    pub next_cursor: u64,
+    pub gap: bool,
+    pub complete: bool,
+}
+
+/// Observed lifecycle state of a cloud VM terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkspaceTerminalState {
+    Running,
+    Exited(Option<i32>),
+    Lost(String),
+}
+
+/// A live PTY terminal running inside a cloud VM, backed by workspace-sdk's
+/// `Terminals` and `ManagedRuns` capabilities. Dropping it releases the VM's
+/// `"terminal"` use so the VM may rest once idle.
+#[async_trait]
+pub trait WorkspaceTerminal: Send + Sync {
+    /// The cloud this VM runs on.
+    fn runs_on(&self) -> &str;
+    /// Working folder inside the VM.
+    fn folder(&self) -> &str;
+    /// Login shell program inside the VM.
+    fn shell(&self) -> &str;
+    /// Read retained raw output bytes from `cursor`.
+    async fn read_output(
+        &self,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<WorkspaceTerminalOutput, Failure>;
+    /// Write raw input bytes to the PTY. Returns the accepted prefix length.
+    async fn write_input(&self, bytes: &[u8]) -> Result<usize, Failure>;
+    /// Resize the PTY to `(cols, rows)`.
+    async fn resize(&self, cols: u16, rows: u16) -> Result<(), Failure>;
+    /// Observe whether the process is still running or has exited.
+    async fn state(&self) -> Result<WorkspaceTerminalState, Failure>;
+    /// End the terminal process group.
+    async fn cancel(&self) -> Result<(), Failure>;
+}
+
 /// Which copy of `nessa` in the VM serves its leases.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServedCopy {
@@ -41,6 +98,14 @@ pub trait WorkspaceRuntime: Send + Sync {
             std::io::ErrorKind::Unsupported,
             "background sessions unavailable",
         ))
+    }
+
+    /// Start an interactive PTY terminal inside this workspace's VM.
+    async fn terminal(
+        &self,
+        _spec: WorkspaceTerminalSpec,
+    ) -> Result<Box<dyn WorkspaceTerminal>, Failure> {
+        Err(Failure::Provider)
     }
 
     /// The lease protocol the image's own copy says it speaks, empty when it
@@ -103,11 +168,49 @@ pub trait Provider: Send + Sync {
         -> Result<(), Failure>;
 }
 
+/// Keeps a cloud VM awake while a terminal runs inside it.
+struct HeldTerminal {
+    terminal: Box<dyn WorkspaceTerminal>,
+    _used: NamedUse,
+}
+
+#[async_trait]
+impl WorkspaceTerminal for HeldTerminal {
+    fn runs_on(&self) -> &str {
+        self.terminal.runs_on()
+    }
+    fn folder(&self) -> &str {
+        self.terminal.folder()
+    }
+    fn shell(&self) -> &str {
+        self.terminal.shell()
+    }
+    async fn read_output(
+        &self,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<WorkspaceTerminalOutput, Failure> {
+        self.terminal.read_output(cursor, limit).await
+    }
+    async fn write_input(&self, bytes: &[u8]) -> Result<usize, Failure> {
+        self.terminal.write_input(bytes).await
+    }
+    async fn resize(&self, cols: u16, rows: u16) -> Result<(), Failure> {
+        self.terminal.resize(cols, rows).await
+    }
+    async fn state(&self) -> Result<WorkspaceTerminalState, Failure> {
+        self.terminal.state().await
+    }
+    async fn cancel(&self) -> Result<(), Failure> {
+        self.terminal.cancel().await
+    }
+}
+
 /// What [`Workspaces::open`] hands out: the provider's runtime, holding the
 /// thread's VM in use, as an opening, for as long as it is kept. Each
-/// stream it serves, a connection or a background command, holds a use of
-/// its own until it is dropped. A connection with no lease on it is let go
-/// before a rest (`SshEnvironment::let_go`), which ends its use.
+/// stream or terminal it serves holds a use of its own until it is dropped.
+/// A connection with no lease on it is let go before a rest
+/// (`SshEnvironment::let_go`), which ends its use.
 struct HeldRuntime {
     runtime: Arc<dyn WorkspaceRuntime>,
     opening: NamedUse,
@@ -125,6 +228,17 @@ impl WorkspaceRuntime for HeldRuntime {
         let mut stream = self.runtime.background(command).await?;
         stream.owner = Box::new((stream.owner, used));
         Ok(stream)
+    }
+    async fn terminal(
+        &self,
+        spec: WorkspaceTerminalSpec,
+    ) -> Result<Box<dyn WorkspaceTerminal>, Failure> {
+        let used = self.opening.also("terminal");
+        let terminal = self.runtime.terminal(spec).await?;
+        Ok(Box::new(HeldTerminal {
+            terminal,
+            _used: used,
+        }))
     }
     async fn image_protocol(&self) -> Option<String> {
         self.runtime.image_protocol().await

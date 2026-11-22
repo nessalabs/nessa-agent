@@ -144,7 +144,7 @@ program sees one terminal with one size, so:
 The state page with the TLA+ model is
 [Share a terminal between views](../state/services/desktop/workspace/share-a-terminal-between-views.md).
 
-## As built (T1 to T4)
+## As built (T1 to T5)
 
 - Methods: `terminal.open`, `list`, `rename`, `attach`, `focus`, `fit`, `detach`,
   `input`, `history`, `close`; events `terminal.output` (`{terminalId,
@@ -153,8 +153,12 @@ The state page with the TLA+ model is
   connection's views and its listing when the connection goes; the window
   lists and attaches every view again on the next one
   (`adapters/gateway/terminal-gateway.ts`).
-- Only this Mac runs terminals so far. A channel or conversation placed on an
-  SSH host or a cloud VM is refused with `terminal_place_unsupported` until T5.
+- This Mac, SSH hosts (`ssh -tt` inside a local pty-runtime session), and
+  Boat / Agent37 cloud VMs (via workspace-sdk's `Terminals` and `ManagedRuns`
+  capabilities, holding a `"terminal"` `NamedUse` so the VM stays awake while
+  the terminal runs) all run through the same Ghostty projection and
+  multi-view rules. Paired computers and pools remain refused with
+  `terminal_place_unsupported`.
 - A Run starts `$SHELL -l -i -c <command>` in the conversation's folder. The
   block finds its runs again by their open request id (`run <message> <part>
   <fence> #<attempt>`, `model/run-block.ts`); more than 8 KiB is refused

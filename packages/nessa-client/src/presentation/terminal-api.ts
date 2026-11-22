@@ -163,6 +163,8 @@ export function isSummary(value: unknown): value is TerminalSummary {
     typeof value.requestId === "string" &&
     typeof value.folder === "string" &&
     typeof value.shell === "string" &&
+    typeof value.runsOn === "string" &&
+    value.runsOn.length > 0 &&
     typeof value.startedAtMs === "number" &&
     (value.state === "running" || value.state === "exited") &&
     (value.channelId === undefined || typeof value.channelId === "string") &&

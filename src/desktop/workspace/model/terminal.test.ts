@@ -4,6 +4,7 @@ import {
   terminalAgentName,
   terminalAgentOf,
   terminalOverviewGroup,
+  terminalRunsOnLabel,
   terminalStatusLine,
   type TerminalEntry,
 } from "./terminal"
@@ -126,5 +127,13 @@ describe("terminal agent and OSC 7501 helpers", () => {
     expect(terminalOverviewGroup(runningClaude)).toBe("working")
     expect(terminalOverviewGroup(exitedDoneClaude)).toBe("finished")
     expect(terminalOverviewGroup(exitedIdleClaude)).toBe("earlier")
+  })
+
+  it("formats runsOn labels for local, cloud VMs, and SSH hosts without prototype lookup", () => {
+    expect(terminalRunsOnLabel("here")).toBe("This Mac")
+    expect(terminalRunsOnLabel("boat")).toBe("Boat VM")
+    expect(terminalRunsOnLabel("agent37")).toBe("Agent37 VM")
+    expect(terminalRunsOnLabel("devbox")).toBe("devbox")
+    expect(terminalRunsOnLabel("toString")).toBe("toString")
   })
 })

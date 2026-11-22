@@ -85,6 +85,7 @@ fn request(owner: &TerminalOwner, id: &str) -> OpenRequest {
         channel_id: None,
         conversation_id: None,
         folder: "/tmp".into(),
+        runs_on: "here".into(),
         kind: TerminalKind::Shell,
         size: size(80, 24),
     }
@@ -475,4 +476,114 @@ fn program_status_updates_entry_and_announces_list() {
             .map(|s| &s.status),
         Some(&done)
     );
+}
+
+#[test]
+fn ssh_target_open_preserves_host_as_runs_on() {
+    let (hub, _engine) = setup();
+    let (link, _out) = hub.connect(owner("p"));
+    let mut req = request(&owner("p"), "ssh-1");
+    req.folder = "/home/dev/project".into();
+    req.runs_on = "devbox".into();
+    let entry = link
+        .open_target(
+            req,
+            StartTarget::Ssh {
+                ssh_program: "/usr/bin/ssh".into(),
+                host: "devbox".into(),
+                folder: "/home/dev/project".into(),
+            },
+            "$SHELL".into(),
+        )
+        .unwrap();
+    assert_eq!(entry.runs_on, "devbox");
+    assert_eq!(entry.folder, "/home/dev/project");
+    assert_eq!(entry.shell, "$SHELL");
+    assert_eq!(hub.list(&owner("p")).len(), 1);
+}
+
+#[tokio::test]
+async fn open_with_applies_resolved_cloud_metadata_and_deduplicates_retries() {
+    let (hub, engine) = setup();
+    let (link, mut out) = hub.connect(owner("p"));
+    let _ = link.list().unwrap();
+
+    let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+    let hub_for_open = Arc::clone(&hub);
+    let recorded = engine.recorded.clone();
+    let mut req = request(&owner("p"), "cloud-1");
+    req.runs_on = "boat".into();
+    req.folder = "".into();
+    let req_retry = req.clone();
+
+    let opening = tokio::spawn(async move {
+        hub_for_open
+            .open_with(req, "/bin/bash", move |_id, _events, _engine| async move {
+                let _ = gate_rx.await;
+                Ok(StartedTerminal {
+                    running: Box::new(FakeRunning(recorded)),
+                    folder: Some("/home/node/.nessa/workspaces/conv-1".into()),
+                    shell: Some("/bin/zsh".into()),
+                    runs_on: Some("agent37".into()),
+                })
+            })
+            .await
+    });
+
+    // Wait until the reservation is in place, then send a racing retry.
+    tokio::task::yield_now().await;
+    let retry = hub
+        .open_with(req_retry, "/bin/bash", |_id, _events, _engine| async {
+            panic!("racing retry must not invoke starter a second time")
+        })
+        .await
+        .unwrap();
+    assert_eq!(retry.request_id, "cloud-1");
+
+    let _ = gate_tx.send(());
+    let entry = opening.await.unwrap().unwrap();
+    assert_eq!(entry.id, retry.id);
+    assert_eq!(entry.runs_on, "agent37");
+    assert_eq!(entry.folder, "/home/node/.nessa/workspaces/conv-1");
+    assert_eq!(entry.shell, "/bin/zsh");
+    assert_eq!(entry.title, "zsh");
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+}
+
+#[tokio::test]
+async fn open_with_clears_reservation_on_spawn_failure() {
+    let (hub, _engine) = setup();
+    let req = request(&owner("p"), "cloud-fail");
+    let failed = hub
+        .open_with(req.clone(), "/bin/bash", |_id, _events, _engine| async {
+            Err(TerminalError::Spawn("vm unreachable".into()))
+        })
+        .await;
+    assert_eq!(failed, Err(TerminalError::Spawn("vm unreachable".into())));
+    assert!(hub.list(&owner("p")).is_empty());
+
+    // A later retry with the same request_id can now succeed.
+    let retry = hub.open(req, "/bin/sh".into()).unwrap();
+    assert_eq!(retry.request_id, "cloud-fail");
+}
+
+#[cfg(all(unix, feature = "terminals"))]
+#[test]
+fn ssh_remote_command_quotes_folder_and_run_command_safely() {
+    let shell_cmd = engine::ssh_remote_command(
+        std::path::Path::new("/home/alice/my 'project'/$dir"),
+        &TerminalKind::Shell,
+    );
+    assert!(shell_cmd.starts_with("cd '/home/alice/my '\\''project'\\''/$dir' && "));
+    assert!(shell_cmd.contains("TERM=xterm-256color"));
+    assert!(shell_cmd.contains("exec \"${SHELL:-/bin/sh}\" -l"));
+
+    let run_cmd = engine::ssh_remote_command(
+        std::path::Path::new("/tmp"),
+        &TerminalKind::Run {
+            command: "echo 'hi' && uname -a".into(),
+        },
+    );
+    assert!(run_cmd.contains("NESSA_RUN_COMMAND='echo '\\''hi'\\'' && uname -a'"));
+    assert!(run_cmd.contains("eval \"$NESSA_RUN_COMMAND\""));
 }
