@@ -289,7 +289,8 @@ pub(super) fn ssh_remote_command(folder: &Path, kind: &TerminalKind) -> String {
     }
 }
 
-enum TransportEvent {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum TransportEvent {
     Bytes(Vec<u8>),
     Gap,
     Exited(Option<i32>),
@@ -391,7 +392,7 @@ impl PtyTransport for LocalPtyTransport {
     }
 }
 
-enum RemoteCommand {
+pub(super) enum RemoteCommand {
     Input(Vec<u8>),
     Resize(TerminalSize),
     Close,
@@ -437,45 +438,27 @@ impl PtyTransport for RemotePtyTransport {
 
 /// Bridges an async cloud VM `WorkspaceTerminal` to the synchronous Ghostty
 /// projection thread. Dropping `remote` when this task exits releases the VM's
-/// `"terminal"` use guard.
-async fn drive_remote_terminal(
+/// `"terminal"` use guard, so every non-normal exit cancels the remote process
+/// while `remote` is still held.
+pub(super) async fn drive_remote_terminal(
     remote: Box<dyn WorkspaceTerminal>,
     mut commands: mpsc::UnboundedReceiver<RemoteCommand>,
     events: std_mpsc::Sender<TransportEvent>,
 ) {
     let mut cursor = 0u64;
     let mut delay = REMOTE_POLL_FAST;
+    let mut next_poll = clock::now();
     let mut idle_ticks = 0u8;
     loop {
         tokio::select! {
-            command = commands.recv() => match command {
-                Some(RemoteCommand::Input(bytes)) => {
-                    let mut offset = 0;
-                    while offset < bytes.len() {
-                        let end = (offset + REMOTE_INPUT_CHUNK).min(bytes.len());
-                        match remote.write_input(&bytes[offset..end]).await {
-                            Ok(0) => break,
-                            Ok(accepted) => offset += accepted.min(end - offset),
-                            Err(_) => break,
-                        }
-                    }
-                    delay = REMOTE_POLL_FAST;
-                    idle_ticks = 0;
-                }
-                Some(RemoteCommand::Resize(size)) => {
-                    let _ = remote.resize(size.cols(), size.rows()).await;
-                    delay = REMOTE_POLL_FAST;
-                    idle_ticks = 0;
-                }
-                Some(RemoteCommand::Close) | None => {
-                    let _ = remote.cancel().await;
-                    return;
-                }
-            },
-            () = clock::sleep(delay) => {
+            biased;
+            // Poll first once its deadline arrives so sustained input or resize
+            // traffic cannot starve output reads.
+            () = clock::sleep_until(next_poll) => {
                 match remote.read_output(cursor, REMOTE_READ_LIMIT).await {
                     Ok(out) => {
                         if out.gap {
+                            cancel_before_release(&*remote, "output gap").await;
                             let _ = events.send(TransportEvent::Gap);
                             return;
                         }
@@ -484,7 +467,7 @@ async fn drive_remote_terminal(
                             delay = REMOTE_POLL_FAST;
                             idle_ticks = 0;
                             if events.send(TransportEvent::Bytes(out.bytes)).is_err() {
-                                let _ = remote.cancel().await;
+                                cancel_before_release(&*remote, "projection receiver closed").await;
                                 return;
                             }
                         } else {
@@ -504,24 +487,31 @@ async fn drive_remote_terminal(
                         if idle_ticks > 0 && idle_ticks.is_multiple_of(10) {
                             match remote.state().await {
                                 Ok(WorkspaceTerminalState::Exited(code)) => {
-                                    // Drain any final bytes before reporting exit.
-                                    if let Ok(tail) = remote.read_output(cursor, REMOTE_READ_LIMIT).await {
-                                        if !tail.bytes.is_empty() {
-                                            let _ = events.send(TransportEvent::Bytes(tail.bytes));
-                                        }
+                                    if let Err(reason) = drain_remaining_output(
+                                        &*remote,
+                                        &mut cursor,
+                                        &events,
+                                    )
+                                    .await
+                                    {
+                                        cancel_before_release(&*remote, reason).await;
+                                        return;
                                     }
                                     let _ = events.send(TransportEvent::Exited(code));
                                     return;
                                 }
                                 Ok(WorkspaceTerminalState::Lost(reason)) => {
+                                    cancel_before_release(&*remote, "remote terminal lost").await;
                                     let _ = events.send(TransportEvent::Failed(reason));
                                     return;
                                 }
                                 _ => {}
                             }
                         }
+                        next_poll = clock::now() + delay;
                     }
                     Err(_) => {
+                        cancel_before_release(&*remote, "output read failed").await;
                         let _ = events.send(TransportEvent::Failed(
                             "lost connection to cloud terminal".into(),
                         ));
@@ -529,6 +519,79 @@ async fn drive_remote_terminal(
                     }
                 }
             }
+            command = commands.recv() => match command {
+                Some(RemoteCommand::Input(bytes)) => {
+                    let mut offset = 0;
+                    while offset < bytes.len() {
+                        let end = (offset + REMOTE_INPUT_CHUNK).min(bytes.len());
+                        match remote.write_input(&bytes[offset..end]).await {
+                            Ok(0) => break,
+                            Ok(accepted) => offset += accepted.min(end - offset),
+                            Err(_) => break,
+                        }
+                    }
+                    delay = REMOTE_POLL_FAST;
+                    idle_ticks = 0;
+                    next_poll = next_poll.min(clock::now() + REMOTE_POLL_FAST);
+                }
+                Some(RemoteCommand::Resize(size)) => {
+                    let _ = remote.resize(size.cols(), size.rows()).await;
+                    delay = REMOTE_POLL_FAST;
+                    idle_ticks = 0;
+                    next_poll = next_poll.min(clock::now() + REMOTE_POLL_FAST);
+                }
+                Some(RemoteCommand::Close) | None => {
+                    cancel_before_release(&*remote, "closed").await;
+                    return;
+                }
+            },
+        }
+    }
+}
+
+/// Cancel the remote process while `remote` (and its VM `"terminal"` use guard)
+/// is still owned.
+async fn cancel_before_release(remote: &dyn WorkspaceTerminal, reason: &str) {
+    if let Err(error) = remote.cancel().await {
+        tracing::warn!(
+            target: "nessa::terminal",
+            reason,
+            ?error,
+            "cloud terminal cancellation before release was not confirmed"
+        );
+    }
+}
+
+/// Drain every remaining output page after an observed exit before publishing
+/// `TransportEvent::Exited`, advancing `cursor` until completion or EOF.
+async fn drain_remaining_output(
+    remote: &dyn WorkspaceTerminal,
+    cursor: &mut u64,
+    events: &std_mpsc::Sender<TransportEvent>,
+) -> Result<(), &'static str> {
+    loop {
+        let tail = match remote.read_output(*cursor, REMOTE_READ_LIMIT).await {
+            Ok(tail) => tail,
+            Err(_) => {
+                let _ = events.send(TransportEvent::Failed(
+                    "lost connection to cloud terminal".into(),
+                ));
+                return Err("exit drain output read failed");
+            }
+        };
+        if tail.gap {
+            let _ = events.send(TransportEvent::Gap);
+            return Err("output gap during exit drain");
+        }
+        let prev = *cursor;
+        if !tail.bytes.is_empty() {
+            *cursor = tail.next_cursor;
+            if events.send(TransportEvent::Bytes(tail.bytes)).is_err() {
+                return Err("projection receiver closed during exit drain");
+            }
+        }
+        if tail.complete || tail.next_cursor <= prev {
+            return Ok(());
         }
     }
 }

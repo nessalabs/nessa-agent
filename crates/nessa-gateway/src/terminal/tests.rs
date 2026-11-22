@@ -587,3 +587,199 @@ fn ssh_remote_command_quotes_folder_and_run_command_safely() {
     assert!(run_cmd.contains("NESSA_RUN_COMMAND='echo '\\''hi'\\'' && uname -a'"));
     assert!(run_cmd.contains("eval \"$NESSA_RUN_COMMAND\""));
 }
+
+#[cfg(all(unix, feature = "terminals"))]
+mod remote_driver_tests {
+    use super::engine::{drive_remote_terminal, RemoteCommand, TransportEvent};
+    use crate::workspaces::application::{
+        WorkspaceTerminal, WorkspaceTerminalOutput, WorkspaceTerminalState,
+    };
+    use crate::workspaces::domain::Failure;
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use std::sync::{mpsc as std_mpsc, Arc, Mutex};
+    use tokio::sync::mpsc;
+
+    struct ScriptedRemote {
+        reads: Mutex<VecDeque<Result<WorkspaceTerminalOutput, Failure>>>,
+        states: Mutex<VecDeque<Result<WorkspaceTerminalState, Failure>>>,
+        lifecycle: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Drop for ScriptedRemote {
+        fn drop(&mut self) {
+            self.lifecycle.lock().unwrap().push("drop");
+        }
+    }
+
+    #[async_trait]
+    impl WorkspaceTerminal for ScriptedRemote {
+        fn runs_on(&self) -> &str {
+            "boat"
+        }
+        fn folder(&self) -> &str {
+            "/home/user/.nessa/workspaces/t"
+        }
+        fn shell(&self) -> &str {
+            "/bin/bash"
+        }
+        async fn read_output(
+            &self,
+            cursor: u64,
+            _limit: u32,
+        ) -> Result<WorkspaceTerminalOutput, Failure> {
+            self.reads
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Ok(WorkspaceTerminalOutput {
+                    bytes: Vec::new(),
+                    next_cursor: cursor,
+                    gap: false,
+                    complete: false,
+                }))
+        }
+        async fn write_input(&self, bytes: &[u8]) -> Result<usize, Failure> {
+            Ok(bytes.len())
+        }
+        async fn resize(&self, _cols: u16, _rows: u16) -> Result<(), Failure> {
+            Ok(())
+        }
+        async fn state(&self) -> Result<WorkspaceTerminalState, Failure> {
+            self.states
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Ok(WorkspaceTerminalState::Running))
+        }
+        async fn cancel(&self) -> Result<(), Failure> {
+            self.lifecycle.lock().unwrap().push("cancel");
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn gap_and_read_error_cancel_remote_before_releasing_vm_guard() {
+        for (read, expected) in [
+            (
+                Ok(WorkspaceTerminalOutput {
+                    bytes: Vec::new(),
+                    next_cursor: 0,
+                    gap: true,
+                    complete: false,
+                }),
+                TransportEvent::Gap,
+            ),
+            (
+                Err(Failure::Provider),
+                TransportEvent::Failed("lost connection to cloud terminal".into()),
+            ),
+        ] {
+            let lifecycle = Arc::new(Mutex::new(Vec::new()));
+            let remote = Box::new(ScriptedRemote {
+                reads: Mutex::new(VecDeque::from([read])),
+                states: Mutex::new(VecDeque::new()),
+                lifecycle: Arc::clone(&lifecycle),
+            });
+            let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (event_tx, event_rx) = std_mpsc::channel();
+            drive_remote_terminal(remote, cmd_rx, event_tx).await;
+            assert_eq!(event_rx.recv().unwrap(), expected);
+            assert_eq!(*lifecycle.lock().unwrap(), vec!["cancel", "drop"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn sustained_input_cannot_starve_output_polling() {
+        let lifecycle = Arc::new(Mutex::new(Vec::new()));
+        let remote = Box::new(ScriptedRemote {
+            reads: Mutex::new(VecDeque::from([
+                Ok(WorkspaceTerminalOutput {
+                    bytes: Vec::new(),
+                    next_cursor: 0,
+                    gap: false,
+                    complete: false,
+                }),
+                Ok(WorkspaceTerminalOutput {
+                    bytes: b"hello".to_vec(),
+                    next_cursor: 5,
+                    gap: false,
+                    complete: true,
+                }),
+            ])),
+            states: Mutex::new(VecDeque::from([Ok(WorkspaceTerminalState::Exited(Some(
+                0,
+            )))])),
+            lifecycle: Arc::clone(&lifecycle),
+        });
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = std_mpsc::channel();
+        let driver = tokio::spawn(drive_remote_terminal(remote, cmd_rx, event_tx));
+        // Flood input every 5ms (faster than the 25ms poll interval).
+        for _ in 0..10 {
+            let _ = cmd_tx.send(RemoteCommand::Input(b"a".to_vec()));
+            crate::timer::clock::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        driver.await.unwrap();
+        assert_eq!(
+            event_rx.recv().unwrap(),
+            TransportEvent::Bytes(b"hello".to_vec())
+        );
+        assert_eq!(event_rx.recv().unwrap(), TransportEvent::Exited(Some(0)));
+    }
+
+    #[tokio::test]
+    async fn periodic_exit_drains_all_remaining_output_pages_before_exited() {
+        let lifecycle = Arc::new(Mutex::new(Vec::new()));
+        let mut reads = VecDeque::new();
+        // 10 empty polls trigger the periodic state() check.
+        for _ in 0..10 {
+            reads.push_back(Ok(WorkspaceTerminalOutput {
+                bytes: Vec::new(),
+                next_cursor: 0,
+                gap: false,
+                complete: false,
+            }));
+        }
+        // Then 3 remaining pages of output after exit.
+        reads.push_back(Ok(WorkspaceTerminalOutput {
+            bytes: b"page-1 ".to_vec(),
+            next_cursor: 7,
+            gap: false,
+            complete: false,
+        }));
+        reads.push_back(Ok(WorkspaceTerminalOutput {
+            bytes: b"page-2 ".to_vec(),
+            next_cursor: 14,
+            gap: false,
+            complete: false,
+        }));
+        reads.push_back(Ok(WorkspaceTerminalOutput {
+            bytes: b"page-3".to_vec(),
+            next_cursor: 20,
+            gap: false,
+            complete: true,
+        }));
+        let remote = Box::new(ScriptedRemote {
+            reads: Mutex::new(reads),
+            states: Mutex::new(VecDeque::from([Ok(WorkspaceTerminalState::Exited(Some(
+                0,
+            )))])),
+            lifecycle: Arc::clone(&lifecycle),
+        });
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = std_mpsc::channel();
+        tokio::time::pause();
+        drive_remote_terminal(remote, cmd_rx, event_tx).await;
+        let received: Vec<TransportEvent> = event_rx.try_iter().collect();
+        assert_eq!(
+            received,
+            vec![
+                TransportEvent::Bytes(b"page-1 ".to_vec()),
+                TransportEvent::Bytes(b"page-2 ".to_vec()),
+                TransportEvent::Bytes(b"page-3".to_vec()),
+                TransportEvent::Exited(Some(0)),
+            ]
+        );
+    }
+}
