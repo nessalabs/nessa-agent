@@ -565,6 +565,25 @@ describe("model choices", () => {
     expect(asked(source, "keepFollowing").map((call) => call[1])).toEqual(["a", null])
   })
 
+  it("follows a held new chat only once the source knows it", async () => {
+    const { source, store } = await ready()
+    const draft = store.dispatch(newSession())!
+    // A call on a new chat's home holds it before its first message.
+    store.dispatch(workspaceActions.sessionHeld({ sessionId: draft }))
+    await settle()
+    expect(asked(source, "keepFollowing")).toEqual([])
+    // Its first message is on its way: the source still holds no such chat.
+    void send(store, "start it", draft)
+    await settle()
+    expect(asked(source, "keepFollowing")).toEqual([])
+    source.emit({
+      kind: "session",
+      session: summary(draft, "start it", 2000, "running", { revision: 1 }),
+    })
+    await settle()
+    expect(asked(source, "keepFollowing").map((call) => call[1])).toEqual([draft])
+  })
+
   it("clears an acknowledged choice once the source's frame confirms it", async () => {
     const { source, store } = await ready()
     source.setModel = async (_id, _model, id) => receipt(id)

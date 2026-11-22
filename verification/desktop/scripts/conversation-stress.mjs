@@ -302,8 +302,14 @@ import {
  *               brings the chat back and puts the pill away; Talk in
  *               another chat asks before it ends the open call, Cancel
  *               leaves it and Talk here moves it; a call that drops
- *               with its chat in no pane is said in the window; End call
- *               closes the call and Talk is back
+ *               with its chat in no pane is said in the window; Pause on
+ *               the pill hangs up with the provider and keeps the pill,
+ *               saying Paused, with Resume in the composer too, and Resume
+ *               opens one new provider call handed what was said before;
+ *               Pause and Resume in the composer do the same; End call
+ *               closes the call and Talk is back; a new chat's home offers
+ *               Talk, the first thing said there starts the chat, its
+ *               reply is handed to the voice, and the call goes on in it
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows) and every place record into
@@ -7139,11 +7145,86 @@ const steps = {
         .catch(() =>
           failures.push("unmuting the voice on the pill did not reach the call"),
         )
+      // Pause on the pill hangs up with the provider and keeps the call: the
+      // pill stays, saying so, and the composer offers Resume. Resume opens a
+      // new provider call, handed what was said before the pause.
+      const callsBeforePause = realtime.calls()
+      await face.getByRole("button", { name: "Pause call", exact: true }).click()
+      if (!(await waitFor(() => !realtime.open(), 5_000)))
+        failures.push("Pause on the pill left the provider's call open")
+      if (!(await pillSays("Paused")))
+        failures.push("the paused call's pill does not say Paused")
+      else if (run.evidence)
+        await pill.screenshot({
+          path: join(run.evidence, "voice-pill-paused.png"),
+          omitBackground: true,
+        })
+      if (
+        !(await pane
+          .getByRole("button", { name: "Resume call", exact: true })
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false))
+      )
+        failures.push(
+          "the composer does not offer Resume for the call paused on the pill",
+        )
+      const toldBeforeResume = realtime.told().length
+      await face.getByRole("button", { name: "Resume call", exact: true }).click()
+      if (
+        !(await waitFor(
+          () => realtime.open() && realtime.calls() === callsBeforePause + 1,
+          10_000,
+        ))
+      )
+        failures.push(
+          `Resume on the pill opened ${realtime.calls() - callsBeforePause} calls, not one`,
+        )
+      if (!(await pillSays("Listening")))
+        failures.push("the resumed call's pill does not say Listening")
+      const recapped = await waitFor(
+        () =>
+          realtime
+            .told()
+            .slice(toldBeforeResume)
+            .some(
+              (told) =>
+                told.startsWith("The person paused this call") &&
+                told.includes(`reply r${step.index} voice s${run.knobs.seed}`),
+            ),
+        5_000,
+      )
+      if (!recapped)
+        failures.push("the resumed call was not handed what was said before the pause")
     }
     // Back in the window, the composer has the switches and the pill goes.
     await front(true)
     if (!(await waitFor(async () => (await face.count()) === 0, 5_000)))
       failures.push("the pill stays while the window with the call is in front")
+    // Pause and Resume in the composer do the same as on the pill; the line
+    // above the composer says the call is paused.
+    const callsBeforeComposerPause = realtime.calls()
+    await pane.getByRole("button", { name: "Pause call", exact: true }).click()
+    if (
+      !(await waitFor(
+        async () => !realtime.open() && (await phase()) === "paused",
+        5_000,
+      ))
+    )
+      failures.push(`Pause in the composer left the call ${await phase()}`)
+    await expectShown(run.page, "Paused", failures, 5_000)
+    await shot("paused")
+    await pane.getByRole("button", { name: "Resume call", exact: true }).click()
+    if (
+      !(await waitFor(
+        async () =>
+          realtime.open() &&
+          realtime.calls() === callsBeforeComposerPause + 1 &&
+          (await phase()) === "listening",
+        10_000,
+      ))
+    )
+      failures.push(`Resume in the composer left the call ${await phase()}`)
     // The person opens another chat while they talk. The call goes on: its
     // chat is in no pane now, so its switches float on the pill though the
     // window is still in front, and the call still hears its chat. What is
@@ -7438,6 +7519,87 @@ const steps = {
       failures.push("the call's line and glow stay after End call")
     if (!realtime.received.some((event) => event.type === "response.create"))
       failures.push("the voice was never asked to speak")
+
+    // A new chat's home offers Talk: the first thing said starts the chat,
+    // and the call goes on in the conversation that takes the home's place.
+    await run.page.keyboard.press(keys.newSession)
+    const newHome = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    const homeTalk = newHome.getByRole("button", { name: "Talk", exact: true })
+    // Home has its own selection: the fixture model, as the `fresh` step picks it.
+    await newHome
+      .locator(css.field)
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    const newModel = catalog.models.find((row) => row.modelId === run.stack.profile.model)
+    await selectStressModel(
+      run.page,
+      newHome.locator(css.modelChip),
+      newModel.displayName,
+    )
+    if (
+      !(await homeTalk
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("a new chat's home offers no Talk")
+    else {
+      const focusedPhase = () =>
+        run.page
+          .locator(`${css.focusedPane} .voice-dock`)
+          .getAttribute("data-phase", { timeout: 1_000 })
+          .catch(() => null)
+      const callsBeforeNew = realtime.calls()
+      await homeTalk.click()
+      if (
+        !(await waitFor(
+          async () =>
+            realtime.open() &&
+            realtime.calls() === callsBeforeNew + 1 &&
+            (await focusedPhase()) === "listening",
+          15_000,
+        ))
+      )
+        failures.push(
+          `Talk on a new chat's home did not open a call (phase ${await focusedPhase()})`,
+        )
+      else {
+        await shot("new-chat-listening")
+        const first = prompt(run, `Please ${STRESS.reply}`, step, " voice new chat")
+        realtime.say(first)
+        await expectShown(run.page, `${SAYS.echo}${first}`, failures)
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) ===
+                0 &&
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            10_000,
+          ))
+        )
+          failures.push(
+            "what was said on a new chat's home did not start the chat with the call in it",
+          )
+        if (
+          !(await waitFor(
+            () => realtime.told().includes(`Agent reply:\n${SAYS.echo}${first}`),
+            15_000,
+          ))
+        )
+          failures.push(
+            "the reply in the chat started by voice was not handed to the voice",
+          )
+        await shot("new-chat-started")
+      }
+      await run.page
+        .locator(css.focusedPane)
+        .getByRole("button", { name: "End call", exact: true })
+        .click({ timeout: 5_000 })
+        .catch(() => {})
+      if (!(await waitFor(() => !realtime.open(), 10_000)))
+        failures.push("End call left the call in the chat started by voice open")
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
 
     // The key never left the gateway's vault: not in its log, nor its audit.
     if (run.stack.gateway.log().includes(realtime.key))

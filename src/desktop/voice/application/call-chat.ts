@@ -31,6 +31,7 @@ function talkedTo(snapshot: VoiceSnapshot): string | null {
     case "listening":
     case "working":
     case "speaking":
+    case "paused":
       return snapshot.sessionId
     case "idle":
     case "failed":

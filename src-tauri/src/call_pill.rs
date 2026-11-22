@@ -51,6 +51,8 @@ pub enum CallPhase {
     Listening,
     Working,
     Speaking,
+    /// Hung up with the provider, kept to be resumed: nothing is billed.
+    Paused,
 }
 
 /// The call as the pill draws it. The JSON is the contract with
@@ -114,6 +116,9 @@ pub enum CallPress {
     Unmute,
     SpeakerOff,
     SpeakerOn,
+    /// Hang up with the provider and keep the call to resume.
+    Pause,
+    Resume,
     /// The chat's name: bring the desktop window forward.
     Open,
 }
@@ -813,6 +818,11 @@ mod tests {
         .expect("the page's picture");
         assert_eq!(picture.phase, CallPhase::Listening);
         assert!(picture.microphone_on && !picture.speaker_on);
+        let paused: CallPicture = serde_json::from_str(
+            r#"{"phase":"paused","title":"Fix the build","microphoneOn":true,"speakerOn":true}"#,
+        )
+        .expect("a paused call's picture");
+        assert_eq!(paused.phase, CallPhase::Paused);
         for refused in [
             r#"{"phase":"idle","title":"","microphoneOn":true,"speakerOn":true}"#,
             r#"{"phase":"listening","title":"","microphoneOn":true,"speakerOn":true,"extra":1}"#,
@@ -846,6 +856,8 @@ mod tests {
             (CallPress::Unmute, "\"unmute\""),
             (CallPress::SpeakerOff, "\"speaker-off\""),
             (CallPress::SpeakerOn, "\"speaker-on\""),
+            (CallPress::Pause, "\"pause\""),
+            (CallPress::Resume, "\"resume\""),
             (CallPress::Open, "\"open\""),
         ] {
             assert_eq!(serde_json::to_string(&press).expect("a press"), name);

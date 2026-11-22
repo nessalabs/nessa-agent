@@ -70,6 +70,16 @@ Tidying (`model/tidy.ts`) is a pure function: fillers ("um", "uh", "erm"),
 repeated words and a leading lowercase are fixed, nothing else. The
 transcription model is also asked for clean punctuated text.
 
+A new chat's home offers Talk too, so a chat can be started by talking. The
+call is about the id the window chose for the new chat, which the gateway
+does not know yet: `voice.startCall` admits a call about a chat that is
+not there when Cedar says the caller may start one, asked as `channel.use`
+on the owner's channel (only the owner's own surface is permitted; a phone
+asks its own policy for `conversation.create`).
+The voice's first `send_to_agent` sends the person's words as the first
+typed message would, which starts the chat, and the call goes on in the
+conversation that takes the home's place.
+
 One call per window. Starting another ends the one running, so Talk in a
 chat while a call talks to another asks first, naming the chat whose call
 ends. Closing the call's pane or showing another conversation in it ends
@@ -96,6 +106,10 @@ so in the window, since the chat's own notice is not on screen to say it.
 | V16 | any open | end, or the conversation is gone from the window (archived, deleted) | idle; the transport closed. A pane closed or showing another conversation ends nothing: the call goes on, the window keeps following its conversation off screen (`heldSession`, kept and read as a shown one is) so every reply still reaches the voice, and its switches float on the pill until a pane shows it again |
 | V17 | any open | transport closed or failed | ended, saying the call dropped |
 | V18 | listening | 12 s after it opened, or after the last unmute, the provider has not heard the person start speaking, and the microphone is on | the transport checks its own audio once over 1 s: any event back from the provider, whether the microphone's track is still live and not muted by the system, audio bytes going out (which fails only when the connection itself is down, since silence is sent too; unknown when the statistics hold no count for outgoing audio, under either name a web view gives its kind), and sound from the microphone (unknown when the meter cannot run). The first thing found wrong is shown in place of "Listening" until the person is heard or the microphone changes; a check that ran into a mute is dropped |
+| V19 | any open | pause (composer or pill) | paused: the transport is closed (the provider bills nothing and the microphone is let go), a connect under way is dropped and its late transport closed, the hearing check stops, and speech not yet written down counts as nothing heard (V9). The call is kept: what was heard and said, the turns it waits on, a send already admitted (it still reaches the agent; its tool answer is dropped, since no later connection knows its call), and the conversation is still followed |
+| V20 | paused | resume | connecting, then a new `voice.startCall` and transport for the same chat; the new connection is handed the chat so far and a recap of the call (the latest 24 lines, the person's transcripts and what the voice said, each cut to 600 characters), told to carry on rather than greet again; the microphone and speaker switches set while paused apply |
+| V21 | paused, or resuming and not yet connected | an awaited turn ends | kept; handed over (V11) once the resumed connection opens |
+| V22 | paused | end; or resume refused or failing | idle; or failed, saying it could not resume (with the start's fix, such as adding a key) |
 
 A turn is open while its reply is being written, while the chat is at
 work, or while its message is held waiting for an agent (`waiting` on the
@@ -110,8 +124,10 @@ Known limits, accepted for now:
   turn that ended saying nothing; its words are in that running turn's reply.
 - Stop while the voice's message is only held waiting answers
   `nothing_running`, as the composer's Stop would.
-- Always-on calls cost while open; ending the call between turns is a later
-  change, not this one.
+- An open call costs while open, even quiet. Pause (V19) hangs up with the
+  provider and keeps the call, so a person who keeps the pill around pays
+  nothing while it is paused. Resume opens a new provider session: the
+  voice has the recap and the chat, not its own memory of the audio.
 
 ## The call pill
 
@@ -122,7 +138,9 @@ the person may read or write in another chat while they talk. The pill is a
 small window of its
 own (`call`, declared hidden in `tauri.conf.json`), always on top, on every
 Space. It shows where the call stands and which chat it talks to, with the
-speaker, the microphone and End. Pressing the chat's name brings the desktop
+speaker, the microphone, Pause (Resume while paused: the light is a hollow
+ring and the state says "Paused") and End. A paused call keeps its pill,
+since it is still the window's call. Pressing the chat's name brings the desktop
 window forward on that chat, opening it in the focused pane when no pane
 shows it; dragging it moves the pill.
 
@@ -178,7 +196,8 @@ be done on a Mac.
 `credential.manage`; `voice.startCall {conversationId}` is
 `conversation.write`. Cedar admits each by its manifest grant; a call is
 also admitted to its one conversation (read and act there, and it must
-exist), so no call is minted about a chat the caller cannot use.
+exist, except for the owner starting a new chat by voice), so no call is
+minted about a chat the caller cannot use.
 
 Every change is recorded before it is made and its outcome after, under
 one operation id, so a request is never read as its effect. A mint runs on
@@ -214,7 +233,7 @@ whether one is saved.
   OpenAI request and answer beside the adapter; the methods at the socket
   (grants, shapes, no key in any answer) in
   `crates/nessa-gateway/tests/product/socket/voice.rs`.
-- Window: `src/desktop/voice/**/*.test.ts` — V1–V17 on a fake transport and a
+- Window: `src/desktop/voice/**/*.test.ts` — V1–V22 on a fake transport and a
   fake workspace; tidy's cases.
 - End to end: the stress check's `voice` step (`pnpm test:e2e:stress`, knob
   `voices`) points the gateway at a fake realtime provider, saves a key in

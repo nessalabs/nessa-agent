@@ -115,6 +115,7 @@ export const PaneHome = memo(function PaneHome({
   const { text, onTextChange } = useComposerText(sessionId)
   const access = useComposerAccess(sessionId)
   const images = useComposerImages(sessionId)
+  const voice = useComposerVoice(sessionId)
 
   return (
     <Home
@@ -125,6 +126,10 @@ export const PaneHome = memo(function PaneHome({
       images={images}
       text={text}
       onTextChange={onTextChange}
+      // Talk starts the chat by voice: the call's first send starts it, and
+      // the call goes on in the conversation that then takes this home's place.
+      voice={voice}
+      voiceDock={<ConversationVoice sessionId={sessionId} />}
       // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
       composerClassName="workspace-dock"
     />
