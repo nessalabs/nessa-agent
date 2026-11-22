@@ -65,4 +65,34 @@ describe("terminal api", () => {
       "terminal.detach",
     ])
   })
+
+  it("accepts valid OSC 7501 programStatus and rejects malformed ones", async () => {
+    const withStatus: TerminalSummary = {
+      ...shell,
+      programStatus: {
+        state: "blocked",
+        kind: "permission",
+        app: "claude-code",
+        msg: "Allow running tests?",
+        updatedAtMs: 2000,
+      },
+    }
+    await expect(requester({ terminals: [withStatus] }).api.list()).resolves.toEqual([
+      withStatus,
+    ])
+    for (const bad of [
+      { state: "bogus", updatedAtMs: 2000 },
+      { state: "working", progress: 42.5, updatedAtMs: 2000 },
+      { state: "working", updatedAtMs: Number.NaN },
+      { state: "working", updatedAtMs: -1 },
+      { state: "idle", kind: "permission", updatedAtMs: 2000 },
+      { state: "idle", progress: 50, updatedAtMs: 2000 },
+      { state: "working", app: "", updatedAtMs: 2000 },
+      { state: "working", msg: "", updatedAtMs: 2000 },
+    ]) {
+      await expect(
+        requester({ terminals: [{ ...shell, programStatus: bad }] }).api.list(),
+      ).rejects.toThrow()
+    }
+  })
 })

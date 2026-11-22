@@ -45,7 +45,11 @@ import {
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { Draft } from "../../model/session-lifecycle"
-import { channelShells, type TerminalEntry } from "../../model/terminal"
+import {
+  effectiveTerminalStatus,
+  isOverviewTerminalAgent,
+  type TerminalEntry,
+} from "../../model/terminal"
 import { atWork, type Message, type Transcript } from "../../model/transcript"
 import {
   channelOf,
@@ -308,9 +312,41 @@ export const selectPaneTerminal = (state: Root, pane: PaneKey): string | null =>
   return item?.kind === "terminal" ? item.terminalId : null
 }
 
+const listedTerminals = createSelector(
+  [(state: Root) => state.workspace.terminals],
+  (terminals) => Object.values(terminals),
+)
+
+const shellsByChannel = createSelector([listedTerminals], (terminals) => {
+  const byChannel = new Map<string, TerminalEntry[]>()
+  for (const terminal of terminals) {
+    if (terminal.kind !== "shell") continue
+    const list = byChannel.get(terminal.channelId)
+    if (list) list.push(terminal)
+    else byChannel.set(terminal.channelId, [terminal])
+  }
+  for (const list of byChannel.values()) {
+    list.sort((a, b) => b.startedAtMs - a.startedAtMs)
+  }
+  return byChannel
+})
+
+const shellIdsByChannel = createSelector([shellsByChannel], (byChannel) => {
+  const ids = new Map<string, readonly string[]>()
+  for (const [channelId, list] of byChannel) {
+    ids.set(
+      channelId,
+      list.map((terminal) => terminal.id),
+    )
+  }
+  return ids
+})
+
+const noShells: readonly TerminalEntry[] = []
+
 /** The ids of a channel's shells, newest first, as its session list shows them. */
-export const selectChannelShells = (state: Root, channelId: string): string[] =>
-  channelShells(state.workspace.terminals, channelId).map((terminal) => terminal.id)
+export const selectChannelShells = (state: Root, channelId: string): readonly string[] =>
+  shellIdsByChannel(state).get(channelId) ?? noIds
 
 /** Whether a pane shows the terminal, and whether it is the focused pane. */
 export const selectTerminalShown = (
@@ -367,7 +403,22 @@ export const selectPanePresent = (state: Root, pane: PaneKey): boolean =>
 /** The sessions the panes show, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], paneIds)
 
-export const selectStatusCounts = createSelector([listed], statusCounts)
+export const selectStatusCounts = createSelector(
+  [listed, listedTerminals],
+  (sessions, terminals) => {
+    const base = statusCounts(sessions)
+    let needsYou = base.needsYou
+    for (const terminal of terminals) {
+      if (
+        isOverviewTerminalAgent(terminal) &&
+        effectiveTerminalStatus(terminal)?.state === "blocked"
+      ) {
+        needsYou += 1
+      }
+    }
+    return needsYou === base.needsYou ? base : { needsYou }
+  },
+)
 
 /** A channel's sessions, newest-first order left to the caller. */
 const sessionsByChannel = createSelector([listed], (sessions) => {
@@ -384,9 +435,28 @@ const none: readonly SessionSummary[] = []
 const channelSessions = (state: Root, channelId: string) =>
   sessionsByChannel(state).get(channelId) ?? none
 
-/** What a channel's row shows about its sessions; compare with `shallowEqual`. */
-export const selectChannelActivity = (state: Root, channelId: string): ChannelActivity =>
-  channelActivity(channelSessions(state, channelId))
+/** What a channel's row shows about its sessions and terminals; compare with `shallowEqual`. */
+export const selectChannelActivity = (
+  state: Root,
+  channelId: string,
+): ChannelActivity => {
+  const base = channelActivity(channelSessions(state, channelId))
+  const shells = shellsByChannel(state).get(channelId) ?? noShells
+  if (shells.length === 0) return base
+  let waiting = base.waiting
+  let running = base.running
+  let unread = base.unread
+  for (const terminal of shells) {
+    const prog = effectiveTerminalStatus(terminal)?.state
+    if (prog === "blocked") waiting += 1
+    else if (prog === "working") running = true
+    else if (prog === "done" || prog === "error") unread = true
+  }
+  if (waiting === base.waiting && running === base.running && unread === base.unread) {
+    return base
+  }
+  return { waiting, running, unread }
+}
 
 /** The sessions a channel's branch discloses, as ids, and how many it holds back. */
 export function selectBranch(
@@ -485,14 +555,15 @@ export const selectListedSessions = listed
 export const selectGlance = createSelector(
   [
     listed,
+    listedTerminals,
     (state: Root) => state.workspace.overview.filter,
     (state: Root) => state.workspace.overview.group,
     (state: Root) => state.workspace.overview.selected,
     (_state: Root, held: readonly Held[]) => held,
     (_state: Root, _held: readonly Held[], now: number) => now,
   ],
-  (sessions, filter, group, looking, held, now): AgentsGlance =>
-    agentsGlance(sessions, held, { filter, group, now, looking }),
+  (sessions, terminals, filter, group, looking, held, now): AgentsGlance =>
+    agentsGlance(sessions, held, { filter, group, now, looking, terminals }),
 )
 
 /** Latest refused message, retained by identity for composer recovery actions. */

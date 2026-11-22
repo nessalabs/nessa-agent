@@ -27,6 +27,7 @@ import {
   deny,
   filterOverview,
   openSession,
+  openTerminal,
   selectInOverview,
   showOverviewGroup,
   type AnswerOutcome,
@@ -43,6 +44,7 @@ import {
   selectOverviewSelected,
   selectReady,
   selectSession,
+  selectTerminal,
   selectTranscript,
 } from "../../adapters/store/selectors"
 import {
@@ -69,6 +71,8 @@ import { RequestRow } from "./request-row"
 import { SessionPeek } from "./session-peek"
 import { ReplyCaret } from "./reply-pill"
 import { SessionRow } from "./session-row"
+import { TerminalOverviewRow } from "./terminal-overview-row"
+import { TerminalPeek } from "./terminal-peek"
 import { ResizeEdge } from "../../../ui/resize-edge"
 import { answeredLabels, type OnAnswer, type Settling } from "./settling"
 import "./overview.css"
@@ -365,6 +369,14 @@ export function AgentsOverview({
     [dispatch, onLeave],
   )
 
+  const openTerminalItem = useCallback(
+    (terminalId: string) => {
+      dispatch(openTerminal({ terminalId }))
+      onLeave()
+    },
+    [dispatch, onLeave],
+  )
+
   const answer = useCallback<OnAnswer>(
     (summary, approval, option, at) => {
       const choice = option.choice
@@ -476,7 +488,13 @@ export function AgentsOverview({
               .overviewItem
           : undefined
       const to = from ?? current
-      if (to !== null && to !== undefined) reply(to)
+      if (to !== null && to !== undefined) {
+        if (selectTerminal(store.getState(), to) !== undefined) {
+          openTerminalItem(to)
+        } else {
+          reply(to)
+        }
+      }
       return
     }
     const step = steps[binding.command]
@@ -766,6 +784,7 @@ export function AgentsOverview({
                     onFocusItem={choose}
                     onChoose={pick}
                     onOpen={open}
+                    onOpenTerminal={openTerminalItem}
                     onAnswer={answer}
                     onLeaveReply={leaveReply}
                     takesKey={takesKey}
@@ -804,12 +823,12 @@ export function AgentsOverview({
           </div>
           {split && peekDrawn && peeked !== null ? (
             <aside className="agents-overview-peek" aria-label="Peek">
-              <SessionPeek
+              <OverviewPeek
                 key={peeked}
-                sessionId={peeked}
-                placement="beside"
+                itemId={peeked}
                 settling={settlingOf.get(peeked)}
-                onOpen={open}
+                onOpenSession={open}
+                onOpenTerminal={openTerminalItem}
                 onAnswer={answer}
                 onLeaveReply={leaveReply}
               />
@@ -931,6 +950,119 @@ const emptyGroup: Readonly<Record<AgentsGroup, string>> = {
   earlier: "Nothing from earlier",
 }
 
+function OverviewPeek({
+  itemId,
+  settling,
+  onOpenSession,
+  onOpenTerminal,
+  onAnswer,
+  onLeaveReply,
+}: {
+  itemId: string
+  settling: Settling | undefined
+  onOpenSession: (sessionId: string) => void
+  onOpenTerminal: (terminalId: string) => void
+  onAnswer: OnAnswer
+  onLeaveReply: () => void
+}) {
+  const isTerminal = useWorkspaceSelector(
+    (state) => selectTerminal(state, itemId) !== undefined,
+  )
+  if (isTerminal) {
+    return <TerminalPeek terminalId={itemId} placement="beside" onOpen={onOpenTerminal} />
+  }
+  return (
+    <SessionPeek
+      sessionId={itemId}
+      placement="beside"
+      settling={settling}
+      onOpen={onOpenSession}
+      onAnswer={onAnswer}
+      onLeaveReply={onLeaveReply}
+    />
+  )
+}
+
+function OverviewRow({
+  itemId,
+  kind,
+  current,
+  selected,
+  expanded,
+  settling,
+  onFocus,
+  onChoose,
+  onOpen,
+  onOpenTerminal,
+  onAnswer,
+  onLeaveReply,
+  takesKey,
+}: {
+  itemId: string
+  kind: AgentsGroup
+  current: boolean
+  selected: boolean
+  expanded: boolean
+  settling: Settling | undefined
+  onFocus: (id: string) => void
+  onChoose: (id: string) => void
+  onOpen: (sessionId: string) => void
+  onOpenTerminal: (terminalId: string) => void
+  onAnswer: OnAnswer
+  onLeaveReply: () => void
+  takesKey: (event: KeyboardEvent) => boolean
+}) {
+  const isTerminal = useWorkspaceSelector(
+    (state) => selectTerminal(state, itemId) !== undefined,
+  )
+  if (isTerminal) {
+    return (
+      <TerminalOverviewRow
+        terminalId={itemId}
+        kind={kind}
+        current={current}
+        selected={selected}
+        expanded={expanded}
+        onFocus={onFocus}
+        onChoose={onChoose}
+        onOpen={onOpenTerminal}
+        takesKey={takesKey}
+      />
+    )
+  }
+  if (kind === "needsYou") {
+    return (
+      <RequestRow
+        sessionId={itemId}
+        current={current}
+        selected={selected}
+        expanded={expanded}
+        settling={settling}
+        onFocus={onFocus}
+        onChoose={onChoose}
+        onOpen={onOpen}
+        onAnswer={onAnswer}
+        onLeaveReply={onLeaveReply}
+        takesKey={takesKey}
+      />
+    )
+  }
+  return (
+    <SessionRow
+      sessionId={itemId}
+      kind={kind}
+      current={current}
+      selected={selected}
+      expanded={expanded}
+      onFocus={onFocus}
+      onChoose={onChoose}
+      onOpen={onOpen}
+      onAnswer={onAnswer}
+      onLeaveReply={onLeaveReply}
+    />
+  )
+}
+
 function Groups({
   glance,
   current,
@@ -940,6 +1072,7 @@ function Groups({
   onFocusItem,
   onChoose,
   onOpen,
+  onOpenTerminal,
   onAnswer,
   onLeaveReply,
   takesKey,
@@ -953,22 +1086,26 @@ function Groups({
   onFocusItem: (id: string) => void
   onChoose: (id: string) => void
   onOpen: (sessionId: string) => void
+  onOpenTerminal: (terminalId: string) => void
   onAnswer: OnAnswer
   onLeaveReply: () => void
   takesKey: (event: KeyboardEvent) => boolean
   /** Widens the filter to every session, which lists all it kept out. */
   onShowAll: () => void
 }) {
-  const row = (sessionId: string) => ({
-    sessionId,
-    current: sessionId === current,
-    selected: sessionId === selected,
-    expanded: sessionId === expanded,
+  const row = (itemId: string) => ({
+    itemId,
+    current: itemId === current,
+    selected: itemId === selected,
+    expanded: itemId === expanded,
+    settling: settlingOf.get(itemId),
     onFocus: onFocusItem,
     onChoose,
     onOpen,
+    onOpenTerminal,
     onAnswer,
     onLeaveReply,
+    takesKey,
   })
   // Nothing listed at all, or nothing of the group shown alone: one quiet
   // line, never an empty page (`quietOf`).
@@ -993,13 +1130,8 @@ function Groups({
             Needs you
           </h2>
           <ul role="list" className="agents-overview-list">
-            {glance.needsYou.map((sessionId) => (
-              <RequestRow
-                key={sessionId}
-                {...row(sessionId)}
-                settling={settlingOf.get(sessionId)}
-                takesKey={takesKey}
-              />
+            {glance.needsYou.map((id) => (
+              <OverviewRow key={id} {...row(id)} kind="needsYou" />
             ))}
           </ul>
         </section>
@@ -1008,8 +1140,8 @@ function Groups({
         <section className="agents-overview-group" aria-labelledby="agents-working">
           <h2 id="agents-working">Working</h2>
           <ul role="list" className="agents-overview-list">
-            {glance.working.map((sessionId) => (
-              <SessionRow key={sessionId} {...row(sessionId)} kind="working" />
+            {glance.working.map((id) => (
+              <OverviewRow key={id} {...row(id)} kind="working" />
             ))}
           </ul>
         </section>
@@ -1018,8 +1150,8 @@ function Groups({
         <section className="agents-overview-group" aria-labelledby="agents-finished">
           <h2 id="agents-finished">Finished</h2>
           <ul role="list" className="agents-overview-list">
-            {glance.finished.map((sessionId) => (
-              <SessionRow key={sessionId} {...row(sessionId)} kind="finished" />
+            {glance.finished.map((id) => (
+              <OverviewRow key={id} {...row(id)} kind="finished" />
             ))}
           </ul>
         </section>
@@ -1028,8 +1160,8 @@ function Groups({
         <section className="agents-overview-group" aria-labelledby="agents-earlier">
           <h2 id="agents-earlier">Earlier</h2>
           <ul role="list" className="agents-overview-list">
-            {glance.earlier.map((sessionId) => (
-              <SessionRow key={sessionId} {...row(sessionId)} kind="earlier" />
+            {glance.earlier.map((id) => (
+              <OverviewRow key={id} {...row(id)} kind="earlier" />
             ))}
           </ul>
         </section>

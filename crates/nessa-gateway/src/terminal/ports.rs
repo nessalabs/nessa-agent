@@ -6,8 +6,10 @@ use std::sync::Arc;
 
 /// What an engine tells the hub about a terminal it runs.
 pub trait EngineEvents: Send + Sync {
-    /// The program ended.
-    fn exited(&self, terminal: &str, status: Option<i32>);
+    /// The program ended, along with its post-exit OSC 7501 status (live states dropped).
+    fn exited(&self, terminal: &str, status: Option<i32>, program_status: Option<ProgramStatus>);
+    /// The terminal's effective OSC 7501 program status changed.
+    fn program_status(&self, terminal: &str, status: Option<ProgramStatus>);
 }
 
 /// A running terminal's engine side.

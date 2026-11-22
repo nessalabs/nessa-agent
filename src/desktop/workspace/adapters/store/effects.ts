@@ -185,14 +185,15 @@ export function workspaceEffects(
     },
   })
 
-  // The open overview always has a session chosen while it lists one: on
+  // The open overview always has an item chosen while it lists one: on
   // opening, and once the chosen one is gone (`keepOverviewChoice`).
   listener.startListening({
     predicate: (_action: UnknownAction, current, previous) =>
       current.workspace.content === "agents" &&
       (current.workspace.content !== previous.workspace.content ||
         current.workspace.overview !== previous.workspace.overview ||
-        current.workspace.sessions !== previous.workspace.sessions),
+        current.workspace.sessions !== previous.workspace.sessions ||
+        current.workspace.terminals !== previous.workspace.terminals),
     effect: (_action, api) => {
       api.dispatch(workspaceActions.overviewChoiceKept({ now: dependencies.now() }))
     },

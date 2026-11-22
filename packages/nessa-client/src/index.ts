@@ -538,6 +538,7 @@ export type {
   TerminalListed,
   TerminalOpenParams,
   TerminalOutput,
+  TerminalProgramStatus,
   TerminalSummary,
   TerminalViewParams,
 } from "./generated/product.js"

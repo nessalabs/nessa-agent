@@ -129,6 +129,7 @@ impl TerminalEngine for GhosttyEngine {
                     views: HashMap::new(),
                     palette: blank_palette(),
                     exit: None,
+                    program_status: super::ProgramStatusTracker::new(),
                 };
                 run.drive(&session, observer, commands, &*events, input_chunk);
                 let _ = session.cancel();
@@ -192,6 +193,7 @@ struct Run {
     palette: TerminalPalette,
     /// Set once the program ended; `Some(None)` when a signal ended it.
     exit: Option<Option<i32>>,
+    program_status: super::ProgramStatusTracker,
 }
 
 impl Run {
@@ -238,16 +240,16 @@ impl Run {
                             continue;
                         };
                         let Some(next) = generation.next() else {
-                            return self.fail("terminal resized too many times");
+                            return self.fail("terminal resized too many times", events);
                         };
                         generation = next;
                         if self.terminal.resize(size, generation).is_err() {
-                            return self.fail("terminal resize failed");
+                            return self.fail("terminal resize failed", events);
                         }
                         if self.exit.is_none() {
                             match session.resize(size) {
                                 Ok(operation) => resizing = Some(operation),
-                                Err(_) => return self.fail("session resize failed"),
+                                Err(_) => return self.fail("session resize failed", events),
                             }
                         }
                         dirty = true;
@@ -296,31 +298,47 @@ impl Run {
                 loop {
                     match observer.try_next() {
                         Ok(Some(OutputEvent::Replay(ReplayPage::Bytes { bytes, .. }))) => {
+                            let mut status_changed = false;
                             for chunk in bytes.chunks(4096) {
+                                // Scan OSC 7501 before feeding Ghostty so any `?` probe reply is
+                                // queued ahead of a trailing DA1 (`CSI c`) reply in the same write.
+                                let scan = self.program_status.feed(chunk);
+                                if !scan.replies.is_empty() {
+                                    pending_input.extend(scan.replies);
+                                }
+                                status_changed |= scan.changed;
                                 match self.terminal.feed(chunk) {
                                     // A query such as DSR is answered by the
                                     // terminal; the answer is the program's input.
                                     Ok(effects) => pending_input.extend(effects.0),
-                                    Err(_) => return self.fail("terminal rejected output"),
+                                    Err(_) => return self.fail("terminal rejected output", events),
                                 }
+                            }
+                            if status_changed {
+                                events.program_status(
+                                    &self.id,
+                                    self.program_status.current().cloned(),
+                                );
                             }
                             fed = true;
                         }
                         Ok(Some(OutputEvent::Replay(ReplayPage::Gap { .. }))) => {
-                            return self.fail("the screen fell behind the program's output");
+                            return self
+                                .fail("the screen fell behind the program's output", events);
                         }
                         Ok(Some(OutputEvent::Complete(completion))) => {
                             let status = match completion.status.exit {
                                 Some(ExitStatus::Code(code)) => Some(code),
                                 _ => None,
                             };
+                            self.program_status.on_exit();
                             self.exit = Some(status);
-                            events.exited(&self.id, status);
+                            events.exited(&self.id, status, self.program_status.current().cloned());
                             dirty = true;
                             break;
                         }
                         Ok(Some(_)) | Ok(None) => break,
-                        Err(_) => return self.fail("terminal output failed"),
+                        Err(_) => return self.fail("terminal output failed", events),
                     }
                 }
             }
@@ -330,7 +348,7 @@ impl Run {
             let now = clock::os::now();
             if (dirty && now >= next_frame) || redraw || (dirty && self.exit.is_some()) {
                 next_frame = now + FRAME_INTERVAL;
-                if !self.project(dirty) {
+                if !self.project(dirty, events) {
                     return;
                 }
                 dirty = false;
@@ -344,11 +362,11 @@ impl Run {
 
     /// Bring every view up to date: all of them when the screen changed,
     /// else only those owed a whole redraw. False when the model failed.
-    fn project(&mut self, changed: bool) -> bool {
+    fn project(&mut self, changed: bool, events: &dyn EngineEvents) -> bool {
         let view = match self.terminal.view() {
             Ok(view) => view,
             Err(_) => {
-                self.fail("the screen could not be read");
+                self.fail("the screen could not be read", events);
                 return false;
             }
         };
@@ -445,8 +463,17 @@ impl Run {
         }
     }
 
-    /// Tell every view the terminal can no longer be drawn.
-    fn fail(&mut self, message: &str) {
+    /// Drop live (working/blocked) program status before exiting the thread on error.
+    fn clear_live_status(&mut self, events: &dyn EngineEvents) {
+        if self.program_status.on_exit() {
+            events.program_status(&self.id, self.program_status.current().cloned());
+        }
+    }
+
+    /// Tell every view the terminal can no longer be drawn, and drop any live
+    /// (working/blocked) program status before exiting the thread.
+    fn fail(&mut self, message: &str, events: &dyn EngineEvents) {
+        self.clear_live_status(events);
         let text = encode(&ServerMessage::Error {
             v: VERSION,
             message: message.to_owned(),

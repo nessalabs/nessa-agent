@@ -20,6 +20,7 @@ import {
   selectChannel,
   selectChannelActivity,
   selectChannelExpanded,
+  selectChannelShells,
   selectFocusedChannel,
   selectShowAll,
 } from "../../adapters/store/selectors"
@@ -30,6 +31,7 @@ import { WorkingWords } from "../chrome/working-words"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"
 import { NewInChannelButton } from "../terminals/new-menu"
+import { TerminalBranchRows } from "../terminals/terminal-rows"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
@@ -126,12 +128,16 @@ function BranchSessions({ channelId }: { channelId: string }) {
     (state) => selectBranch(state, channelId),
     sameBranch,
   )
+  const hasTerminals = useWorkspaceSelector(
+    (state) => selectChannelShells(state, channelId).length > 0,
+  )
   const showAll = useWorkspaceSelector((state) => selectShowAll(state, channelId))
   return (
     <ul className="workspace-branch-sessions workspace-rise">
       {branch.ids.map((sessionId) => (
         <ThreadRow key={sessionId} sessionId={sessionId} channelId={channelId} />
       ))}
+      <TerminalBranchRows channelId={channelId} />
       {branch.hidden > 0 || (showAll && branch.total > branchCap) ? (
         <SidebarMenuItem
           size="xs"
@@ -143,7 +149,7 @@ function BranchSessions({ channelId }: { channelId: string }) {
           {showAll ? "Show fewer" : `Show all ${branch.total}`}
         </SidebarMenuItem>
       ) : null}
-      {branch.total === 0 ? (
+      {branch.total === 0 && !hasTerminals ? (
         <SidebarMenuItem
           size="xs"
           className="workspace-more"

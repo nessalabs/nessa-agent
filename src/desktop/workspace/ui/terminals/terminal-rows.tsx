@@ -19,12 +19,22 @@ import {
   selectTerminalShown,
 } from "../../adapters/store/selectors"
 import { paneItemKey, terminalItem } from "../../model/pane-item"
+import {
+  effectiveTerminalStatus,
+  terminalAgentOf,
+  terminalStatusLine,
+} from "../../model/terminal"
 import { sessionTime } from "../../model/time-labels"
 import { useNow } from "../../../../clock"
-import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import { ListRow } from "../../../ui/list-row"
+import { WorkingWords } from "../chrome/working-words"
 import { RenameField } from "../session-row-actions"
+import {
+  TerminalIcon,
+  TerminalStatusIndicator,
+  terminalStatusSummary,
+} from "./terminal-icon"
 
 export const TerminalRows = memo(function TerminalRows({
   channelId,
@@ -62,20 +72,29 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
   const dispatch = useWorkspaceDispatch()
   const terminal = useWorkspaceSelector((state) => selectTerminal(state, terminalId))
   const shown = useWorkspaceSelector((state) => selectTerminalShown(state, terminalId))
-  const now = useNow(30_000)
   // The name being typed, while the person renames it here.
   const [draft, setDraft] = useState<string | null>(null)
   if (!terminal) return null
   const renaming = draft !== null
   const exited = terminal.state === "exited"
+  const agent = terminalAgentOf(terminal)
+  const status = effectiveTerminalStatus(terminal)
+  const working = status?.state === "working"
+  const activeStatus =
+    status && status.state !== "idle" ? terminalStatusLine(status) : undefined
+  const label = terminalStatusSummary(agent, status)
   return (
     <ListRow
       role="option"
       tabIndex={-1}
       aria-selected={shown === "focused"}
+      aria-label={label ? `${terminal.title}. ${label}.` : undefined}
       selected={shown === "focused"}
+      unread={status?.state === "done"}
       data-open={shown !== null || undefined}
       data-terminal-row={terminal.id}
+      data-terminal-agent={agent ?? undefined}
+      data-program-state={status?.state}
       className="workspace-session workspace-terminal-row"
       data-drag-item={paneItemKey(terminalItem(terminal.id))}
       data-renaming={renaming || undefined}
@@ -88,7 +107,7 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
         event.preventDefault()
         dispatch(openTerminal({ terminalId: terminal.id }))
       }}
-      leading={<DesktopIcon name="terminal" size={18} />}
+      leading={<TerminalIcon agent={agent} size={18} />}
       title={
         renaming ? (
           <RenameField
@@ -103,16 +122,21 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
             }}
           />
         ) : (
-          terminal.title
+          <WorkingWords working={working} spoken>
+            {terminal.title}
+          </WorkingWords>
         )
       }
+      description={renaming ? undefined : activeStatus}
       trailing={
         <>
-          <time>
-            {exited
-              ? `Exited ${terminal.exitStatus ?? ""}`.trim()
-              : sessionTime(terminal.startedAtMs, now)}
-          </time>
+          {status && status.state !== "idle" ? (
+            <TerminalStatusIndicator status={status} />
+          ) : exited ? (
+            <time>{`Exited ${terminal.exitStatus ?? ""}`.trim()}</time>
+          ) : (
+            <TerminalTime at={terminal.startedAtMs} as="time" />
+          )}
           <span className="workspace-session-actions" aria-hidden="true">
             <IconButton
               icon="rename"
@@ -142,3 +166,90 @@ const TerminalRow = memo(function TerminalRow({ terminalId }: { terminalId: stri
     />
   )
 })
+
+/**
+ * A channel's open shells rendered inline beneath the channel in the sidebar
+ * tree, showing the Claude/Codex badge and live OSC 7501 status.
+ */
+export const TerminalBranchRows = memo(function TerminalBranchRows({
+  channelId,
+}: {
+  channelId: string
+}) {
+  const ids = useWorkspaceSelector(
+    (state) => selectChannelShells(state, channelId),
+    shallowEqual,
+  )
+  if (ids.length === 0) return null
+  return (
+    <>
+      {ids.map((id) => (
+        <TerminalBranchRow key={id} terminalId={id} channelId={channelId} />
+      ))}
+    </>
+  )
+})
+
+const TerminalBranchRow = memo(function TerminalBranchRow({
+  terminalId,
+  channelId,
+}: {
+  terminalId: string
+  channelId: string
+}) {
+  const dispatch = useWorkspaceDispatch()
+  const terminal = useWorkspaceSelector((state) => selectTerminal(state, terminalId))
+  const shown = useWorkspaceSelector((state) => selectTerminalShown(state, terminalId))
+  if (!terminal) return null
+  const exited = terminal.state === "exited"
+  const agent = terminalAgentOf(terminal)
+  const status = effectiveTerminalStatus(terminal)
+  const working = status?.state === "working"
+  const label = terminalStatusSummary(agent, status)
+  return (
+    <li>
+      <ListRow
+        as="button"
+        className="workspace-thread-row workspace-terminal-branch-row"
+        data-row="terminal"
+        data-terminal-row={terminal.id}
+        data-terminal-agent={agent ?? undefined}
+        data-program-state={status?.state}
+        data-parent={channelId}
+        data-open={shown !== null || undefined}
+        selected={shown === "focused"}
+        unread={status?.state === "done"}
+        aria-label={label ? `${terminal.title}. ${label}.` : terminal.title}
+        data-drag-item={paneItemKey(terminalItem(terminal.id))}
+        onClick={() => dispatch(openTerminal({ terminalId: terminal.id }))}
+        leading={<TerminalIcon agent={agent} size={16} />}
+        title={
+          <WorkingWords working={working} spoken>
+            {terminal.title}
+          </WorkingWords>
+        }
+        trailing={
+          status && status.state !== "idle" ? (
+            <TerminalStatusIndicator status={status} />
+          ) : exited ? (
+            <span className="workspace-time">
+              {`Exited ${terminal.exitStatus ?? ""}`.trim()}
+            </span>
+          ) : (
+            <TerminalTime at={terminal.startedAtMs} as="span" />
+          )
+        }
+      />
+    </li>
+  )
+})
+
+function TerminalTime({ at, as }: { at: number; as: "time" | "span" }) {
+  const now = useNow(30_000)
+  const label = sessionTime(at, now)
+  return as === "time" ? (
+    <time>{label}</time>
+  ) : (
+    <span className="workspace-time">{label}</span>
+  )
+}

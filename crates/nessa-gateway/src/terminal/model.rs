@@ -69,6 +69,14 @@ pub struct TerminalEntry {
     pub shell: String,
     pub started_at_ms: u64,
     pub ended: Option<TerminalEnd>,
+    pub program_status: Option<StampedProgramStatus>,
+}
+
+/// Active OSC 7501 program status paired with when it last changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StampedProgramStatus {
+    pub status: super::ProgramStatus,
+    pub updated_at_ms: u64,
 }
 
 /// How a terminal's program ended.

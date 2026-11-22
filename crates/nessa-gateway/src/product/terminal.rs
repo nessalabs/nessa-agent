@@ -18,8 +18,8 @@ use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     TerminalCloseParams, TerminalDetachParams, TerminalHistoryParams, TerminalInputParams,
-    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalRenameParams,
-    TerminalSummary, TerminalViewParams,
+    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalProgramStatus,
+    TerminalRenameParams, TerminalSummary, TerminalViewParams,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde::de::DeserializeOwned;
@@ -241,5 +241,17 @@ pub(super) fn summary(entry: &TerminalEntry) -> TerminalSummary {
         },
         exit_status: entry.ended.and_then(|end| end.status).map(i64::from),
         ended_at_ms: entry.ended.map(|end| end.at_ms),
+        program_status: entry
+            .program_status
+            .as_ref()
+            .map(|stamped| TerminalProgramStatus {
+                state: stamped.status.state.as_str().into(),
+                kind: stamped.status.kind.map(|kind| kind.as_str().into()),
+                progress: stamped.status.progress.map(u64::from),
+                app: stamped.status.app.clone(),
+                title: stamped.status.title.clone(),
+                msg: stamped.status.msg.clone(),
+                updated_at_ms: stamped.updated_at_ms,
+            }),
     }
 }

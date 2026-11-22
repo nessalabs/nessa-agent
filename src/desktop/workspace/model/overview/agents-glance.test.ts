@@ -329,4 +329,86 @@ describe("one group shown alone", () => {
       ),
     ).toBe(false)
   })
+
+  it("includes Claude and Codex terminal agents in their OSC 7501 groups and ignores plain shells", () => {
+    const terminals = [
+      {
+        id: "t_claude_blocked",
+        title: "Claude",
+        kind: "shell" as const,
+        channelId: "default",
+        requestId: "r1",
+        folder: "/repo",
+        shell: "/bin/zsh",
+        runsOn: "here" as const,
+        startedAtMs: 10,
+        state: "running" as const,
+        programStatus: {
+          state: "blocked" as const,
+          kind: "permission" as const,
+          app: "claude-code",
+          updatedAtMs: 50,
+        },
+      },
+      {
+        id: "t_codex_working",
+        title: "Codex",
+        kind: "shell" as const,
+        channelId: "default",
+        requestId: "r2",
+        folder: "/repo",
+        shell: "/bin/zsh",
+        runsOn: "here" as const,
+        startedAtMs: 10,
+        state: "running" as const,
+        programStatus: {
+          state: "working" as const,
+          app: "codex",
+          updatedAtMs: 40,
+        },
+      },
+      {
+        id: "t_claude_done",
+        title: "Claude done",
+        kind: "shell" as const,
+        channelId: "default",
+        requestId: "r3",
+        folder: "/repo",
+        shell: "/bin/zsh",
+        runsOn: "here" as const,
+        startedAtMs: 10,
+        state: "running" as const,
+        programStatus: {
+          state: "done" as const,
+          app: "claude-code",
+          updatedAtMs: 30,
+        },
+      },
+      {
+        id: "t_plain_shell",
+        title: "zsh",
+        kind: "shell" as const,
+        channelId: "default",
+        requestId: "r4",
+        folder: "/repo",
+        shell: "/bin/zsh",
+        runsOn: "here" as const,
+        startedAtMs: 10,
+        state: "running" as const,
+      },
+    ]
+
+    const ongoingGlance = agentsGlance([], [], { ...ongoing, terminals })
+    expect(ongoingGlance.needsYou).toEqual(["t_claude_blocked"])
+    expect(ongoingGlance.working).toEqual(["t_codex_working"])
+    expect(ongoingGlance.finished).toEqual([])
+    expect(ongoingGlance.hidden).toBe(1)
+
+    const allGlance = agentsGlance([], [], { ...all, terminals })
+    expect(allGlance.needsYou).toEqual(["t_claude_blocked"])
+    expect(allGlance.working).toEqual(["t_codex_working"])
+    expect(allGlance.finished).toEqual(["t_claude_done"])
+    expect(allGlance.earlier).toEqual([])
+    expect(allGlance.counts).toEqual({ needsYou: 1, working: 1, finished: 1, earlier: 0 })
+  })
 })
