@@ -2273,6 +2273,61 @@ async fn raising_to_full_mid_turn_allows_each_waiting_review_once_as_the_modes_a
 }
 
 #[tokio::test]
+async fn a_full_raise_whose_answer_cannot_be_audited_fails_after_trying_every_review() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    // The agent takes Full, then neither answer can be audited.
+    provider.answer_succeeds.store(false, Ordering::SeqCst);
+    *provider.answer_failure.lock().unwrap() = Some((
+        AgentError::AuditFailure,
+        nessa_sdk::application::agent_execution::permissions::PermissionSelectionState::Pending,
+    ));
+    let raiser = caller();
+    let raise =
+        || service.set_approval_mode(id.clone(), raiser.clone(), ConversationApprovalMode::Full);
+    let audit_failed = |raised: &Result<ConversationApprovalMode, ConversationError>| {
+        matches!(
+            raised,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::AuditFailure,
+                ..
+            })
+        )
+    };
+    let raised = raise().await;
+    assert!(audit_failed(&raised), "{raised:?}");
+    // Each review was tried, and the mode the agent took stays taken.
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 2);
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    assert_eq!(view.permissions.len(), 2);
+    // A replay of the same request (a lost reply, a retry) tries the
+    // unanswered reviews again and still reports their failure, never the
+    // saved mode alone.
+    let replayed = raise().await;
+    assert!(audit_failed(&replayed), "{replayed:?}");
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 4);
+    // Once they can be audited, the replay answers them and succeeds.
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
+    assert!(service
+        .read(id.clone(), caller())
+        .await
+        .unwrap()
+        .permissions
+        .is_empty());
+    // Nothing is left to replay.
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn raising_to_auto_mid_turn_leaves_waiting_reviews_to_the_person() {
     let (service, provider, _, _, _) = mode_fixture();
     let (id, finish) = two_waiting_reviews(&service, &provider).await;

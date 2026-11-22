@@ -835,6 +835,9 @@ struct LiveConversation {
     tool_source: Option<ToolSource>,
     /// The tool policies of the Drive turns admitted here.
     admitted_policies: Arc<AdmittedPolicies>,
+    /// The reviews its last raise to Full could not answer
+    /// (`raised_access.rs`), for a replay of that raise.
+    unsettled_raise: raised_access::UnsettledRaise,
 }
 struct ModelBudget {
     identity: ProviderIdentity,
@@ -2635,6 +2638,7 @@ impl ConversationService {
                                 organization_id: record.organization().clone(),
                                 tool_source,
                                 admitted_policies,
+                                unsettled_raise: raised_access::UnsettledRaise::default(),
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -3129,7 +3133,31 @@ impl ConversationService {
                 if !matches_call(&existing) {
                     return Err(ConversationError::RequestConflict);
                 }
-                return saved_result(&existing);
+                let saved = saved_result(&existing);
+                // A replayed raise to Full reports its answers as the first
+                // call did: what it could not answer is tried again, and a
+                // failure still fails it (`raised_access.rs`). Only while
+                // the chat still runs at Full, and its agent is live.
+                if matches!(saved, Ok(ConversationApprovalMode::Full))
+                    && existing.prior != ConversationApprovalMode::Full
+                    && record.approval_mode() == ConversationApprovalMode::Full
+                {
+                    let slot = service.inner.conversations.lock().await.get(&id).cloned();
+                    if let Some(slot) = slot {
+                        if let Ok(live) = service.wait_for_slot(&id, slot).await {
+                            let allowed = raised_access::replay_unsettled(
+                                &id,
+                                &live,
+                                &actor,
+                                &existing.request_id,
+                            )
+                            .await;
+                            service.inner.live_changes.publish(&id);
+                            allowed?;
+                        }
+                    }
+                }
+                return saved;
             }
             // A model change a restart or failed cleanup left pending is
             // settled first, as a send settles it, rather than refusing every
@@ -3306,17 +3334,22 @@ impl ConversationService {
                 live.projection.lock().await.approval_mode(terminal.requested);
                 // A raise to Full is the person's answer to what the running
                 // turn waits on: each agent review is allowed once
-                // (`raised_access.rs`).
+                // (`raised_access.rs`). An answer that could not be audited
+                // fails the raise, though the mode stays taken.
                 if terminal.requested == ConversationApprovalMode::Full
                     && terminal.prior != ConversationApprovalMode::Full
                 {
-                    raised_access::allow_waiting_reviews(
+                    let allowed = raised_access::allow_waiting_reviews(
                         &id,
                         &live,
                         &actor,
                         &terminal.request_id,
                     )
                     .await;
+                    // Answers change live authority without an execution
+                    // event: wake readers, failed or not.
+                    service.inner.live_changes.publish(&id);
+                    allowed?;
                 }
             }
             Ok(terminal.requested)
