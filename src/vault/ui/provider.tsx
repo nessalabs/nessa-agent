@@ -19,7 +19,7 @@ const VaultContext = createContext({
   release: (_owner: symbol) => {},
   beginChange: (_owner: symbol): boolean => false,
   endChange: (_owner: symbol) => {},
-  /** Counts closed dialogs, so a reader of Touch ID's status reads it again. */
+  /** Counts closed vault dialogs, so protected readers read again after unlock. */
   settled: 0,
 })
 /** UI gate only: a missing provider adds no UI behavior; the gateway still owns
@@ -150,6 +150,10 @@ export function useVaultUnlock() {
 /** The explicit settings control shares this provider's owning connection. */
 export function useVaultSource() {
   return useContext(VaultContext).source
+}
+/** Increments each time a vault dialog closes, so protected readers refresh after unlock. */
+export function useVaultSettled() {
+  return useContext(VaultContext).settled
 }
 /** Touch ID in Settings: whether it is offered here and on, read again each
  * time a vault dialog closes, and turning it off. Undefined until read, and
