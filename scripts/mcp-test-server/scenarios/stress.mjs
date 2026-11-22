@@ -227,8 +227,8 @@ export const TABLE_HOLD_MS = 3000
  * window draws a highlighted code block and a Mermaid diagram in the same
  * answer: the window is dark only, and they must be too whatever the OS
  * appearance is (UI audit #29). The second block's line is wider than a
- * reply, so it scrolls sideways inside the highlighter's shadow root, which
- * a swipe begun over it must leave to it.
+ * reply, so it scrolls sideways inside the highlighter's shadow root, and a
+ * swipe over it scrolls it.
  */
 export const CODE_LINES = [
   "```ts",

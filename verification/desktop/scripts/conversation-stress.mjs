@@ -12866,7 +12866,7 @@ const steps = {
     await run.exclusive(async () => {
       const page = run.page
       // An answer with a table wider than the reply: its panel scrolls
-      // sideways, which a swipe begun over it must leave to it.
+      // sideways, and a swipe over it scrolls it.
       const text = prompt(run, STRESS.table, step)
       const seen = await send(run, run.main.id, text, failures)
       const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
