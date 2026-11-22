@@ -222,7 +222,7 @@
   min-height: 26px;
   padding: 0 9px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--desktop-radius-pill);
   background: transparent;
   color: var(--desktop-muted);
   font: inherit;
@@ -243,7 +243,7 @@
 }
 
 .workspace-unsent-action:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
 }
 
