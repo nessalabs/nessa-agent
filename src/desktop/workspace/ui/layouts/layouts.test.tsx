@@ -1005,8 +1005,8 @@ describe("a source removing a session", () => {
   })
 
   it("keeps a model change until the box goes", async () => {
-    // The notice has to be on screen before the source removes the session.
-    // The choice and the transcript's model control are already gone then.
+    // The picker's note has to be on screen before the source removes the
+    // session. The choice is already gone then.
     const frames = controlledAnimationFrames()
     try {
       const { store, root } = await render(ThreeColumns)
@@ -1014,41 +1014,36 @@ describe("a source removing a session", () => {
         [...host.querySelectorAll("article.workspace-pane")].find(
           (item) => item.getAttribute("aria-label") === "Session b",
         )
-      const notice = () => pane()?.querySelector(".desktop-composer-notice")
       for (let step = 0; step < 8 && !pane()?.querySelector("textarea"); step++)
         await act(async () => frames.runFrame())
       expect(pane()?.querySelector("textarea")).not.toBeNull()
-      const chip = () => pane()?.querySelector('[data-slot="model-level-picker-trigger"]')
+      const said = () =>
+        pane()
+          ?.querySelector('[data-slot="model-level-picker-trigger"]')
+          ?.closest(".desktop-tip-anchor")
+          ?.getAttribute("data-tooltip")
+      const refused = "Model didn’t change. Choose again to try."
       await act(async () => {
-        store.dispatch(
-          workspaceActions.transcriptLoaded({
-            transcript: {
-              sessionId: "b",
-              messages: [],
-              activity: null,
-              approvals: [],
-              revision: 2,
-              modelControl: {
-                pending: {
-                  requestId: "ask",
-                  requestedModel: opus.modelId,
-                  status: "recovery_required",
-                },
-              },
-            },
-          }),
-        )
         store.dispatch(
           workspaceActions.modelChoiceAsked({
             sessionId: "b",
             choice: { requestId: "ask", model: opus, state: "asking" },
           }),
         )
+        store.dispatch(
+          workspaceActions.modelChoiceSettled({
+            sessionId: "b",
+            choice: {
+              requestId: "ask",
+              model: opus,
+              state: "refused",
+              reason: "not-supported",
+              code: "model_change_not_applied",
+            },
+          }),
+        )
       })
-      expect(notice()?.textContent).toBe(
-        "The model change is not confirmed yet. You can send once it settles.",
-      )
-      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      expect(said()).toBe(refused)
       await act(async () => {
         store.dispatch(
           workspaceActions.sessionRemoved({
@@ -1059,17 +1054,10 @@ describe("a source removing a session", () => {
         )
       })
       expect(store.getState().workspace.modelChoices).not.toHaveProperty("b")
-      expect(store.getState().workspace.transcripts).not.toHaveProperty("b")
-      expect(notice()?.textContent).toBe(
-        "The model change is not confirmed yet. You can send once it settles.",
-      )
-      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      expect(said()).toBe(refused)
       await act(async () => frames.runFrame())
       await act(async () => frames.runFrame())
-      expect(notice()?.textContent).toBe(
-        "The model change is not confirmed yet. You can send once it settles.",
-      )
-      expect(chip()?.hasAttribute("disabled")).toBe(true)
+      expect(said()).toBe(refused)
       await act(async () => frames.runFrame())
       expect(pane()).toBeUndefined()
       await act(async () => root.unmount())

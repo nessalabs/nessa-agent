@@ -43,7 +43,8 @@ it("shows a compact error with real code and copies the complete diagnostic only
       </ClipboardProvider>,
     ),
   )
-  expect(host.textContent).toContain("Error sending · agent_not_configured")
+  expect(host.textContent).toContain("Error sending")
+  expect(host.textContent).toContain("agent_not_configured")
   expect(host.textContent).not.toContain(details)
   expect(write).not.toHaveBeenCalled()
   await act(async () => button("Copy error details").click())

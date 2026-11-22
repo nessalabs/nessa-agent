@@ -563,7 +563,7 @@ export function useSplitPanesDrag(
     if (!scope) return
 
     const announcer = document.createElement("div")
-    announcer.className = "split-panes-announcer"
+    announcer.className = classes.announcer
     announcer.setAttribute("role", "status")
     announcer.setAttribute("aria-live", "polite")
     scope.append(announcer)

@@ -724,10 +724,7 @@ const body = {
             key: pane.dataset.paneKey,
             focused: pane.hasAttribute("data-focused"),
             running: form?.hasAttribute("data-running") ?? false,
-            // A notice keeps the line: there is something to read.
-            empty:
-              (form?.hasAttribute("data-empty") ?? false) &&
-              !form.querySelector(":scope > .desktop-composer-notice"),
+            empty: form?.hasAttribute("data-empty") ?? false,
             width: form?.getBoundingClientRect().width ?? 0,
             height: form?.getBoundingClientRect().height ?? 0,
             wake: (() => {

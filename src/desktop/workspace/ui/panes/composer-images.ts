@@ -1,7 +1,8 @@
 /**
  * A session's composer attachments, wired to the workspace
  * (`composerImages`): the tiles show what the store holds, a paste or a pick
- * asks `addComposerImages`, and one refused is said until they change.
+ * asks `addComposerImages`, and why one was refused is said by the Attach
+ * button until they change.
  */
 import { useCallback, useMemo, useState } from "react"
 import {
@@ -17,7 +18,7 @@ import type { ComposerImages } from "../../../ui/composer"
 
 const mebibytes = (bytes: number) => `${bytes / (1024 * 1024)} MiB`
 
-/** What the composer says of attachments it did not take. */
+/** What the Attach button says of attachments the composer did not take. */
 export function draftImageRefusalCopy(refusal: DraftImageRefusal): string {
   switch (refusal) {
     case "too-many":
@@ -60,12 +61,17 @@ export function useComposerImages(sessionId: string): ComposerImages {
     (imageId: string) => dispatch(removeComposerImage({ sessionId, imageId })),
     [dispatch, sessionId],
   )
-  const notice =
+  const text =
     refused && refused.images === images
       ? draftImageRefusalCopy(refused.refusal)
       : undefined
   return useMemo(
-    () => ({ images, onPaste, onRemove, notice }),
-    [images, onPaste, onRemove, notice],
+    () => ({
+      images,
+      onPaste,
+      onRemove,
+      ...(text ? { note: { tone: "warning" as const, text } } : {}),
+    }),
+    [images, onPaste, onRemove, text],
   )
 }
