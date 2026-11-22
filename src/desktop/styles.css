@@ -1359,40 +1359,53 @@ html:not(.dark) [data-surface] {
   outline-offset: 2px;
 }
 
+/* Read aloud beside the composer (`composer-spoken.tsx`), never drawn. */
+.desktop-composer-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /*
- * What the composer says of the draft, its model or its access, on a quiet
- * line of its own above the controls. Its words start where the draft's text
- * starts; a warning's mark hangs in the padding to their left, and a neutral
- * notice draws no mark at all, so the line reads as a hint, not a list item.
+ * A composer control with a warning to give (`ComposerNote`): the words are
+ * its tooltip, and a dot says there is something to read. The composer
+ * itself has no line for status. A round control (Attach, the shield, the
+ * folded circle) wears the dot inside its top corner, clear of its curve;
+ * the model's chip, a long pill that clips its edges, wears it in place of
+ * its chevron. The picker's anchor draws no box (`display: contents`), so the
+ * chip inside it is styled.
  */
-.desktop-composer-notice {
-  display: flex;
-  margin-top: 6px;
-  font-size: var(--desktop-text-footnote);
-  line-height: 1.5;
-  color: var(--muted-foreground);
-  animation: desktop-composer-notice-in var(--desktop-fast) ease-out;
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor) {
+  position: relative;
 }
 
-.desktop-composer-notice[data-tone="warning"] {
-  color: var(--foreground);
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after,
+.desktop-composer
+  .desktop-tip-anchor[data-attention="warning"]
+  > .desktop-chip-model::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--desktop-radius-pill);
+  background: var(--destructive);
+  pointer-events: none;
 }
 
-.desktop-composer-notice [data-slot="status-label-mark"] {
-  /* The mark is 12px and sits 6px before the words. */
-  margin-inline-start: -18px;
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after {
+  position: absolute;
+  top: 5px;
+  right: 5px;
 }
 
-@keyframes desktop-composer-notice-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .desktop-composer-notice {
-    animation: none;
-  }
+.desktop-composer
+  .desktop-tip-anchor[data-attention="warning"]
+  > .desktop-chip-model
+  > svg:last-child {
+  display: none;
 }
 
 .desktop-composer-row {

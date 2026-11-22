@@ -5,6 +5,7 @@ import { WorkspaceSendFailure } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
+import { modelPickerNote } from "./composer-model"
 import {
   changeModel as requestModel,
   sendMessage,
@@ -18,7 +19,7 @@ import {
   selectComposerText,
   selectNextModel,
 } from "../../adapters/store/selectors"
-import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
+import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import { useComposerVoice, VoiceDock } from "../../../voice"
@@ -204,36 +205,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
     modelChanging(state.workspace, sessionId),
   )
   const modelBusy = useRememberedValue(sessionId, modelBusyLive)
-  const choiceCode =
-    modelChoice &&
-    (modelChoice.state === "refused" || modelChoice.state === "recovery_required")
-      ? modelChoice.code
-      : undefined
-  const modelNotice =
-    choiceCode === "conversation_configuration_changed"
-      ? "This chat can't be reopened."
-      : // The source settles its own pending change; sending waits for it.
-        modelControl?.pending?.status === "recovery_required"
-        ? "The model change is not confirmed yet. You can send once it settles."
-        : modelChoice?.state === "recovery_required" ||
-            modelChoice?.state === "acknowledged"
-          ? "The model change is not confirmed. Send again to check and try."
-          : // A change on its way says nothing: the picker already shows it,
-            // and Send waits for it (`onSend` below).
-            modelBusy
-            ? undefined
-            : modelChoice?.state === "refused"
-              ? modelChoice.code === "agent_sign_in_required"
-                ? `${agentName(agentOf(modelChoice.model))} isn’t signed in where this chat runs. Save its login in Settings › Saved logins, then choose it again.`
-                : modelChoice.code === "model_change_not_applied"
-                  ? "Model didn’t change. Choose again to try."
-                  : "The model change wasn’t made. Choose again to try."
-              : modelControl?.effect === "nextTurn"
-                ? "Model applies to the next turn."
-                : modelControl?.effect === "subsequentResponses"
-                  ? "Model applies to subsequent responses."
-                  : undefined
-
+  const modelNote = modelPickerNote(modelChoice, modelControl, modelBusy)
   return (
     <>
       <WorkspaceSendFailure sessionId={sessionId} />
@@ -245,7 +217,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         model={model}
         onModelChange={changeModel}
         modelDisabled={modelRequest}
-        modelNotice={modelNotice}
+        modelNote={modelNote}
         onSend={modelBusy ? undefined : send}
         onStop={stop}
         voice={voice}

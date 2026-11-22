@@ -14,7 +14,10 @@ import type {
   SavedLoginsGateway,
   SavedLoginsOutcome,
 } from "../adapters/saved-logins-gateway"
+import { VaultProvider, useVaultUnlock, type VaultSource } from "../../../vault"
+import type { VoiceKeyGateway } from "../../voice/adapters/voice-gateway"
 import { DeviceLoginsSwitch, SavedLoginsGroup, SavedLoginsProvider } from "./saved-logins"
+import { VoiceKeyProvider, VoiceKeyRow } from "./voice-key-row"
 
 let root: Root
 let host: HTMLDivElement
@@ -364,4 +367,111 @@ it("shows no ChatGPT accounts where the gateway keeps none", async () => {
     ),
   )
   expect(host.querySelector("[data-chatgpt-accounts]")).toBeNull()
+})
+
+it("re-reads saved logins and voice key once the vault unlocks", async () => {
+  let state: "locked" | "unlocked" = "locked"
+  const { gateway, refuseWith } = fake({ chatgpt: true })
+  refuseWith("Unlock Nessa to change saved logins.")
+  const voice: VoiceKeyGateway = {
+    read: async () =>
+      state === "locked"
+        ? { kind: "refused", sentence: "Nessa is locked." }
+        : { kind: "read", keySaved: false },
+    save: async () => ({ kind: "read", keySaved: true }),
+    forget: async () => ({ kind: "read", keySaved: false }),
+  }
+  const source: VaultSource = {
+    status: async () => state,
+    setup: async () => {
+      state = "unlocked"
+      return state
+    },
+    unlock: async () => {
+      state = "unlocked"
+      refuseWith("")
+      return state
+    },
+    changePassphrase: async () => state,
+    lock: async () => {
+      state = "locked"
+      return state
+    },
+  }
+  function UnlockTrigger() {
+    const ensure = useVaultUnlock()
+    return (
+      <button type="button" data-test-unlock onClick={() => void ensure()}>
+        Unlock
+      </button>
+    )
+  }
+  await act(async () =>
+    root.render(
+      <VaultProvider source={source}>
+        <UnlockTrigger />
+        <VoiceKeyProvider gateway={voice}>
+          <VoiceKeyRow />
+        </VoiceKeyProvider>
+        <SavedLoginsProvider gateway={gateway}>
+          <SavedLoginsGroup />
+        </SavedLoginsProvider>
+      </VaultProvider>,
+    ),
+  )
+  expect(host.querySelector("[data-chatgpt-continue]")).toBeNull()
+  expect(host.textContent).toContain("Nessa is locked.")
+
+  await act(async () => button("[data-test-unlock]").click())
+  const input = document.querySelector<HTMLInputElement>(
+    '[data-vault-dialog="unlock"] input[type="password"]',
+  )
+  if (!input) throw new Error("expected unlock passphrase input")
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+    set?.call(input, "test-passphrase-123")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+  const form = document.querySelector<HTMLFormElement>(
+    '[data-vault-dialog="unlock"] form',
+  )
+  if (!form) throw new Error("expected unlock form")
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+  })
+  expect(document.querySelector('[data-vault-dialog="unlock"]')).toBeNull()
+  expect(host.querySelector("[data-chatgpt-continue]")?.textContent).toBe(
+    "Continue with ChatGPT",
+  )
+  expect(host.querySelector(".settings-saved-logins-error")).toBeNull()
+  expect(host.textContent).toContain("Not connected")
+  expect(host.textContent).not.toContain("Nessa is locked.")
+})
+
+it("applies a slow ChatGPT polling response even when read latency exceeds pollMs", async () => {
+  const { gateway, signedIn } = fake({ chatgpt: true })
+  let reads = 0
+  const slowGateway: SavedLoginsGateway = {
+    ...gateway,
+    read: () => {
+      reads += 1
+      if (reads === 1) return gateway.read()
+      return new Promise((resolve) => {
+        setTimeout(() => void gateway.read().then(resolve), 40)
+      })
+    },
+  }
+  await act(async () =>
+    root.render(
+      <SavedLoginsProvider gateway={slowGateway}>
+        <SavedLoginsGroup pollMs={10} />
+      </SavedLoginsProvider>,
+    ),
+  )
+  await act(async () => button("[data-chatgpt-continue]").click())
+  expect(host.querySelector("[data-chatgpt-open]")).not.toBeNull()
+  signedIn("2b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e", "slow@example.com")
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 90)))
+  expect(host.querySelector("[data-chatgpt-open]")).toBeNull()
+  expect(host.querySelector('[data-chatgpt-account="slow@example.com"]')).not.toBeNull()
 })

@@ -697,6 +697,22 @@ const explain = (error) =>
 
 const dock = (page) => page.locator(css.conversationDock)
 
+/**
+ * The composer says nothing of its own: what a control has to say is its
+ * tooltip (`ComposerNote`), so the docked composer holds no element but the
+ * draft and its row, and no status line anywhere in it.
+ */
+async function composerSaysNothing(page, when, failures) {
+  const said = await dock(page)
+    .locator(composerControls.said)
+    .evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 160)))
+    .catch(() => [])
+  if (said.length)
+    failures.push(
+      `the composer said something of its own ${when}: ${JSON.stringify(said)}`,
+    )
+}
+
 async function pageText(page) {
   return fold(
     await page
@@ -1342,23 +1358,42 @@ async function channelRunning(page, name, running, failures) {
  */
 async function rowFillBesideItsSettings(page, row, name, failures) {
   const control = row.locator(":scope > [data-size]")
-  const fill = () => control.evaluate((it) => getComputedStyle(it).backgroundColor)
+  const read = () =>
+    control.evaluate((it) => ({
+      fill: getComputedStyle(it).backgroundColor,
+      hovered: Boolean(
+        it.closest('[data-slot="sidebar-menu-item-row"]')?.matches(":hover"),
+      ),
+      animating: it
+        .getAnimations()
+        .some(
+          (animation) =>
+            ["running", "pending"].includes(animation.playState) &&
+            animation.effect?.getComputedTiming().iterations !== Infinity,
+        ),
+    }))
   const settled = async () => {
     let last = null
     return (
       (await waitFor(async () => {
-        const now = await fill()
-        const same = now === last
+        const now = await read()
+        if (now.animating) {
+          last = null
+          return null
+        }
+        const same = last !== null && now.fill === last.fill
         last = now
         return same ? now : null
-      }, 5_000)) ?? last
+      }, 5_000)) ??
+      last ??
+      (await read())
     )
   }
   await page.mouse.move(600, 400)
-  const atRest = await settled()
+  const atRest = (await settled()).fill
   await control.hover({ timeout: 10_000 })
   // Waits past any transition delay for the fill to leave its rest.
-  if (!(await waitFor(async () => (await fill()) !== atRest, 2_000))) {
+  if (!(await waitFor(async () => (await read()).fill !== atRest, 2_000))) {
     // A selected row keeps one fill under the pointer and away from it, so
     // there is nothing to tell apart.
     log(
@@ -1366,12 +1401,19 @@ async function rowFillBesideItsSettings(page, row, name, failures) {
     )
     return false
   }
-  const onControl = await settled()
+  let onControl = await settled()
+  // WebKit can drop :hover if a concurrent sidebar update shifts layout under
+  // the stationary pointer; re-hover the control once before taking the baseline.
+  if (!onControl.hovered || onControl.fill === atRest) {
+    await control.hover({ timeout: 10_000 })
+    await waitFor(async () => (await read()).fill !== atRest, 2_000)
+    onControl = await settled()
+  }
   await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
   const beside = await settled()
-  if (beside !== onControl)
+  if (beside.fill !== onControl.fill)
     failures.push(
-      `channel ${name} pointed at its settings loses the row's hover fill: ${beside}, not ${onControl}`,
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside.fill}, not ${onControl.fill}`,
     )
   return true
 }
@@ -2722,7 +2764,7 @@ async function pickerStep(run, step, failures) {
     )
   // The chat goes to Auto where its model offers it. A target not offered at
   // Auto on this platform (only Ask is verified for every model) takes the
-  // chat to Ask in the same change, and the composer says so; one offered at
+  // chat to Ask in the same change, and the shield says so; one offered at
   // Auto keeps it.
   const { agents } = await run.client.agents.list()
   const offered = (modelId) =>
@@ -2867,23 +2909,20 @@ async function pickerStep(run, step, failures) {
     endMode !== startMode
       ? `Access is now Ask for approval. This model doesn’t offer ${startMode === "auto" ? "Auto approval" : "Full access"} here.`
       : undefined
+  // The shield says it, as its tooltip; the composer has no line for it.
   const noticeText = () =>
     dock(page)
-      .locator(composerControls.notice)
-      .allInnerTexts()
-      .then((texts) => texts.join(" "))
+      .locator(composerControls.access)
+      .getAttribute("data-tooltip")
+      .then((text) => text ?? "")
       .catch(() => "")
-  if (
-    stepped &&
-    !(await waitFor(async () => (await noticeText()).includes(stepped), 10_000))
-  )
-    failures.push(
-      `the composer did not say the chat moved to Ask: "${await noticeText()}"`,
-    )
+  if (stepped && !(await waitFor(async () => (await noticeText()) === stepped, 10_000)))
+    failures.push(`the shield did not say the chat moved to Ask: "${await noticeText()}"`)
   if (!stepped && (await noticeText()).includes("Access is now"))
     failures.push(
-      `the composer says access moved though it was kept: "${await noticeText()}"`,
+      `the shield says access moved though it was kept: "${await noticeText()}"`,
     )
+  await composerSaysNothing(page, "after a model change", failures)
   if (
     (await dock(page)
       .locator(composerControls.access)
@@ -4258,6 +4297,7 @@ async function slowLaunch(run, failures) {
 
 const unsignedSwitch = (...args) => steps.unsignedSwitchBody(...args)
 const failedModelControl = (...args) => steps.failedControlBody(...args)
+const stuckModelControl = (...args) => steps.stuckControlBody(...args)
 
 const steps = {
   /** The cloud for new thread VMs is picked in Settings › Connections ›
@@ -5412,19 +5452,10 @@ const steps = {
         5_000,
       )
       if (!chosen) failures.push("the shield did not show the choice while the turn ran")
-      let said = null
       for (const _ of Array.from({ length: 6 })) {
-        const notices = await dock(run.page)
-          .locator(composerControls.notice)
-          .allInnerTexts()
-          .catch(() => [])
-        if (notices.length) said = notices
+        await composerSaysNothing(run.page, "of the mid-turn access change", failures)
         await run.page.waitForTimeout(250)
       }
-      if (said)
-        failures.push(
-          `the composer spoke of the mid-turn access change: ${JSON.stringify(said)}`,
-        )
       if (run.evidence && !run.accessHintShot) {
         run.accessHintShot = true
         await dock(run.page)
@@ -5573,14 +5604,15 @@ const steps = {
     const notice = await waitFor(
       async () =>
         (
-          await dock(run.page)
-            .locator(composerControls.notice)
-            .innerText()
-            .catch(() => "")
+          (await dock(run.page)
+            .locator(composerControls.access)
+            .getAttribute("data-tooltip")
+            .catch(() => "")) ?? ""
         ).includes("This model doesn’t offer that access."),
       10_000,
     )
-    if (!notice) failures.push("the window did not explain the unavailable access choice")
+    if (!notice) failures.push("the shield did not explain the unavailable access choice")
+    await composerSaysNothing(run.page, "of the unavailable access choice", failures)
     const after = await readWithReviews(run.client, run.main.id)
     if (
       before.approvalMode !== "ask" ||
@@ -11111,8 +11143,8 @@ const steps = {
    * A switch to an agent that is not signed in where the conversation runs:
    * the harness answers its session/new with "authentication required"
    * (`--refusals`), as Codex on a VM with no saved login does. The send is
-   * refused before anything reaches either agent, the composer says why in
-   * words (not a bare model_change_not_applied), the picker goes back to the
+   * refused before anything reaches either agent, the picker says why in
+   * words (not a bare model_change_not_applied) and the composer nothing, the picker goes back to the
    * conversation's own model, no switch is recorded, and the next message
    * runs on the agent it was on.
    */
@@ -11158,20 +11190,25 @@ const steps = {
       await pickModel(run.page, picker, target)
       const refused = prompt(run, STRESS.reply, step, " refused switch")
       await send(run, conversationId, refused, failures)
-      const said = await waitFor(async () => {
-        const notices = await dock(run.page)
-          .locator(composerControls.notice)
-          .allInnerTexts()
-          .catch(() => [])
-        return notices.find((each) => each.includes(composerControls.signInRequired))
-      }, 30_000)
+      const pickerSays = () =>
+        dock(run.page)
+          .locator(composerControls.pickerNote)
+          .getAttribute("data-tooltip")
+          .then((text) => text ?? "")
+          .catch(() => "")
+      const said = await waitFor(
+        async () => (await pickerSays()).includes(composerControls.signInRequired),
+        30_000,
+      )
+      await composerSaysNothing(run.page, "of the refused switch", failures)
+      if (run.evidence)
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `unsigned-${run.engine}.png`) })
+          .catch(() => {})
       if (!said) {
-        const notices = await dock(run.page)
-          .locator(composerControls.notice)
-          .allInnerTexts()
-          .catch(() => [])
         failures.push(
-          `the composer did not say the agent isn't signed in: ${JSON.stringify(notices)}`,
+          `the picker did not say the agent isn't signed in: ${JSON.stringify(await pickerSays())}`,
         )
       }
       if (run.evidence)
@@ -11213,7 +11250,7 @@ const steps = {
    * its set_config_option with an internal error (`--refusals`), which ends
    * the agent's worker and the turn with it, as Claude's adapter did for a
    * real person. The change is settled without anyone asking again: nothing
-   * stays pending ("not confirmed yet" in the composer), the turn is not
+   * stays pending, the composer says nothing of it, the turn is not
    * left at work with a Stop that stops nothing, and the next message
    * completes.
    */
@@ -11319,21 +11356,7 @@ const steps = {
       )
       return
     }
-    const notices = () =>
-      dock(run.page)
-        .locator(composerControls.notice)
-        .allInnerTexts()
-        .catch(() => [])
-    const unconfirmed = (said) =>
-      said.some((each) => each.includes(composerControls.modelUnconfirmed))
-    const started = Date.now()
-    const cleared = await waitFor(async () => !unconfirmed(await notices()), 30_000)
-    log(`failed control: the composer's notice cleared after ${Date.now() - started} ms`)
-    const words = await notices()
-    if (!cleared)
-      failures.push(
-        `the composer still says the change is not confirmed: ${JSON.stringify(words)}`,
-      )
+    await composerSaysNothing(run.page, "after a failed model control", failures)
     if (run.evidence)
       writeFileSync(
         join(run.evidence, `failed-control-${run.engine ?? "window"}-${step.index}.json`),
@@ -11346,6 +11369,102 @@ const steps = {
     const after = prompt(run, STRESS.reply, step, " after failed control")
     const seen = await send(run, conversationId, after, failures)
     await settled(run, conversationId, seen, after, "completed", failures)
+    if (failures.length) return
+    await stuckModelControl(run, step, conversationId, target, failures)
+  },
+  /**
+   * The same failed control, but the agent cannot be opened again to settle
+   * it either (its `session/resume` fails too), as a person's Boat chat was
+   * left: the gateway holds the change unconfirmed, and only a send can
+   * settle it. The window must not wait for a settle nobody asks for: the
+   * composer says nothing, Send is offered, and once the agent can open
+   * again the person's next message settles the change and completes.
+   */
+  async stuckControlBody(run, step, conversationId, target, failures) {
+    const control = join(run.stack.refusals, `${run.stack.agent}.model`)
+    const resume = join(run.stack.refusals, `${run.stack.agent}.session-resume`)
+    const held = prompt(run, STRESS.pause, step, " stuck control")
+    await send(run, conversationId, held, failures)
+    if (!(await stopShown(run.page)))
+      failures.push("Send did not turn into Stop while the turn ran")
+    writeFileSync(control, "")
+    writeFileSync(resume, "")
+    try {
+      const answer = await run.client.conversation
+        .setModel(conversationId, target.modelId)
+        .then(
+          () => "applied",
+          (error) => error.code ?? error.message,
+        )
+      rmSync(control, { force: true })
+      if (answer === "applied")
+        failures.push("a model control the agent failed was answered as applied")
+      const stuck = await waitFor(async () => {
+        const view = await run.client.conversation.read(conversationId).catch(() => null)
+        return view?.modelChange?.status === "recovery_required" &&
+          view.messages.every((each) => ended(each))
+          ? view
+          : null
+      }, 60_000)
+      if (!stuck) {
+        failures.push("the change the agent could not settle was not left unconfirmed")
+        return
+      }
+      const box = dock(run.page).locator("textarea")
+      await box.fill(prompt(run, STRESS.reply, step, " while unconfirmed"))
+      const offered = await waitFor(
+        async () =>
+          await dock(run.page)
+            .getByRole(...composerControls.send)
+            .isEnabled()
+            .catch(() => false),
+        10_000,
+      )
+      if (!offered)
+        failures.push(
+          "Send was held while the gateway waited for a send to settle the change",
+        )
+      await composerSaysNothing(run.page, "while the change was unconfirmed", failures)
+      const warns = await dock(run.page)
+        .locator(composerControls.pickerNote)
+        .getAttribute("data-attention")
+        .catch(() => null)
+      if (warns !== "warning")
+        failures.push("the picker did not mark the change it will check on the next send")
+      if (run.evidence)
+        await dock(run.page)
+          .screenshot({ path: join(run.evidence, `stuck-control-${run.engine}.png`) })
+          .catch(() => {})
+      await box.fill("")
+    } finally {
+      rmSync(control, { force: true })
+      rmSync(resume, { force: true })
+    }
+    const next = prompt(run, STRESS.reply, step, " after stuck control")
+    // Read before Send: the picker shows the settled model once the send settles it.
+    const shown = await dock(run.page)
+      .locator(css.modelChip)
+      .getAttribute("aria-label")
+      .catch(() => null)
+    const seen = await send(run, conversationId, next, failures)
+    const { view, turn } = await settled(
+      run,
+      conversationId,
+      seen,
+      next,
+      "completed",
+      failures,
+    )
+    const ran = catalog.models.find((model) => model.modelId === turn?.model)
+    if (ran && shown && !shown.includes(ran.displayName))
+      failures.push(
+        `the picker showed "${shown}" and the message ran on ${ran.displayName}`,
+      )
+    if (view?.modelChange)
+      failures.push(
+        `the send did not settle the unconfirmed change: ${JSON.stringify(view.modelChange)}`,
+      )
+    await composerSaysNothing(run.page, "after the send settled the change", failures)
   },
   async handoff(run, step, failures) {
     const other = otherAgent(run.stack.agent)
@@ -13380,10 +13499,7 @@ async function stackedComposersFold(run, failures) {
           key: pane.dataset.paneKey,
           focused: pane.hasAttribute("data-pane-focused"),
           running: form?.hasAttribute("data-running") ?? false,
-          // A notice keeps the line: there is something to read.
-          empty:
-            (form?.hasAttribute("data-empty") ?? false) &&
-            !form.querySelector(":scope > .desktop-composer-notice"),
+          empty: form?.hasAttribute("data-empty") ?? false,
           width: Math.round(box?.width ?? 0),
           height: Math.round(box?.height ?? 0),
           circle: wake ? getComputedStyle(wake).display !== "none" : false,

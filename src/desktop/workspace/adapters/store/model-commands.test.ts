@@ -414,7 +414,7 @@ describe("model choices", () => {
     expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
   })
 
-  it("holds a send while the source says a model change is pending", async () => {
+  it("holds a send while the source makes a model control now", async () => {
     const { source, store } = await ready()
     source.emit({
       kind: "transcript",
@@ -432,6 +432,32 @@ describe("model choices", () => {
     expect(await send(store, "waits")).toBe("not-asked")
     expect(asked(source, "setModel")).toHaveLength(0)
     expect(asked(source, "send")).toHaveLength(0)
+  })
+
+  // Nothing settles a change the source left unconfirmed until something
+  // asks, and the source settles it before it takes a message (or refuses
+  // the message): holding the send waited forever.
+  it("sends while the source has a model change left unconfirmed, for the source to settle first", async () => {
+    const { source, store } = await ready()
+    source.emit({
+      kind: "transcript",
+      transcript: {
+        ...emptyTranscript("a"),
+        revision: 2,
+        modelControl: {
+          pending: {
+            requestId: "x",
+            requestedModel: next.modelId,
+            status: "recovery_required",
+          },
+        },
+      },
+    })
+    await settle()
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
+    expect(await send(store, "goes")).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(0)
+    expect(asked(source, "send")).toHaveLength(1)
   })
 
   it("ignores a stale token or wrong target completion", async () => {

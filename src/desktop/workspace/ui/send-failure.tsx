@@ -6,6 +6,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/ho
 import { useRememberedValue } from "../adapters/store/remembered-session"
 import { selectFailedMessage } from "../adapters/store/selectors"
 import { failureCopy } from "./failure-copy"
+import { agentName, agentOf } from "../model/workspace-index"
 import { BoatTokenForm, useBoatConnection } from "../../settings/ui/boat-row"
 
 /** Both conversation and overview composers act on the same refused message. */
@@ -21,6 +22,11 @@ export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
       <SendFailure
         details={diagnostic?.message ?? failureCopy(reason)}
         code={diagnostic?.code}
+        summary={
+          diagnostic?.code === "agent_sign_in_required" && model
+            ? `${agentName(agentOf(model))} isn’t signed in where this chat runs.`
+            : failureCopy(reason)
+        }
         onRetry={() =>
           void dispatch(
             resendMessage({ sessionId, messageId: message.id, initiator: "person" }),
