@@ -98,6 +98,61 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
+const programStates = new Set(["idle", "working", "done", "blocked", "error"])
+const blockedKinds = new Set(["permission", "question", "auth"])
+
+function isProgramStatus(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    typeof value.state !== "string" ||
+    !programStates.has(value.state) ||
+    typeof value.updatedAtMs !== "number" ||
+    !Number.isSafeInteger(value.updatedAtMs) ||
+    value.updatedAtMs < 0
+  ) {
+    return false
+  }
+  if (value.kind !== undefined) {
+    if (
+      value.state !== "blocked" ||
+      typeof value.kind !== "string" ||
+      !blockedKinds.has(value.kind)
+    ) {
+      return false
+    }
+  }
+  if (value.progress !== undefined) {
+    if (
+      (value.state !== "working" && value.state !== "blocked") ||
+      typeof value.progress !== "number" ||
+      !Number.isInteger(value.progress) ||
+      value.progress < 0 ||
+      value.progress > 100
+    ) {
+      return false
+    }
+  }
+  if (
+    value.app !== undefined &&
+    (typeof value.app !== "string" || value.app.length < 1 || value.app.length > 32)
+  ) {
+    return false
+  }
+  if (
+    value.title !== undefined &&
+    (typeof value.title !== "string" || value.title.length < 1)
+  ) {
+    return false
+  }
+  if (
+    value.msg !== undefined &&
+    (typeof value.msg !== "string" || value.msg.length < 1)
+  ) {
+    return false
+  }
+  return true
+}
+
 /** A summary the window can rely on: the fields it reads are there and typed. */
 export function isSummary(value: unknown): value is TerminalSummary {
   return (
@@ -113,6 +168,7 @@ export function isSummary(value: unknown): value is TerminalSummary {
     (value.channelId === undefined || typeof value.channelId === "string") &&
     (value.conversationId === undefined || typeof value.conversationId === "string") &&
     (value.exitStatus === undefined || typeof value.exitStatus === "number") &&
-    (value.endedAtMs === undefined || typeof value.endedAtMs === "number")
+    (value.endedAtMs === undefined || typeof value.endedAtMs === "number") &&
+    (value.programStatus === undefined || isProgramStatus(value.programStatus))
   )
 }

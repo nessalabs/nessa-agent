@@ -4372,6 +4372,25 @@ export interface TerminalSummary {
   exitStatus?: number
   /** When it ended, in milliseconds since the Unix epoch; only once exited. */
   endedAtMs?: number
+  /** Most urgent active OSC 7501 program status record (or detected agent app) for this terminal. */
+  programStatus?: TerminalProgramStatus
+}
+/** Active program status for a terminal, from OSC 7501 (Program Status Protocol, rev 0.4). */
+export interface TerminalProgramStatus {
+  /** The program's reported state. */
+  state: "idle" | "working" | "done" | "blocked" | "error"
+  /** With blocked: what the program waits on the person for. */
+  kind?: "permission" | "question" | "auth"
+  /** Progress percentage (0 to 100) when working or blocked. */
+  progress?: number
+  /** Stable machine-readable program name (for example claude-code or codex). */
+  app?: string
+  /** Short human-readable label for the active status record. */
+  title?: string
+  /** Single-line human-readable status message. */
+  msg?: string
+  /** When this program status last changed, in milliseconds since the Unix epoch. */
+  updatedAtMs: number
 }
 /** The terminal terminal.open started, or the one this requestId already started. */
 export interface TerminalOpenResult {

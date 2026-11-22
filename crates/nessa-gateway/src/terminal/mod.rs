@@ -31,6 +31,7 @@ pub use engine::GhosttyEngine;
 mod hub;
 mod model;
 mod ports;
+mod program_status;
 mod runtime;
 mod system_host;
 mod title;
@@ -38,6 +39,7 @@ mod title;
 pub use hub::*;
 pub use model::*;
 pub use ports::*;
+pub use program_status::*;
 pub use runtime::*;
 pub use system_host::SystemTerminalHost;
 #[cfg(test)]

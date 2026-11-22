@@ -14,11 +14,16 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectTerminal } from "../../adapters/store/selectors"
 import type { PaneFrame } from "../../../split-panes"
 import type { PanePlacement } from "../../../split-panes/model/pane-sizing"
-import { DesktopIcon } from "../../../ui/icons"
 import { IconButton } from "../../../ui/icon-button"
 import { tooltip } from "../../../ui/tooltip"
 import { placeTooltip } from "../../../model/tooltip-placement"
-import type { TerminalEntry } from "../../model/terminal"
+import {
+  terminalAgentName,
+  terminalAgentOf,
+  terminalStatusLine,
+  type TerminalEntry,
+} from "../../model/terminal"
+import { TerminalIcon, TerminalStatusIndicator } from "../terminals/terminal-icon"
 import { TerminalView } from "../terminals/terminal-view"
 import { PaneFocusMark } from "./pane-focus-mark"
 import { PaneHeaderFrame } from "./pane-header-frame"
@@ -46,6 +51,8 @@ export const TerminalPane = memo(function TerminalPane({
   const terminal = known.current
   const title = terminal?.title ?? "Terminal"
   const gone = listed === undefined
+  const agent = terminalAgentOf(terminal)
+  const status = gone ? undefined : terminal?.programStatus
   const close = useCallback(
     () => void dispatch(closeTerminal(terminalId)),
     [dispatch, terminalId],
@@ -56,6 +63,8 @@ export const TerminalPane = memo(function TerminalPane({
       {...frame}
       aria-label={title}
       data-terminal-state={gone ? "gone" : terminal?.state}
+      data-terminal-agent={agent ?? undefined}
+      data-program-state={status?.state}
       {...focusHandlers}
     >
       <PaneFocusMark paneKey={key} multi={multi} />
@@ -64,7 +73,7 @@ export const TerminalPane = memo(function TerminalPane({
         multi={multi}
         name={
           <>
-            <DesktopIcon name="terminal" size={16} aria-hidden />
+            <TerminalIcon agent={agent} size={16} />
             <span className="workspace-pane-title workspace-truncate" {...tooltip(title)}>
               {title}
             </span>
@@ -72,7 +81,9 @@ export const TerminalPane = memo(function TerminalPane({
               <span className="workspace-terminal-ended">
                 {endedWords(terminal, gone)}
               </span>
-            ) : null}
+            ) : (
+              <TerminalStatusIndicator status={status} />
+            )}
           </>
         }
         actions={
@@ -159,6 +170,23 @@ function TerminalDetails({ terminal }: { terminal: TerminalEntry }) {
         }}
       >
         <dl>
+          {terminal.programStatus?.app ? (
+            <>
+              <dt>Program</dt>
+              <dd>
+                {(() => {
+                  const agent = terminalAgentOf(terminal)
+                  return agent ? terminalAgentName(agent) : terminal.programStatus.app
+                })()}
+              </dd>
+            </>
+          ) : null}
+          {terminal.programStatus && terminal.programStatus.state !== "idle" ? (
+            <>
+              <dt>Status</dt>
+              <dd>{terminalStatusLine(terminal.programStatus)}</dd>
+            </>
+          ) : null}
           <dt>Runs on</dt>
           <dd>This Mac</dd>
           <dt>Folder</dt>

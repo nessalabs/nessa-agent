@@ -221,7 +221,7 @@ fn an_ended_program_is_listed_and_refuses_input() {
         .id;
     assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
     let events = engine.events.lock().unwrap().clone().unwrap();
-    events.exited(&id, Some(3));
+    events.exited(&id, Some(3), None);
     assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
     let entry = &hub.list(&owner("p"))[0];
     assert_eq!(
@@ -323,7 +323,7 @@ fn an_exit_while_starting_is_kept() {
     let (hub, engine) = setup();
     let (link, _out) = hub.connect(owner("p"));
     *engine.during_start.lock().unwrap() = Some(Box::new(|id, events| {
-        events.exited(id, Some(0));
+        events.exited(id, Some(0), None);
     }));
     link.open(request(&owner("p"), "r1"), "/bin/sh".into())
         .unwrap();
@@ -398,4 +398,81 @@ fn a_terminal_closed_while_starting_is_not_answered() {
     );
     assert!(hub.list(&owner("p")).is_empty());
     assert_eq!(engine.recorded.0.lock().unwrap().as_slice(), ["close"]);
+}
+
+#[test]
+fn program_status_updates_entry_and_announces_list() {
+    let (hub, engine) = setup();
+    let (link, mut out) = hub.connect(owner("p"));
+    let entry = link
+        .open(request(&owner("p"), "r1"), "/bin/sh".into())
+        .unwrap();
+    let _ = link.list().unwrap();
+    assert_eq!(out.try_recv(), None);
+
+    let events = engine.events.lock().unwrap().clone().unwrap();
+    let status = ProgramStatus {
+        state: ProgramStatusState::Blocked,
+        kind: Some(ProgramBlockedKind::Permission),
+        progress: None,
+        app: Some("claude-code".into()),
+        title: None,
+        msg: Some("Allow running tests?".into()),
+    };
+    events.program_status(&entry.id, Some(status.clone()));
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+
+    let listed = hub.list(&owner("p"));
+    let stamped = listed[0].program_status.as_ref().expect("status set");
+    assert_eq!(stamped.status, status);
+    assert_eq!(stamped.updated_at_ms, 1_000);
+
+    // Repeating the exact same status does not re-announce.
+    events.program_status(&entry.id, Some(status));
+    assert_eq!(out.try_recv(), None);
+
+    // Clearing removes it and announces.
+    events.program_status(&entry.id, None);
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+    assert_eq!(hub.list(&owner("p"))[0].program_status, None);
+
+    // Exiting drops any live status atomically and preserves settled `done`.
+    let done = ProgramStatus {
+        state: ProgramStatusState::Done,
+        kind: None,
+        progress: None,
+        app: Some("claude-code".into()),
+        title: None,
+        msg: Some("Finished".into()),
+    };
+    events.exited(&entry.id, Some(0), Some(done.clone()));
+    assert_eq!(out.try_recv(), Some(TerminalSignal::Listed));
+    assert_eq!(
+        hub.list(&owner("p"))[0]
+            .program_status
+            .as_ref()
+            .map(|s| &s.status),
+        Some(&done)
+    );
+
+    // Post-exit live (working/blocked) status is ignored.
+    events.program_status(
+        &entry.id,
+        Some(ProgramStatus {
+            state: ProgramStatusState::Working,
+            kind: None,
+            progress: Some(50),
+            app: Some("claude-code".into()),
+            title: None,
+            msg: None,
+        }),
+    );
+    assert_eq!(out.try_recv(), None);
+    assert_eq!(
+        hub.list(&owner("p"))[0]
+            .program_status
+            .as_ref()
+            .map(|s| &s.status),
+        Some(&done)
+    );
 }

@@ -56,9 +56,15 @@ pub struct TerminalHub {
 struct HubEvents(std::sync::Weak<TerminalHub>);
 
 impl EngineEvents for HubEvents {
-    fn exited(&self, terminal: &str, status: Option<i32>) {
+    fn exited(&self, terminal: &str, status: Option<i32>, program_status: Option<ProgramStatus>) {
         if let Some(hub) = self.0.upgrade() {
-            hub.ended(terminal, status);
+            hub.ended(terminal, status, program_status);
+        }
+    }
+
+    fn program_status(&self, terminal: &str, status: Option<ProgramStatus>) {
+        if let Some(hub) = self.0.upgrade() {
+            hub.program_status_changed(terminal, status);
         }
     }
 }
@@ -171,6 +177,7 @@ impl TerminalHub {
             shell: shell.to_string_lossy().into_owned(),
             started_at_ms: self.clock.now_ms(),
             ended: None,
+            program_status: None,
         };
         {
             let mut hub = self.lock();
@@ -246,7 +253,7 @@ impl TerminalHub {
         Ok(entry)
     }
 
-    fn ended(&self, terminal: &str, status: Option<i32>) {
+    fn ended(&self, terminal: &str, status: Option<i32>, program_status: Option<ProgramStatus>) {
         let at_ms = self.clock.now_ms();
         let mut hub = self.lock();
         let Some(live) = hub
@@ -257,8 +264,47 @@ impl TerminalHub {
             return;
         };
         live.entry.ended = Some(TerminalEnd { status, at_ms });
+        // Drop live (working/blocked) states atomically with exit; keep settled states.
+        let post_exit = program_status.filter(|s| !s.state.is_live());
+        if live.entry.program_status.as_ref().map(|s| &s.status) != post_exit.as_ref() {
+            live.entry.program_status = post_exit.map(|status| StampedProgramStatus {
+                status,
+                updated_at_ms: at_ms,
+            });
+        }
         let owner = live.owner.clone();
-        self.announce(&mut hub, &owner);
+        let listed = matches!(live.running, Process::Started(_));
+        if listed {
+            self.announce(&mut hub, &owner);
+        }
+    }
+
+    fn program_status_changed(&self, terminal: &str, status: Option<ProgramStatus>) {
+        let updated_at_ms = self.clock.now_ms();
+        let mut hub = self.lock();
+        let Some(live) = hub
+            .terminals
+            .iter_mut()
+            .find(|live| live.entry.id == terminal)
+        else {
+            return;
+        };
+        // An exited terminal can never take a live (working/blocked) status.
+        if live.entry.ended.is_some() && status.as_ref().is_some_and(|s| s.state.is_live()) {
+            return;
+        }
+        if live.entry.program_status.as_ref().map(|s| &s.status) == status.as_ref() {
+            return;
+        }
+        live.entry.program_status = status.map(|status| StampedProgramStatus {
+            status,
+            updated_at_ms,
+        });
+        let owner = live.owner.clone();
+        let listed = matches!(live.running, Process::Started(_));
+        if listed {
+            self.announce(&mut hub, &owner);
+        }
     }
 
     /// Tell each listening connection of `owner` that the list changed.

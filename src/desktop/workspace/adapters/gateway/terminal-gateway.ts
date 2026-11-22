@@ -69,6 +69,9 @@ export function terminalEntry(summary: TerminalSummary): TerminalEntry {
     state: summary.state,
     ...(summary.exitStatus === undefined ? {} : { exitStatus: summary.exitStatus }),
     ...(summary.endedAtMs === undefined ? {} : { endedAtMs: summary.endedAtMs }),
+    ...(summary.programStatus === undefined
+      ? {}
+      : { programStatus: summary.programStatus }),
   }
 }
 

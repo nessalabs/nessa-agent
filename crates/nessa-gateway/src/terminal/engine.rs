@@ -129,6 +129,7 @@ impl TerminalEngine for GhosttyEngine {
                     views: HashMap::new(),
                     palette: blank_palette(),
                     exit: None,
+                    program_status: super::ProgramStatusTracker::new(),
                 };
                 run.drive(&session, observer, commands, &*events, input_chunk);
                 let _ = session.cancel();
@@ -192,6 +193,7 @@ struct Run {
     palette: TerminalPalette,
     /// Set once the program ended; `Some(None)` when a signal ended it.
     exit: Option<Option<i32>>,
+    program_status: super::ProgramStatusTracker,
 }
 
 impl Run {
@@ -296,17 +298,35 @@ impl Run {
                 loop {
                     match observer.try_next() {
                         Ok(Some(OutputEvent::Replay(ReplayPage::Bytes { bytes, .. }))) => {
+                            let mut status_changed = false;
                             for chunk in bytes.chunks(4096) {
+                                // Scan OSC 7501 before feeding Ghostty so any `?` probe reply is
+                                // queued ahead of a trailing DA1 (`CSI c`) reply in the same write.
+                                let scan = self.program_status.feed(chunk);
+                                if !scan.replies.is_empty() {
+                                    pending_input.extend(scan.replies);
+                                }
+                                status_changed |= scan.changed;
                                 match self.terminal.feed(chunk) {
                                     // A query such as DSR is answered by the
                                     // terminal; the answer is the program's input.
                                     Ok(effects) => pending_input.extend(effects.0),
-                                    Err(_) => return self.fail("terminal rejected output"),
+                                    Err(_) => {
+                                        self.clear_live_status(events);
+                                        return self.fail("terminal rejected output");
+                                    }
                                 }
+                            }
+                            if status_changed {
+                                events.program_status(
+                                    &self.id,
+                                    self.program_status.current().cloned(),
+                                );
                             }
                             fed = true;
                         }
                         Ok(Some(OutputEvent::Replay(ReplayPage::Gap { .. }))) => {
+                            self.clear_live_status(events);
                             return self.fail("the screen fell behind the program's output");
                         }
                         Ok(Some(OutputEvent::Complete(completion))) => {
@@ -314,13 +334,17 @@ impl Run {
                                 Some(ExitStatus::Code(code)) => Some(code),
                                 _ => None,
                             };
+                            self.program_status.on_exit();
                             self.exit = Some(status);
-                            events.exited(&self.id, status);
+                            events.exited(&self.id, status, self.program_status.current().cloned());
                             dirty = true;
                             break;
                         }
                         Ok(Some(_)) | Ok(None) => break,
-                        Err(_) => return self.fail("terminal output failed"),
+                        Err(_) => {
+                            self.clear_live_status(events);
+                            return self.fail("terminal output failed");
+                        }
                     }
                 }
             }
@@ -442,6 +466,13 @@ impl Run {
         let id = self.id.clone();
         if !deliver(&id, key, target, messages) {
             target.redraw = true;
+        }
+    }
+
+    /// Drop live (working/blocked) program status before exiting the thread on error.
+    fn clear_live_status(&mut self, events: &dyn EngineEvents) {
+        if self.program_status.on_exit() {
+            events.program_status(&self.id, self.program_status.current().cloned());
         }
     }
 
