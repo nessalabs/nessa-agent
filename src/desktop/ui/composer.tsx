@@ -191,6 +191,8 @@ export function Composer({
 
   return (
     <>
+      {/* Before the form, so nothing stands under the composer card. */}
+      <ComposerSpoken notes={[modelNote, access?.note, attached?.note]} />
       <form
         ref={formRef}
         className="desktop-composer"
@@ -386,7 +388,6 @@ export function Composer({
           )}
         </button>
       </form>
-      <ComposerSpoken notes={[modelNote, access?.note, attached?.note]} />
     </>
   )
 }
