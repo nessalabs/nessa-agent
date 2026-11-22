@@ -1371,27 +1371,41 @@ html:not(.dark) [data-surface] {
 
 /*
  * A composer control with a warning to give (`ComposerNote`): the words are
- * its tooltip, and a dot in its corner says there is something to read. The
- * composer itself has no line for status. The model picker's anchor draws no
- * box (`display: contents`), so its chip wears the dot; the folded circle
- * (`conversation.css`) carries the first warning the same way.
+ * its tooltip, and a dot says there is something to read. The composer
+ * itself has no line for status. A round control (Attach, the shield, the
+ * folded circle) wears the dot inside its top corner, clear of its curve;
+ * the model's chip, a long pill that clips its edges, wears it in place of
+ * its chevron. The picker's anchor draws no box (`display: contents`), so the
+ * chip inside it is styled.
  */
-.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor),
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > * {
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor) {
   position: relative;
 }
 
 .desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after,
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after {
+.desktop-composer
+  .desktop-tip-anchor[data-attention="warning"]
+  > .desktop-chip-model::after {
   content: "";
-  position: absolute;
-  top: 2px;
-  right: 2px;
   width: 6px;
   height: 6px;
+  flex: none;
   border-radius: var(--desktop-radius-pill);
   background: var(--destructive);
   pointer-events: none;
+}
+
+.desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+
+.desktop-composer
+  .desktop-tip-anchor[data-attention="warning"]
+  > .desktop-chip-model
+  > svg:last-child {
+  display: none;
 }
 
 .desktop-composer-row {

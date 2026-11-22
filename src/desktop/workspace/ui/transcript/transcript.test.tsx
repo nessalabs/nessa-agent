@@ -290,12 +290,12 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-code")?.textContent).toBe("cargo update")
     expect(host.querySelectorAll(".workspace-list-items li")).toHaveLength(2)
     const failed = host.querySelector("[data-send-failure]")
-    expect(failed?.querySelector("span")?.textContent).toBe("Error sending")
+    expect(failed?.querySelector("span > span")?.textContent).toBe("Error sending")
     expect(
       [...(failed?.querySelectorAll("button") ?? [])]
         .filter((b) => b.textContent)
         .map((b) => b.textContent),
-    ).toEqual(["Send Again", "Discard"])
+    ).toEqual(["Discard", "Send Again"])
   })
 
   it("shows a failed turn's status and diagnostic apart from a message that was not sent", async () => {
