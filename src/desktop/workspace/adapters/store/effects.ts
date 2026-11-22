@@ -23,7 +23,7 @@ import { shownSessionIds, unreadShown } from "../../application/usecases/updates
 import { pendingAccess } from "../../application/usecases/access"
 import { applyPendingAccess } from "./access-commands"
 import { entry, sessionOf, type WorkspaceState } from "../../application/workspace-state"
-import { fromSource } from "../../model/revision"
+import { fromSource, knownToSource } from "../../model/revision"
 import { workspaceActions } from "./slice"
 import { shownWindow } from "../../application/usecases/window"
 import { releasedImageUrls } from "../../application/usecases/draft-images"
@@ -122,12 +122,16 @@ export function workspaceEffects(
     },
   })
 
-  // The session held off screen is the source's to keep following.
+  // The session held off screen is the source's to keep following, once the
+  // source knows it: as with a shown session (`shownSessionIds`), a draft or
+  // a session whose first message is still on its way is not there to
+  // follow, and asking would have the source take it out as gone. It is
+  // told again as soon as the source knows it.
   listener.startListening({
     predicate: (_action: UnknownAction, current, previous) =>
-      current.workspace.heldSession !== previous.workspace.heldSession,
+      heldToFollow(current.workspace) !== heldToFollow(previous.workspace),
     effect: (_action, api) => {
-      dependencies.workspace.keepFollowing(api.getState().workspace.heldSession)
+      dependencies.workspace.keepFollowing(heldToFollow(api.getState().workspace))
     },
   })
 
@@ -278,4 +282,12 @@ export function workspaceEffects(
     },
   })
   return listener
+}
+
+/** The held session, while the source knows it; null otherwise. */
+function heldToFollow(state: WorkspaceState): string | null {
+  const held = state.heldSession
+  if (held === null) return null
+  const session = sessionOf(state, held)
+  return session !== undefined && knownToSource(session) ? held : null
 }

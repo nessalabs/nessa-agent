@@ -60,13 +60,17 @@ export interface ComposerImages {
 /**
  * A voice call from the composer, owned outside (`voice/ui/composer-voice.ts`):
  * the button that starts one, and while one talks to this conversation
- * (`active`) its speaker and microphone switches and End, in place of the
- * voice button.
+ * (`active`) its speaker and microphone switches, Pause or Resume, and End,
+ * in place of the voice button.
  */
 export interface ComposerVoice {
   readonly active: boolean
   readonly start: () => void
   readonly end: () => void
+  /** Hung up with the provider and kept: Resume reconnects it. */
+  readonly paused: boolean
+  readonly pause: () => void
+  readonly resume: () => void
   readonly microphoneOn: boolean
   readonly speakerOn: boolean
   readonly setMicrophone: (on: boolean) => void
@@ -379,7 +383,7 @@ export function Composer({
   )
 }
 
-/** The voice button, or a call's speaker, microphone and end. */
+/** The voice button, or a call's speaker, microphone, pause and end. */
 function VoiceControls({ voice }: { voice: ComposerVoice }) {
   if (!voice.active)
     return (
@@ -411,6 +415,15 @@ function VoiceControls({ voice }: { voice: ComposerVoice }) {
         className="desktop-voice-toggle"
         aria-pressed={voice.microphoneOn}
         onClick={() => voice.setMicrophone(!voice.microphoneOn)}
+      />
+      <IconButton
+        key="pause"
+        icon={voice.paused ? "resume" : "pause"}
+        label={voice.paused ? "Resume call" : "Pause call"}
+        tooltipSide="above"
+        className="desktop-voice-toggle"
+        aria-pressed={voice.paused}
+        onClick={voice.paused ? voice.resume : voice.pause}
       />
       <button
         key="end"

@@ -7,7 +7,7 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::conversation::application::{load_conversation, AccessAction};
+use crate::conversation::application::{load_conversation, AccessAction, Reader};
 use crate::voice::application::{VoiceCaller, VoiceError, VoiceStatus as Status};
 use crate::voice::domain::{CallTransport, VoiceKey};
 use nessa_auth::application::session::AuthenticatedSession;
@@ -85,6 +85,12 @@ pub(super) async fn dispatch(
 /// conversation must exist. An ungranted one answers `conversation_not_found`
 /// as a missing one does, so a call is never minted (and paid for) about
 /// nothing.
+///
+/// The one exception is the owner starting a new chat by voice: its id is
+/// the one the owner's window chose for it, and the first thing the person
+/// says starts it, as the first typed message would. Only the owner may call
+/// about a chat not yet there, since only the owner may start one anywhere;
+/// a phone or a paired device must name one that exists.
 async fn admit_call(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -99,11 +105,17 @@ async fn admit_call(
     let Some((_, conversations, _)) = state.reads.passive_read.as_ref() else {
         return Err(ConversationErrorCode::ConversationsNotConfigured.as_str());
     };
-    load_conversation(conversations.as_ref(), &id)
+    let exists = load_conversation(conversations.as_ref(), &id)
         .await
         .map_err(|_| "temporarily_unavailable")?
-        .ok_or("conversation_not_found")?;
-    Ok(())
+        .is_some();
+    if exists {
+        return Ok(());
+    }
+    match super::read_access::reader(state, session).await? {
+        Reader::Owner => Ok(()),
+        _ => Err("conversation_not_found"),
+    }
 }
 
 fn status_answer(frame: &RequestFrame, answer: Result<Status, VoiceError>) -> OutgoingMessage {

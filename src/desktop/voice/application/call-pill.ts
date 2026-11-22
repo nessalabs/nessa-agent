@@ -35,6 +35,8 @@ export interface PillCall {
   end(): void
   setMicrophone(on: boolean): void
   setSpeaker(on: boolean): void
+  pause(): void
+  resume(): Promise<void>
 }
 
 export interface CallPillDependencies {
@@ -101,6 +103,10 @@ export function followCallWithPill(dependencies: CallPillDependencies): () => vo
           return call.setMicrophone(asked.on)
         case "speaker":
           return call.setSpeaker(asked.on)
+        case "pause":
+          return call.pause()
+        case "resume":
+          return void call.resume()
         case "show":
           if (sessionId !== null) dependencies.showChat(sessionId)
       }

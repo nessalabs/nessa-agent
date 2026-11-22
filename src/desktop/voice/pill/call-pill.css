@@ -104,6 +104,16 @@ html:has(.call-pill-page) body {
   box-shadow: none;
 }
 
+/* Paused: the light goes out to a hollow ring, and the name steps back. */
+.call-pill[data-phase="paused"] .call-pill-light {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--desktop-muted);
+}
+
+.call-pill[data-phase="paused"] .call-pill-title {
+  color: var(--desktop-muted);
+}
+
 .call-pill:is([data-phase="connecting"], [data-phase="working"]) .call-pill-light {
   animation: call-pill-breathe 1.6s ease-in-out infinite;
 }

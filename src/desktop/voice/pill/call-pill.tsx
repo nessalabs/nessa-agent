@@ -1,6 +1,7 @@
 /**
  * The call pill's face: where the call stands and which chat it talks to,
- * then the speaker, the microphone and End. It draws the picture it is given
+ * then the speaker, the microphone, Pause (Resume while paused) and End. It
+ * draws the picture it is given
  * and reports presses; the call is the desktop window's (`application/
  * call-pill.ts`).
  *
@@ -29,6 +30,7 @@ export function CallPill({
   // Where the button was pressed, while it is held; a press that travels
   // from there is a drag, and its click is then not a press on the name.
   const pressed = useRef<{ x: number; y: number } | null>(null)
+  const paused = picture.phase === "paused"
   const dragged = useRef(false)
   const moved = (event: ReactPointerEvent) => {
     const from = pressed.current
@@ -92,6 +94,15 @@ export function CallPill({
         onClick={() => onPress(picture.microphoneOn ? "mute" : "unmute")}
       >
         <DesktopIcon name={picture.microphoneOn ? "microphone" : "microphoneOff"} />
+      </button>
+      <button
+        type="button"
+        className="call-pill-switch"
+        data-call-pause={paused ? "resume" : "pause"}
+        aria-label={paused ? "Resume call" : "Pause call"}
+        onClick={() => onPress(paused ? "resume" : "pause")}
+      >
+        <DesktopIcon name={paused ? "resume" : "pause"} />
       </button>
       <button
         type="button"

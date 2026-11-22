@@ -10,6 +10,7 @@ export const CALL_PILL_PHASES = [
   "listening",
   "working",
   "speaking",
+  "paused",
 ] as const
 
 /** Where an open call stands. A call that is not open has no picture. */
@@ -30,6 +31,8 @@ export const CALL_PRESSES = [
   "unmute",
   "speaker-off",
   "speaker-on",
+  "pause",
+  "resume",
   "open",
 ] as const
 
