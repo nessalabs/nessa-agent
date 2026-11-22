@@ -66,6 +66,12 @@ pub struct ConversationView {
     /// limits, or why it could not. Absent before any lease was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLeaseView>,
+    /// Getting a cloud machine ready for its agent, oldest first: the
+    /// opening under way, if any, and the last one that finished, as this
+    /// gateway saw them since it started (`SetupSteps`). Empty, and not
+    /// sent, for a conversation that runs on no cloud machine.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<ConversationSetup>,
     /// Artifacts the conversation recorded, each held when it was recorded,
     /// the newest `nessa_projection::MAX_VIEW_ARTIFACTS`
     /// in the order they were recorded. Empty before any was recorded. A
@@ -1415,6 +1421,53 @@ pub enum ConversationReorderOutcome {
     Unchanged,
     QueueChanged,
     PriorityConflict,
+}
+
+/// One opening of a conversation's cloud machine: each step it took.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSetup {
+    pub state: ConversationSetupState,
+    /// The message whose send this opening served, when a send started it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// In the order they began; only the last can still be under way.
+    pub steps: Vec<ConversationSetupStep>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSetupState {
+    Running,
+    /// The agent started.
+    Ready,
+    /// The machine or the agent did not start.
+    Failed,
+}
+
+/// One step of getting a cloud machine ready, on the gateway's clock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSetupStep {
+    pub step: ConversationSetupStepKind,
+    pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSetupStepKind {
+    /// A new machine is being made.
+    Creating,
+    /// A resting machine is being started.
+    Waking,
+    /// This build of Nessa is being put on it.
+    Installing,
+    /// The gateway is reaching it.
+    Connecting,
+    /// The agent is being started there.
+    Starting,
 }
 
 /// The conversation's latest lease as its records fold. A lease of a kind

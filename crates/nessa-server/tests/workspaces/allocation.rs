@@ -1166,6 +1166,7 @@ fn connection_cache_refuses_capacity_without_evicting_borrowed_environments() {
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let (service, _, provider) = fixture();
     let factory = ThreadWorkspaces {
+        setup: None,
         service,
         channels: Arc::new(
             LocalChannelStore::open(&directory.path().join("channels.sqlite3")).unwrap(),

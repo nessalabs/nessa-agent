@@ -791,6 +791,22 @@ pub struct ConversationMcpTool {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetup {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    pub steps: Vec<ConversationSetupStep>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetupStep {
+    pub step: String,
+    pub started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
@@ -809,6 +825,8 @@ pub struct ConversationView {
     pub transcript_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Vec<ConversationSetup>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,

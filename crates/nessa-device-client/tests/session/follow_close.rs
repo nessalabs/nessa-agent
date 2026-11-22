@@ -154,6 +154,7 @@ fn settled_view(conversation: &str) -> ConversationView {
         transcript_state: "complete".into(),
         runtime: None,
         lease: None,
+        setup: None,
         artifacts: Vec::new(),
         notes: Vec::new(),
         unreadable: Vec::new(),

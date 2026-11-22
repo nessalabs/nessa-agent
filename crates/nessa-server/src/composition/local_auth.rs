@@ -1465,7 +1465,10 @@ async fn conversations(
         RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
     })?);
     let channel_store: Arc<dyn ChannelStore> = channel_file.clone();
+    // How far each thread's VM got toward running its agent, for its view.
+    let setup_steps = crate::conversation::application::SetupSteps::new(Arc::new(SystemClock));
     let thread_workspaces = Arc::new(ThreadWorkspaces {
+        setup: Some(setup_steps.clone()),
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
@@ -1486,6 +1489,7 @@ async fn conversations(
         workspace_environments,
         thread_workspaces.service.clone(),
         channel_store.clone(),
+        thread_workspaces.setup.clone(),
     );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = nessa_agent_install::infrastructure::host_platform();
@@ -1967,6 +1971,7 @@ async fn conversations(
         audit: Arc::new(drive_audit),
     });
     service.bind_permission_rules(permission_memory.clone());
+    service.bind_setup_steps(setup_steps);
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }

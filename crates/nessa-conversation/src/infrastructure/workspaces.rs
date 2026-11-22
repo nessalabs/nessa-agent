@@ -6,8 +6,8 @@ use super::ssh_environment::{
 use crate::timer::clock;
 use crate::{
     application::{
-        ChannelStore, ConversationError, Environment, EnvironmentFuture, ThreadEnvironments,
-        MAX_RETAINED_ENVIRONMENTS,
+        ChannelStore, ConversationError, Environment, EnvironmentFuture, SetupStep, SetupSteps,
+        ThreadEnvironments, MAX_RETAINED_ENVIRONMENTS,
     },
     domain::{BackgroundCommand, ChannelId, RestCause, TaskStop},
     env::LEASE_PROTOCOL,
@@ -40,6 +40,9 @@ pub struct ThreadWorkspaces {
     pub environments: Mutex<BTreeMap<String, Arc<SshEnvironment>>>,
     /// Asked for each VM lease's saved login; `None` hands none.
     pub logins: Option<Arc<dyn super::ssh_environment::SavedLogins>>,
+    /// Told each step of making a thread's VM ready for its agent, for the
+    /// thread's view; `None` tells nobody.
+    pub setup: Option<Arc<SetupSteps>>,
 }
 /// The VM's copy being chosen, and installed if it must be, on a task of
 /// its own: an install outlasts the opening that started it.
@@ -49,6 +52,17 @@ struct Connector {
     channels: Arc<dyn ChannelStore>,
     conversation: ConversationId,
     copies: VmCopies,
+    setup: Option<Arc<SetupSteps>>,
+}
+impl Connector {
+    /// `step` begins for this thread's VM, when an agent is opened on it:
+    /// an account of a lease already held (`provision` false) makes nothing
+    /// ready for anyone.
+    fn step(&self, provision: bool, step: SetupStep) {
+        if let (true, Some(setup)) = (provision, &self.setup) {
+            setup.step(&self.conversation, step);
+        }
+    }
 }
 /// Which copy of `nessa` serves one thread's VM.
 struct VmCopies {
@@ -67,6 +81,7 @@ impl VmCopies {
         &self,
         runtime: Arc<dyn WorkspaceRuntime>,
         install: bool,
+        installing: Installing,
     ) -> Result<ServedCopy, LeaseRefusal> {
         let pending = {
             let mut choosing = self
@@ -90,6 +105,7 @@ impl VmCopies {
                             &conversation,
                             runtime.as_ref(),
                             install,
+                            installing,
                         )
                         .await
                     });
@@ -121,6 +137,7 @@ async fn served_copy(
     conversation: &ConversationId,
     runtime: &dyn WorkspaceRuntime,
     install: bool,
+    installing: Installing,
 ) -> Result<ServedCopy, LeaseRefusal> {
     let image = runtime.image_protocol().await;
     if image.as_deref() == Some(LEASE_PROTOCOL) {
@@ -135,12 +152,15 @@ async fn served_copy(
         if !(install && image.is_some()) {
             return Ok(ServedCopy::Image);
         }
+        installing();
         installer
             .ensure_on(&shell, &host, &conversation.to_string(), audit)
             .await?;
     }
     Ok(ServedCopy::Installed(installer.serve_command().await?))
 }
+/// Said once this build is about to be installed in a thread's VM.
+type Installing = Box<dyn FnOnce() + Send>;
 /// Clears a thread's [`PendingCopy`] when its task ends, however it ends.
 struct Done(Arc<Mutex<Option<PendingCopy>>>);
 impl Drop for Done {
@@ -224,6 +244,18 @@ impl WorkspaceConnector for Connector {
         provision: bool,
     ) -> EnvironmentFuture<'_, Result<LeaseConnection, LeaseRefusal>> {
         Box::pin(async move {
+            // A thread with a VM wakes it, which may already run; one with
+            // none has one made.
+            if provision && self.setup.is_some() {
+                self.step(
+                    provision,
+                    if self.service.has_vm(&self.conversation.to_string()).await {
+                        SetupStep::Waking
+                    } else {
+                        SetupStep::Creating
+                    },
+                );
+            }
             let runtime = open_workspace(
                 self.service.as_ref(),
                 self.channels.as_ref(),
@@ -231,7 +263,19 @@ impl WorkspaceConnector for Connector {
                 provision,
             )
             .await?;
-            let copy = self.copies.copy(runtime.clone(), provision).await?;
+            let installing: Installing = match (provision, &self.setup) {
+                (true, Some(setup)) => {
+                    let setup = setup.clone();
+                    let conversation = self.conversation.clone();
+                    Box::new(move || setup.step(&conversation, SetupStep::Installing))
+                }
+                _ => Box::new(|| {}),
+            };
+            let copy = self
+                .copies
+                .copy(runtime.clone(), provision, installing)
+                .await?;
+            self.step(provision, SetupStep::Connecting);
             let stream = runtime.serve(copy).await.map_err(|error| {
                 tracing::warn!(?error, "Boat environment process could not be started");
                 LeaseRefusal::EnvironmentUnreachable
@@ -318,6 +362,7 @@ impl ThreadEnvironments for ThreadWorkspaces {
         }
         let environment = SshEnvironment::workspace(
             Arc::new(Connector {
+                setup: self.setup.clone(),
                 service: self.service.clone(),
                 channels: self.channels.clone(),
                 conversation: conversation.clone(),
