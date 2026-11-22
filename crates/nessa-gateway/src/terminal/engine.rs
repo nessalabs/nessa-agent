@@ -240,16 +240,16 @@ impl Run {
                             continue;
                         };
                         let Some(next) = generation.next() else {
-                            return self.fail("terminal resized too many times");
+                            return self.fail("terminal resized too many times", events);
                         };
                         generation = next;
                         if self.terminal.resize(size, generation).is_err() {
-                            return self.fail("terminal resize failed");
+                            return self.fail("terminal resize failed", events);
                         }
                         if self.exit.is_none() {
                             match session.resize(size) {
                                 Ok(operation) => resizing = Some(operation),
-                                Err(_) => return self.fail("session resize failed"),
+                                Err(_) => return self.fail("session resize failed", events),
                             }
                         }
                         dirty = true;
@@ -311,10 +311,7 @@ impl Run {
                                     // A query such as DSR is answered by the
                                     // terminal; the answer is the program's input.
                                     Ok(effects) => pending_input.extend(effects.0),
-                                    Err(_) => {
-                                        self.clear_live_status(events);
-                                        return self.fail("terminal rejected output");
-                                    }
+                                    Err(_) => return self.fail("terminal rejected output", events),
                                 }
                             }
                             if status_changed {
@@ -326,8 +323,8 @@ impl Run {
                             fed = true;
                         }
                         Ok(Some(OutputEvent::Replay(ReplayPage::Gap { .. }))) => {
-                            self.clear_live_status(events);
-                            return self.fail("the screen fell behind the program's output");
+                            return self
+                                .fail("the screen fell behind the program's output", events);
                         }
                         Ok(Some(OutputEvent::Complete(completion))) => {
                             let status = match completion.status.exit {
@@ -341,10 +338,7 @@ impl Run {
                             break;
                         }
                         Ok(Some(_)) | Ok(None) => break,
-                        Err(_) => {
-                            self.clear_live_status(events);
-                            return self.fail("terminal output failed");
-                        }
+                        Err(_) => return self.fail("terminal output failed", events),
                     }
                 }
             }
@@ -354,7 +348,7 @@ impl Run {
             let now = clock::os::now();
             if (dirty && now >= next_frame) || redraw || (dirty && self.exit.is_some()) {
                 next_frame = now + FRAME_INTERVAL;
-                if !self.project(dirty) {
+                if !self.project(dirty, events) {
                     return;
                 }
                 dirty = false;
@@ -368,11 +362,11 @@ impl Run {
 
     /// Bring every view up to date: all of them when the screen changed,
     /// else only those owed a whole redraw. False when the model failed.
-    fn project(&mut self, changed: bool) -> bool {
+    fn project(&mut self, changed: bool, events: &dyn EngineEvents) -> bool {
         let view = match self.terminal.view() {
             Ok(view) => view,
             Err(_) => {
-                self.fail("the screen could not be read");
+                self.fail("the screen could not be read", events);
                 return false;
             }
         };
@@ -476,8 +470,10 @@ impl Run {
         }
     }
 
-    /// Tell every view the terminal can no longer be drawn.
-    fn fail(&mut self, message: &str) {
+    /// Tell every view the terminal can no longer be drawn, and drop any live
+    /// (working/blocked) program status before exiting the thread.
+    fn fail(&mut self, message: &str, events: &dyn EngineEvents) {
+        self.clear_live_status(events);
         let text = encode(&ServerMessage::Error {
             v: VERSION,
             message: message.to_owned(),

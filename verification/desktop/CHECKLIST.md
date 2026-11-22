@@ -2681,3 +2681,21 @@ vault dialog blocking the main conversation click.
 - The conversation stress `passphrases` step changes through Settings, verifies
   Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
   Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.
+
+
+### Terminal agents and OSC 7501 overview
+
+- Terminals running Claude Code or Codex show their rounded-square Claude
+  (orange) or Codex (white) badge and live OSC 7501 status (`blocked`,
+  `working`, `done`, `error`) in the terminal pane header, session list, and
+  sidebar channel tree.
+- Running or settled Claude/Codex terminals appear in the Agents overview under
+  their OSC 7501 group with a live `TerminalPeek`.
+- In narrow mode (`< 820px`), `ArrowDown`/`ArrowUp` typed inside the inline
+  `TerminalPeek` reach `terminal.input` without moving focus to another
+  overview row.
+- Pressing `Enter` on a terminal row (or clicking Open in `TerminalPeek`)
+  leaves the overview and opens its terminal pane with the agent badge and
+  status indicator. `terminal-overview.mjs` owns these checks in Chromium and
+  WebKit.
+
