@@ -1,5 +1,6 @@
 import type { TerminalEntry } from "../model/terminal"
 import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
+import type { CodexChatgptSignIn } from "../../../provider-authentication/model/chatgpt-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { WindowChange, WindowChangeOutcome } from "../model/window-change"
@@ -529,6 +530,8 @@ export interface WorkspaceDependencies {
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
   /** Mints and keeps a Claude sign-in for Boat VMs, where the host can. */
   readonly boatClaudeSignIn?: BoatClaudeSignIn
+  /** Signs a ChatGPT account in for Codex on other computers, kept by the gateway. */
+  readonly codexChatgptSignIn?: CodexChatgptSignIn
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

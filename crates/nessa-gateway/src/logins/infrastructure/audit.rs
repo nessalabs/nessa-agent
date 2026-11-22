@@ -9,6 +9,7 @@ use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
 use serde_json::{json, Value};
 
 use crate::logins::application::{AuditUnavailable, LoginAudit, LoginEvent, LoginRecord, Withheld};
+use crate::logins::chatgpt::domain::{AccountId, SignInEnd};
 
 pub struct DurableLoginAudit {
     directory: PathBuf,
@@ -27,6 +28,8 @@ fn withheld(why: Withheld) -> &'static str {
         Withheld::NotAllowed => "not_allowed",
         Withheld::Locked => "vault_locked",
         Withheld::Unavailable => "unavailable",
+        Withheld::SignInNeeded => "sign_in_needed",
+        Withheld::RefreshFailed => "refresh_failed",
     }
 }
 
@@ -85,10 +88,16 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
             environment,
             agent,
             lease,
+            chatgpt,
         } => (
             "sent",
             "login_handed",
-            json!({ "environment": environment, "agent": agent.name(), "lease": lease }),
+            json!({
+                "environment": environment,
+                "agent": agent.name(),
+                "lease": lease,
+                "chatgptAccount": chatgpt.as_ref().map(AccountId::as_str),
+            }),
         ),
         LoginEvent::NotSent {
             environment,
@@ -105,6 +114,60 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
                 "reason": withheld(*why),
             }),
         ),
+        LoginEvent::ChatgptSignInRequested { account } => (
+            "requested",
+            "chatgpt_sign_in",
+            json!({ "account": account.as_ref().map(AccountId::as_str) }),
+        ),
+        LoginEvent::ChatgptSignInEnded { account, end } => (
+            if *end == SignInEnd::SignedIn {
+                "signed_in"
+            } else {
+                "ended"
+            },
+            "chatgpt_sign_in",
+            json!({ "account": account.as_ref().map(AccountId::as_str), "end": end.name() }),
+        ),
+        LoginEvent::ChatgptUseRequested { account } => (
+            "requested",
+            "chatgpt_use",
+            json!({ "account": account.as_ref().map(AccountId::as_str) }),
+        ),
+        LoginEvent::ChatgptUseFailed { account } => (
+            "failed",
+            "chatgpt_use",
+            json!({ "account": account.as_ref().map(AccountId::as_str) }),
+        ),
+        LoginEvent::ChatgptUsed { account } => (
+            "used",
+            "chatgpt_use",
+            json!({ "account": account.as_ref().map(AccountId::as_str) }),
+        ),
+        LoginEvent::ChatgptRemoveRequested { account } => (
+            "requested",
+            "chatgpt_remove",
+            json!({ "account": account.as_str() }),
+        ),
+        LoginEvent::ChatgptRemoveFailed { account } => (
+            "failed",
+            "chatgpt_remove",
+            json!({ "account": account.as_str() }),
+        ),
+        LoginEvent::ChatgptRemoved { account, revoked } => (
+            "removed",
+            "chatgpt_remove",
+            json!({ "account": account.as_str(), "revoked": revoked }),
+        ),
+        LoginEvent::ChatgptRefreshed { account } => (
+            "refreshed",
+            "chatgpt_refresh",
+            json!({ "account": account.as_str() }),
+        ),
+        LoginEvent::ChatgptRefreshFailed { account, why } => (
+            "refresh_failed",
+            "chatgpt_refresh",
+            json!({ "account": account.as_str(), "reason": why.name() }),
+        ),
     };
     let (cause, initiator) = match &record.caller {
         Some(caller) => (
@@ -116,8 +179,9 @@ pub(super) fn stored(record: &LoginRecord) -> (&'static str, Value) {
                 "credentialId": caller.credential_id,
             }),
         ),
-        // A login handed out at a lease: the event names the lease, whose
-        // own records name who started it.
+        // A login handed out at a lease, or refreshed for one: the event
+        // names the lease, or the account, and the lease's own records
+        // name who started it.
         None => ("lease_granted", json!({ "kind": "gateway" })),
     };
     (

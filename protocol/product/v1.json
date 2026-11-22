@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 152,
+          "maxItems": 156,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -10095,6 +10095,10 @@
           "maxItems": 256,
           "items": { "type": "string", "pattern": "^peer:[0-9a-f]{64}$" },
           "description": "The paired machines whose switch is on, by environment name, in name order."
+        },
+        "chatgpt": {
+          "$ref": "#/$defs/ChatgptLogins",
+          "description": "The ChatGPT accounts Codex can use on other machines in place of its API key, and the sign-in. Absent when this gateway keeps none (ChatGPT sign-in is off this run)."
         }
       },
       "required": ["logins", "devicesOn"]
@@ -10111,7 +10115,7 @@
         "login": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 4096,
+          "maxLength": 16384,
           "pattern": "^[!-~]+$",
           "description": "The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces."
         }
@@ -10144,6 +10148,138 @@
       },
       "required": ["environment", "on"]
     },
+    "ChatgptAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One ChatGPT account kept for Codex. Its tokens are never returned.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The account, as the other ChatGPT methods name it."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 320,
+          "description": "The email the account signed in with, as OpenAI's ID token gave it; empty when it gave none."
+        },
+        "inUse": {
+          "type": "boolean",
+          "description": "Whether Codex on other machines is handed this account's token. At most one account is."
+        },
+        "needsSignIn": {
+          "type": "boolean",
+          "description": "Whether OpenAI refused to refresh it, so it must be signed in again before it is used."
+        }
+      },
+      "required": ["id", "email", "inUse", "needsSignIn"]
+    },
+    "ChatgptSignInEnd": {
+      "type": "string",
+      "enum": [
+        "signed_in",
+        "declined",
+        "incomplete",
+        "wrong_account",
+        "exchange_failed",
+        "invalid_identity",
+        "plan_not_enabled",
+        "too_many_accounts",
+        "not_saved",
+        "timed_out",
+        "cancelled",
+        "replaced",
+        "listen_failed"
+      ],
+      "description": "How a ChatGPT sign-in ended. signed_in: the account is kept. declined: it was declined in the browser. incomplete: the browser came back without what a sign-in gives. wrong_account: signing an account in again came back as another account. exchange_failed: OpenAI did not give tokens for the sign-in. invalid_identity: OpenAI's ID token did not verify. plan_not_enabled: the account's plan did not grant use of ChatGPT tokens. too_many_accounts: as many accounts as are kept already are. not_saved: the tokens could not be kept in the vault. timed_out: the browser did not come back in time. cancelled: it was cancelled. replaced: another sign-in started in its place. listen_failed: this computer could not listen for the browser's return."
+    },
+    "ChatgptSignIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the ChatGPT sign-in stands: waiting for the browser to come back from authorizeUrl, or idle with how the last one this run ended.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["idle", "waiting"],
+          "description": "Whether a sign-in waits for the browser."
+        },
+        "attempt": {
+          "type": "string",
+          "format": "uuid",
+          "description": "While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it."
+        },
+        "authorizeUrl": {
+          "type": "string",
+          "maxLength": 8192,
+          "description": "While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to."
+        },
+        "accountId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "While waiting: the account signing in again; absent for a new account."
+        },
+        "last": {
+          "$ref": "#/$defs/ChatgptSignInEnd",
+          "description": "While idle: how the last sign-in this run ended, if one did."
+        }
+      },
+      "required": ["state"]
+    },
+    "ChatgptLogins": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The ChatGPT accounts kept for Codex, and the sign-in.",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/ChatgptAccount" },
+          "description": "The accounts, in the order they were first signed in."
+        },
+        "signIn": { "$ref": "#/$defs/ChatgptSignIn", "description": "The sign-in." },
+        "started": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile."
+        }
+      },
+      "required": ["accounts", "signIn"]
+    },
+    "LoginsChatgptSignInParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced.",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The account to sign in again; absent for a new account."
+        }
+      },
+      "required": []
+    },
+    "LoginsChatgptUseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Choose the ChatGPT account Codex on other machines uses (logins.chatgptUse), or none, so its API key is used again. Applies to agents opened after it.",
+      "properties": {
+        "accountId": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "The account, or null for none."
+        }
+      },
+      "required": ["accountId"]
+    },
+    "LoginsChatgptRemoveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Forget a ChatGPT account (logins.chatgptRemove), revoking its refresh token at OpenAI when it can. Agents already open keep the token they opened with until it is renewed.",
+      "properties": {
+        "accountId": { "type": "string", "format": "uuid", "description": "The account." }
+      },
+      "required": ["accountId"]
+    },
     "LoginsErrorCode": {
       "type": "string",
       "enum": [
@@ -10152,9 +10288,11 @@
         "logins_audit_unavailable",
         "logins_change_unrecorded",
         "logins_too_many_devices",
+        "logins_unknown_account",
+        "logins_chatgpt_not_configured",
         "vault_locked"
       ],
-      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first."
+      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. logins_unknown_account: no ChatGPT account has that id. logins_chatgpt_not_configured: ChatGPT sign-in is off this run. vault_locked: unlock Nessa first."
     },
     "VoiceStatus": {
       "type": "object",

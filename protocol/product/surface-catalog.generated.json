@@ -986,6 +986,34 @@
       "destructive": false
     },
     {
+      "name": "logins.chatgptSignIn",
+      "params": "LoginsChatgptSignInParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptCancel",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptUse",
+      "params": "LoginsChatgptUseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptRemove",
+      "params": "LoginsChatgptRemoveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
       "name": "voice.status",
       "params": null,
       "grant": "credential.manage",

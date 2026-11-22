@@ -26,7 +26,14 @@ export function loginsRefusalCode(code: unknown): LoginsRefusalCode | undefined 
 
 /** The method a {@link NessaLoginsError} answers. */
 export type LoginsMethod =
-  "logins.status" | "logins.save" | "logins.remove" | "logins.setDevice"
+  | "logins.status"
+  | "logins.save"
+  | "logins.remove"
+  | "logins.setDevice"
+  | "logins.chatgptSignIn"
+  | "logins.chatgptCancel"
+  | "logins.chatgptUse"
+  | "logins.chatgptRemove"
 
 /**
  * A `logins.*` method that did not answer with a result.

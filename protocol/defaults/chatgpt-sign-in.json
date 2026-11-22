@@ -1,0 +1,7 @@
+{
+  "issuer": "https://auth.openai.com",
+  "authorizeUrl": "https://auth.openai.com/api/accounts/authorize",
+  "tokenUrl": "https://auth.openai.com/api/accounts/oauth/token",
+  "revokeUrl": "https://auth.openai.com/api/accounts/oauth/revoke",
+  "jwksUrl": "https://auth.openai.com/.well-known/jwks.json"
+}

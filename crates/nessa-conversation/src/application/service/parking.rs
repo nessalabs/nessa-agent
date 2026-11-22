@@ -13,6 +13,7 @@
 //!   untouched for its limit (workspace_idle, or park_after) ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
 //!     ──▶ in a cloud workspace: its connection let go, its VM stopped
+//!   a handed login past its renewal (a ChatGPT token) ──▶ parked once idle, watched or not
 //! the next message ──▶ opens the conversation (resuming its VM) ──▶ session/resume
 //! an opening past the bound on live agents ──▶ the parkable one touched
 //!   longest ago is parked now (`make_room`)
@@ -210,7 +211,9 @@ impl ConversationService {
     /// `park_after`. An agent that is attached, able to resume its provider
     /// session, idle and with no app call waiting on a review may be parked;
     /// one that cannot resume would lose its session's context, and a
-    /// permission review or a question belongs to a running turn. In a cloud
+    /// permission review or a question belongs to a running turn. One whose
+    /// handed login is past renewal waits for nothing, watched or not
+    /// (`docs/design/chatgpt-sign-in.md`). In a cloud
     /// workspace of its own it waits `workspace_idle`, watched or not, while
     /// no background command of it runs; elsewhere it waits `park_after`
     /// while nobody follows it.
@@ -231,6 +234,20 @@ impl ConversationService {
             .background_tasks
             .get()
             .is_some_and(|tasks| tasks.running_for(id));
+        // A login handed to its lease that must be renewed by now (a
+        // ChatGPT access token): parked now that it is idle, watched or not,
+        // so the next message starts it with a fresh one.
+        let renew = live
+            .lease
+            .renew_by()
+            .is_some_and(|by| by <= self.inner.clock.unix_milliseconds());
+        if renew {
+            return if running {
+                Idle::InUse
+            } else {
+                Idle::After(Duration::ZERO)
+            };
+        }
         let closing = slot.closing.load(Ordering::SeqCst);
         if closing || self.inner.environment.in_workspace(id).await {
             return if running {

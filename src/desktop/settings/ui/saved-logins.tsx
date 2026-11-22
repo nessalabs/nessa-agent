@@ -5,6 +5,11 @@
  * its login; a paired computer's page in Devices has its own "Use my saved
  * logins here" switch. A login is never shown again: the rows say only
  * whether one is saved.
+ *
+ * Codex's row also lists its ChatGPT accounts, when the gateway keeps them:
+ * "Continue with ChatGPT" starts a sign-in, the row links to it in the
+ * browser, and reads again every `pollMs` until it ends. One account is in
+ * use; another can be chosen, signed in again, or removed.
  */
 import {
   createContext,
@@ -16,14 +21,16 @@ import {
   type ReactNode,
 } from "react"
 import type { LoginAgent } from "@nessa/client"
-import type {
-  SavedLogins,
-  SavedLoginsGateway,
-  SavedLoginsOutcome,
+import {
+  chatgptEndSentence,
+  type ChatgptView,
+  type SavedLogins,
+  type SavedLoginsGateway,
+  type SavedLoginsOutcome,
 } from "../adapters/saved-logins-gateway"
 import { useVaultUnlock } from "../../../vault"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
-import { ItemRow, RowAction, SettingGroup, Toggle } from "./settings-controls"
+import { ItemRow, RowAction, RowLink, SettingGroup, Toggle } from "./settings-controls"
 
 const SavedLoginsContext = createContext<SavedLoginsGateway | undefined>(undefined)
 
@@ -39,8 +46,11 @@ export function SavedLoginsProvider({
   )
 }
 
+/** How often the logins are read while a ChatGPT sign-in waits for the browser. */
+export const CHATGPT_POLL_MS = 2000
+
 /** The saved logins as last read, the change in flight, and why the last one was refused. */
-function useSavedLogins() {
+function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
   const gateway = useContext(SavedLoginsContext)
   const ensure = useVaultUnlock()
   const [logins, setLogins] = useState<SavedLogins | undefined>(undefined)
@@ -60,6 +70,19 @@ function useSavedLogins() {
       current = false
     }
   }, [gateway, take])
+  // While a ChatGPT sign-in waits for the browser, how it ends is read again.
+  const waiting = logins?.chatgpt?.signIn.kind === "waiting"
+  useEffect(() => {
+    if (!gateway || !waiting) return
+    let current = true
+    const timer = window.setInterval(() => {
+      void gateway.read().then((outcome) => current && take(outcome))
+    }, pollMs)
+    return () => {
+      current = false
+      window.clearInterval(timer)
+    }
+  }, [gateway, waiting, take, pollMs])
   /**
    * Unlocks first, then does `work`. What is shown may be unread (a locked
    * vault refused the read on mount): then it is read again once unlocked,
@@ -119,8 +142,8 @@ const agents: readonly {
 ]
 
 /** Settings › Connections › Accounts › Saved logins: one row per agent. */
-export function SavedLoginsGroup() {
-  const state = useSavedLogins()
+export function SavedLoginsGroup({ pollMs }: { pollMs?: number } = {}) {
+  const state = useSavedLogins(pollMs)
   return (
     <SettingGroup
       id="saved-logins"
@@ -212,8 +235,136 @@ function SavedLoginRow({
             </button>
           </div>
         </form>
+        {agent.id === "codex" && state.logins?.chatgpt && (
+          <ChatgptAccounts chatgpt={state.logins.chatgpt} state={state} />
+        )}
       </div>
     </ItemRow>
+  )
+}
+
+/**
+ * Codex's ChatGPT accounts under its row: the one in use, the others to
+ * choose, and the sign-in. Codex on other computers uses the account in
+ * use in place of the key above; with none in use, the key.
+ */
+function ChatgptAccounts({
+  chatgpt,
+  state,
+}: {
+  chatgpt: ChatgptView
+  state: ReturnType<typeof useSavedLogins>
+}) {
+  const { busy, act } = state
+  const { signIn, accounts } = chatgpt
+  const ended =
+    signIn.kind === "idle" && signIn.last ? chatgptEndSentence(signIn.last) : undefined
+  const anyInUse = accounts.some((account) => account.inUse)
+  return (
+    <div className="settings-chatgpt" data-chatgpt-accounts={accounts.length}>
+      <p>
+        Or use your ChatGPT plan: Codex on your SSH hosts and cloud workspaces then runs
+        on the account in use instead of the key.
+      </p>
+      {accounts.length > 0 && (
+        <ul className="settings-chatgpt-accounts">
+          {accounts.map((account) => (
+            <li
+              key={account.id}
+              data-chatgpt-account={account.email || account.id}
+              data-chatgpt-in-use={account.inUse ? "" : undefined}
+            >
+              <span className="settings-chatgpt-email">
+                {account.email || "ChatGPT account"}
+              </span>
+              <span className="settings-chatgpt-state" role="status">
+                {account.needsSignIn
+                  ? "Needs signing in again"
+                  : account.inUse
+                    ? "In use"
+                    : ""}
+              </span>
+              <span className="settings-chatgpt-actions">
+                {account.needsSignIn ? (
+                  <RowAction
+                    disabled={busy || signIn.kind === "waiting"}
+                    onClick={() =>
+                      void act((gateway) => gateway.chatgptSignIn(account.id))
+                    }
+                    data-chatgpt-sign-in-again={account.id}
+                  >
+                    Sign in again
+                  </RowAction>
+                ) : account.inUse ? (
+                  <RowAction
+                    disabled={busy}
+                    onClick={() => void act((gateway) => gateway.chatgptUse(null))}
+                    data-chatgpt-stop-using={account.id}
+                  >
+                    Use the key
+                  </RowAction>
+                ) : (
+                  <RowAction
+                    disabled={busy}
+                    onClick={() => void act((gateway) => gateway.chatgptUse(account.id))}
+                    data-chatgpt-use={account.id}
+                  >
+                    Use
+                  </RowAction>
+                )}
+                <RowAction
+                  disabled={busy}
+                  onClick={() => void act((gateway) => gateway.chatgptRemove(account.id))}
+                  data-chatgpt-remove={account.id}
+                >
+                  Remove
+                </RowAction>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {signIn.kind === "waiting" ? (
+        <div className="settings-chatgpt-waiting" data-chatgpt-sign-in="waiting">
+          <p role="status">Finish signing in to ChatGPT in your browser.</p>
+          <div className="settings-boat-fields">
+            <RowLink href={signIn.authorizeUrl} data-chatgpt-open>
+              Open ChatGPT
+            </RowLink>
+            <RowAction
+              disabled={busy}
+              onClick={() => void act((gateway) => gateway.chatgptCancel())}
+              data-chatgpt-cancel
+            >
+              Cancel
+            </RowAction>
+          </div>
+        </div>
+      ) : (
+        <div className="settings-boat-fields" data-chatgpt-sign-in="idle">
+          <RowAction
+            disabled={busy}
+            onClick={() => void act((gateway) => gateway.chatgptSignIn())}
+            data-chatgpt-continue
+          >
+            {accounts.length > 0
+              ? "Add another ChatGPT account"
+              : "Continue with ChatGPT"}
+          </RowAction>
+          {accounts.length > 0 && !anyInUse && (
+            <span className="settings-chatgpt-note">Codex uses the key above.</span>
+          )}
+        </div>
+      )}
+      {ended && (
+        <p
+          role="status"
+          data-chatgpt-ended={signIn.kind === "idle" ? signIn.last : undefined}
+        >
+          {ended}
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -26,7 +26,13 @@
 // The request path then moved into nessa-gateway (#1313): the machine
 // report it lists is public to nessa-server from there, so this build is
 // not 8106b187bf6402ee. The frames are unchanged again.
-const PROTOCOL: &str = "f1318337c23960c2";
+// ChatGPT sign-in for Codex (#1403) adds a frame: `Renew` hands a running
+// lease's harnesses a fresh token, which env serve keeps in a token file
+// per lease. So this build is not f1318337c23960c2, and here the frames do
+// change. The image id stays the published worker until a rebuilt image is
+// published for this hash; a worker dialing in on the older protocol takes
+// this gateway's build, as before.
+const PROTOCOL: &str = "32629fa3092423a7";
 const IMAGE: &str = "bsh_KC74wkwmxzdt57Y9MxwBdSJlBa75Lfjz0BvFC-6SuS4";
 pub fn worker_image() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == PROTOCOL).then_some(IMAGE)
@@ -39,7 +45,10 @@ pub fn worker_image() -> Option<&'static str> {
 /// Agent37 workspace, so this alpha's VMs are made in the workspace it was
 /// published to: `nessa-runtime@1` was published from this lease protocol's
 /// sources, image digest sha256:f87af076ec3f5b2464f7ad584a90ca659aa0bb382fd9dc940d33f82830745584.
-const AGENT37_PROTOCOL: &str = "f1318337c23960c2";
+/// The `Renew` frame (#1403) moved the protocol off f1318337c23960c2; the
+/// template stays `nessa-runtime@1` until one is published from this hash,
+/// and a runtime dialing in on the older protocol takes this gateway's build.
+const AGENT37_PROTOCOL: &str = "32629fa3092423a7";
 const AGENT37_TEMPLATE: &str = "nessa-runtime@1";
 pub fn agent37_template() -> Option<&'static str> {
     (crate::env::LEASE_PROTOCOL == AGENT37_PROTOCOL).then_some(AGENT37_TEMPLATE)

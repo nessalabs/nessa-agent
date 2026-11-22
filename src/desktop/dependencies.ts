@@ -1,4 +1,5 @@
 import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
+import { codexChatgptSignIn } from "../provider-authentication/model/chatgpt-sign-in"
 import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
 import {
@@ -208,6 +209,8 @@ export function createDesktopDependencies(
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
     /** The host's Claude sign-in minting for Boat VMs, where it has one (`main.tsx`). */
     mintClaudeSignIn?: { available: () => Promise<boolean>; mint: () => Promise<string> }
+    /** Hands an address to the person's own browser, where the host can. */
+    openInBrowser?: (url: string) => void
     /** A Boat sign-in beside a given `workspace`; the gateway's own is composed here. */
     boatClaudeSignIn?: WorkspaceDependencies["boatClaudeSignIn"]
     /**
@@ -314,6 +317,16 @@ export function createDesktopDependencies(
               (await source.connected()).boat.saveClaudeSignIn({ token }),
           })
         : undefined),
+    // A ChatGPT account for Codex on other computers, kept by the gateway.
+    codexChatgptSignIn: source
+      ? codexChatgptSignIn({
+          status: async () => (await (await source.connected()).logins.status()).chatgpt,
+          begin: async (accountId) =>
+            (await (await source.connected()).logins.chatgptSignIn(accountId)).chatgpt,
+          open: options.openInBrowser,
+          pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        })
+      : undefined,
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,

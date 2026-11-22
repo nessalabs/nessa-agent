@@ -1,12 +1,12 @@
 //! Lease frames: their wire shape, the hello another build is recognised by,
 //! and the bounds on a frame and the bytes it carries.
 use super::{
-    decode, encode, fingerprint, login_variable, login_variables, read_hello, ArtifactReadRefusal,
-    Cleanup, Collection, CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome,
-    FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello, InvalidLogin, Login,
-    MachineDisk, MachineReport, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
-    MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_LOGIN_BYTES, MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE,
-    MAX_MACHINE_TEXT_BYTES,
+    decode, encode, fingerprint, is_chatgpt_access_token, login_variable, login_variables,
+    read_hello, ArtifactReadRefusal, Cleanup, Collection, CollectionRefusal, CommandEnd, Data,
+    EndingCause, FetchOutcome, FetchRefusal, FromEnvironment, GrantRefusal, GrantedTerms, Hello,
+    InvalidLogin, Login, MachineDisk, MachineReport, PublishRefusal, Sandbox, StagedArtifact,
+    ToEnvironment, CHATGPT_TOKEN_FILE_VARIABLE, MAX_DATA_BYTES, MAX_FRAME_BYTES, MAX_LOGIN_BYTES,
+    MAX_MACHINE_DISKS, MAX_MACHINE_FIGURE, MAX_MACHINE_TEXT_BYTES,
 };
 use crate::pairing::FrameReader;
 use std::collections::BTreeMap;
@@ -50,6 +50,10 @@ fn every_frame_round_trips_and_names_its_lease() {
             channel: 1,
             grace_ms: 10,
             kill_ms: 20,
+        },
+        ToEnvironment::Renew {
+            lease: "l".into(),
+            login: Login::new("eyJa.eyJb.c2ln".into()).unwrap(),
         },
         ToEnvironment::End { lease: "l".into() },
         ToEnvironment::Account { lease: "l".into() },
@@ -300,6 +304,21 @@ fn a_start_carries_a_login_by_value_and_never_prints_it() {
         ),
         "CODEX_API_KEY"
     );
+    // A ChatGPT access token is a JWT, which no API key is; it goes in a
+    // file the lease keeps, never in a variable.
+    let chatgpt = |value: &str| is_chatgpt_access_token(&Login::new(value.into()).unwrap());
+    assert!(chatgpt("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln-_"));
+    for key in [
+        "sk-proj-x",
+        "eyJ.only-two",
+        "eyJa.b.c.d",
+        "eyJa..c",
+        "eyJa.b+c.d",
+    ] {
+        assert!(!chatgpt(key), "{key}");
+    }
+    assert!(!login_variables(crate::agents::AgentId::Codex).contains(&CHATGPT_TOKEN_FILE_VARIABLE));
+    assert!(Login::new("e".repeat(MAX_LOGIN_BYTES)).is_ok());
 }
 
 /// A grant asks for its sandbox by name, and its answer says the terms

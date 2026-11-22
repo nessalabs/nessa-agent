@@ -509,6 +509,7 @@ import {
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { FAKE_CHATGPT_ACCOUNTS, startFakeOpenai } from "./lib/fake-openai.mjs"
 import {
   asEarlierPlaces,
   asOlderBuild,
@@ -580,6 +581,11 @@ const POOL = "peer:any"
  * The variable each agent is handed its saved login in on a worker: the
  * first of `login_variables` (crates/nessa-protocol/src/lease.rs).
  */
+/** The variable naming the file a ChatGPT token is handed to Codex in. */
+const CHATGPT_TOKEN_FILE = "NESSA_CHATGPT_TOKEN_FILE"
+/** Whether `text` holds any of `secrets`. */
+const secretsIn = (text, secrets) => secrets.some((secret) => text.includes(secret))
+
 const LOGIN_VARIABLES = {
   claude: "CLAUDE_CODE_OAUTH_TOKEN",
   codex: "CODEX_API_KEY",
@@ -6417,6 +6423,282 @@ const steps = {
       owner?.close()
       rmSync(launches, { force: true })
       // The switch the step turned on is off again.
+      try {
+        await run.stack.vault.unlock()
+        if (worker?.name) await run.client.logins.setDevice(worker.name, false)
+      } catch (error) {
+        failures.push(`the worker's switch could not be turned off: ${error.message}`)
+      }
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
+  },
+
+  async chatgpt(run, step, failures) {
+    const openai = run.stack.openai
+    if (!openai) {
+      failures.push("the stack was started without the fake OpenAI")
+      return
+    }
+    const [first, second] = FAKE_CHATGPT_ACCOUNTS
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `chatgpt-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    const panel = run.page.locator(".settings-chatgpt")
+    const chatgpt = async () => (await run.client.logins.status()).chatgpt
+    const idOf = async (account) =>
+      (await chatgpt())?.accounts.find((each) => each.email === account.email)?.id
+    try {
+      // Both accounts signed in from Settings, the browser played by the
+      // fake: Continue, then its address opened as the account.
+      await run.exclusive(async () => {
+        const needsUnlock = (await run.client.vault.status()).state === "locked"
+        await openAccounts(run.page)
+        if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+        await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+        for (const [index, account] of [first, second].entries()) {
+          await panel.locator("[data-chatgpt-continue]").click()
+          await unlockVault(run.page)
+          const open = panel.locator("[data-chatgpt-open]")
+          if (
+            !(await open
+              .waitFor({ timeout: 15_000 })
+              .then(() => true)
+              .catch(() => false))
+          ) {
+            failures.push(`no Open ChatGPT link for ${account.email}`)
+            return
+          }
+          if (index === 0) await shot("waiting")
+          const back = await openai.approve(await open.getAttribute("href"), account)
+          if (back.status !== 200)
+            failures.push(`the gateway answered the browser's return with ${back.status}`)
+          const ended = await panel
+            .locator('[data-chatgpt-ended="signed_in"]')
+            .waitFor({ timeout: 15_000 })
+            .then(() => true)
+            .catch(() => false)
+          if (!ended) failures.push(`Settings does not say ${account.email} signed in`)
+          const listed = await panel
+            .locator(`[data-chatgpt-account="${account.email}"]`)
+            .waitFor({ timeout: 5_000 })
+            .then(() => true)
+            .catch(() => false)
+          if (!listed) failures.push(`Settings does not list ${account.email}`)
+          if (failures.length) return
+        }
+        // The first is chosen for Codex.
+        const id = await idOf(first)
+        const row = panel.locator(`[data-chatgpt-account="${first.email}"]`)
+        if ((await row.getAttribute("data-chatgpt-in-use")) === null && id) {
+          await row.locator(`[data-chatgpt-use="${id}"]`).click()
+          await unlockVault(run.page)
+        }
+        if (
+          !(await waitFor(
+            async () => (await chatgpt())?.accounts.find((each) => each.id === id)?.inUse,
+            15_000,
+          ))
+        )
+          failures.push(`${first.email} is not in use after Use`)
+        else await shot("accounts")
+        const shown = await run.page.locator("[data-settings-layers]").innerText()
+        if (openai.secrets().some((secret) => shown.includes(secret)))
+          failures.push("Settings shows a ChatGPT token")
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      const status = await run.client.logins.status()
+      if (status.chatgpt?.accounts.length !== 2)
+        failures.push(
+          `the gateway keeps ${status.chatgpt?.accounts.length} ChatGPT accounts, not 2`,
+        )
+      if (openai.secrets().some((secret) => JSON.stringify(status).includes(secret)))
+        failures.push("logins.status answered with a ChatGPT token")
+      if (failures.length) return
+      await steps.chatgptOnWorker(run, step, failures, { first, second, idOf })
+    } finally {
+      // Both removed again whatever happened, each revoked at OpenAI.
+      try {
+        await run.stack.vault.unlock()
+        for (const each of (await chatgpt())?.accounts ?? [])
+          await run.client.logins.chatgptRemove(each.id)
+      } catch (error) {
+        failures.push(`the ChatGPT accounts could not be removed again: ${error.message}`)
+      }
+    }
+    if ((await chatgpt())?.accounts.length)
+      failures.push("a ChatGPT account was kept after removal")
+    if (openai.calls.revoke < 2)
+      failures.push(
+        `removing both accounts revoked ${openai.calls.revoke} refresh tokens, not 2`,
+      )
+    if (openai.calls.reused)
+      failures.push(
+        `the gateway reused a rotated refresh token ${openai.calls.reused} times`,
+      )
+    // No record or log holds a token.
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const audit = join(namespace, "conversations", "audit", "logins")
+    const records = existsSync(audit)
+      ? readdirSync(audit).map((name) => readFileSync(join(audit, name), "utf8"))
+      : []
+    const secrets = openai.secrets()
+    if (records.some((text) => secrets.some((secret) => text.includes(secret))))
+      failures.push("a saved-login record holds a ChatGPT token")
+    if (secrets.some((secret) => run.stack.gateway.log().includes(secret)))
+      failures.push("the gateway's log holds a ChatGPT token")
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async chatgptOnWorker(run, step, failures, { first, second, idOf }) {
+    const openai = run.stack.openai
+    const agent = "codex"
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    // Linking restarts the gateway, which locks its vault.
+    await run.stack.vault.unlock()
+    // Each launch of Codex on the worker records its token file's name, the
+    // token in it, and whether a variable held the token instead.
+    const launches = join(tmpdir(), `nessa-stress-chatgpt-${randomUUID()}.txt`)
+    writeFileSync(launches, "")
+    const seen = () =>
+      readFileSync(launches, "utf8")
+        .split("\n")
+        .slice(0, -1)
+        .map((line) => {
+          const [file, token, key] = line.split(" ")
+          return { file, token, key }
+        })
+    let worker
+    let owner
+    let following = null
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      const launch = scriptedLaunch(agent, {
+        scenario: run.stack.scenario,
+        nativeContext: run.stack.nativeContext,
+        model: run.stack.profile.model,
+      })
+      const recording = [
+        "/bin/sh",
+        "-c",
+        `printf '%s %s %s\\n' "\${${CHATGPT_TOKEN_FILE}:--}" "$(cat "\${${CHATGPT_TOKEN_FILE}:-/dev/null}" 2>/dev/null || true)" "\${CODEX_API_KEY:+key}" >> '${launches}'; exec "$@"`,
+        "sh",
+        ...launch.command.argv,
+      ]
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent,
+        launch: { ...launch, command: { ...launch.command, argv: recording } },
+        label: `chatgpt${step.index}`,
+        logins: true,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      await run.client.logins.setDevice(worker.name, true)
+      // `keep`: followed from the start, so its agent is not parked once
+      // idle and its lease stays.
+      const talk = async (label, keep = false) => {
+        const before = seen().length
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent,
+          environment: worker.name,
+        })
+        if (keep)
+          following = await run.client.subscriptions.view(conversationId, {
+            view: () => {},
+            ended: () => {
+              following = null
+            },
+          })
+        const text = prompt(run, STRESS.reply, step, ` chatgpt ${label}`)
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+        return { conversationId, launched: seen().slice(before) }
+      }
+      const handed = (launched, account, label) => {
+        if (launched.length === 0) {
+          failures.push(`${label}: Codex was never launched on the worker`)
+          return null
+        }
+        for (const each of launched) {
+          if (each.key)
+            failures.push(`${label}: Codex was launched with an API key variable`)
+          if (openai.subjectOf(each.token) !== account.subject)
+            failures.push(
+              `${label}: Codex's token file held ${each.token ? "a token of another account" : "nothing"}`,
+            )
+        }
+        return launched.at(-1)
+      }
+      // The first account: Codex starts with its token in a file. Followed,
+      // it stays open: a minute in, the gateway renews the token and the
+      // machine replaces it in the same file.
+      const { launched } = await talk("first", true)
+      const started = handed(launched, first, "first account")
+      if (!started || failures.length) return
+      const renewed = await waitFor(() => {
+        try {
+          const now = readFileSync(started.file, "utf8")
+          return now !== started.token && openai.subjectOf(now) === first.subject
+        } catch {
+          return false
+        }
+      }, 150_000)
+      if (!renewed)
+        failures.push("the worker's token file was not renewed while its lease ran")
+      following?.close()
+      following = null
+      if (failures.length) return
+      // The second account chosen: the next Codex runs on it.
+      await run.client.logins.chatgptUse(await idOf(second))
+      const other = await talk("second")
+      handed(other.launched, second, "second account")
+      if (failures.length) return
+      // The key again: nothing of ChatGPT's is handed.
+      await run.client.logins.chatgptUse(null)
+      const none = await talk("none")
+      if (none.launched.some((each) => each.token))
+        failures.push("with no account in use Codex was still handed a ChatGPT token")
+      if (secretsIn(worker.log(), openai.secrets()))
+        failures.push("the worker's log holds a ChatGPT token")
+    } finally {
+      following?.close()
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      rmSync(launches, { force: true })
       try {
         await run.stack.vault.unlock()
         if (worker?.name) await run.client.logins.setDevice(worker.name, false)
@@ -15561,7 +15843,12 @@ async function startStack(options) {
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
+  // The `chatgpt` step's OpenAI sign-in, on this machine.
+  const openai = knobs.chatgpts > 0 ? await startFakeOpenai() : null
   const environment = {
+    ...(openai
+      ? { NESSA_CHATGPT_SIGN_IN: openai.config(join(directory, "chatgpt-sign-in.json")) }
+      : {}),
     ...(nativeContext ? { CLAUDE_CONFIG_DIR: nativeContext.baseline } : {}),
     ...(realtime
       ? {
@@ -15652,6 +15939,8 @@ async function startStack(options) {
             ? [otherAgent(options.agent)]
             : []),
           ...(nativeContext && options.agent !== "claude" ? ["claude"] : []),
+          // The `chatgpt` step runs Codex on its worker.
+          ...(knobs.chatgpts > 0 && options.agent !== "codex" ? ["codex"] : []),
         ]),
       ],
       // Off, at a port of its own: the `linking` step turns it on from
@@ -15676,6 +15965,7 @@ async function startStack(options) {
     await stack?.close()
     await github?.close()
     await realtime?.close()
+    await openai?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -15686,6 +15976,7 @@ async function startStack(options) {
     } finally {
       await github?.close()
       await realtime?.close()
+      await openai?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -15698,6 +15989,7 @@ async function startStack(options) {
     nativeListen,
     github,
     realtime,
+    openai,
     scenario,
     nativeContext,
     // Removed when the stack closes.

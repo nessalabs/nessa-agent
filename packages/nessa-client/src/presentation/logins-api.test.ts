@@ -55,6 +55,68 @@ describe("client.logins", () => {
     }
   })
 
+  const account = "0b7f6c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e"
+  const chatgpt = {
+    accounts: [{ id: account, email: "a@example.com", inUse: true, needsSignIn: false }],
+    signIn: {
+      state: "waiting",
+      attempt: "9e8d7c6b-5a49-4382-a716-152433425160",
+      authorizeUrl: "https://auth.example/authorize?x=1",
+    },
+  }
+
+  it("asks the ChatGPT methods with their params and reads the accounts", async () => {
+    const { api, calls } = session(() => ({ ...status, chatgpt }))
+    expect((await api.chatgptSignIn()).chatgpt).toEqual(chatgpt)
+    await api.chatgptSignIn(account)
+    await api.chatgptCancel()
+    await api.chatgptUse(account)
+    await api.chatgptUse(null)
+    await api.chatgptRemove(account)
+    expect(calls).toEqual([
+      { method: "logins.chatgptSignIn", params: {} },
+      { method: "logins.chatgptSignIn", params: { accountId: account } },
+      { method: "logins.chatgptCancel", params: {} },
+      { method: "logins.chatgptUse", params: { accountId: account } },
+      { method: "logins.chatgptUse", params: { accountId: null } },
+      { method: "logins.chatgptRemove", params: { accountId: account } },
+    ])
+  })
+
+  it("refuses ChatGPT accounts outside the schema, a token above all", async () => {
+    const [first] = chatgpt.accounts
+    for (const bad of [
+      { ...chatgpt, accounts: [{ ...first, access: "eyJ.a.b" }] },
+      { ...chatgpt, accounts: [{ ...first, id: "one" }] },
+      { ...chatgpt, accounts: [first, first] },
+      { ...chatgpt, accounts: [first, { ...first, id: account.replace("0b", "0c") }] },
+      {
+        ...chatgpt,
+        accounts: Array.from({ length: 9 }, (_, index) => ({
+          ...first,
+          inUse: false,
+          id: account.replace("0b", index.toString(16).padStart(2, "0")),
+        })),
+      },
+      { ...chatgpt, signIn: { state: "idle", authorizeUrl: "https://x" } },
+      { ...chatgpt, signIn: { state: "idle", last: "gone" } },
+      { ...chatgpt, signIn: { state: "waiting" } },
+      // A sign-in that waits names its attempt; an end names the one it was.
+      { ...chatgpt, signIn: { state: "waiting", authorizeUrl: "https://x" } },
+      { ...chatgpt, signIn: { state: "idle", last: "declined" } },
+      {
+        ...chatgpt,
+        signIn: { state: "idle", attempt: "9e8d7c6b-5a49-4382-a716-152433425160" },
+      },
+      { ...chatgpt, signIn: { state: "waiting", authorizeUrl: "javascript:alert(1)" } },
+      { ...chatgpt, token: "x" },
+    ]) {
+      const { api } = session(() => ({ ...status, chatgpt: bad }))
+      const error = await api.status().catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(NessaLoginsError)
+    }
+  })
+
   it("names a refusal this build knows", async () => {
     const { api } = session(() => {
       throw new NessaRpcError("vault_locked", "refused")

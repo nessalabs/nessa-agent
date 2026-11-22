@@ -257,6 +257,10 @@ export const KNOBS = {
     default: 1,
     what: "times an agent's login is saved in Settings › Accounts and a paired worker that takes logins starts the agent without it until its switch in Devices is on, then with it; removed again after",
   },
+  chatgpts: {
+    default: 1,
+    what: "times two ChatGPT accounts are signed in for Codex in Settings › Accounts through a fake OpenAI, a paired worker's Codex is handed the one in use as a token file (never a variable) that the gateway renews while it runs, the other account is chosen and used, and both are removed again",
+  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
@@ -417,6 +421,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.logins, () => ({ kind: "login" }))
+  add(knobs.chatgpts, () => ({ kind: "chatgpt" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.huddles, () => ({ kind: "huddle" }))

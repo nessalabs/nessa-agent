@@ -90,6 +90,12 @@ async-trait = "0.1"
 # one both Tauri crates install, so a workspace build holds a single
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The RS256 check of a ChatGPT sign-in's ID token against OpenAI's published
+# keys (logins::chatgpt::infrastructure::authority): the *ring* rustls
+# already brings, not a second implementation.
+ring = "0.17"
+# OpenAI's `earliest_refresh_at`, when it is an RFC 3339 time.
+time = { version = "0.3", features = ["parsing"] }
 sha2 = "0.10"
 # A resolved Windows path without the `\\?\` prefix, so a channel's folder is
 # kept, shown and handed to an agent as the person knows it.

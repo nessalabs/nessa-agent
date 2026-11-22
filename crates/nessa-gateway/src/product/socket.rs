@@ -2284,7 +2284,13 @@ async fn dispatch_authorized(
         ProductMethod::LoginsStatus
         | ProductMethod::LoginsSave
         | ProductMethod::LoginsRemove
-        | ProductMethod::LoginsSetDevice => super::logins::dispatch(state, session, frame).await,
+        | ProductMethod::LoginsSetDevice
+        | ProductMethod::LoginsChatgptSignIn
+        | ProductMethod::LoginsChatgptCancel
+        | ProductMethod::LoginsChatgptUse
+        | ProductMethod::LoginsChatgptRemove => {
+            super::logins::dispatch(state, session, frame).await
+        }
         ProductMethod::VoiceStatus
         | ProductMethod::VoiceSaveKey
         | ProductMethod::VoiceForgetKey

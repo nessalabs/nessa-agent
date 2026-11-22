@@ -4605,6 +4605,8 @@ pub struct SavedLogin {
 pub struct LoginsStatus {
     pub logins: Vec<SavedLogin>,
     pub devices_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<ChatgptLogins>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4623,6 +4625,100 @@ pub struct LoginsSetDeviceParams {
     pub environment: String,
     pub on: bool,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptAccount {
+    pub id: String,
+    pub email: String,
+    pub in_use: bool,
+    pub needs_sign_in: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ChatgptSignInEnd {
+    #[serde(rename = "signed_in")]
+    SignedIn,
+    #[serde(rename = "declined")]
+    Declined,
+    #[serde(rename = "incomplete")]
+    Incomplete,
+    #[serde(rename = "wrong_account")]
+    WrongAccount,
+    #[serde(rename = "exchange_failed")]
+    ExchangeFailed,
+    #[serde(rename = "invalid_identity")]
+    InvalidIdentity,
+    #[serde(rename = "plan_not_enabled")]
+    PlanNotEnabled,
+    #[serde(rename = "too_many_accounts")]
+    TooManyAccounts,
+    #[serde(rename = "not_saved")]
+    NotSaved,
+    #[serde(rename = "timed_out")]
+    TimedOut,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "replaced")]
+    Replaced,
+    #[serde(rename = "listen_failed")]
+    ListenFailed,
+}
+impl ChatgptSignInEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedIn => "signed_in",
+            Self::Declined => "declined",
+            Self::Incomplete => "incomplete",
+            Self::WrongAccount => "wrong_account",
+            Self::ExchangeFailed => "exchange_failed",
+            Self::InvalidIdentity => "invalid_identity",
+            Self::PlanNotEnabled => "plan_not_enabled",
+            Self::TooManyAccounts => "too_many_accounts",
+            Self::NotSaved => "not_saved",
+            Self::TimedOut => "timed_out",
+            Self::Cancelled => "cancelled",
+            Self::Replaced => "replaced",
+            Self::ListenFailed => "listen_failed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptSignIn {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<ChatgptSignInEnd>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptLogins {
+    pub accounts: Vec<ChatgptAccount>,
+    pub sign_in: ChatgptSignIn,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptSignInParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptUseParams {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub account_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptRemoveParams {
+    pub account_id: String,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum LoginsErrorCode {
     #[serde(rename = "logins_not_configured")]
@@ -4635,6 +4731,10 @@ pub enum LoginsErrorCode {
     LoginsChangeUnrecorded,
     #[serde(rename = "logins_too_many_devices")]
     LoginsTooManyDevices,
+    #[serde(rename = "logins_unknown_account")]
+    LoginsUnknownAccount,
+    #[serde(rename = "logins_chatgpt_not_configured")]
+    LoginsChatgptNotConfigured,
     #[serde(rename = "vault_locked")]
     VaultLocked,
 }
@@ -4646,6 +4746,8 @@ impl LoginsErrorCode {
             Self::LoginsAuditUnavailable => "logins_audit_unavailable",
             Self::LoginsChangeUnrecorded => "logins_change_unrecorded",
             Self::LoginsTooManyDevices => "logins_too_many_devices",
+            Self::LoginsUnknownAccount => "logins_unknown_account",
+            Self::LoginsChatgptNotConfigured => "logins_chatgpt_not_configured",
             Self::VaultLocked => "vault_locked",
         }
     }
@@ -5151,6 +5253,10 @@ pub mod product_method {
     pub const LOGINS_SAVE: &str = "logins.save";
     pub const LOGINS_REMOVE: &str = "logins.remove";
     pub const LOGINS_SET_DEVICE: &str = "logins.setDevice";
+    pub const LOGINS_CHATGPT_SIGN_IN: &str = "logins.chatgptSignIn";
+    pub const LOGINS_CHATGPT_CANCEL: &str = "logins.chatgptCancel";
+    pub const LOGINS_CHATGPT_USE: &str = "logins.chatgptUse";
+    pub const LOGINS_CHATGPT_REMOVE: &str = "logins.chatgptRemove";
     pub const VOICE_STATUS: &str = "voice.status";
     pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
     pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
@@ -5360,7 +5466,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 152
+                items.len() <= 156
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5523,6 +5629,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "logins.save",
     "logins.remove",
     "logins.setDevice",
+    "logins.chatgptSignIn",
+    "logins.chatgptCancel",
+    "logins.chatgptUse",
+    "logins.chatgptRemove",
     "voice.status",
     "voice.saveKey",
     "voice.forgetKey",
@@ -5879,6 +5989,14 @@ pub enum ProductMethod {
     LoginsRemove,
     /// `logins.setDevice`
     LoginsSetDevice,
+    /// `logins.chatgptSignIn`
+    LoginsChatgptSignIn,
+    /// `logins.chatgptCancel`
+    LoginsChatgptCancel,
+    /// `logins.chatgptUse`
+    LoginsChatgptUse,
+    /// `logins.chatgptRemove`
+    LoginsChatgptRemove,
     /// `voice.status`
     VoiceStatus,
     /// `voice.saveKey`
@@ -6051,6 +6169,10 @@ impl ProductMethod {
         ProductMethod::LoginsSave,
         ProductMethod::LoginsRemove,
         ProductMethod::LoginsSetDevice,
+        ProductMethod::LoginsChatgptSignIn,
+        ProductMethod::LoginsChatgptCancel,
+        ProductMethod::LoginsChatgptUse,
+        ProductMethod::LoginsChatgptRemove,
         ProductMethod::VoiceStatus,
         ProductMethod::VoiceSaveKey,
         ProductMethod::VoiceForgetKey,
@@ -6216,6 +6338,10 @@ impl ProductMethod {
             "logins.save" => Some(ProductMethod::LoginsSave),
             "logins.remove" => Some(ProductMethod::LoginsRemove),
             "logins.setDevice" => Some(ProductMethod::LoginsSetDevice),
+            "logins.chatgptSignIn" => Some(ProductMethod::LoginsChatgptSignIn),
+            "logins.chatgptCancel" => Some(ProductMethod::LoginsChatgptCancel),
+            "logins.chatgptUse" => Some(ProductMethod::LoginsChatgptUse),
+            "logins.chatgptRemove" => Some(ProductMethod::LoginsChatgptRemove),
             "voice.status" => Some(ProductMethod::VoiceStatus),
             "voice.saveKey" => Some(ProductMethod::VoiceSaveKey),
             "voice.forgetKey" => Some(ProductMethod::VoiceForgetKey),
@@ -6378,6 +6504,10 @@ impl ProductMethod {
             ProductMethod::LoginsSave => "logins.save",
             ProductMethod::LoginsRemove => "logins.remove",
             ProductMethod::LoginsSetDevice => "logins.setDevice",
+            ProductMethod::LoginsChatgptSignIn => "logins.chatgptSignIn",
+            ProductMethod::LoginsChatgptCancel => "logins.chatgptCancel",
+            ProductMethod::LoginsChatgptUse => "logins.chatgptUse",
+            ProductMethod::LoginsChatgptRemove => "logins.chatgptRemove",
             ProductMethod::VoiceStatus => "voice.status",
             ProductMethod::VoiceSaveKey => "voice.saveKey",
             ProductMethod::VoiceForgetKey => "voice.forgetKey",
@@ -6538,6 +6668,10 @@ impl ProductMethod {
             ProductMethod::LoginsSave => Some("credential.manage"),
             ProductMethod::LoginsRemove => Some("credential.manage"),
             ProductMethod::LoginsSetDevice => Some("credential.manage"),
+            ProductMethod::LoginsChatgptSignIn => Some("credential.manage"),
+            ProductMethod::LoginsChatgptCancel => Some("credential.manage"),
+            ProductMethod::LoginsChatgptUse => Some("credential.manage"),
+            ProductMethod::LoginsChatgptRemove => Some("credential.manage"),
             ProductMethod::VoiceStatus => Some("credential.manage"),
             ProductMethod::VoiceSaveKey => Some("credential.manage"),
             ProductMethod::VoiceForgetKey => Some("credential.manage"),
@@ -6697,6 +6831,10 @@ impl ProductMethod {
             ProductMethod::LoginsSave => ProductLane::Requests,
             ProductMethod::LoginsRemove => ProductLane::Requests,
             ProductMethod::LoginsSetDevice => ProductLane::Requests,
+            ProductMethod::LoginsChatgptSignIn => ProductLane::Requests,
+            ProductMethod::LoginsChatgptCancel => ProductLane::Requests,
+            ProductMethod::LoginsChatgptUse => ProductLane::Requests,
+            ProductMethod::LoginsChatgptRemove => ProductLane::Requests,
             ProductMethod::VoiceStatus => ProductLane::Requests,
             ProductMethod::VoiceSaveKey => ProductLane::Requests,
             ProductMethod::VoiceForgetKey => ProductLane::Requests,
@@ -7180,6 +7318,19 @@ impl ProductMethod {
             ProductMethod::LoginsSetDevice => ProductParams::LoginsSetDevice(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::LoginsChatgptSignIn => ProductParams::LoginsChatgptSignIn(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsChatgptCancel => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::LoginsChatgptCancel,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::LoginsChatgptUse => ProductParams::LoginsChatgptUse(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsChatgptRemove => ProductParams::LoginsChatgptRemove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::VoiceStatus => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::VoiceStatus,
                 _ => return Err(ParamsRefused),
@@ -7374,6 +7525,10 @@ pub enum ProductParams {
     LoginsSave(LoginsSaveParams),
     LoginsRemove(LoginsRemoveParams),
     LoginsSetDevice(LoginsSetDeviceParams),
+    LoginsChatgptSignIn(LoginsChatgptSignInParams),
+    LoginsChatgptCancel,
+    LoginsChatgptUse(LoginsChatgptUseParams),
+    LoginsChatgptRemove(LoginsChatgptRemoveParams),
     VoiceStatus,
     VoiceSaveKey(VoiceSaveKeyParams),
     VoiceForgetKey,
@@ -7557,6 +7712,10 @@ impl ProductParams {
             ProductParams::LoginsSave(_) => ProductMethod::LoginsSave,
             ProductParams::LoginsRemove(_) => ProductMethod::LoginsRemove,
             ProductParams::LoginsSetDevice(_) => ProductMethod::LoginsSetDevice,
+            ProductParams::LoginsChatgptSignIn(_) => ProductMethod::LoginsChatgptSignIn,
+            ProductParams::LoginsChatgptCancel => ProductMethod::LoginsChatgptCancel,
+            ProductParams::LoginsChatgptUse(_) => ProductMethod::LoginsChatgptUse,
+            ProductParams::LoginsChatgptRemove(_) => ProductMethod::LoginsChatgptRemove,
             ProductParams::VoiceStatus => ProductMethod::VoiceStatus,
             ProductParams::VoiceSaveKey(_) => ProductMethod::VoiceSaveKey,
             ProductParams::VoiceForgetKey => ProductMethod::VoiceForgetKey,

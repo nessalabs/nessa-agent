@@ -266,8 +266,12 @@ export {
   type LoginsMethod,
 } from "./application/logins-error.js"
 export {
+  ChatgptSignInEnd,
   LoginAgent,
   LoginsErrorCode,
+  type ChatgptAccount,
+  type ChatgptLogins,
+  type ChatgptSignIn,
   type LoginsStatus,
   type SavedLogin,
 } from "./generated/product.js"
