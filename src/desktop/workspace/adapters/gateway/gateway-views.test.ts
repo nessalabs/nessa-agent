@@ -172,6 +172,52 @@ describe("what a bounded view says about history it did not draw", () => {
 })
 
 describe("a conversation view as a transcript", () => {
+  it("names the step its cloud machine is on instead of Thinking, and puts a finished one on the reply it waited for", () => {
+    const S = GATEWAY_NOW_MS
+    const running = transcriptFrom(
+      view("c", {
+        setup: [
+          {
+            state: "running",
+            executionId: "e2",
+            steps: [
+              { step: "waking", startedAtMs: S - 9_000, endedAtMs: S - 4_000 },
+              { step: "connecting", startedAtMs: S - 4_000 },
+            ],
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(running.activity).toEqual({
+      label: "Connecting",
+      since: S - 9_000,
+      setup: true,
+    })
+    const ready = transcriptFrom(
+      view("c", {
+        messages: [turn({ parts: [textPart("done", 0)] })],
+        setup: [
+          {
+            state: "ready",
+            executionId: "e1",
+            steps: [{ step: "creating", startedAtMs: S - 30_000, endedAtMs: S - 1_000 }],
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    const reply = ready.messages.find((message) => message.id === replyId("e1"))
+    expect(
+      reply && "setup" in reply ? reply.setup?.steps.map((step) => step.step) : [],
+    ).toEqual(["creating"])
+    expect(ready.activity ?? null).toBeNull()
+  })
+
   it("keeps an MCP App's widget part after its tool's step, and none for a tool without a UI", () => {
     const transcript = transcriptFrom(
       view("c", {

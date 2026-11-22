@@ -37,6 +37,8 @@ export function liveActivity(
   activity: Activity | null,
 ): Activity | null {
   if (!activity) return null
+  // Getting the machine ready is not the agent's work: both views name it.
+  if (activity.setup) return activity
   if (view === "compact") return { label: compactActivityLabel, since: activity.since }
   return shownActivity(messages, activity)
 }

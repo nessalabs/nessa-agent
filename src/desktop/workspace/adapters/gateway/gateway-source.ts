@@ -1405,6 +1405,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const held = reads.get(sessionId)
     if (held && behind(frame.cursor, held.cursor)) return
     const transcript = applyRead(sessionId, frame.view, frame.cursor, receivedAtMs)
+    // Read back, it was made after all (its creation's answer was lost).
+    notCreated.delete(sessionId)
     follow.applied = true
     settle(follow, { value: transcript })
   }
@@ -1430,7 +1432,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     refusal: unknown,
     deleted: boolean,
   ) => {
-    if (gone(refusal)) {
+    // One this window is creating is not gone for not being there yet: its
+    // record is written as its machine starts being made. One whose creation
+    // failed is let go, not taken out: its message stays, to send again.
+    if (gone(refusal) && notCreated.has(sessionId)) {
+      unfollow(sessionId, refusal)
+      return
+    }
+    if (gone(refusal) && !creating.has(sessionId)) {
       remove(sessionId)
       if (deleted) tellApps(() => options.apps?.forget(sessionId))
       settle(follow, { error: refusal })
@@ -1597,6 +1606,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     open(sessionId, follow, who)
     return follow
   }
+
+  // The conversations this window is creating now (`open` in `send`), and
+  // those whose creation it asked for last failed.
+  const creating = new Set<string>()
+  const notCreated = new Set<string>()
 
   /** The conversation as its subscription last said it, waiting for the first frame when none is held (D20). */
   const transcriptOf = (sessionId: string, who: Caller): Promise<Transcript> => {
@@ -1774,19 +1788,39 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const open = async (live: () => boolean) => {
         if (!start) return
         const agent = agentForProvider(model.provider)
-        await dispatch(live, (connected) => {
-          held(sessionId)
-          return connected.conversation.create({
-            conversationId: sessionId,
-            ...(agent ? { agent } : {}),
-            model: model.modelId,
-            // The access chosen in the home; the gateway asks when told none,
-            // or starts as the channel says.
-            ...(access ? { approvalMode: access } : {}),
-            // The channel it is in for its whole life; none is the default one.
-            ...(channelId ? { channelId } : {}),
+        // A chat on a cloud machine answers its creation only once the
+        // machine is made and its agent started, a minute or more on. It is
+        // followed while it waits, once a retry's wait has let its record be
+        // written, so the window can say each step of that (`setup`).
+        creating.add(sessionId)
+        const following = waitsOnWorkspace
+          ? clock.after(timing.retryMs, () => {
+              if (creating.has(sessionId) && !takenOut(sessionId))
+                follow(sessionId, "held")
+            })
+          : undefined
+        try {
+          await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.create({
+              conversationId: sessionId,
+              ...(agent ? { agent } : {}),
+              model: model.modelId,
+              // The access chosen in the home; the gateway asks when told none,
+              // or starts as the channel says.
+              ...(access ? { approvalMode: access } : {}),
+              // The channel it is in for its whole life; none is the default one.
+              ...(channelId ? { channelId } : {}),
+            })
           })
-        })
+          notCreated.delete(sessionId)
+        } catch (error) {
+          notCreated.add(sessionId)
+          throw error
+        } finally {
+          following?.()
+          creating.delete(sessionId)
+        }
       }
       const submit = async (live: () => boolean, submitted: PreparedSubmission) => {
         await dispatch(live, (connected) => {

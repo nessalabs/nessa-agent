@@ -27,7 +27,9 @@ import { reportVerb, threadReportOf } from "../../model/thread-report"
 import { ChatPill } from "./chat-pill"
 import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
+import { SetupTrace } from "./setup-trace"
 import { ToolSteps } from "./tool-steps"
+import { UnsentRow } from "./unsent-row"
 import type { DraftImage } from "../../model/draft-images"
 import type { TranscriptView } from "../../model/transcript-view"
 
@@ -137,6 +139,7 @@ export const Message = memo(function Message({
         data-role="user"
         data-new={isNew || undefined}
         data-sending={message.delivery?.state === "sending" || undefined}
+        data-unsent={message.delivery?.state === "failed" || undefined}
       >
         {message.agent ? (
           <p
@@ -176,6 +179,9 @@ export const Message = memo(function Message({
             Retried
           </p>
         ) : null}
+        {message.delivery?.state === "failed" ? (
+          <UnsentRow sessionId={sessionId} message={message} />
+        ) : null}
         {message.terminal ? <TurnTerminalMark terminal={message.terminal} /> : null}
       </div>
     )
@@ -196,6 +202,11 @@ export const Message = memo(function Message({
   return (
     <div className="workspace-message" data-role="agent" data-new={isNew || undefined}>
       <div className="workspace-message-body">
+        {/* How long its machine took, drawn as a tool run is: so the compact
+            view, which draws none, leaves it out too. */}
+        {message.setup && view === "detailed" ? (
+          <SetupTrace sessionId={sessionId} setup={message.setup} />
+        ) : null}
         {groups.map((group, index) => {
           if (Array.isArray(group))
             return (
@@ -297,8 +308,6 @@ function MessageWidget({ sessionId, widget }: { sessionId: string; widget: Widge
   )
   return <InlineWidget widget={widget} host={host} openElsewhere={openElsewhere} />
 }
-
-/** Why a message did not reach the agent, and the two ways on: send it again, or let it go. */
 
 /**
  * The images and files on a message this window sent and its conversation does not hold
