@@ -185,6 +185,9 @@ export function Composer({
   const [thinking, setThinking] = useState(defaultThinkingLevel)
 
   const [fast, setFast] = useState(false)
+  const warning = [modelNote, access?.note, attached?.note].find(
+    (note) => note?.tone === "warning",
+  )
 
   return (
     <>
@@ -369,7 +372,9 @@ export function Composer({
           type="button"
           className="desktop-composer-wake"
           aria-label="Write a message"
-          {...tooltip("Write a message", { side: "above" })}
+          // Folded, the controls are hidden: the circle says their warning.
+          {...said(warning)}
+          {...tooltip(warning?.text ?? "Write a message", { side: "above" })}
           // Focus on the circle is focus into the pane: the pane takes it, and
           // the caret follows into the field (`workspace/adapters/dom/focus.ts`).
           onClick={(event) => event.currentTarget.focus()}

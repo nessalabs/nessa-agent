@@ -573,6 +573,11 @@ it("says nothing of its own: every note is its control's tooltip, and the form h
     "This model doesn’t offer that access.",
     "warning",
   ])
+  // Folded, the controls are hidden: the circle says the first warning.
+  expect(said(".desktop-composer-wake")).toEqual([
+    "Model didn’t change. Choose again to try.",
+    "warning",
+  ])
   const picker = form.querySelector(".desktop-chip-model")?.closest(".desktop-tip-anchor")
   expect([
     picker?.getAttribute("data-tooltip"),

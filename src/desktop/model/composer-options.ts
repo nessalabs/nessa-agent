@@ -64,6 +64,11 @@ export function groupByProvider(models: readonly ComposerModel[]): ComposerProvi
 export const composerModels: readonly ComposerModel[] = catalog.models
 export const composerProviders = groupByProvider(composerModels)
 
+/** A catalogue model by its id alone, as a source names a model it was asked for. */
+export function composerModelById(modelId: string): ComposerModel | undefined {
+  return composerModels.find((model) => model.modelId === modelId)
+}
+
 /** Opens on Claude Opus 5 when the catalog has it, otherwise its first model. */
 export function defaultComposerModel(
   models: readonly ComposerModel[],

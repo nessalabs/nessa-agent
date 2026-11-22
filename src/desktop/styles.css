@@ -1372,19 +1372,17 @@ html:not(.dark) [data-surface] {
 /*
  * A composer control with a warning to give (`ComposerNote`): the words are
  * its tooltip, and a dot in its corner says there is something to read. The
- * composer itself has no line for status.
+ * composer itself has no line for status. The model picker's anchor draws no
+ * box (`display: contents`), so its chip wears the dot; the folded circle
+ * (`conversation.css`) carries the first warning the same way.
  */
-/* The model picker's anchor draws no box (`display: contents`): its chip wears the dot. */
-/* A quiet pane folds its composer to a circle (`conversation.css`), which wears the dot then. */
 .desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor),
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *,
-.desktop-composer:has([data-attention="warning"]) > .desktop-composer-wake {
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > * {
   position: relative;
 }
 
 .desktop-composer [data-attention="warning"]:not(.desktop-tip-anchor)::after,
-.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after,
-.desktop-composer:has([data-attention="warning"]) > .desktop-composer-wake::after {
+.desktop-composer .desktop-tip-anchor[data-attention="warning"] > *::after {
   content: "";
   position: absolute;
   top: 2px;

@@ -1,7 +1,7 @@
 import type { ComposerNote } from "../../../ui/composer"
 import type { ModelChoice, ModelControl } from "../../model/model-choice"
 import { agentName, agentOf } from "../../model/workspace-index"
-import { composerModelById } from "../../../ui/catalogue-model-picker"
+import { composerModelById } from "../../../model/composer-options"
 
 /**
  * What the model picker says of the session's model, in its tooltip: why
@@ -23,14 +23,6 @@ export function modelPickerNote(
   )
     return { tone: "warning", text: "This chat can’t be reopened." }
   if (busy) return undefined
-  if (control?.pending?.status === "recovery_required") {
-    const asked = composerModelById(control.pending.requestedModel)
-    return {
-      tone: "warning",
-      text: `The change to ${asked?.displayName ?? control.pending.requestedModel} isn’t confirmed. Sending checks it first.`,
-    }
-  }
-  if (control?.pending) return undefined
   if (choice?.state === "refused")
     return {
       tone: "warning",
@@ -41,6 +33,14 @@ export function modelPickerNote(
             ? "Model didn’t change. Choose again to try."
             : "The model change wasn’t made. Choose again to try.",
     }
+  if (control?.pending?.status === "recovery_required") {
+    const asked = composerModelById(control.pending.requestedModel)
+    return {
+      tone: "warning",
+      text: `The change to ${asked?.displayName ?? control.pending.requestedModel} isn’t confirmed. Sending checks it first.`,
+    }
+  }
+  if (control?.pending) return undefined
   if (choice) return undefined
   if (control?.effect === "nextTurn")
     return { tone: "neutral", text: "Model and thinking. Applies to the next turn." }
