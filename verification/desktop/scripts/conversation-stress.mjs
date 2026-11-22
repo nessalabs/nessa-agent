@@ -1336,23 +1336,42 @@ async function channelRunning(page, name, running, failures) {
  */
 async function rowFillBesideItsSettings(page, row, name, failures) {
   const control = row.locator(":scope > [data-size]")
-  const fill = () => control.evaluate((it) => getComputedStyle(it).backgroundColor)
+  const read = () =>
+    control.evaluate((it) => ({
+      fill: getComputedStyle(it).backgroundColor,
+      hovered: Boolean(
+        it.closest('[data-slot="sidebar-menu-item-row"]')?.matches(":hover"),
+      ),
+      animating: it
+        .getAnimations()
+        .some(
+          (animation) =>
+            ["running", "pending"].includes(animation.playState) &&
+            animation.effect?.getComputedTiming().iterations !== Infinity,
+        ),
+    }))
   const settled = async () => {
     let last = null
     return (
       (await waitFor(async () => {
-        const now = await fill()
-        const same = now === last
+        const now = await read()
+        if (now.animating) {
+          last = null
+          return null
+        }
+        const same = last !== null && now.fill === last.fill
         last = now
         return same ? now : null
-      }, 5_000)) ?? last
+      }, 5_000)) ??
+      last ??
+      (await read())
     )
   }
   await page.mouse.move(600, 400)
-  const atRest = await settled()
+  const atRest = (await settled()).fill
   await control.hover({ timeout: 10_000 })
   // Waits past any transition delay for the fill to leave its rest.
-  if (!(await waitFor(async () => (await fill()) !== atRest, 2_000))) {
+  if (!(await waitFor(async () => (await read()).fill !== atRest, 2_000))) {
     // A selected row keeps one fill under the pointer and away from it, so
     // there is nothing to tell apart.
     log(
@@ -1360,12 +1379,19 @@ async function rowFillBesideItsSettings(page, row, name, failures) {
     )
     return false
   }
-  const onControl = await settled()
+  let onControl = await settled()
+  // WebKit can drop :hover if a concurrent sidebar update shifts layout under
+  // the stationary pointer; re-hover the control once before taking the baseline.
+  if (!onControl.hovered || onControl.fill === atRest) {
+    await control.hover({ timeout: 10_000 })
+    await waitFor(async () => (await read()).fill !== atRest, 2_000)
+    onControl = await settled()
+  }
   await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
   const beside = await settled()
-  if (beside !== onControl)
+  if (beside.fill !== onControl.fill)
     failures.push(
-      `channel ${name} pointed at its settings loses the row's hover fill: ${beside}, not ${onControl}`,
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside.fill}, not ${onControl.fill}`,
     )
   return true
 }
