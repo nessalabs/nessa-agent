@@ -219,6 +219,7 @@ export const Message = memo(function Message({
                 text={group.text}
                 streaming={message.working}
                 fresh={isNew}
+                runs={{ conversationId: sessionId, messageId: message.id, part: index }}
               />
             ) : null
           if (group.kind === "code")

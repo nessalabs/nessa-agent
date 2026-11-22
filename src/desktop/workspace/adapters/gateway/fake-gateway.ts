@@ -35,6 +35,8 @@ import {
   type ListSubscriptionHandlers,
   type Subscription,
   type SubscriptionEnd,
+  type TerminalApi,
+  type TerminalSummary,
   type ViewSubscriptionHandlers,
   type WorkspaceAnswerParams,
   type WorkspaceWindow,
@@ -43,6 +45,7 @@ import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
 import type { WindowPublishClient } from "./window-publisher"
 import type { WindowCommandClient } from "./window-commands"
+import type { TerminalClient } from "./terminal-gateway"
 
 /**
  * The fake's client: the source's, sharing's conversation methods (which
@@ -58,7 +61,8 @@ export type FakeGatewayClient = {
   readonly replyStyle: import("@nessa/client").ReplyStyleApi
 } & GatewayClient &
   WindowPublishClient &
-  WindowCommandClient & {
+  WindowCommandClient &
+  TerminalClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
       Pick<
@@ -559,6 +563,11 @@ export function fakeGateway(
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
   const eventListeners = new Map<string, Set<(payload: unknown) => void>>()
+  const publish = (event: string, payload: unknown) => {
+    const handlers = eventListeners.get(event)
+    if (!handlers) return
+    for (const handler of [...handlers]) handler(payload)
+  }
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
   // View subscribes on their way, which the gateway counts against its limit.
@@ -1018,6 +1027,7 @@ export function fakeGateway(
           return channel
         }) as never,
     },
+    terminals: fakeTerminals((event, payload) => publish(event, payload)),
     workspace: {
       publish: (_windowId, revision, window) => {
         const held = windows.at(-1)?.revision ?? -1
@@ -1180,11 +1190,7 @@ export function fakeGateway(
       if (next.status !== "connected") endAll(undefined, { reason: "disconnected" })
       for (const observer of [...observers]) observer(next)
     },
-    publishEvent(event: string, payload: unknown) {
-      const handlers = eventListeners.get(event)
-      if (!handlers) return
-      for (const handler of [...handlers]) handler(payload)
-    },
+    publishEvent: publish,
     closed: () => closed,
     count: (method: Method) => calls.filter((call) => call.method === method).length,
   })
@@ -1220,6 +1226,127 @@ function fakeReplyStyle(): import("@nessa/client").ReplyStyleApi {
       else next[role] = choice
       levels.set(level, next)
       return read(channelId)
+    },
+  }
+}
+
+/**
+ * Terminals as the gateway keeps them, with a pretend shell: an attached view
+ * is sent a prompt, what is typed is echoed, and Enter answers a line. It
+ * speaks the runtime's protocol, so a view draws it as it draws a real one.
+ */
+function fakeTerminals(publish: (event: string, payload: unknown) => void): TerminalApi {
+  const terminals: TerminalSummary[] = []
+  const screens = new Map<
+    string,
+    { lines: string[]; typed: string; views: Map<string, number> }
+  >()
+  let next = 0
+  const listed = () => publish("terminal.listed", { terminals: [...terminals] })
+  const paint = (terminalId: string, viewId: string, cols: number, rows: number) => {
+    const screen = screens.get(terminalId)
+    if (!screen) return
+    const all = [...screen.lines, `$ ${screen.typed}`].slice(-rows)
+    const send = (message: unknown) =>
+      publish("terminal.output", {
+        terminalId,
+        viewId,
+        message: JSON.stringify({ v: 1, ...(message as object) }),
+      })
+    send({ type: "ready", cols, rows })
+    send({
+      type: "frame",
+      seq: 1,
+      cursor: { col: `$ ${screen.typed}`.length, row: all.length - 1, visible: true },
+      rows: Array.from({ length: rows }, (_, y) => ({
+        y,
+        cells: [...(all[y] ?? "")].map((char) => [char, 1, 0]),
+      })),
+      total: all.length,
+    })
+  }
+  const repaint = (terminalId: string) => {
+    for (const [viewId, size] of screens.get(terminalId)?.views ?? [])
+      paint(terminalId, viewId, size >> 16, size & 0xffff)
+  }
+  return {
+    open: (params) => {
+      const known = terminals.find((terminal) => terminal.requestId === params.requestId)
+      if (known) return Promise.resolve(known)
+      next += 1
+      const terminal: TerminalSummary = {
+        terminalId: `t_${next.toString(16).padStart(32, "0")}`,
+        title: params.command ? (params.command.split("\n")[0] ?? "").trim() : "zsh",
+        kind: params.command ? "run" : "shell",
+        ...(params.channelId ? { channelId: params.channelId } : {}),
+        ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+        requestId: params.requestId,
+        folder: "/Users/you/project",
+        shell: "/bin/zsh",
+        runsOn: "here",
+        startedAtMs: Date.now(),
+        state: "running",
+      }
+      terminals.push(terminal)
+      screens.set(terminal.terminalId, {
+        lines: params.command ? [`$ ${params.command}`] : ["Last login on ttys001"],
+        typed: "",
+        views: new Map(),
+      })
+      listed()
+      return Promise.resolve(terminal)
+    },
+    list: () => Promise.resolve([...terminals]),
+    attach: ({ terminalId, viewId, cols, rows }) => {
+      const screen = screens.get(terminalId)
+      if (!screen)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      screen.views.set(viewId, (cols << 16) | rows)
+      paint(terminalId, viewId, cols, rows)
+      return Promise.resolve()
+    },
+    focus: () => Promise.resolve(),
+    fit: ({ terminalId, viewId, cols, rows }) => {
+      screens.get(terminalId)?.views.set(viewId, (cols << 16) | rows)
+      paint(terminalId, viewId, cols, rows)
+      return Promise.resolve()
+    },
+    detach: (terminalId, viewId) => {
+      screens.get(terminalId)?.views.delete(viewId)
+      return Promise.resolve()
+    },
+    input: (terminalId, bytes) => {
+      const screen = screens.get(terminalId)
+      if (!screen)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      for (const char of new TextDecoder().decode(bytes)) {
+        if (char === "\r") {
+          screen.lines.push(`$ ${screen.typed}`, `ran: ${screen.typed}`)
+          screen.typed = ""
+        } else if (char === "\x7f") screen.typed = screen.typed.slice(0, -1)
+        else if (char >= " ") screen.typed += char
+      }
+      repaint(terminalId)
+      return Promise.resolve()
+    },
+    history: () => Promise.resolve(),
+    close: (terminalId) => {
+      const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
+      if (at < 0)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      terminals.splice(at, 1)
+      screens.delete(terminalId)
+      listed()
+      return Promise.resolve()
+    },
+    rename: (terminalId, title) => {
+      const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
+      const found = terminals[at]
+      if (!found)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      terminals[at] = { ...found, title }
+      listed()
+      return Promise.resolve()
     },
   }
 }

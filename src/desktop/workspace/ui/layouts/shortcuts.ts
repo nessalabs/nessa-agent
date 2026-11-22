@@ -25,6 +25,8 @@ export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "KeyB", command: true, alt: true }, "togglePanel"),
   bind({ code: "KeyN", command: true }, "newSession"),
   bind({ code: "KeyN", command: true, shift: true }, "newSessionBeside"),
+  // A shell in the channel in front, opened as a session opens.
+  bind({ code: "KeyJ", command: true }, "newTerminal"),
   // Splits the chat in front: a new session beside it.
   bind({ code: "KeyD", command: true }, "splitRight"),
   bind({ code: "KeyW", command: true }, "closePane"),
@@ -55,6 +57,7 @@ export const shortcutNames: Readonly<Record<ShortcutCommand, string>> = {
   togglePanel: "Show or hide the panel",
   newSession: "New session",
   newSessionBeside: "New session beside",
+  newTerminal: "New terminal",
   splitRight: "Split right",
   splitDown: "Split down",
   closePane: "Close pane",

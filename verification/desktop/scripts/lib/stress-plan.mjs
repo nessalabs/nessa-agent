@@ -217,6 +217,14 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
+  terminals: {
+    default: 1,
+    what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
+  },
+  runs: {
+    default: 1,
+    what: "replies with shell fences the person runs: Run shows the output inline and ends with its exit and time, the stop icon interrupts a console fence's command, Run again starts anew and the terminal icon opens the run in a pane",
+  },
   menus: {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
@@ -292,6 +300,10 @@ export const KNOBS = {
   asks: {
     default: 1,
     what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
+  },
+  raises: {
+    default: 1,
+    what: "times the shield raises the main chat from Ask to Full while its turn waits on a review: the agent takes Full mid-turn, the open review is allowed by the raise, and the turn asks nothing more",
   },
   accessRequests: {
     default: 1,
@@ -403,6 +415,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
+  add(knobs.terminals, () => ({ kind: "terminal" }))
+  add(knobs.runs, () => ({ kind: "run" }))
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
@@ -436,6 +450,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.coordinators, () => ({ kind: "coordinator" }))
   add(knobs.asks, () => ({ kind: "ask" }))
   add(knobs.accessRequests, () => ({ kind: "accessRequest" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.raises, () => ({ kind: "raise" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   // Preset checks keep their original model. Positive model changes (a
@@ -478,6 +494,16 @@ export function plan(knobs, accessScenario = "full") {
         mode = "ask"
       }
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
+    } else if (step.kind === "raise") {
+      // Where the model offers no Full there is nothing to raise to.
+      if (accessScenario === "ask-only") continue
+      // Raised from Ask, where the agent asks; Full afterwards.
+      if (mode !== "ask") {
+        out.push({ kind: "switch", from: mode, to: "ask", during: false })
+        mode = "ask"
+      }
+      out.push({ ...step, from: "ask", to: "full", mode: "ask" })
+      mode = "full"
     } else if (step.kind === "restart") {
       out.push({ kind: "restart", signal: next() < 0.5 ? "SIGKILL" : "SIGTERM" })
     } else {
@@ -502,7 +528,7 @@ export function describe(steps) {
   return steps
     .map((step) => {
       const extra =
-        step.kind === "switch" || step.kind === "refused-access"
+        step.kind === "switch" || step.kind === "refused-access" || step.kind === "raise"
           ? ` ${step.from}→${step.to}${step.during ? " during a turn" : ""}`
           : step.kind === "restart"
             ? ` ${step.signal}`

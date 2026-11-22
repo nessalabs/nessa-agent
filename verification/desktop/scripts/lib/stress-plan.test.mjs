@@ -93,7 +93,7 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
-          ["permission", "reviews", "large", "waitingRow", "model"].includes(
+          ["permission", "reviews", "large", "waitingRow", "model", "raise"].includes(
             steps[index + 1]?.kind,
           ),
         )
@@ -159,7 +159,7 @@ test("positive model steps retain default and raised counts, run last but for ha
       )
       let mode = "ask"
       for (const step of steps) {
-        if (step.kind === "switch") {
+        if (step.kind === "switch" || step.kind === "raise") {
           assert.equal(step.from, mode)
           mode = step.to
         }
@@ -207,8 +207,11 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         launches: "0",
         menuPanels: "0",
         menus: "0",
+        terminals: "0",
+        runs: "0",
         composers: "0",
         pickers: "0",
+        raises: "0",
         githubs: "0",
         voices: "0",
         logins: "0",
@@ -347,4 +350,19 @@ test("selected Ask-only qualification filters that profile's plan without admitt
     () => selectedPlan(knobsFrom({}, {}), "parent-stop", "unknown"),
     /scenario/,
   )
+})
+
+test("a raise runs from Ask to Full, a switch to Ask first where Full or Auto is in force", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    const steps = plan(knobsFrom({ seed: String(seed), raises: "2" }, {}))
+    assert.equal(steps.filter((step) => step.kind === "raise").length, 2)
+    let mode = "ask"
+    for (const step of steps) {
+      if (step.kind === "raise") assert.equal(mode, "ask")
+      if (step.kind === "switch" || step.kind === "raise") {
+        assert.equal(step.from, mode)
+        mode = step.to
+      }
+    }
+  }
 })

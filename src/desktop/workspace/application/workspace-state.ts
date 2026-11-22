@@ -26,6 +26,7 @@ import {
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
 import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
+import type { TerminalEntry } from "../model/terminal"
 import { sameWidget, type WidgetRef } from "../../widgets/model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
@@ -128,6 +129,8 @@ export interface WorkspaceState {
   readonly channels: readonly Channel[]
   readonly sessions: Readonly<Record<string, SessionSummary>>
   readonly drafts: Readonly<Record<string, Draft>>
+  /** The person's terminals, by id, as the gateway last listed them (`model/terminal.ts`). */
+  readonly terminals: Readonly<Record<string, TerminalEntry>>
   /**
    * The conversations as the source last gave them, by session: every one a
    * pane shows, and a few others (`model/retention.ts`).
@@ -453,6 +456,7 @@ export const initialWorkspace: WorkspaceState = {
   channels: [],
   sessions: {},
   drafts: {},
+  terminals: {},
   transcripts: {},
   heldSession: null,
   conversationRevisions: {},
@@ -771,9 +775,13 @@ export function toggled(
   return include ? [...ids, id] : ids.filter((other) => other !== id)
 }
 
-/** The channel of the session in the focused pane, draft or not; none when it shows a widget. */
+/** The channel of the chat or terminal in the focused pane, draft or not; none when it shows a widget. */
 export function focusedChannel(state: WorkspaceState): string | undefined {
   if (!state.panes) return undefined
+  // A terminal belongs to a channel as a chat does: what starts from its pane
+  // starts there.
+  const item = itemIn(focusedPane(state.panes))
+  if (item?.kind === "terminal") return state.terminals[item.terminalId]?.channelId
   const sessionId = sessionIn(focusedPane(state.panes))
   if (sessionId === undefined) return undefined
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId

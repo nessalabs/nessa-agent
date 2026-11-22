@@ -134,6 +134,8 @@ import {
   type DecisionSource,
   type DecisionsClient,
   channelGateway,
+  terminalGateway,
+  type TerminalClient,
   inMemoryChannels,
   windowPublisher,
   windowCommandInbox,
@@ -364,6 +366,13 @@ export function createDesktopDependencies(
         ? inMemoryChannels({ add: (channel) => samples.addChannel(channel) })
         : options.channels,
     paths: options.paths,
+    // Terminals are the gateway's own; the sample has none.
+    terminals: source
+      ? terminalGateway({
+          connected: () => source.connected(),
+          newId,
+        })
+      : undefined,
     // What the window shows, for the person's agents, and the changes they
     // ask of it: only a gateway has any.
     windowPublisher: publisher,
@@ -414,7 +423,8 @@ type WindowGatewayClient = GatewayClient &
   SharingClient &
   DecisionsClient &
   WindowPublishClient &
-  WindowCommandClient & {
+  WindowCommandClient &
+  TerminalClient & {
     readonly agents: AgentsApi
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi

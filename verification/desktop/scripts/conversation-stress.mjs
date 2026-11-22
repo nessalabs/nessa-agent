@@ -53,7 +53,11 @@ import {
  *               sign-in for where the run was (Authenticate for a Boat VM,
  *               this computer's otherwise), and the next message retires it
  *   switch      the access shield picks another mode, sometimes mid-turn,
- *               where the change waits for the turn to end
+ *               where the gateway takes it at once
+ *   raise       the shield raises the main chat from Ask to Full while its
+ *               turn waits on the first of three reviews: the gateway runs it
+ *               at Full while the turn still runs, the open review is allowed
+ *               by the raise with no click, and the turn asks nothing more
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
  *               and started again; the turn is resumed and the window follows
  *   delegate    the agent creates a thread and messages it; the thread's
@@ -450,6 +454,8 @@ import {
   STRESS,
   TABLE_HOLD_MS,
   TABLE_LINES,
+  RUN_PRINTS,
+  RUN_COMMAND,
   CODE_LINES,
   MATH_LINES,
   TRACE_CALLS,
@@ -457,6 +463,7 @@ import {
   WATCH_CALLS,
   ASK,
   ACCESS,
+  RAISE_REVIEWS,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -550,6 +557,7 @@ import {
   requireStressCapabilities,
   elevatedAccessAfter,
 } from "./lib/stress-profile.mjs"
+import { raisedTurn } from "./lib/raise-evidence.mjs"
 
 const INSTANCE = "conversation-stress"
 /** The conversation metadata version this build writes (`schema.sql`'s last line). */
@@ -2021,6 +2029,220 @@ function carried(view, seen, text) {
  * behind a failure is followed to the turn that carries it on. `seen` are the
  * turns from before the send, left out of what a failure lists.
  */
+/**
+ * Whether the gateway was built with terminals; a failure naming how to
+ * build it when not (`scripts/terminal/ghostty.sh`).
+ */
+/**
+ * ⌘\ offers terminals: the open one by its name, under the terminal glyph,
+ * chats under their agent's tile, and a new terminal, which opens beside.
+ * The new one is ended from its own pane, leaving `opened`'s in front.
+ */
+async function opensBeside(run, opened, name, listed, failures) {
+  const page = run.page
+  await page
+    .locator(`.workspace-terminal-pane${css.focusedPane} .workspace-pane-title`)
+    .click()
+  const panes = await page.locator(css.pane).count()
+  await page.keyboard.press(keys.openBeside)
+  const dialog = page.getByRole("dialog", { name: "Open beside" })
+  if (
+    !(await dialog.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("⌘\\ beside a terminal opened no Open beside picker")
+    return
+  }
+  const terminalRow = dialog.getByRole("option", { name: new RegExp(`^${name}`) })
+  if (!(await terminalRow.count()))
+    failures.push(`the Open beside picker does not offer the terminal "${name}"`)
+  else if (!(await terminalRow.locator("svg").count()))
+    failures.push("the Open beside picker's terminal row has no icon")
+  if (!(await dialog.locator('[role="option"] .workspace-agent-tile').count()))
+    failures.push("the Open beside picker shows no agent tile on its chats")
+  const fresh = dialog.getByRole("option", { name: /^New terminal in #/ })
+  if (!(await fresh.count())) {
+    failures.push("the Open beside picker offers no New terminal")
+    await page.keyboard.press(keys.escape)
+    return
+  }
+  await fresh.click()
+  const made = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  if (!made) {
+    failures.push("New terminal in the Open beside picker opened no terminal")
+    return
+  }
+  if (
+    !(await waitFor(
+      async () => (await page.locator(css.pane).count()) === panes + 1,
+      5_000,
+    ))
+  )
+    failures.push("New terminal in the Open beside picker did not open a pane beside")
+  const beside = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+  if ((await beside.locator(".workspace-pane-title").innerText()) === name)
+    failures.push("the new terminal did not take the focus beside")
+  await beside.getByRole("button", { name: "End Terminal" }).click()
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === panes, 5_000))
+  )
+    failures.push("ending the terminal opened beside left its pane")
+}
+
+/**
+ * A watched Run that ended stays open, its box no taller than what it
+ * printed; the bar's chevron folds the output away and brings it back.
+ */
+async function foldsItsOutput(block, failures, shot) {
+  const output = block.locator("[data-run-output]")
+  const fold = block.locator("[data-run-fold]")
+  if (!(await output.count())) {
+    failures.push("a Run that ended while watched folded its output away")
+    return
+  }
+  const fitted = await waitFor(async () => {
+    const [box, grid] = await Promise.all([
+      output.boundingBox(),
+      output.locator('[data-slot="terminal-grid"]').boundingBox(),
+    ])
+    return box && grid && box.height < grid.height
+  }, 5_000)
+  if (!fitted) failures.push("an ended Run's box keeps the blank rows under its output")
+  await shot?.("open")
+  await fold.click()
+  if (
+    !(await waitFor(async () => (await output.count()) === 0, 3_000)) ||
+    (await fold.getAttribute("aria-expanded")) !== "false"
+  )
+    failures.push("the Run bar's chevron did not fold the output away")
+  await shot?.("folded")
+  await fold.click()
+  if (!(await waitFor(async () => (await output.count()) === 1, 3_000)))
+    failures.push("the Run bar's chevron did not bring the output back")
+}
+
+async function terminalsBuilt(run, failures) {
+  try {
+    await run.client.terminals.list()
+    return true
+  } catch (error) {
+    failures.push(
+      `the gateway has no terminals (${error.code ?? error.message}; it logged ${JSON.stringify(terminalLog(run))}): build it with eval "$(scripts/terminal/ghostty.sh)" && cargo build -p nessa-server --features nessa-server/terminals`,
+    )
+    return false
+  }
+}
+
+/** What the gateway logged about terminals, last few lines: why one is unavailable. */
+function terminalLog(run) {
+  return run.stack.gateway
+    .log()
+    .split("\n")
+    .filter((line) => /terminal|pty/i.test(line))
+    .slice(-4)
+}
+
+/**
+ * Whether the terminal in `grid` reflows to its pane: with the window made
+ * narrower, the grid draws at full size (no scale) and holds fewer columns,
+ * which only a resize of the terminal itself gives. A pane that never took
+ * the terminal's size scales it down instead.
+ */
+async function reflowsToItsPane(page, grid, failures) {
+  const look = () =>
+    grid.evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      scaled: getComputedStyle(element).transform !== "none",
+    }))
+  const settled = await waitFor(
+    async () => (await look()).width > 0 && !(await look()).scaled,
+    5_000,
+  )
+  if (!settled) {
+    failures.push("the terminal opened scaled down: its pane never took its size")
+    return
+  }
+  const before = await look()
+  const size = page.viewportSize()
+  if (!size) return
+  await page.setViewportSize({ width: size.width - 320, height: size.height })
+  try {
+    const reflowed = await waitFor(async () => {
+      const now = await look()
+      return !now.scaled && now.width < before.width - 100 ? now : null
+    }, 5_000)
+    if (!reflowed)
+      failures.push(
+        `a narrower window did not reflow the terminal (${JSON.stringify({ before, after: await look() })})`,
+      )
+  } finally {
+    await page.setViewportSize(size)
+  }
+}
+
+/**
+ * Opens a second shell with ⌘J (it takes the focused pane), then clicks the
+ * first terminal's row: the pane shows the first terminal again, `word` and
+ * all, with no click inside it. The second shell is ended through the
+ * gateway after. Whether the pane came back.
+ */
+async function switchesBack(run, grid, row, listed, opened, word) {
+  const page = run.page
+  await page.keyboard.press(keys.newTerminal)
+  const second = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  const away = await waitFor(
+    async () => !(await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  await row.click()
+  const back = await waitFor(
+    async () => (await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  if (second) await run.client.terminals.close(second.terminalId).catch(() => {})
+  return Boolean(second && away && back)
+}
+
+/** A terminal grid's rows as text, top to bottom. */
+async function gridRows(grid) {
+  return grid
+    .locator('[data-slot="terminal-row"]')
+    .evaluateAll((rows) => rows.map((row) => row.textContent ?? ""))
+    .catch(() => [])
+}
+
+/** Shows the main conversation in the focused pane again, after a step put a terminal there. */
+async function showMainAgain(run, failures) {
+  const row = run.page.locator(selectorFor.sessionListRowFor(run.main.id))
+  await row.click({ timeout: 10_000 }).catch(() => {})
+  const shown = await dock(run.page)
+    .locator("textarea")
+    .waitFor({ timeout: 10_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  if (!shown) failures.push("the main conversation did not show again after the terminal")
+}
+
 async function settled(run, conversationId, seen, text, status, failures, seconds = 60) {
   const end = Date.now() + seconds * 1000
   let view
@@ -5181,9 +5403,10 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      // A change the running turn holds back says nothing: the shield shows
-      // the choice at once and the composer adds no line about it (Saurav
-      // asked for the "Access changes when the agent stops." line to go).
+      // A change made mid-turn says nothing: the shield shows the choice at
+      // once, the gateway takes it while the turn runs (the `raise` step
+      // checks the turn's next call is decided at it), and the composer adds
+      // no line about it.
       const chosen = await waitFor(
         async () =>
           (await dock(run.page)
@@ -5204,7 +5427,7 @@ const steps = {
       }
       if (said)
         failures.push(
-          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
+          `the composer spoke of the mid-turn access change: ${JSON.stringify(said)}`,
         )
       if (run.evidence && !run.accessHintShot) {
         run.accessHintShot = true
@@ -5227,6 +5450,86 @@ const steps = {
       failures.push(
         `the shield shows ${shield}, not ${composerControls.accessValue[step.to]}`,
       )
+    run.mode = step.to
+  },
+
+  async raise(run, step, failures) {
+    if (!(await accessIs(run, run.main.id, step.from)))
+      failures.push(`the raise does not start at ${step.from}`)
+    const recordingBefore = readFileSync(run.stack.acpRecording, "utf8")
+    const text = prompt(run, STRESS.raise, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const first = `Raise 1 of ${RAISE_REVIEWS}`
+    const asked = await untilTurn(
+      run,
+      run.main.id,
+      { text },
+      (_turn, current) => current.permissions.some((each) => each.title === first),
+      30,
+    )
+    if (!asked.view?.permissions?.some((each) => each.title === first)) {
+      failures.push("the raise turn did not ask its first review")
+      return
+    }
+    if (!(await card(run.page)))
+      failures.push("no card for the review open when access was raised")
+    // Raised while the turn waits on that card, as a person does who meant
+    // to give it full access and is asked anyway.
+    await pickAccess(run.page, step.to)
+    if (!(await accessIs(run, run.main.id, step.to)))
+      failures.push(`the gateway did not run the chat at ${step.to} after the raise`)
+    // The review open at the raise is allowed by it; none after it is asked,
+    // so the turn ends with nobody clicking anything.
+    const { turn, view } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    const said = (turn?.parts ?? []).map((part) => part.text ?? "").join("")
+    for (let n = 1; n <= RAISE_REVIEWS; n += 1)
+      if (!said.includes(`Raised ${n}.`))
+        failures.push(
+          `review ${n} of the raise turn was not allowed: ${JSON.stringify(said.slice(-120))}`,
+        )
+    if (!said.includes(SAYS.raised)) failures.push("the raise turn did not finish")
+    // On the agent's wire: the mode change went while the turn waited on its
+    // first review, that review was answered after it, and nothing more was
+    // asked (the turn runs fast once allowed, so a read of the view cannot
+    // tell this apart from a change held until the turn ended).
+    const wire = raisedTurn(
+      recordingBefore,
+      readFileSync(run.stack.acpRecording, "utf8"),
+      text,
+    )
+    if (!wire) failures.push("the raise turn's prompt is not in the agent's recording")
+    else {
+      if (!wire.modeChanged)
+        failures.push(
+          "the raise reached the agent only after its turn, not while it waited",
+        )
+      if (!wire.answeredAfterChange)
+        failures.push(
+          "the review open at the raise was answered before the agent took it",
+        )
+      if (wire.asked !== 1)
+        failures.push(
+          `the raised turn asked ${wire.asked} reviews, not only the one open at the raise`,
+        )
+    }
+    if (view?.permissions?.length)
+      failures.push(`${view.permissions.length} reviews still open after the raise`)
+    if (await card(run.page, 1_000))
+      failures.push("an approval card is still shown after the raise")
+    await expectShown(run.page, SAYS.raised, failures)
+    const shield = await dock(run.page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")
+      .catch(() => null)
+    if (shield !== composerControls.accessValue[step.to])
+      failures.push(`the shield shows ${shield} after the raise, not ${step.to}`)
     run.mode = step.to
   },
 
@@ -11966,6 +12269,278 @@ const steps = {
       await bubble.screenshot({
         path: join(run.evidence, `attach-${run.engine}-${step.index}-sent.png`),
       })
+  },
+  async terminal(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const word = `stress-terminal-r${step.index}-s${run.knobs.seed}`
+      const listed = await run.client.terminals.list()
+      // The main chat in front, so ⌘J opens in its (default) channel and not
+      // in one an earlier step left in front.
+      await showMainAgain(run, failures)
+      const warned = []
+      const onConsole = (message) => {
+        if (/terminal/i.test(message.text())) warned.push(message.text())
+      }
+      page.on("console", onConsole)
+      // ⌘J opens a shell in the channel in front, in the focused pane.
+      await page.keyboard.press(keys.newTerminal)
+      const pane = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+      const grid = pane.locator('[data-slot="terminal-grid"]')
+      const shown = await grid.waitFor({ timeout: 15_000 }).then(
+        () => true,
+        () => false,
+      )
+      page.off("console", onConsole)
+      if (!shown) {
+        failures.push(
+          `⌘J showed no terminal in the focused pane${warned.length ? `: ${warned.join(" | ")}` : ""}; the gateway said ${JSON.stringify(terminalLog(run))}`,
+        )
+        return
+      }
+      const opened = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find(
+          (each) =>
+            each.kind === "shell" &&
+            !listed.some((old) => old.terminalId === each.terminalId),
+        )
+      }, 10_000)
+      if (!opened) {
+        failures.push("the gateway does not list the terminal ⌘J opened")
+        return
+      }
+      // The pane sizes the terminal before anyone clicks it: a narrower
+      // window reflows the shell to the pane, never shrinks its text.
+      await reflowsToItsPane(page, grid, failures)
+      // A real shell: what is typed runs, and its output is a row of its own.
+      await grid.click()
+      await page.keyboard.type(`echo ${word}`)
+      await page.keyboard.press(keys.enter)
+      const ran = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === word),
+        15_000,
+      )
+      if (!ran)
+        failures.push(
+          `the terminal never printed ${word}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()).slice(-4))}`,
+        )
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `terminal-${run.engine}-${step.index}.png`),
+        })
+      // Listed in the channel's session list, with no path on the row.
+      const row = page.locator(`[data-terminal-row="${opened.terminalId}"]`)
+      if (
+        !(await row.waitFor({ timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list has no row for the terminal")
+      else if ((await row.innerText()).includes(opened.folder))
+        failures.push("the terminal's session row shows its folder")
+      // Switching: a second ⌘J shell takes the pane; the first one's row
+      // brings it back, its own output showing without a click in the pane.
+      if (!(await switchesBack(run, grid, row, listed, opened, word)))
+        failures.push(
+          `the first terminal's row did not show its own output in the pane: ${JSON.stringify((await gridRows(grid)).filter((each) => each.trim()).slice(-3))}`,
+        )
+      // The details popover names its folder and shell.
+      await pane.getByRole("button", { name: "Terminal Details" }).click()
+      const details = page.locator(".workspace-terminal-details")
+      const said = await details.waitFor({ timeout: 5_000 }).then(
+        () => details.innerText(),
+        () => "",
+      )
+      for (const part of ["Runs on", opened.folder, opened.shell])
+        if (!said.includes(part))
+          failures.push(`the terminal's details do not say ${part}`)
+      await page.keyboard.press(keys.escape)
+      // Renamed from its row: the gateway keeps the name and the row and the
+      // pane's title show it.
+      const name = `stress shell ${step.index}`
+      await row.hover()
+      // The row's buttons are hover chrome, hidden from the accessibility tree.
+      await row.locator(`button[aria-label="Rename ${opened.title}"]`).click()
+      const field = row.getByRole("textbox", { name: "Terminal name" })
+      await field.fill(name)
+      await field.press(keys.enter)
+      const renamed = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find((each) => each.terminalId === opened.terminalId)?.title === name
+      }, 5_000)
+      if (!renamed) failures.push("the gateway did not keep the terminal's new name")
+      else if (
+        !(await waitFor(
+          async () =>
+            (await row.innerText()).includes(name) &&
+            (await pane.locator(".workspace-pane-title").innerText()) === name,
+          5_000,
+        ))
+      )
+        failures.push("the terminal's row or pane does not show its new name")
+      await opensBeside(run, opened, name, listed, failures)
+      // The pane's × ends it: the gateway lists it no more, nor does the window.
+      await pane.getByRole("button", { name: "End Terminal" }).click()
+      const ended = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return !now.some((each) => each.terminalId === opened.terminalId)
+      }, 10_000)
+      if (!ended)
+        failures.push("the terminal is still listed after its pane's × ended it")
+      if (
+        !(await row.waitFor({ state: "detached", timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list still shows the ended terminal")
+      await showMainAgain(run, failures)
+    })
+  },
+  async run(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    const asked = prompt(run, STRESS.runBlock, step)
+    const seen = await send(run, run.main.id, asked, failures)
+    const { turn } = await settled(run, run.main.id, seen, asked, "completed", failures)
+    if (!turn) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.runBlock}${asked}` })
+      const blocks = message.locator("[data-run-block]")
+      if (!(await waitFor(async () => (await blocks.count()) === 2, 15_000))) {
+        failures.push(`the reply drew ${await blocks.count()} Run blocks, not 2`)
+        return
+      }
+      const [prints, waits] = [blocks.nth(0), blocks.nth(1)]
+      // Run: the output shows under the block, then its exit and time.
+      await prints.locator("[data-run-button]").click()
+      const finished = await waitFor(
+        async () => (await prints.getAttribute("data-run-state")) === "exited",
+        20_000,
+      )
+      if (!finished) {
+        failures.push("the first Run never ended")
+        return
+      }
+      const grid = prints.locator('[data-slot="terminal-grid"]')
+      const printed = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === RUN_PRINTS),
+        10_000,
+      )
+      if (!printed)
+        failures.push(
+          `Run's output does not show ${RUN_PRINTS}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()))}`,
+        )
+      // Scrolling the chat over the output scrolls the chat, not its history.
+      await grid.hover()
+      await run.page.mouse.wheel(0, -400)
+      await run.page.waitForTimeout(300)
+      if (await prints.locator('[data-slot="terminal-scrolled"]').count())
+        failures.push("scrolling the chat over Run's output scrolled the output back")
+      // As typed in a terminal: the prompt, then the command, above its output.
+      // A long prompt wraps the command onto the next row, so the rows above
+      // the output are read as one run of text.
+      const rows = await gridRows(grid)
+      const printedAt = rows.findIndex((row) => row.trim() === RUN_PRINTS)
+      const above = rows.slice(0, Math.max(printedAt, 0)).join("").trimEnd()
+      const prompted =
+        above.endsWith(RUN_COMMAND) &&
+        above.slice(0, -RUN_COMMAND.length).trim().length > 0
+      if (printedAt < 0 || !prompted)
+        failures.push(
+          `Run's output does not show the command after a prompt above what it printed: ${JSON.stringify(rows.filter((row) => row.trim()))}`,
+        )
+      const status = prints.locator("[data-run-exit]")
+      const words = (await status.count()) ? await status.innerText() : ""
+      if (!/^exit 0 · \d/.test(words))
+        failures.push(`the finished Run says ${JSON.stringify(words)}`)
+      const runs = (await run.client.terminals.list()).filter(
+        (each) => each.kind === "run" && each.conversationId === run.main.id,
+      )
+      if (!runs.some((each) => each.state === "exited" && each.exitStatus === 0))
+        failures.push("the gateway does not list the finished run as exited 0")
+      if (!(await prints.locator("[data-run-button]").innerText()).includes("Run again"))
+        failures.push("a finished Run does not offer Run again")
+      // The box stops at the last printed row, and the bar folds it away.
+      await foldsItsOutput(
+        prints,
+        failures,
+        run.evidence
+          ? (state) =>
+              message.screenshot({
+                path: join(run.evidence, `run-${run.engine}-${step.index}-${state}.png`),
+              })
+          : undefined,
+      )
+      if (run.evidence)
+        await message.screenshot({
+          path: join(run.evidence, `run-${run.engine}-${step.index}.png`),
+        })
+      // The console fence runs its $ line only, and the stop icon interrupts it.
+      await waits.locator("[data-run-button]").click()
+      const running = await waitFor(
+        async () => (await waits.getAttribute("data-run-state")) === "running",
+        15_000,
+      )
+      if (!running) failures.push("the console fence's Run never started")
+      else {
+        await waits.getByRole("button", { name: "Stop" }).click()
+        const stopped = await waitFor(
+          async () => (await waits.getAttribute("data-run-state")) === "exited",
+          10_000,
+        )
+        const exit = stopped
+          ? await waits.locator("[data-run-exit]").getAttribute("data-run-exit")
+          : ""
+        if (!stopped) failures.push("Stop did not end the console fence's run")
+        else if (exit === "0") failures.push("a stopped run says it exited 0")
+      }
+      // Run again starts a new run under the same block; the terminal icon opens it in a pane.
+      await prints.locator("[data-run-button]").click()
+      const again = await waitFor(async () => {
+        const now = (await run.client.terminals.list()).filter(
+          (each) => each.kind === "run" && each.conversationId === run.main.id,
+        )
+        return now.length === runs.length + 2
+      }, 15_000)
+      if (!again) failures.push("Run again did not start a new run")
+      // Beside the chat: the chat stays in its own pane.
+      const panesBefore = await page.locator(css.pane).count()
+      await prints.getByRole("button", { name: "Open Beside" }).click()
+      const pane = page.locator(".workspace-terminal-pane")
+      if (
+        !(await pane
+          .first()
+          .waitFor({ timeout: 5_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push("the Run's terminal icon opened no pane")
+      else {
+        if ((await page.locator(css.pane).count()) !== panesBefore + 1)
+          failures.push("the Run's terminal icon took the chat's pane, not one beside it")
+        if (await prints.locator("[data-run-output]").count())
+          failures.push("the Run still draws its output inline while a pane shows it")
+        if (run.evidence)
+          await page.screenshot({
+            path: join(run.evidence, `run-${run.engine}-${step.index}-beside.png`),
+          })
+        const close = pane.first().getByRole("button", { name: /^(Close|End Terminal)$/ })
+        await close.click()
+      }
+      // Leave no runs behind.
+      for (const each of await run.client.terminals.list())
+        if (each.kind === "run" && each.conversationId === run.main.id)
+          await run.client.terminals.close(each.terminalId).catch(() => {})
+      await showMainAgain(run, failures)
+    })
   },
   async table(run, step, failures) {
     // The answer repeats the question, so it names this chat by its id: the

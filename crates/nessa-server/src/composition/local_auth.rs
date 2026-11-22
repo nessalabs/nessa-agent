@@ -656,6 +656,21 @@ pub(super) async fn product_state(
         product = product.with_voice(voice);
     }
     product = product.with_logins(saved_logins);
+    // Terminals (docs/design/terminals.md): the engine bootstrap prepared
+    // before the async runtime, when this build and process have one. With
+    // none, every `terminal.*` answers terminal_unavailable, list included,
+    // so no window offers a terminal it cannot open.
+    if let Some(engine) = crate::terminal::prepared_engine() {
+        product = product.with_terminals(
+            crate::terminal::TerminalHub::new(
+                Some(engine),
+                Arc::new(crate::terminal::SystemTerminalClock),
+            ),
+            Arc::new(crate::terminal::SystemTerminalHost),
+        );
+    } else if let Some(reason) = crate::terminal::unprepared_reason() {
+        tracing::warn!(reason, "terminals unavailable: pty runtime not built");
+    }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it

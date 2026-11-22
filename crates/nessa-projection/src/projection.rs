@@ -2097,10 +2097,22 @@ pub fn agent_review(review: &PendingReview) -> Option<ConversationPermission> {
         deadline: content
             .deadline()
             .and_then(|deadline| permission_deadline(deadline, true)),
+        // A choice the harness keeps past this request follows the
+        // once-only ones, so a surface's first allow (its Allow once, and
+        // the desktop's ↩) never remembers anything, whatever order the
+        // harness listed them in. Otherwise the harness's order.
         options: review
             .options
             .choices()
             .iter()
+            .filter(|option| !option.kept_by_harness())
+            .chain(
+                review
+                    .options
+                    .choices()
+                    .iter()
+                    .filter(|option| option.kept_by_harness()),
+            )
             .map(|option| ConversationPermissionOption {
                 id: option.id().as_str().into(),
                 label: option.label().into(),

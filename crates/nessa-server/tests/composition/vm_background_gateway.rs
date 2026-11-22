@@ -60,9 +60,21 @@ fn folder(thread: &str) -> PathBuf {
     FIXTURE.get().unwrap().root.join(thread)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[test]
 #[ignore = "long-lived gateway owned by the desktop VM stress driver"]
-async fn serve() {
+fn serve() {
+    // As bootstrap does: terminals are prepared before any async runtime
+    // starts, since pty-runtime forks to stage its helper image.
+    crate::terminal::prepare();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(serve_gateway());
+}
+
+async fn serve_gateway() {
     let idle = std::env::var("NESSA_VM_STRESS_IDLE_SECONDS")
         .unwrap()
         .parse::<u64>()

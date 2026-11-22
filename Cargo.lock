@@ -3973,6 +3973,8 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "pty-runtime",
+ "pty-runtime-infrastructure",
  "rcgen",
  "regex",
  "reqwest 0.13.4",

@@ -229,10 +229,8 @@ export function workspaceEffects(
     },
   })
 
-  // A choice of access made while the agent was at work is asked of the
-  // source once its conversation has no turn at work: the gateway changes
-  // access only between turns. `askSource` marks it on its way first, so it
-  // is asked once.
+  // A pending choice of access is asked of the source when `pendingAccess`
+  // says it is due. `askSource` marks it on its way first, so it is asked once.
   listener.startListening({
     predicate: (_action: UnknownAction, current, previous) =>
       (current.workspace.accessChoices !== previous.workspace.accessChoices ||

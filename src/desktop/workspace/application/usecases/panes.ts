@@ -39,9 +39,11 @@ import {
   paneItemKey,
   roomProbeKey,
   sessionItem,
+  terminalItem,
   type PaneItem,
   type PaneItemKey,
 } from "../../model/pane-item"
+import type { TerminalEntry } from "../../model/terminal"
 import {
   channelOf,
   draftOf,
@@ -64,6 +66,7 @@ import {
  */
 function showable(state: WorkspaceState, item: PaneItem): boolean {
   if (item.kind === "widget") return false
+  if (item.kind === "terminal") return Object.hasOwn(state.terminals, item.terminalId)
   return (
     sessionOf(state, item.sessionId) !== undefined ||
     draftOf(state, item.sessionId) !== undefined
@@ -141,6 +144,56 @@ export function openSession(
   { sessionId, pane }: { sessionId: string; pane?: PaneKey },
 ): WorkspaceState {
   return openItem(state, { item: sessionItem(sessionId), pane })
+}
+
+/**
+ * Opens a terminal as a session opens: in `pane` (the focused pane when none
+ * is named), or, shown already, focuses the pane showing it. Only a terminal
+ * the gateway listed opens.
+ */
+export function openTerminal(
+  state: WorkspaceState,
+  { terminalId, pane }: { terminalId: string; pane?: PaneKey },
+): WorkspaceState {
+  return openItem(state, { item: terminalItem(terminalId), pane })
+}
+
+/** Opens a terminal beside a pane, by `openBeside`'s rules. */
+export function openTerminalBeside(
+  state: WorkspaceState,
+  {
+    terminalId,
+    target,
+    side,
+    room,
+    replace,
+  }: {
+    terminalId: string
+    target?: PaneKey
+    side?: Side
+    room: PaneRoom | undefined
+    replace?: boolean
+  },
+): WorkspaceState {
+  return openItemBeside(state, {
+    item: terminalItem(terminalId),
+    target,
+    side,
+    room,
+    replace,
+  })
+}
+
+/**
+ * The gateway's list of terminals, whole. A pane showing a terminal that is
+ * no longer listed keeps it until the person closes the pane: it says the
+ * terminal ended rather than vanishing under the cursor.
+ */
+export function terminalsListed(
+  state: WorkspaceState,
+  terminals: Readonly<Record<string, TerminalEntry>>,
+): WorkspaceState {
+  return { ...state, terminals }
 }
 
 /** Where a new pane showing `item` goes on `side` of `target`, if the room allows. */
@@ -359,6 +412,13 @@ function homeAfterLast(
   state: WorkspaceState,
   item: PaneItem | null,
 ): { channelId: string; model: ModelRef } | undefined {
+  // A terminal's pane goes back to a new session's home in the terminal's channel.
+  if (item?.kind === "terminal") {
+    const listed = Object.hasOwn(state.terminals, item.terminalId)
+      ? state.terminals[item.terminalId]
+      : undefined
+    return draftHome(state, { channelId: listed?.channelId ?? state.view.channelId })
+  }
   const session = item?.kind === "session" ? sessionOf(state, item.sessionId) : undefined
   if (!session) return undefined
   return draftHome(state, {

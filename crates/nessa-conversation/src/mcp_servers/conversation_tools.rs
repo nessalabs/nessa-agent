@@ -279,7 +279,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": REQUEST_ACCESS_TOOL,
-                "description": "Ask the person who owns this conversation to raise its access, when your work needs more than the access it has: auto (run most commands without asking them) or full (run any command, never asking). Give the access and one line on why you need it. The person sees a red card with Nessa's own question, Approve and Not now; you cannot word it. Approve raises the access by the person's own hand, then sends \"Approve\" as their next message here; \"Not now\" leaves it as it is. The word is their answer, not your access: the person may type it, so read your access from whether your next commands still ask, and ask again only if the work still needs it. End your turn after asking: access changes only between turns. Only a turn the person started may ask; a chat already at that access or more is not asked (access_held). Ask only for what the work needs, never ahead of time.",
+                "description": "Ask the person who owns this conversation to raise its access, when your work needs more than the access it has: auto (run most commands without asking them) or full (run any command, never asking). Give the access and one line on why you need it. The person sees a red card with Nessa's own question, Approve and Not now; you cannot word it. Approve raises the access by the person's own hand, then sends \"Approve\" as their next message here; \"Not now\" leaves it as it is. The word is their answer, not your access: the person may type it, so read your access from whether your next commands still ask, and ask again only if the work still needs it. End your turn after asking: the answer comes as the person's next message. Only a turn the person started may ask; a chat already at that access or more is not asked (access_held). Ask only for what the work needs, never ahead of time.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1467,7 +1467,7 @@ fn window_view(source: &ConversationId, reading: &WindowReading) -> Value {
                         }
                         mine_here |= mine;
                     }
-                    PaneContent::Draft => {}
+                    PaneContent::Draft | PaneContent::Terminal => {}
                     PaneContent::Widget(widget) => {
                         pane["widget"] = json!({"plugin": widget.plugin(), "id": widget.id()});
                     }

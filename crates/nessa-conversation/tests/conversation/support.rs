@@ -1470,6 +1470,9 @@ pub struct ProviderFactory {
     pub native_hooks: AtomicBool,
     /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
     pub offer_deny: AtomicBool,
+    /// List a harness "Always allow" (kept past the request) before "Allow
+    /// once", as some harnesses order them.
+    pub offer_kept_allow_first: AtomicBool,
     /// The input each review carries; `{}` when unset.
     pub review_arguments: Mutex<Option<String>>,
     /// Gate after domain consumption rather than before it.
@@ -2462,15 +2465,32 @@ impl ProviderSessionBackend for Backend {
                     } else {
                         format!("tool-{index}")
                     };
-                    let mut choices = vec![PermissionOption::new(
-                        PermissionOptionId::new("allow").unwrap(),
-                        "Allow once",
-                        PermissionDecision::new(
-                            PermissionEffect::Allow,
-                            PermissionScope::request(),
-                        ),
-                    )
-                    .unwrap()];
+                    let mut choices = Vec::new();
+                    if self.factory.offer_kept_allow_first.load(Ordering::SeqCst) {
+                        choices.push(
+                            PermissionOption::new(
+                                PermissionOptionId::new("allow-always").unwrap(),
+                                "Always allow",
+                                PermissionDecision::new(
+                                    PermissionEffect::Allow,
+                                    PermissionScope::request(),
+                                ),
+                            )
+                            .unwrap()
+                            .kept_by_the_harness(),
+                        );
+                    }
+                    choices.push(
+                        PermissionOption::new(
+                            PermissionOptionId::new("allow").unwrap(),
+                            "Allow once",
+                            PermissionDecision::new(
+                                PermissionEffect::Allow,
+                                PermissionScope::request(),
+                            ),
+                        )
+                        .unwrap(),
+                    );
                     if self.factory.offer_deny.load(Ordering::SeqCst) {
                         choices.push(
                             PermissionOption::new(

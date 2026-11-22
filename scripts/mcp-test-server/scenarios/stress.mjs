@@ -22,6 +22,12 @@ export const STRESS = {
   listPermission: "stress compact version review",
   listPreview: "stress list preview",
   reviews: "stress reviews",
+  /**
+   * A turn of {@link RAISE_REVIEWS} reviews in a row, raised to Full while
+   * the first one waits: that one is allowed by the raise, and none after it
+   * is asked.
+   */
+  raise: "stress raise access",
   large: "stress large review",
   wait: "stress wait",
   pause: "stress pause",
@@ -54,6 +60,8 @@ export const STRESS = {
   closePane: "stress close-pane",
   panelTabs: "stress panel tabs",
   table: "stress table",
+  /** A reply with shell fences the person runs (`run` step). */
+  runBlock: "stress run block",
   paste: "stress paste",
   attach: "stress attach",
   trace: "stress trace",
@@ -124,6 +132,7 @@ export const SAYS = {
   allowed: "Allowed.",
   denied: "Denied.",
   reviewed: "All reviews answered.",
+  raised: "Finished at the raised access.",
   waiting: "Working until stopped.",
   pausing: "Pausing.",
   resumed: "Finished after the pause.",
@@ -149,6 +158,7 @@ export const SAYS = {
   control: "Controlled: ",
   panelTabs: "Panel tabs: ",
   table: "Tables: ",
+  runBlock: "Runnable: ",
   paste: "Images: ",
   attach: "Attached: ",
   trace: "Traced: ",
@@ -186,6 +196,28 @@ export const TABLE_LINES = [
   "| The Last Projectionist | Cineplex Scotiabank Theatre | Sat Oct 17 | 12:30 pm | 104 min | DCP | English | 42 |",
   "| Night Shift at the Lighthouse | CineCycle | Sat Oct 17 | 11:59 pm | 88 min | 16 mm | French, English subtitles | 9 |",
 ]
+
+/**
+ * The fences a `run` turn answers with: one that prints and ends, its word
+ * made by the shell's own arithmetic so only a run (not the source) shows
+ * it, and a console fence whose `$ ` line waits to be stopped.
+ */
+export const RUN_FENCES = [
+  "```bash",
+  "echo stress-run-$((6 * 7))",
+  "```",
+  "",
+  "```console",
+  "$ sleep 30",
+  "(it waits)",
+  "```",
+]
+
+/** What the `run` turn's first fence prints when run. */
+export const RUN_PRINTS = "stress-run-42"
+
+/** The `run` turn's first fence's command, shown after the prompt when run. */
+export const RUN_COMMAND = "echo stress-run-$((6 * 7))"
 
 /** How long a `table` turn holds between its tables and the rest of its answer. */
 export const TABLE_HOLD_MS = 3000
@@ -292,6 +324,9 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
   'try{g=/^password=(.*)$/m.exec(x("git",["credential","fill"],{input:"protocol=https\\nhost=github.com\\n\\n",env:{...process.env,GIT_TERMINAL_PROMPT:"0",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},stdio:["pipe","pipe","ignore"],timeout:10000}).toString())?.[1]}catch{}',
   'process.stdout.write("token="+p(process.env.GH_TOKEN)+" git="+p(g))',
 ].join(";")}'`
+
+/** How many reviews the `raise` turn asks in a row. */
+export const RAISE_REVIEWS = 3
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -503,6 +538,21 @@ export function stressScenario({
         ],
       },
       {
+        when: STRESS.runBlock,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.runBlock,
+              "${prompt.text}",
+              "\n\n",
+              ...RUN_FENCES.map((line) => `${line}\n`),
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.table,
         steps: [
           {
@@ -642,6 +692,20 @@ export function stressScenario({
       {
         when: STRESS.reviews,
         steps: [...many, { do: "text", chunks: [SAYS.reviewed] }, { do: "end" }],
+      },
+      {
+        when: STRESS.raise,
+        steps: [
+          ...Array.from({ length: RAISE_REVIEWS }, (_, index) =>
+            review(
+              `Raise ${index + 1} of ${RAISE_REVIEWS}`,
+              { index },
+              `Raised ${index + 1}.`,
+            ),
+          ),
+          { do: "text", chunks: [SAYS.raised] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.large,
