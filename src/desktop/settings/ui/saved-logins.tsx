@@ -17,6 +17,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -28,7 +29,7 @@ import {
   type SavedLoginsGateway,
   type SavedLoginsOutcome,
 } from "../adapters/saved-logins-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
 import { ItemRow, RowAction, RowLink, SettingGroup, Toggle } from "./settings-controls"
 
@@ -53,6 +54,8 @@ export const CHATGPT_POLL_MS = 2000
 function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
   const gateway = useContext(SavedLoginsContext)
   const ensure = useVaultUnlock()
+  const vaultSettled = useVaultSettled()
+  const reads = useRef(0)
   const [logins, setLogins] = useState<SavedLogins | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,18 +68,24 @@ function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
   useEffect(() => {
     if (!gateway) return
     let current = true
-    void gateway.read().then((outcome) => current && take(outcome))
+    const revision = ++reads.current
+    void gateway.read().then((outcome) => {
+      if (current && revision === reads.current) take(outcome)
+    })
     return () => {
       current = false
     }
-  }, [gateway, take])
+  }, [gateway, take, vaultSettled])
   // While a ChatGPT sign-in waits for the browser, how it ends is read again.
   const waiting = logins?.chatgpt?.signIn.kind === "waiting"
   useEffect(() => {
     if (!gateway || !waiting) return
     let current = true
     const timer = window.setInterval(() => {
-      void gateway.read().then((outcome) => current && take(outcome))
+      const revision = ++reads.current
+      void gateway.read().then((outcome) => {
+        if (current && revision === reads.current) take(outcome)
+      })
     }, pollMs)
     return () => {
       current = false
@@ -95,6 +104,7 @@ function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
     ) => Promise<SavedLoginsOutcome>,
   ): Promise<boolean> => {
     if (!gateway || busy) return false
+    reads.current += 1
     setBusy(true)
     try {
       if (!(await ensure())) {
@@ -106,16 +116,22 @@ function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
         const read = await gateway.read()
         if (read.kind === "read") {
           current = read.logins
+          reads.current += 1
           setLogins(read.logins)
         }
       }
+      reads.current += 1
       const outcome = await work(gateway, current)
+      reads.current += 1
       take(outcome)
       if (outcome.kind === "refused") {
         // A refusal can follow a change that was made (its record could
         // not be kept): show how things stand, keeping why.
         const after = await gateway.read()
-        if (after.kind === "read") setLogins(after.logins)
+        if (after.kind === "read") {
+          reads.current += 1
+          setLogins(after.logins)
+        }
       }
       return outcome.kind === "read"
     } finally {

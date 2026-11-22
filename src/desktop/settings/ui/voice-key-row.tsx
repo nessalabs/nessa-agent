@@ -9,12 +9,13 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
 import { Dialog } from "@nessa-ui/react/dialog"
 import type { VoiceKeyGateway, VoiceKeyOutcome } from "../../voice/adapters/voice-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 
@@ -148,6 +149,8 @@ export function VoiceKeyButton({
 export function VoiceKeyRow() {
   const gateway = useContext(VoiceKeyContext)
   const ensure = useVaultUnlock()
+  const vaultSettled = useVaultSettled()
+  const reads = useRef(0)
   const entry = setting("voice")
   const found = useContext(FoundSetting) === "voice"
   const [saved, setSaved] = useState<boolean | undefined>(undefined)
@@ -164,21 +167,28 @@ export function VoiceKeyRow() {
   useEffect(() => {
     if (!gateway) return
     let current = true
-    void gateway.read().then((outcome) => current && take(outcome))
+    const revision = ++reads.current
+    void gateway.read().then((outcome) => {
+      if (current && revision === reads.current) take(outcome)
+    })
     return () => {
       current = false
     }
-  }, [gateway])
+  }, [gateway, vaultSettled])
 
   const forget = async () => {
     if (!gateway || busy) return
+    reads.current += 1
     setBusy(true)
     try {
       if (!(await ensure())) {
         setError("Unlock Nessa to remove the key.")
         return
       }
-      take(await gateway.forget())
+      reads.current += 1
+      const outcome = await gateway.forget()
+      reads.current += 1
+      take(outcome)
     } finally {
       setBusy(false)
     }
@@ -214,6 +224,7 @@ export function VoiceKeyRow() {
           onClose={(next) => {
             setAsking(false)
             if (next) {
+              reads.current += 1
               setSaved(true)
               setError(null)
             }
