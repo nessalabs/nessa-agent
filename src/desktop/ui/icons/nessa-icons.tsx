@@ -282,6 +282,12 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M6.5 8l2 2-2 2M10.5 12.25h3" />
     </>,
   ),
+  details: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.5" />
+      <path d="M10 9.25v4M10 6.75v.01" />
+    </>,
+  ),
   site: drawn(
     <>
       <circle cx="10" cy="10" r="6.5" />

@@ -12,10 +12,23 @@ export async function vmBackgroundFixture(directory, idleSeconds) {
     throw new Error("the VM background gateway fixture requires a Unix gateway")
   const root = join(directory, "vm-background")
   mkdirSync(root, { recursive: true })
+  // The same terminals as the real gateway's build, when its Ghostty library
+  // is named (scripts/terminal/ghostty.sh): this binary serves the stress run.
+  const terminals = process.env.PTY_RUNTIME_GHOSTTY_SOURCE
+    ? ["--features", "nessa-server/terminals"]
+    : []
   const testBinary = await new Promise((resolve, reject) => {
     const child = spawn(
       "cargo",
-      ["test", "-p", "nessa-server", "--lib", "--no-run", "--message-format=json"],
+      [
+        "test",
+        "-p",
+        "nessa-server",
+        ...terminals,
+        "--lib",
+        "--no-run",
+        "--message-format=json",
+      ],
       { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
     )
     let output = ""

@@ -1,4 +1,5 @@
 import { Agent37Provider } from "./settings/ui/agent37-row"
+import { TerminalSourceProvider } from "./workspace/ui/terminals/terminal-source"
 import { BoatProvider } from "./settings/ui/boat-row"
 import { ReplyStyleProvider } from "./settings/ui/reply-style-control"
 import { DevicesProvider } from "./devices"
@@ -322,76 +323,80 @@ createRoot(container).render(
                               read={dependencies.heldFiles}
                               save={saveFile}
                             >
-                              <DecisionsProvider source={dependencies.decisions}>
-                                <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                                  <DecisionSettingsProvider
-                                    gateway={dependencies.decisionSettings}
-                                  >
-                                    <PermissionRulesProvider
-                                      gateway={dependencies.permissionRules}
+                              <TerminalSourceProvider source={dependencies.terminals}>
+                                <DecisionsProvider source={dependencies.decisions}>
+                                  <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                                    <DecisionSettingsProvider
+                                      gateway={dependencies.decisionSettings}
                                     >
-                                      <BoatProvider gateway={dependencies.boat}>
-                                        <ReplyStyleProvider
-                                          gateway={dependencies.replyStyle}
-                                        >
-                                          <Agent37Provider gateway={dependencies.agent37}>
-                                            <GithubProvider
-                                              gateway={dependencies.github}
-                                              avatar={githubAvatar}
+                                      <PermissionRulesProvider
+                                        gateway={dependencies.permissionRules}
+                                      >
+                                        <BoatProvider gateway={dependencies.boat}>
+                                          <ReplyStyleProvider
+                                            gateway={dependencies.replyStyle}
+                                          >
+                                            <Agent37Provider
+                                              gateway={dependencies.agent37}
                                             >
-                                              <VoiceKeyProvider
-                                                gateway={dependencies.voiceKey}
+                                              <GithubProvider
+                                                gateway={dependencies.github}
+                                                avatar={githubAvatar}
                                               >
-                                                <SavedLoginsProvider
-                                                  gateway={dependencies.savedLogins}
+                                                <VoiceKeyProvider
+                                                  gateway={dependencies.voiceKey}
                                                 >
-                                                  <VoiceProvider
-                                                    controller={voice}
-                                                    title={(sessionId) => {
-                                                      const sessions =
-                                                        store.getState().workspace
-                                                          .sessions
-                                                      return Object.hasOwn(
-                                                        sessions,
-                                                        sessionId,
-                                                      )
-                                                        ? sessions[sessionId].title
-                                                        : null
-                                                    }}
-                                                    showChat={(sessionId) =>
-                                                      void store.dispatch(
-                                                        openSession({ sessionId }),
-                                                      )
-                                                    }
+                                                  <SavedLoginsProvider
+                                                    gateway={dependencies.savedLogins}
                                                   >
-                                                    {/* The window is dark only (desktop.html's
+                                                    <VoiceProvider
+                                                      controller={voice}
+                                                      title={(sessionId) => {
+                                                        const sessions =
+                                                          store.getState().workspace
+                                                            .sessions
+                                                        return Object.hasOwn(
+                                                          sessions,
+                                                          sessionId,
+                                                        )
+                                                          ? sessions[sessionId].title
+                                                          : null
+                                                      }}
+                                                      showChat={(sessionId) =>
+                                                        void store.dispatch(
+                                                          openSession({ sessionId }),
+                                                        )
+                                                      }
+                                                    >
+                                                      {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                                    <CodeBlockProvider mode="dark">
-                                                      <HapticProvider tick={hapticTick}>
-                                                        <DesktopWindow
-                                                          hostKind={host.kind}
-                                                          browserSurface={
-                                                            host.kind === "browser"
-                                                          }
-                                                          inspectable={
-                                                            import.meta.env.DEV
-                                                          }
-                                                        />
-                                                      </HapticProvider>
-                                                    </CodeBlockProvider>
-                                                  </VoiceProvider>
-                                                </SavedLoginsProvider>
-                                              </VoiceKeyProvider>
-                                            </GithubProvider>
-                                          </Agent37Provider>
-                                        </ReplyStyleProvider>
-                                      </BoatProvider>
-                                    </PermissionRulesProvider>
-                                  </DecisionSettingsProvider>
-                                </NativeHooksProvider>
-                              </DecisionsProvider>
+                                                      <CodeBlockProvider mode="dark">
+                                                        <HapticProvider tick={hapticTick}>
+                                                          <DesktopWindow
+                                                            hostKind={host.kind}
+                                                            browserSurface={
+                                                              host.kind === "browser"
+                                                            }
+                                                            inspectable={
+                                                              import.meta.env.DEV
+                                                            }
+                                                          />
+                                                        </HapticProvider>
+                                                      </CodeBlockProvider>
+                                                    </VoiceProvider>
+                                                  </SavedLoginsProvider>
+                                                </VoiceKeyProvider>
+                                              </GithubProvider>
+                                            </Agent37Provider>
+                                          </ReplyStyleProvider>
+                                        </BoatProvider>
+                                      </PermissionRulesProvider>
+                                    </DecisionSettingsProvider>
+                                  </NativeHooksProvider>
+                                </DecisionsProvider>
+                              </TerminalSourceProvider>
                             </HeldFilesProvider>
                           </SiteIconProvider>
                         </ClipboardProvider>

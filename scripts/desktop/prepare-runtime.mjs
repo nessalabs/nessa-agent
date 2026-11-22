@@ -163,11 +163,20 @@ export function assembleDesktopRuntime({
   const carried = hostBuilds
     ? crossBuildHostBuilds({ root, environment, run })
     : undefined
-  run("cargo", ["build", "--release", "-p", "nessa-server", "-p", "nessa-mcp"], {
-    cwd: root,
-    stdio: "inherit",
-    ...(carried && { env: { ...environment, ...carried.environment } }),
-  })
+  // Terminals need the pinned libghostty-vt: built in when
+  // PTY_RUNTIME_GHOSTTY_SOURCE names it (scripts/terminal/ghostty.sh).
+  const terminals = environment.PTY_RUNTIME_GHOSTTY_SOURCE
+    ? ["--features", "nessa-server/terminals"]
+    : []
+  run(
+    "cargo",
+    ["build", "--release", "-p", "nessa-server", ...terminals, "-p", "nessa-mcp"],
+    {
+      cwd: root,
+      stdio: "inherit",
+      ...(carried && { env: { ...environment, ...carried.environment } }),
+    },
+  )
   const metadata = JSON.parse(
     run("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
       cwd: root,

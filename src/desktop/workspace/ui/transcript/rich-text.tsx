@@ -1,9 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useMessageStreamText } from "@nessa-ui/react/message"
-import { ReplyMarkdown } from "@nessa-ui/react/reply-markdown"
+import { ReplyMarkdown, type ReplyFence } from "@nessa-ui/react/reply-markdown"
 import { inlineRuns } from "../../model/transcript"
+import { runnableFence, runRequestBase } from "../../model/run-block"
 import { ChatPill, useKnownChat } from "./chat-pill"
+import { RunBlock } from "./run-block"
+import { useTerminalSource } from "../terminals/terminal-source"
 
 /**
  * Inline code an agent wrote. The id of a chat this window has is that chat,
@@ -83,12 +86,19 @@ export function AgentProse({
   text,
   streaming = false,
   fresh = false,
+  runs,
 }: {
   text: string
   /** Its turn is still writing it (`TurnMessage.working`). */
   streaming?: boolean
   /** It has only now appeared in this view (`Message`'s `isNew`). */
   fresh?: boolean
+  /**
+   * Where it was said, so its shell fences can be run (`RunBlock`): the
+   * conversation, the message and which of its parts. None draws them as
+   * plain code.
+   */
+  runs?: { conversationId: string; messageId: string; part: number }
 }) {
   // While it is written, the kit's pacing releases bursty chunks as one
   // steady reveal and `ReplyMarkdown` fades each new word in, so words
@@ -111,12 +121,31 @@ export function AgentProse({
   const revealing =
     !reducedMotion() &&
     (streaming || (streamed.current && paced.staticLength < text.length))
+  const source = useTerminalSource()
+  const conversationId = runs?.conversationId
+  const messageId = runs?.messageId
+  const part = runs?.part
+  const renderFence = useCallback(
+    (fence: ReplyFence) =>
+      conversationId === undefined ||
+      messageId === undefined ||
+      part === undefined ||
+      !runnableFence(fence.language) ? undefined : (
+        <RunBlock
+          fence={fence}
+          conversationId={conversationId}
+          base={runRequestBase(messageId, part, fence.at)}
+        />
+      ),
+    [conversationId, messageId, part],
+  )
   return (
     <ReplyMarkdown
       className="workspace-prose text-inherit text-[length:inherit] leading-[inherit] tracking-[inherit]"
       streaming={revealing}
       components={proseComponents}
       renderText={chatIds}
+      renderFence={source && runs ? renderFence : undefined}
     >
       {revealing ? paced.text : text}
     </ReplyMarkdown>

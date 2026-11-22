@@ -217,6 +217,14 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
+  terminals: {
+    default: 1,
+    what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
+  },
+  runs: {
+    default: 1,
+    what: "replies with shell fences the person runs: Run shows the output inline and ends with its exit and time, the stop icon interrupts a console fence's command, Run again starts anew and the terminal icon opens the run in a pane",
+  },
   menus: {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
@@ -403,6 +411,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.launches, () => ({ kind: "launch" }))
   add(knobs.menuPanels, () => ({ kind: "menuPanel" }))
   add(knobs.menus, () => ({ kind: "menu" }))
+  add(knobs.terminals, () => ({ kind: "terminal" }))
+  add(knobs.runs, () => ({ kind: "run" }))
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))

@@ -1,3 +1,4 @@
+import type { TerminalEntry } from "../model/terminal"
 import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
@@ -581,7 +582,83 @@ export interface WorkspaceDependencies {
   readonly channels?: ChannelSource
   /** The system's pickers for a channel's paths; absent where there are none. */
   readonly paths?: PathPicker
+  /**
+   * The person's terminals (`terminal.*`). Absent beside no gateway, or a
+   * gateway built without terminals; ⌘J and the + menu then offer none.
+   */
+  readonly terminals?: TerminalSource
 }
+
+/** What a new terminal is asked for: a shell in a channel, or a Run in a conversation. */
+export type TerminalOpenRequest =
+  | { readonly kind: "shell"; readonly channelId?: string }
+  | { readonly kind: "run"; readonly conversationId: string; readonly command: string }
+
+/** Why a terminal did not open, in the window's words. */
+export type TerminalOpenFailure =
+  "unavailable" | "limit" | "elsewhere" | "folder-missing" | "not-found" | "start-failed"
+
+export class TerminalOpenError extends Error {
+  constructor(readonly reason: TerminalOpenFailure) {
+    super(`The terminal did not open: ${reason}`)
+    this.name = "TerminalOpenError"
+  }
+}
+
+/** A grid in cells. */
+export interface TerminalFit {
+  readonly cols: number
+  readonly rows: number
+}
+
+/**
+ * The person's terminals on the gateway. The gateway owns each terminal and
+ * lays its screen out; the window lists them, shows them in views and types
+ * into them. Agents never reach this.
+ */
+export interface TerminalSource {
+  /** The list now, then each change, whole, for as long as the window follows. */
+  follow(onList: (terminals: readonly TerminalEntry[]) => void): () => void
+  /**
+   * Start one. `requestId` makes a retry answer the terminal the first try
+   * started. Rejects with a `TerminalOpenError`.
+   */
+  open(
+    request: TerminalOpenRequest,
+    requestId: string,
+    fit: TerminalFit,
+  ): Promise<TerminalEntry>
+  /** A new view of a terminal: a pane, or a Run block's output. */
+  view(terminalId: string): TerminalView
+  /** Type into a terminal with no view of it: a Run block's stop sends Control-C. */
+  input(terminalId: string, bytes: Uint8Array): void
+  /** End a terminal. It leaves the list. */
+  close(terminalId: string): Promise<void>
+  /** The person's own name for a terminal; the list shows it once the gateway says so. */
+  rename(terminalId: string, title: string): Promise<void>
+}
+
+/**
+ * One view of a terminal. Nothing shows until its first `fit`, which attaches
+ * it with that fit; after a reconnect it attaches again on its own.
+ */
+export interface TerminalView {
+  /** This view's messages, as pty-runtime protocol objects. */
+  subscribe(listener: (message: TerminalProtocolMessage) => void): () => void
+  /** The grid the view's box holds. The first one attaches the view. */
+  fit(fit: TerminalFit): void
+  /** The person is typing here: the terminal takes this view's fit. */
+  focus(fit: TerminalFit): void
+  input(bytes: Uint8Array): void
+  history(start: number, count: number): void
+  /** Stop showing it here. The terminal keeps running. */
+  release(): void
+}
+
+/** One pty-runtime client protocol message, as parsed. The view's component reads it. */
+export type TerminalProtocolMessage = { readonly type: string } & Readonly<
+  Record<string, unknown>
+>
 
 /**
  * Tells the gateway what the window shows. Fire and forget: the newest word

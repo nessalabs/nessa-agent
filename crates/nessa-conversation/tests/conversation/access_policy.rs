@@ -261,7 +261,8 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             AccessAction::List
             | AccessAction::Write
             | AccessAction::ChannelCreate
-            | AccessAction::ChannelList => AccessResource::Catalogue {
+            | AccessAction::ChannelList
+            | AccessAction::TerminalUse => AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
             },
@@ -512,6 +513,34 @@ fn owner_act_admits_the_owner_until_the_conversation_is_deleted() {
         "org",
         "owner"
     )));
+}
+
+#[test]
+fn owner_terminal_run_admits_the_owner_until_the_conversation_is_deleted() {
+    let policy = policy();
+    assert_eq!(
+        allowed_by(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation("org", "owner", false),
+            "org",
+            "owner"
+        )),
+        Some(&["owner.terminal_run".to_owned()][..])
+    );
+    for (conversation, org, who) in [
+        (conversation("org", "owner", true), "org", "owner"),
+        (conversation("org", "owner", false), "org", "someone"),
+        (conversation("org", "owner", false), "other", "owner"),
+    ] {
+        assert!(!allowed(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation,
+            org,
+            who
+        )));
+    }
 }
 
 #[test]

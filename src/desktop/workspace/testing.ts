@@ -35,9 +35,9 @@ import { loadWorkspace } from "./adapters/store/commands"
 export function shownBy(pane: Pane): string {
   const item = paneItemOf(pane.item)
   if (!item) throw new Error(`a pane holds a key the codec did not write: ${pane.item}`)
-  return item.kind === "session"
-    ? item.sessionId
-    : `widget ${item.widget.plugin}/${item.widget.id}`
+  if (item.kind === "session") return item.sessionId
+  if (item.kind === "terminal") return `terminal ${item.terminalId}`
+  return `widget ${item.widget.plugin}/${item.widget.id}`
 }
 
 /** What the panes show, in reading order. */
