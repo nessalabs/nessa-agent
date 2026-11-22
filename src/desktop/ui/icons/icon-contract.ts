@@ -92,6 +92,8 @@ const desktopRoles = [
   "edit",
   "terminal",
   "copy",
+  // What a terminal is: where it runs, its folder, its shell
+  "details",
   // A website, where its own icon cannot be shown
   "site",
   // Settings categories

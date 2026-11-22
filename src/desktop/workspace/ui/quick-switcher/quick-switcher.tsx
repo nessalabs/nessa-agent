@@ -18,7 +18,8 @@ import { commandKey, commandLabel } from "../../../model/keyboard"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { switcherRows, type SwitcherRow } from "../../model/session-search"
 import { sessionTime } from "../../model/time-labels"
-import { StatusGlyph } from "../chrome/status-glyph"
+import { AgentTile } from "../chrome/agent-tile"
+import { useTerminalSource } from "../terminals/terminal-source"
 import { ListRow } from "../../../ui/list-row"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./quick-switcher.css"
@@ -89,33 +90,57 @@ export function QuickSwitcher({
 }) {
   const sessions = useWorkspaceSelector(selectListedSessions)
   const channels = useWorkspaceSelector(selectChannels)
+  // Terminals are offered only in a window that can open them.
+  const terminalSource = useTerminalSource()
+  const terminalEntries = useWorkspaceSelector((state) => state.workspace.terminals)
+  const terminals = useMemo(
+    () => (terminalSource ? Object.values(terminalEntries) : null),
+    [terminalSource, terminalEntries],
+  )
   const [query, setQuery] = useState("")
   const [active, setActive] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const now = useNow(60_000)
-  const newShortcut = useWorkspaceFrame().shortcut("newSession")
+  const frame = useWorkspaceFrame()
+  const newShortcut = frame.shortcut("newSession")
+  const terminalShortcut = frame.shortcut("newTerminal")
   const channelName = (id: string) =>
     channels.find((channel) => channel.id === id)?.name ?? ""
   // What a row shows, by what it is: a session, a channel, or a new session.
-  const rowParts = (row: SwitcherRow) =>
-    row.kind === "session"
-      ? {
-          leading: <StatusGlyph status={row.session.status} idle />,
+  const rowParts = (row: SwitcherRow) => {
+    switch (row.kind) {
+      case "session":
+        return {
+          leading: <AgentTile model={row.session.model} size={20} />,
           title: <Highlight text={row.session.title} hits={row.hits} />,
           meta: `#${channelName(row.session.channelId)} · ${agentName(agentOf(row.session.model))}`,
           trailing: sessionTime(row.session.updatedAt, now),
         }
-      : row.kind === "channel"
-        ? {
-            leading: (
-              <DesktopIcon name={row.channel.private ? "privateChannel" : "channel"} />
-            ),
-            title: <Highlight text={row.channel.name} hits={row.hits} />,
-            meta: row.channel.topic,
-          }
-        : row.text
+      case "channel":
+        return {
+          leading: (
+            <DesktopIcon name={row.channel.private ? "privateChannel" : "channel"} />
+          ),
+          title: <Highlight text={row.channel.name} hits={row.hits} />,
+          meta: row.channel.topic,
+        }
+      case "terminal":
+        return {
+          leading: <DesktopIcon name="terminal" />,
+          title: <Highlight text={row.terminal.title} hits={row.hits} />,
+          meta: `#${channelName(row.terminal.channelId)} · Terminal`,
+          trailing: sessionTime(row.terminal.startedAtMs, now),
+        }
+      case "newTerminal":
+        return {
+          leading: <DesktopIcon name="terminal" />,
+          title: `New terminal in #${channelName(row.channelId)}`,
+          trailing: terminalShortcut ? <Kbd>{terminalShortcut}</Kbd> : null,
+        }
+      case "new":
+        return row.text
           ? {
               leading: <DesktopIcon name="enter" />,
               title: `“${row.text}”`,
@@ -126,6 +151,8 @@ export function QuickSwitcher({
               title: `New session in #${channelName(row.channelId)}`,
               trailing: newShortcut ? <Kbd>{newShortcut}</Kbd> : null,
             }
+    }
+  }
 
   // Modal: focus stays in the field, even when a menu that just closed hands
   // focus back to its trigger a frame after the switcher opened. Closed
@@ -154,8 +181,8 @@ export function QuickSwitcher({
   }
 
   const rows = useMemo(
-    () => switcherRows({ query, sessions, channels, channelId }),
-    [query, sessions, channels, channelId],
+    () => switcherRows({ query, sessions, channels, channelId, terminals }),
+    [query, sessions, channels, channelId, terminals],
   )
   const clamped = Math.min(active, rows.length - 1)
 
@@ -316,5 +343,7 @@ function resultGroups(rows: readonly SwitcherRow[]) {
 function rowKey(row: SwitcherRow): string {
   if (row.kind === "session") return `session-${row.session.id}`
   if (row.kind === "channel") return `channel-${row.channel.id}`
+  if (row.kind === "terminal") return `terminal-${row.terminal.id}`
+  if (row.kind === "newTerminal") return "new-terminal"
   return row.text ? "ask" : "new"
 }

@@ -585,6 +585,14 @@ struct QueuedResponse {
     _mount: Option<AppMountGuard>,
 }
 
+/// What a request on one connection may act through: its window's place
+/// and its place among the person's terminals.
+#[derive(Clone, Copy, Default)]
+struct Places<'a> {
+    window: Option<&'a WindowSlot>,
+    terminals: Option<&'a crate::terminal::TerminalLink>,
+}
+
 enum WireResponse {
     Ordinary(Box<OutgoingMessage>),
     Record {
@@ -600,6 +608,12 @@ enum WireResponse {
     /// Boxed, so a queued response stays as small as its record fields.
     WindowCommand {
         payload: Box<WorkspaceCommand>,
+    },
+    /// A terminal event for this connection (`terminal.output`,
+    /// `terminal.listed`), numbered the same way.
+    Terminal {
+        name: &'static str,
+        payload: Box<serde_json::Value>,
     },
 }
 
@@ -986,6 +1000,28 @@ async fn run_authenticated<S>(
             Arc::clone(&ordinary_slots),
         ))
     });
+    // This connection's place among the person's terminals (`terminal.*`),
+    // and what its views are sent. Dropped with the socket, it takes every
+    // view of this connection with it.
+    let (terminals, terminal_task) = match state.terminals.hub.as_ref() {
+        Some(hub) => {
+            let owner = crate::terminal::TerminalOwner {
+                organization: session.context().organization_id().as_str().to_owned(),
+                principal: session.context().principal_id().as_str().to_owned(),
+            };
+            let (link, signals) = hub.connect(owner.clone());
+            let task = tokio::spawn(forward_terminal_signals(
+                signals,
+                Arc::clone(hub),
+                owner,
+                ordinary_send.clone(),
+                Arc::clone(&ordinary_slots),
+            ));
+            (Some(link), Some(task))
+        }
+        None => (None, None),
+    };
+    let terminals = Arc::new(terminals);
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -1366,6 +1402,7 @@ async fn run_authenticated<S>(
         let request_state = state.clone();
         let request_session = session.clone();
         let request_window = std::sync::Arc::downgrade(&window);
+        let request_terminals = std::sync::Arc::downgrade(&terminals);
         let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
                 let (request, permit) = admitted.into_parts();
@@ -1387,11 +1424,15 @@ async fn run_authenticated<S>(
                 // Weak: a request still running when the socket goes does not
                 // keep its window published.
                 let window = request_window.upgrade();
+                let terminals = request_terminals.upgrade();
                 let message = dispatch_on(
                     &request_state,
                     &request_session,
                     admitted,
-                    window.as_deref().and_then(Option::as_ref),
+                    Places {
+                        window: window.as_deref().and_then(Option::as_ref),
+                        terminals: terminals.as_deref().and_then(Option::as_ref),
+                    },
                 )
                 .await;
                 (
@@ -1433,6 +1474,11 @@ async fn run_authenticated<S>(
         task.abort();
         let _ = task.await;
     }
+    if let Some(task) = terminal_task {
+        task.abort();
+        let _ = task.await;
+    }
+    drop(terminals);
     drop(ordinary_send);
     drop(record_send);
     if !writer_finished {
@@ -1454,6 +1500,63 @@ async fn forward_window_commands(
         let queued = QueuedResponse {
             message: WireResponse::WindowCommand {
                 payload: Box::new(super::workspace::command(&command)),
+            },
+            _slot: Arc::new(permit),
+            _record_work: None,
+            _mount: None,
+        };
+        if send.send(queued).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Send each terminal event for this connection, in the order its views
+/// were given them. A `Listed` reads the owner's list as it is now.
+async fn forward_terminal_signals(
+    mut signals: crate::terminal::TerminalSignals,
+    hub: Arc<crate::terminal::TerminalHub>,
+    owner: crate::terminal::TerminalOwner,
+    send: mpsc::Sender<QueuedResponse>,
+    slots: Arc<Semaphore>,
+) {
+    use crate::terminal::TerminalSignal;
+    use nessa_protocol::product::generated::{TerminalListed, TerminalOutput};
+    while let Some(signal) = signals.recv().await {
+        let (name, payload) = match signal {
+            TerminalSignal::Output {
+                terminal_id,
+                view_id,
+                message,
+            } => (
+                product_event::TERMINAL_OUTPUT,
+                serde_json::to_value(TerminalOutput {
+                    terminal_id,
+                    view_id,
+                    message,
+                }),
+            ),
+            TerminalSignal::Listed => (
+                product_event::TERMINAL_LISTED,
+                serde_json::to_value(TerminalListed {
+                    terminals: hub
+                        .list(&owner)
+                        .iter()
+                        .map(super::terminal::summary)
+                        .collect(),
+                }),
+            ),
+        };
+        let Ok(payload) = payload else {
+            continue;
+        };
+        let Ok(permit) = slots.clone().acquire_owned().await else {
+            break;
+        };
+        let queued = QueuedResponse {
+            message: WireResponse::Terminal {
+                name,
+                payload: Box::new(payload),
             },
             _slot: Arc::new(permit),
             _record_work: None,
@@ -1684,6 +1787,11 @@ fn fitted_review_set(reviews: Vec<PermissionReviewNotice>) -> PermissionReviewWa
 /// is unchanged. `None` when the numbering is spent: the socket keeps going,
 /// and a later change of the set is sent with a number if one remains.
 fn number_review_notice(message: WireResponse, sequence: &EventSequence) -> Option<WireResponse> {
+    if let WireResponse::Terminal { name, payload } = &message {
+        let seq = sequence.next()?;
+        let frame = EventFrame::push(name, payload.as_ref(), seq, 0).ok()?;
+        return Some(WireResponse::ordinary(OutgoingMessage::Event(frame)));
+    }
     if let WireResponse::WindowCommand { payload } = &message {
         let seq = sequence.next()?;
         let frame = EventFrame::push(
@@ -1802,7 +1910,7 @@ async fn dispatch(
         state,
         session,
         Admitted::unmetered(Request::decode(frame)),
-        None,
+        Places::default(),
     )
     .await
 }
@@ -1813,10 +1921,10 @@ async fn dispatch_on(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     admitted: Admitted,
-    window: Option<&WindowSlot>,
+    places: Places<'_>,
 ) -> OutgoingMessage {
     let method = admitted.request().frame().method.clone();
-    let response = answer_request(state, session, admitted, window).await;
+    let response = answer_request(state, session, admitted, places).await;
     super::conversation::trace_refused_command(&method, &response);
     response
 }
@@ -1828,7 +1936,7 @@ async fn answer_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     admitted: Admitted,
-    window: Option<&WindowSlot>,
+    places: Places<'_>,
 ) -> OutgoingMessage {
     let (request, _permit) = admitted.into_parts();
     let frame = request.frame();
@@ -1861,7 +1969,7 @@ async fn answer_request(
         Ok(initiation) => {
             let id = frame.id.clone();
             match Authorized::new(request, initiation) {
-                Some(authorized) => dispatch_authorized(state, &session, authorized, window).await,
+                Some(authorized) => dispatch_authorized(state, &session, authorized, places).await,
                 // Authorization refuses a method the manifest lacks first.
                 None => failure(&id, "unknown_method"),
             }
@@ -2028,11 +2136,24 @@ async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     authorized: Authorized,
-    window: Option<&WindowSlot>,
+    places: Places<'_>,
 ) -> OutgoingMessage {
     let method = authorized.method();
     let (frame, initiation) = authorized.into_parts();
+    let window = places.window;
     match method {
+        ProductMethod::TerminalOpen
+        | ProductMethod::TerminalList
+        | ProductMethod::TerminalAttach
+        | ProductMethod::TerminalFocus
+        | ProductMethod::TerminalFit
+        | ProductMethod::TerminalDetach
+        | ProductMethod::TerminalInput
+        | ProductMethod::TerminalHistory
+        | ProductMethod::TerminalClose
+        | ProductMethod::TerminalRename => {
+            super::terminal::dispatch(state, session, frame, places.terminals).await
+        }
         ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),
         ProductMethod::WorkspaceAnswer => super::workspace::answer(window, frame),
         ProductMethod::WorkspaceArrange | ProductMethod::WorkspaceClosePane => {
@@ -2671,7 +2792,9 @@ async fn send_queued<S: Sink<Message> + Unpin>(
         }
         // Numbered before it reaches here. A snapshot that was not is not a
         // record and is not sent on this path.
-        WireResponse::ReviewWaiting { .. } | WireResponse::WindowCommand { .. } => Err(()),
+        WireResponse::ReviewWaiting { .. }
+        | WireResponse::WindowCommand { .. }
+        | WireResponse::Terminal { .. } => Err(()),
     }
 }
 
@@ -2712,7 +2835,9 @@ async fn send_record_queued<S: Sink<Message> + Unpin>(
         // review snapshots go on the ordinary lane, so this arm is never
         // reached. It is still delivered as `send_queued` would, under this
         // response's deadline, rather than dropped.
-        message @ (WireResponse::ReviewWaiting { .. } | WireResponse::WindowCommand { .. }) => {
+        message @ (WireResponse::ReviewWaiting { .. }
+        | WireResponse::WindowCommand { .. }
+        | WireResponse::Terminal { .. }) => {
             drop((slot, record_work, mount));
             return missed_record_deadline(
                 within_deadline(deadline, send_queued(write_timeout, socket, message)).await,

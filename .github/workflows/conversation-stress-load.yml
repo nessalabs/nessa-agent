@@ -127,7 +127,16 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
         timeout-minutes: 15
       # nessa-mcp: the `github` step runs commands through Nessa's own shell tool.
-      - run: cargo build -p nessa-server -p nessa-mcp
+      # Terminals need the pinned libghostty-vt (scripts/terminal/ghostty.sh).
+      - uses: actions/cache@v4
+        with:
+          path: .vendor/pty-runtime
+          key: ghostty-${{ runner.os }}-${{ hashFiles('crates/nessa-gateway/Cargo.toml', 'scripts/terminal/ghostty.sh') }}
+      - run: |
+          eval "$(scripts/terminal/ghostty.sh)"
+          cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
       # The peer step enrolls through this example.
       - run: cargo build -p nessa-client-core --example read_only_sync
       - name: Pick the seed

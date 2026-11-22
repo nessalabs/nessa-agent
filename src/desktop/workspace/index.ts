@@ -92,6 +92,8 @@ export {
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
 export { channelGateway } from "./adapters/gateway/channel-gateway"
+export { terminalGateway, type TerminalClient } from "./adapters/gateway/terminal-gateway"
+export { terminalsById } from "./model/terminal"
 export {
   decisionsGateway,
   type DecisionsClient,

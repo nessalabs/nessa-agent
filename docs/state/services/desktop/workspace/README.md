@@ -137,6 +137,7 @@ Source review scope: owner entry points and relevant regression declarations wer
 
 - [Talk to a conversation by voice](voice-call.md)
 - [Create a channel](create-a-channel.md)
+- [Share a terminal between views](share-a-terminal-between-views.md)
 - [Recover provider sign-in](provider-sign-in.md)
 - [Join an answer already being sent](question-answer-flights.md)
 - [Inspect devices and add a computer](devices-dashboard.md)

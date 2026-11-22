@@ -30,6 +30,8 @@ export {
   type IssueCredentialResult,
   type ServerApi,
   type WorkspaceApi,
+  type TerminalApi,
+  terminalInputLimit,
   type ChannelApi,
   type AppsApi,
   channelRefusal,
@@ -527,6 +529,13 @@ export type {
   WorkspaceShowing,
   WorkspaceWidget,
   WorkspaceWindow,
+} from "./generated/product.js"
+export type {
+  TerminalListed,
+  TerminalOpenParams,
+  TerminalOutput,
+  TerminalSummary,
+  TerminalViewParams,
 } from "./generated/product.js"
 
 export { type VaultApi } from "./presentation/vault-api.js"

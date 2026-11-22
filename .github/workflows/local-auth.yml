@@ -348,8 +348,18 @@ jobs:
         run: NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs
       # nessa-mcp: the stress check's `github` step runs commands through
       # Nessa's own shell tool.
+      # Terminals need the pinned libghostty-vt (scripts/terminal/ghostty.sh),
+      # kept between runs by the pty-runtime rev it is built for.
+      - uses: actions/cache@v4
+        with:
+          path: .vendor/pty-runtime
+          key: ghostty-${{ runner.os }}-${{ hashFiles('crates/nessa-gateway/Cargo.toml', 'scripts/terminal/ghostty.sh') }}
       - id: gateway-build
-        run: cargo build -p nessa-server -p nessa-mcp
+        run: |
+          eval "$(scripts/terminal/ghostty.sh)"
+          cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
       # The peer step enrolls through this example. It is not the gateway
       # build chaos waits on.
       - name: Build the peer example
@@ -363,7 +373,9 @@ jobs:
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
-        timeout-minutes: 20
+        # The run builds its VM fixture gateway first (about 4 minutes, with
+        # terminals), then 87 steps in about 16; 20 cut a run that held them all.
+        timeout-minutes: 30
       - name: Keep the evidence of a failed run
         if: failure()
         uses: actions/upload-artifact@v4
@@ -420,8 +432,18 @@ jobs:
         timeout-minutes: 45
       # nessa-mcp: the stress check's `github` step runs commands through
       # Nessa's own shell tool.
+      # Terminals need the pinned libghostty-vt (scripts/terminal/ghostty.sh),
+      # kept between runs by the pty-runtime rev it is built for.
+      - uses: actions/cache@v4
+        with:
+          path: .vendor/pty-runtime
+          key: ghostty-${{ runner.os }}-${{ hashFiles('crates/nessa-gateway/Cargo.toml', 'scripts/terminal/ghostty.sh') }}
       - id: gateway-build
-        run: cargo build -p nessa-server -p nessa-mcp
+        run: |
+          eval "$(scripts/terminal/ghostty.sh)"
+          cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
       # The peer step enrolls through this example. It is not the gateway
       # build chaos waits on.
       - name: Build the peer example

@@ -1,3 +1,4 @@
+import type { TerminalEntry } from "../../model/terminal"
 import type { ModelChoice } from "../../model/model-choice"
 import type { FailureDiagnostic } from "../../model/failure"
 /**
@@ -79,6 +80,12 @@ const workspaceSlice = createSlice({
       panes.focusPane(state, payload.pane),
     openSession: (state, { payload }: Payload<{ sessionId: string; pane?: PaneKey }>) =>
       panes.openSession(state, payload),
+    openTerminal: (state, { payload }: Payload<{ terminalId: string; pane?: PaneKey }>) =>
+      panes.openTerminal(state, payload),
+    terminalsListed: (
+      state,
+      { payload }: Payload<{ terminals: Readonly<Record<string, TerminalEntry>> }>,
+    ) => panes.terminalsListed(state, payload.terminals),
     openedBeside: (
       state,
       {
@@ -91,6 +98,18 @@ const workspaceSlice = createSlice({
         replace?: boolean
       }>,
     ) => panes.openBeside(state, payload),
+    openedTerminalBeside: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        terminalId: string
+        target?: PaneKey
+        side?: Side
+        room: PaneRoom | undefined
+        replace?: boolean
+      }>,
+    ) => panes.openTerminalBeside(state, payload),
     sessionDropped: (
       state,
       {
@@ -556,7 +575,9 @@ const goesSomewhere: ReadonlySet<string> = new Set(
   [
     workspaceActions.focusPane,
     workspaceActions.openSession,
+    workspaceActions.openTerminal,
     workspaceActions.openedBeside,
+    workspaceActions.openedTerminalBeside,
     workspaceActions.sessionDropped,
     workspaceActions.draftCreated,
     workspaceActions.widgetOpened,

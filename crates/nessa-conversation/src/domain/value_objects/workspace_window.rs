@@ -101,6 +101,9 @@ pub enum PaneContent {
     /// A new conversation the person has not started yet.
     Draft,
     Widget(WidgetRef),
+    /// One of the person's terminals. It names nothing: an agent never reads
+    /// a terminal, only that a pane shows one.
+    Terminal,
 }
 
 impl PaneContent {
@@ -109,6 +112,7 @@ impl PaneContent {
             Self::Conversation(_) => "conversation",
             Self::Draft => "draft",
             Self::Widget(_) => "widget",
+            Self::Terminal => "terminal",
         }
     }
 }

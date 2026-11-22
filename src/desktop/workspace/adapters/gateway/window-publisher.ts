@@ -201,6 +201,8 @@ function wireItem(item: ShownItem): WorkspacePaneItem {
         : { kind: "draft" }
     case "draft":
       return { kind: "draft" }
+    case "terminal":
+      return { kind: "terminal" }
     case "widget":
       return {
         kind: "widget",
