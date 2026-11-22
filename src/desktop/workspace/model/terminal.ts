@@ -38,13 +38,24 @@ export interface TerminalEntry {
   readonly requestId: string
   readonly folder: string
   readonly shell: string
-  /** Where it runs, in words: this Mac for now. */
-  readonly runsOn: "here"
+  /** Where it runs: "here", "boat", "agent37", or an SSH host name. */
+  readonly runsOn: string
   readonly startedAtMs: number
   readonly state: "running" | "exited"
   readonly exitStatus?: number
   readonly endedAtMs?: number
   readonly programStatus?: TerminalProgramStatus
+}
+
+const runsOnLabels: Readonly<Record<string, string>> = {
+  here: "This Mac",
+  boat: "Boat VM",
+  agent37: "Agent37 VM",
+}
+
+/** Human-readable label for where a terminal runs. */
+export function terminalRunsOnLabel(runsOn: string): string {
+  return Object.hasOwn(runsOnLabels, runsOn) ? runsOnLabels[runsOn] : runsOn
 }
 
 const agentByApp: Readonly<Record<string, TerminalAgent>> = {

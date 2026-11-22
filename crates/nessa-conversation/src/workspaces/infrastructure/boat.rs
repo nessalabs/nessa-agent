@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use std::{collections::BTreeMap, io::Write, sync::Arc, time::Duration};
 use workspace_sdk::{
     boat_client::{Api, ClientConfig},
-    infrastructure::FileStateRepository,
     ports::SocketForward,
     providers::{
         boat_machines::{
@@ -30,7 +29,7 @@ use workspace_sdk::{
         },
         SandboxAttachOptions, SandboxProvider, SupervisorDeployment,
     },
-    AttachRequest, ProviderId, WorkspaceId, WorkspaceSdk,
+    AttachRequest, WorkspaceId,
 };
 
 /// How long making a thread's VM ready may take: waiting out a stop still
@@ -79,21 +78,11 @@ impl BoatProvider {
         thread: &str,
         vm: &str,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
-        // An attachment for this connection only: Nessa's assignments are
-        // the VM's record, so the SDK's is made here and dropped with it.
-        let records = tempfile::tempdir().map_err(|_| Failure::Storage)?;
         let provider = SandboxProvider::from_machines(machines).with_supervisor(
             SupervisorDeployment::Preinstalled {
                 executable: VM_SUPERVISOR.into(),
             },
         );
-        let sdk = WorkspaceSdk::builder(Arc::new(
-            FileStateRepository::new(records.path()).map_err(|_| Failure::Storage)?,
-        ))
-        .provider(Arc::new(provider))
-        .map_err(|_| Failure::Provider)?
-        .build()
-        .map_err(|_| Failure::Provider)?;
         let request = AttachRequest::new(
             WorkspaceId::new(thread).map_err(|_| Failure::InvalidInput)?,
             &SandboxAttachOptions {
@@ -102,17 +91,15 @@ impl BoatProvider {
             },
         )
         .map_err(|_| Failure::Provider)?;
-        let workspace = sdk
-            .attach(
-                &ProviderId::new("boat").map_err(|_| Failure::Provider)?,
-                request,
-            )
+        let backend = workspace_sdk::IProvider::attach(&provider, request)
             .await
             .map_err(|_| Failure::Provider)?;
-        let root = workspace.descriptor().root;
+        let root = backend.descriptor().root;
         let forward =
             SocketForward::new(self.relay_socket.clone()).map_err(|_| Failure::InvalidInput)?;
-        let link = workspace
+        let link = backend
+            .connections()
+            .ok_or(Failure::Provider)?
             .connection(Some(forward))
             .await
             .map_err(|_| Failure::Provider)?;
@@ -121,11 +108,16 @@ impl BoatProvider {
             link,
             self.relay_socket.clone(),
             self.relay_program.clone(),
-            root,
+            root.clone(),
             vm,
             super::ssh::BOAT_DATA_DIR,
         )?;
-        Ok(Arc::new(super::runtime::BoatRuntime { access }))
+        Ok(Arc::new(super::runtime::BoatRuntime {
+            access,
+            backend,
+            cloud: crate::workspaces::domain::Cloud::Boat,
+            workspace_root: root,
+        }))
     }
 }
 

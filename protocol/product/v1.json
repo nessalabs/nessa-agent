@@ -10656,8 +10656,10 @@
         },
         "runsOn": {
           "type": "string",
-          "enum": ["here"],
-          "description": "The machine: here is the gateway's own."
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The machine: here is the gateway's own, boat or agent37 for a cloud VM, or an SSH host name."
         },
         "startedAtMs": {
           "type": "integer",

@@ -20,6 +20,7 @@ import { placeTooltip } from "../../../model/tooltip-placement"
 import {
   terminalAgentName,
   terminalAgentOf,
+  terminalRunsOnLabel,
   terminalStatusLine,
   type TerminalEntry,
 } from "../../model/terminal"
@@ -188,7 +189,7 @@ function TerminalDetails({ terminal }: { terminal: TerminalEntry }) {
             </>
           ) : null}
           <dt>Runs on</dt>
-          <dd>This Mac</dd>
+          <dd>{terminalRunsOnLabel(terminal.runsOn)}</dd>
           <dt>Folder</dt>
           <dd className="workspace-terminal-path">{terminal.folder}</dd>
           <dt>Shell</dt>

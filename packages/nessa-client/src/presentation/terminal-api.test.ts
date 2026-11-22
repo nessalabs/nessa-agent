@@ -95,4 +95,18 @@ describe("terminal api", () => {
       ).rejects.toThrow()
     }
   })
+
+  it("accepts remote runsOn values and rejects missing or empty runsOn", async () => {
+    for (const runsOn of ["here", "boat", "agent37", "devbox"]) {
+      const remote: TerminalSummary = { ...shell, runsOn }
+      await expect(requester({ terminals: [remote] }).api.list()).resolves.toEqual([
+        remote,
+      ])
+    }
+    for (const bad of ["", 42, undefined]) {
+      await expect(
+        requester({ terminals: [{ ...shell, runsOn: bad }] }).api.list(),
+      ).rejects.toThrow()
+    }
+  })
 })
