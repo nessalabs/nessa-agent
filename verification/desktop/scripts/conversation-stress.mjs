@@ -4590,20 +4590,30 @@ const steps = {
         failures.push("the completed VM background task did not permit idle rest")
       // Boat fails the rested VM's next opening. Sent from the composer, the
       // message is shown not sent, and the workspace records why, as one of
-      // the causes a person acts on. Send Again then opens the VM and the
+      // the causes a person acts on. Send again then opens the VM and the
       // message goes through. A read of the rested conversation would open
       // its VM itself, so its turns are the ones read before it rested.
       const after = `${STRESS.reply} VM open fails ${step.index}`
       const seen = new Set(view.messages.map((each) => each.executionId))
       writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
       await send(run, id, after, failures, seen)
-      const unsent = run.page.locator("[data-send-failure]")
+      // Said right under the message, in two words; Copy holds the rest.
+      const unsent = run.page.locator(css.unsent)
       if (!(await waitFor(async () => (await unsent.count()) === 1, 60_000)))
         failures.push("a send whose VM could not be opened was not shown as not sent")
-      else if (!(await unsent.textContent())?.includes("Error sending"))
+      else if (!(await unsent.textContent())?.includes("Container didn’t start"))
         failures.push(
           `a send whose VM could not be opened says ${JSON.stringify(await unsent.textContent())}`,
         )
+      if (
+        (await unsent.count()) === 1 &&
+        !(await unsent.evaluate((row) =>
+          row.closest('[data-role="user"]')?.hasAttribute("data-unsent"),
+        ))
+      )
+        failures.push("the row saying a send did not go is not under its message")
+      if ((await run.page.locator(css.sendFailure).count()) !== 0)
+        failures.push("a chat's composer still carries a card for a send that did not go")
       if (
         !run.stack.vmFixture
           .events()
@@ -4617,10 +4627,45 @@ const steps = {
       )
         failures.push("a failed VM opening was not recorded with its cause")
       if ((await unsent.count()) === 1) {
-        await unsent.getByRole("button", { name: "Send Again" }).click()
+        // Waking the rested VM is slowed so a person sees each step: the
+        // live row names it instead of Thinking, and the reply then says
+        // how long the container took, opening to each step.
+        writeFileSync(join(run.stack.vmFixture.root, `slow-next-open-${id}`), "3000")
+        const said = new Set()
+        const live = run.page.locator(".workspace-live")
+        const watching = (async () => {
+          const until = Date.now() + 30_000
+          while (Date.now() < until && !said.has("done")) {
+            const text = await live
+              .first()
+              .textContent({ timeout: 200 })
+              .catch(() => null)
+            if (text) said.add(text.replace(/\d+:\d+.*$/, "").trim())
+            await sleep(100)
+          }
+        })()
+        await unsent.getByRole("button", { name: "Send again" }).click()
         await settled(run, id, seen, after, "completed", failures)
+        said.add("done")
+        await watching
+        if (![...said].some((text) => text.startsWith("Waking container")))
+          failures.push(`waking a rested VM did not say so: ${JSON.stringify([...said])}`)
         if (!(await waitFor(async () => (await unsent.count()) === 0, 10_000)))
           failures.push("the message sent again still shows as not sent")
+        const ready = run.page
+          .locator('[data-role="agent"] [data-setup-trace]')
+          .filter({ hasText: /Container ready in \d+s/ })
+        if (!(await waitFor(async () => (await ready.count()) >= 1, 10_000)))
+          failures.push("a reply that waited on its VM does not say how long it took")
+        else {
+          await ready.last().locator('[data-slot="tool-trace-line"]').click()
+          const listed = await ready
+            .last()
+            .locator('[data-slot="tool-trace-step"]')
+            .allTextContents()
+          if (!listed.some((text) => text.includes("Waking container")))
+            failures.push(`the container's steps list ${JSON.stringify(listed)}`)
+        }
       }
       if (run.evidence)
         writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
@@ -4888,8 +4933,8 @@ const steps = {
     // given first; the person's own message is the text they sent.
     const echoed = turn?.retried ? "[" : text
     await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
-    if ((await run.page.locator(css.sendFailure).count()) > 0)
-      failures.push("the composer shows a send failure")
+    if ((await run.page.locator(`${css.sendFailure}, ${css.unsent}`).count()) > 0)
+      failures.push("the window shows a send failure")
     // The message after a sign-in refusal supersedes it (ADR 501).
     if (
       step.after === "signIn" &&
@@ -10114,9 +10159,9 @@ const steps = {
           failures.push("the new window conversation did not use the exact fixture model")
         await expectShown(run.page, `${SAYS.echo}${text}`, failures)
       }
-      // Answered or not, a send the window took and then failed says so in
-      // its composer, with the code it was refused with.
-      const refused = run.page.locator(css.sendFailure)
+      // Answered or not, a send the window took and then failed says so
+      // under its message.
+      const refused = run.page.locator(`${css.sendFailure}, ${css.unsent}`)
       if ((await refused.count()) > 0)
         failures.push(
           `the first message of a new conversation failed: ${fold(await refused.first().innerText())}`,
