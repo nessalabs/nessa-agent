@@ -72,8 +72,10 @@ transcription model is also asked for clean punctuated text.
 
 A new chat's home offers Talk too, so a chat can be started by talking. The
 call is about the id the window chose for the new chat, which the gateway
-does not know yet: `voice.startCall` lets the owner (and only the owner,
-who alone may start a chat anywhere) call about a chat that is not there.
+does not know yet: `voice.startCall` admits a call about a chat that is
+not there when Cedar says the caller may start one, asked as `channel.use`
+on the owner's channel (only the owner's own surface is permitted; a phone
+asks its own policy for `conversation.create`).
 The voice's first `send_to_agent` sends the person's words as the first
 typed message would, which starts the chat, and the call goes on in the
 conversation that takes the home's place.
