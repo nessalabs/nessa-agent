@@ -2282,19 +2282,20 @@ async fn a_full_raise_whose_answer_cannot_be_audited_fails_after_trying_every_re
         AgentError::AuditFailure,
         nessa_sdk::application::agent_execution::permissions::PermissionSelectionState::Pending,
     ));
-    let raised = service
-        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
-        .await;
-    assert!(
+    let raiser = caller();
+    let raise =
+        || service.set_approval_mode(id.clone(), raiser.clone(), ConversationApprovalMode::Full);
+    let audit_failed = |raised: &Result<ConversationApprovalMode, ConversationError>| {
         matches!(
             raised,
             Err(ConversationError::PermissionAnswer {
                 error: AgentError::AuditFailure,
                 ..
             })
-        ),
-        "{raised:?}"
-    );
+        )
+    };
+    let raised = raise().await;
+    assert!(audit_failed(&raised), "{raised:?}");
     // Each review was tried, and the mode the agent took stays taken.
     assert_eq!(provider.permission_answers.lock().unwrap().len(), 2);
     let view = service.read(id.clone(), caller()).await.unwrap();
@@ -2302,6 +2303,26 @@ async fn a_full_raise_whose_answer_cannot_be_audited_fails_after_trying_every_re
         view.selection.unwrap().approval_mode,
         ConversationApprovalMode::Full
     );
+    assert_eq!(view.permissions.len(), 2);
+    // A replay of the same request (a lost reply, a retry) tries the
+    // unanswered reviews again and still reports their failure, never the
+    // saved mode alone.
+    let replayed = raise().await;
+    assert!(audit_failed(&replayed), "{replayed:?}");
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 4);
+    // Once they can be audited, the replay answers them and succeeds.
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
+    assert!(service
+        .read(id.clone(), caller())
+        .await
+        .unwrap()
+        .permissions
+        .is_empty());
+    // Nothing is left to replay.
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
     let _ = finish.send(());
     service.shutdown().await.unwrap();
 }
