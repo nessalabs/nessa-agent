@@ -1984,7 +1984,10 @@ describe("the view's machine setup", () => {
       [[running, running, running], /setup/],
       [[{ ...running, state: "paused" }], /conversation state/],
       [[{ ...running, steps: [] }], /setup steps/],
-      [[{ ...running, steps: [{ step: "booting", startedAtMs: 1 }] }], /conversation step/],
+      [
+        [{ ...running, steps: [{ step: "booting", startedAtMs: 1 }] }],
+        /conversation step/,
+      ],
       [[{ ...running, steps: [{ step: "waking", startedAtMs: -1 }] }], /startedAtMs/],
       [[{ ...running, extra: 1 }], /unknown fields/],
     ]
