@@ -349,4 +349,74 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     expect(after?.detail).toBe("quota exceeded")
     registry.dispose()
   })
+
+  it("creates, sleeps, wakes with URL rotation (G8), and deletes a Cloud Box gateway (#1420)", async () => {
+    const { store, current } = memoryStore()
+    const credentialStore = inMemoryGatewayCredentialStore()
+    const remote1 = fakeRemoteClient("gw-cloud-1")
+    const remote2 = fakeRemoteClient("gw-cloud-1")
+    let calls = 0
+    const connectRemote: RemoteClientConnector = vi.fn(async () => {
+      calls += 1
+      return calls === 1 ? remote1.client : remote2.client
+    })
+    const cloudBoxes = {
+      create: vi.fn(
+        async ({ name, cloud }: { name: string; cloud: "boat" | "agent37" }) => ({
+          boxId: "11111111-2222-3333-4444-555555555555",
+          name,
+          cloud,
+          gatewayId: "gw-cloud-1",
+          url: "wss://box-1.example.com",
+          credential: "enroll-secret",
+        }),
+      ),
+      wake: vi.fn(async () => ({
+        gatewayId: "gw-cloud-1",
+        url: "wss://box-1-rotated.example.com",
+      })),
+      sleep: vi.fn(async () => {}),
+      delete: vi.fn(async () => {}),
+    }
+
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store,
+      credentialStore,
+      now: () => 2000,
+      after: () => () => {},
+      connectRemote,
+      cloudBoxes,
+    })
+
+    const created = await registry.createCloudBox!({
+      name: "Cloud Box",
+      cloud: "agent37",
+    })
+    expect(created.gatewayId).toBe("gw-cloud-1")
+    expect(created.cloudBox).toEqual({
+      boxId: "11111111-2222-3333-4444-555555555555",
+      cloud: "agent37",
+    })
+    expect(credentialStore.read("gw-cloud-1")).toBe("enroll-secret")
+    expect(current()[0]?.cloudBox?.boxId).toBe("11111111-2222-3333-4444-555555555555")
+
+    await registry.sleepCloudBox!("gw-cloud-1")
+    expect(cloudBoxes.sleep).toHaveBeenCalledWith("11111111-2222-3333-4444-555555555555")
+    expect(registry.list().find((g) => g.gatewayId === "gw-cloud-1")?.status).toBe(
+      "disconnected",
+    )
+
+    // G8: wake refreshes rotated URL and reconnects.
+    await registry.wake!("gw-cloud-1")
+    expect(cloudBoxes.wake).toHaveBeenCalledWith("11111111-2222-3333-4444-555555555555")
+    expect(current()[0]?.url).toBe("wss://box-1-rotated.example.com/")
+
+    // G11: deleteCloudBox destroys VM and removes gateway.
+    await registry.deleteCloudBox!("gw-cloud-1")
+    expect(cloudBoxes.delete).toHaveBeenCalledWith("11111111-2222-3333-4444-555555555555")
+    expect(registry.list().map((g) => g.gatewayId)).toEqual(["local"])
+    expect(credentialStore.read("gw-cloud-1")).toBeNull()
+    registry.dispose()
+  })
 })

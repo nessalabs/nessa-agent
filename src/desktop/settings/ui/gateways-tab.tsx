@@ -1,9 +1,10 @@
 /**
- * Settings › Connections › Gateways (ADR 1417, #1419).
+ * Settings › Connections › Gateways (ADR 1417, #1419, #1420).
  *
  * Lists the local host gateway alongside every registered remote `nessa-server`
- * gateway with live connection status, reconnect, and remove actions, plus an
- * "Add remote gateway" form that verifies the handshake before saving (G7).
+ * gateway (both self-hosted and managed Cloud Box VMs) with live connection
+ * status, wake/sleep/reconnect/delete/remove actions, an "Add remote gateway"
+ * form (G7), and a "Create Cloud Box" form (#1420).
  */
 import {
   createContext,
@@ -47,7 +48,11 @@ export function GatewaysTab() {
   const [credential, setCredential] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [removingIds, setRemovingIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [boxName, setBoxName] = useState("")
+  const [boxCloud, setBoxCloud] = useState<"agent37" | "boat">("agent37")
+  const [creatingBox, setCreatingBox] = useState(false)
+  const [boxError, setBoxError] = useState<string | null>(null)
+  const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set())
 
   useEffect(() => {
     if (!registry) return
@@ -61,6 +66,27 @@ export function GatewaysTab() {
         <p>Connect to a gateway to manage additional remote gateways.</p>
       </div>
     )
+  }
+
+  const runRowAction = async (
+    gatewayId: string,
+    action: () => Promise<void>,
+    fallbackError: string,
+  ) => {
+    if (pendingIds.has(gatewayId)) return
+    setError(null)
+    setPendingIds((prev) => new Set(prev).add(gatewayId))
+    try {
+      await action()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : fallbackError)
+    } finally {
+      setPendingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(gatewayId)
+        return next
+      })
+    }
   }
 
   const submitAdd = async () => {
@@ -85,21 +111,24 @@ export function GatewaysTab() {
     void submitAdd()
   }
 
-  const handleRemove = async (gatewayId: string) => {
-    if (removingIds.has(gatewayId)) return
-    setError(null)
-    setRemovingIds((prev) => new Set(prev).add(gatewayId))
+  const submitCreateBox = async () => {
+    if (!registry.createCloudBox || creatingBox) return
+    if (boxName.trim() === "") return
+    setBoxError(null)
+    setCreatingBox(true)
     try {
-      await registry.remove(gatewayId)
+      await registry.createCloudBox({ name: boxName.trim(), cloud: boxCloud })
+      setBoxName("")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove gateway.")
+      setBoxError(err instanceof Error ? err.message : "Could not create Cloud Box.")
     } finally {
-      setRemovingIds((prev) => {
-        const next = new Set(prev)
-        next.delete(gatewayId)
-        return next
-      })
+      setCreatingBox(false)
     }
+  }
+
+  const handleCreateBoxSubmit = (event: FormEvent) => {
+    event.preventDefault()
+    void submitCreateBox()
   }
 
   return (
@@ -108,39 +137,152 @@ export function GatewaysTab() {
         title="Connected gateways"
         note="Each gateway runs its own channels, agents, and terminals. Disconnecting one never disturbs the others."
       >
-        {gateways.map((gateway) => (
-          <ItemRow
-            key={gateway.gatewayId}
-            label={gateway.label}
-            detail={
-              gateway.isLocal
-                ? `Local host · ${gatewayStatusLabel(gateway.status)}`
-                : `${gateway.url} · ${gatewayStatusLabel(gateway.status)}${
-                    gateway.detail ? ` — ${gateway.detail}` : ""
-                  }`
-            }
-            control={
-              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                {!gateway.isLocal &&
-                  gateway.status !== "connected" &&
-                  gateway.status !== "auth-refused" && (
-                    <RowAction onClick={() => registry.reconnect(gateway.gatewayId)}>
-                      Reconnect
+        {gateways.map((gateway) => {
+          const isPending = pendingIds.has(gateway.gatewayId)
+          const cloudBox = gateway.cloudBox
+          const wake = registry.wake
+          const sleepCloudBox = registry.sleepCloudBox
+          const deleteCloudBox = registry.deleteCloudBox
+          return (
+            <ItemRow
+              key={gateway.gatewayId}
+              label={gateway.label}
+              detail={
+                gateway.isLocal
+                  ? `Local host · ${gatewayStatusLabel(gateway.status)}`
+                  : `${cloudBox ? `Cloud Box (${cloudBox.cloud}) · ` : ""}${gateway.url} · ${gatewayStatusLabel(gateway.status)}${
+                      gateway.detail ? ` — ${gateway.detail}` : ""
+                    }`
+              }
+              control={
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  {cloudBox &&
+                    wake &&
+                    gateway.status !== "connected" &&
+                    gateway.status !== "waking" &&
+                    gateway.status !== "auth-refused" && (
+                      <RowAction
+                        disabled={isPending}
+                        onClick={() =>
+                          void runRowAction(
+                            gateway.gatewayId,
+                            () => wake(gateway.gatewayId),
+                            "Could not wake Cloud Box.",
+                          )
+                        }
+                      >
+                        Wake
+                      </RowAction>
+                    )}
+                  {cloudBox && sleepCloudBox && gateway.status === "connected" && (
+                    <RowAction
+                      disabled={isPending}
+                      onClick={() =>
+                        void runRowAction(
+                          gateway.gatewayId,
+                          () => sleepCloudBox(gateway.gatewayId),
+                          "Could not sleep Cloud Box.",
+                        )
+                      }
+                    >
+                      Sleep
                     </RowAction>
                   )}
-                {!gateway.isLocal && (
-                  <RowAction
-                    disabled={removingIds.has(gateway.gatewayId)}
-                    onClick={() => void handleRemove(gateway.gatewayId)}
-                  >
-                    Remove
-                  </RowAction>
-                )}
-              </div>
-            }
-          />
-        ))}
+                  {!gateway.isLocal &&
+                    !cloudBox &&
+                    gateway.status !== "connected" &&
+                    gateway.status !== "auth-refused" && (
+                      <RowAction onClick={() => registry.reconnect(gateway.gatewayId)}>
+                        Reconnect
+                      </RowAction>
+                    )}
+                  {cloudBox && deleteCloudBox && (
+                    <RowAction
+                      disabled={isPending}
+                      onClick={() =>
+                        void runRowAction(
+                          gateway.gatewayId,
+                          () => deleteCloudBox(gateway.gatewayId),
+                          "Could not delete Cloud Box VM.",
+                        )
+                      }
+                    >
+                      Delete VM
+                    </RowAction>
+                  )}
+                  {!gateway.isLocal && (
+                    <RowAction
+                      disabled={isPending}
+                      onClick={() =>
+                        void runRowAction(
+                          gateway.gatewayId,
+                          () => registry.remove(gateway.gatewayId),
+                          "Could not remove gateway.",
+                        )
+                      }
+                    >
+                      Remove
+                    </RowAction>
+                  )}
+                </div>
+              }
+            />
+          )
+        })}
       </Group>
+
+      {registry.createCloudBox && (
+        <Group
+          title="Create Cloud Box"
+          note={
+            boxError ??
+            "Provision a persistent cloud VM running nessa-server. Your channels, files, and terminals stay on its disk across sleep and wake."
+          }
+        >
+          <form onSubmit={handleCreateBoxSubmit}>
+            <ItemRow
+              label="Name"
+              control={
+                <input
+                  type="text"
+                  aria-label="Cloud Box name"
+                  placeholder="Cloud Box"
+                  value={boxName}
+                  onChange={(event) => setBoxName(event.target.value)}
+                  disabled={creatingBox}
+                />
+              }
+            />
+            <ItemRow
+              label="Cloud"
+              control={
+                <select
+                  aria-label="Cloud provider"
+                  value={boxCloud}
+                  onChange={(event) =>
+                    setBoxCloud(event.target.value === "boat" ? "boat" : "agent37")
+                  }
+                  disabled={creatingBox}
+                >
+                  <option value="agent37">Agent37</option>
+                  <option value="boat">Boat</option>
+                </select>
+              }
+            />
+            <ItemRow
+              label=""
+              control={
+                <RowAction
+                  disabled={creatingBox || boxName.trim() === ""}
+                  onClick={() => void submitCreateBox()}
+                >
+                  {creatingBox ? "Creating…" : "Create Cloud Box"}
+                </RowAction>
+              }
+            />
+          </form>
+        </Group>
+      )}
 
       <Group
         title="Add remote gateway"
@@ -156,7 +298,7 @@ export function GatewaysTab() {
               <input
                 type="text"
                 aria-label="Gateway name"
-                placeholder="Cloud Box"
+                placeholder="Work Devbox"
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
                 disabled={busy}

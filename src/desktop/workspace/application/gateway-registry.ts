@@ -6,7 +6,7 @@
  * Implementations live in `adapters/gateway/gateway-registry-adapter.ts` so the
  * domain and application layers stay free of `@nessa/client` and transport details.
  */
-import type { GatewaySnapshot } from "../model/gateway-id"
+import type { CloudBoxMetadata, GatewaySnapshot } from "../model/gateway-id"
 
 export type GatewayRegistryFailure =
   | "invalid-url"
@@ -32,6 +32,12 @@ export interface AddGatewayInput {
   readonly label: string
   readonly url: string
   readonly credential: string
+  readonly cloudBox?: CloudBoxMetadata
+}
+
+export interface CreateCloudBoxInput {
+  readonly name: string
+  readonly cloud: "boat" | "agent37"
 }
 
 /**
@@ -61,6 +67,12 @@ export interface GatewayRegistryPort {
   updateEndpoint?(gatewayId: string, url: string): void
   /** Single-flight wake hook for sleeping cloud VM gateways (Phase 3, G3–G5). */
   wake?(gatewayId: string): Promise<void>
+  /** Provision, bootstrap, and enroll a persistent Cloud Box gateway VM (#1420). */
+  createCloudBox?(input: CreateCloudBoxInput): Promise<GatewaySnapshot>
+  /** Stop an idle persistent Cloud Box VM while keeping its gateway entry (#1420, G5). */
+  sleepCloudBox?(gatewayId: string): Promise<void>
+  /** Destroy a persistent Cloud Box VM and remove its gateway entry (#1420, G11). */
+  deleteCloudBox?(gatewayId: string): Promise<void>
   /** Tear down all managed remote connections and listeners. */
   dispose(): void
 }

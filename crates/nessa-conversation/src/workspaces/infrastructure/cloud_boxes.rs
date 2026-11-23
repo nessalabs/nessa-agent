@@ -10,12 +10,13 @@ use crate::workspaces::{
         CloudBoxStore, Provider, ProvisionedCloudBox, RestCause,
     },
     domain::{
-        Admitted, CloudBoxEndpoint, CloudBoxError, CloudBoxId, CloudBoxRecord, CloudBoxUrl,
-        CloudConnection, Failure, RefusalDisposition,
+        Admitted, Cloud, CloudBoxEndpoint, CloudBoxError, CloudBoxId, CloudBoxName, CloudBoxRecord,
+        CloudBoxState, CloudBoxUrl, CloudConnection, EnvironmentIdentity, Failure,
+        RefusalDisposition, TemplateRelease,
     },
 };
 use nessa_local_storage::{create_directory, OpenMode, PrivateDirectory};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsStr,
     fs,
@@ -34,6 +35,279 @@ const BOOTSTRAP_CREATE_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap creat
 /// Status command installed in gateway cloud images that ensures headless
 /// `nessa-server` is running after wake and prints its current JSON endpoint.
 const BOOTSTRAP_STATUS_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap status";
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredState {
+    Provisioning,
+    Running,
+    Sleeping,
+    Refused,
+    Deleted,
+}
+
+impl From<CloudBoxState> for StoredState {
+    fn from(value: CloudBoxState) -> Self {
+        match value {
+            CloudBoxState::Provisioning => Self::Provisioning,
+            CloudBoxState::Running => Self::Running,
+            CloudBoxState::Sleeping => Self::Sleeping,
+            CloudBoxState::Refused => Self::Refused,
+            CloudBoxState::Deleted => Self::Deleted,
+        }
+    }
+}
+
+impl From<StoredState> for CloudBoxState {
+    fn from(value: StoredState) -> Self {
+        match value {
+            StoredState::Provisioning => Self::Provisioning,
+            StoredState::Running => Self::Running,
+            StoredState::Sleeping => Self::Sleeping,
+            StoredState::Refused => Self::Refused,
+            StoredState::Deleted => Self::Deleted,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredAdmitted {
+    Boat {
+        id: String,
+        name: String,
+        version_id: String,
+        version: u32,
+    },
+    Agent37 {
+        template: String,
+        revision: Option<u64>,
+        digest: Option<String>,
+    },
+}
+
+impl From<&Admitted> for StoredAdmitted {
+    fn from(value: &Admitted) -> Self {
+        match value {
+            Admitted::Boat(v) => Self::Boat {
+                id: v.id().into(),
+                name: v.name().into(),
+                version_id: v.version_id().into(),
+                version: v.version(),
+            },
+            Admitted::Agent37(v) => Self::Agent37 {
+                template: v.template().into(),
+                revision: v.revision(),
+                digest: v.digest().map(str::to_owned),
+            },
+        }
+    }
+}
+
+impl TryFrom<StoredAdmitted> for Admitted {
+    type Error = CloudBoxError;
+    fn try_from(value: StoredAdmitted) -> Result<Self, Self::Error> {
+        match value {
+            StoredAdmitted::Boat {
+                id,
+                name,
+                version_id,
+                version,
+            } => EnvironmentIdentity::new(id, name, version_id, version).map(Admitted::Boat),
+            StoredAdmitted::Agent37 {
+                template,
+                revision,
+                digest,
+            } => TemplateRelease::new(template, revision, digest).map(Admitted::Agent37),
+        }
+        .map_err(|_| CloudBoxError::ReceiptUnavailable("invalid admission identity".into()))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredCloudBoxRecord {
+    Provisioning {
+        box_id: String,
+        name: String,
+        cloud: String,
+        created_at_ms: u64,
+    },
+    Active {
+        box_id: String,
+        name: String,
+        cloud: String,
+        vm: String,
+        image: String,
+        admission: StoredAdmitted,
+        gateway_id: String,
+        url: String,
+        state: StoredState,
+        created_at_ms: u64,
+        updated_at_ms: u64,
+    },
+    Refused {
+        box_id: String,
+        name: String,
+        cloud: String,
+        reason: String,
+        updated_at_ms: u64,
+    },
+    Deleted {
+        box_id: String,
+        vm: Option<String>,
+        updated_at_ms: u64,
+    },
+}
+
+impl From<&CloudBoxRecord> for StoredCloudBoxRecord {
+    fn from(record: &CloudBoxRecord) -> Self {
+        match record {
+            CloudBoxRecord::Provisioning {
+                box_id,
+                name,
+                cloud,
+                created_at_ms,
+            } => Self::Provisioning {
+                box_id: box_id.as_str().to_owned(),
+                name: name.as_str().to_owned(),
+                cloud: cloud.as_str().to_owned(),
+                created_at_ms: *created_at_ms,
+            },
+            CloudBoxRecord::Active {
+                box_id,
+                name,
+                cloud,
+                vm,
+                image,
+                admission,
+                gateway_id,
+                url,
+                state,
+                created_at_ms,
+                updated_at_ms,
+            } => Self::Active {
+                box_id: box_id.as_str().to_owned(),
+                name: name.as_str().to_owned(),
+                cloud: cloud.as_str().to_owned(),
+                vm: vm.clone(),
+                image: image.clone(),
+                admission: StoredAdmitted::from(admission),
+                gateway_id: gateway_id.clone(),
+                url: url.as_str().to_owned(),
+                state: StoredState::from(*state),
+                created_at_ms: *created_at_ms,
+                updated_at_ms: *updated_at_ms,
+            },
+            CloudBoxRecord::Refused {
+                box_id,
+                name,
+                cloud,
+                reason,
+                updated_at_ms,
+            } => Self::Refused {
+                box_id: box_id.as_str().to_owned(),
+                name: name.as_str().to_owned(),
+                cloud: cloud.as_str().to_owned(),
+                reason: reason.clone(),
+                updated_at_ms: *updated_at_ms,
+            },
+            CloudBoxRecord::Deleted {
+                box_id,
+                vm,
+                updated_at_ms,
+            } => Self::Deleted {
+                box_id: box_id.as_str().to_owned(),
+                vm: vm.clone(),
+                updated_at_ms: *updated_at_ms,
+            },
+        }
+    }
+}
+
+impl TryFrom<StoredCloudBoxRecord> for CloudBoxRecord {
+    type Error = CloudBoxError;
+    fn try_from(stored: StoredCloudBoxRecord) -> Result<Self, Self::Error> {
+        let parse_cloud = |word: &str| {
+            Cloud::parse(word).ok_or_else(|| {
+                CloudBoxError::ReceiptUnavailable(format!("unknown cloud provider `{word}`"))
+            })
+        };
+        match stored {
+            StoredCloudBoxRecord::Provisioning {
+                box_id,
+                name,
+                cloud,
+                created_at_ms,
+            } => Ok(Self::Provisioning {
+                box_id: CloudBoxId::parse(box_id)?,
+                name: CloudBoxName::new(name)?,
+                cloud: parse_cloud(&cloud)?,
+                created_at_ms,
+            }),
+            StoredCloudBoxRecord::Active {
+                box_id,
+                name,
+                cloud,
+                vm,
+                image,
+                admission,
+                gateway_id,
+                url,
+                state,
+                created_at_ms,
+                updated_at_ms,
+            } => Ok(Self::Active {
+                box_id: CloudBoxId::parse(box_id)?,
+                name: CloudBoxName::new(name)?,
+                cloud: parse_cloud(&cloud)?,
+                vm,
+                image,
+                admission: Admitted::try_from(admission)?,
+                gateway_id,
+                url: CloudBoxUrl::new(url)?,
+                state: CloudBoxState::from(state),
+                created_at_ms,
+                updated_at_ms,
+            }),
+            StoredCloudBoxRecord::Refused {
+                box_id,
+                name,
+                cloud,
+                reason,
+                updated_at_ms,
+            } => Ok(Self::Refused {
+                box_id: CloudBoxId::parse(box_id)?,
+                name: CloudBoxName::new(name)?,
+                cloud: parse_cloud(&cloud)?,
+                reason,
+                updated_at_ms,
+            }),
+            StoredCloudBoxRecord::Deleted {
+                box_id,
+                vm,
+                updated_at_ms,
+            } => Ok(Self::Deleted {
+                box_id: CloudBoxId::parse(box_id)?,
+                vm,
+                updated_at_ms,
+            }),
+        }
+    }
+}
+
+fn decode_history(bytes: &[u8]) -> Result<Vec<CloudBoxRecord>, CloudBoxError> {
+    let stored: Vec<StoredCloudBoxRecord> = serde_json::from_slice(bytes)
+        .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+    stored.into_iter().map(CloudBoxRecord::try_from).collect()
+}
+
+fn encode_history(history: &[CloudBoxRecord]) -> Result<Vec<u8>, CloudBoxError> {
+    let stored: Vec<StoredCloudBoxRecord> =
+        history.iter().map(StoredCloudBoxRecord::from).collect();
+    serde_json::to_vec_pretty(&stored)
+        .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))
+}
 
 /// File-backed [`CloudBoxStore`] storing one validated JSON history per box.
 pub struct FileCloudBoxStore {
@@ -83,9 +357,7 @@ impl CloudBoxStore for FileCloudBoxStore {
                     path.display()
                 )));
             }
-            let history: Vec<CloudBoxRecord> = serde_json::from_slice(&bytes)
-                .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-            histories.push(history);
+            histories.push(decode_history(&bytes)?);
         }
         Ok(histories)
     }
@@ -111,8 +383,7 @@ impl CloudBoxStore for FileCloudBoxStore {
                 "cloud box receipt history exceeded maximum size".into(),
             ));
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))
+        decode_history(&bytes)
     }
 
     fn append(&self, box_id: &CloudBoxId, record: CloudBoxRecord) -> Result<(), CloudBoxError> {
@@ -120,8 +391,7 @@ impl CloudBoxStore for FileCloudBoxStore {
         history.push(record);
         CloudBoxRecord::validate_history(&history)?;
 
-        let bytes = serde_json::to_vec_pretty(&history)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        let bytes = encode_history(&history)?;
         if bytes.len() as u64 > MAX_HISTORY_BYTES {
             return Err(CloudBoxError::ReceiptUnavailable(
                 "cloud box receipt history exceeded maximum size".into(),

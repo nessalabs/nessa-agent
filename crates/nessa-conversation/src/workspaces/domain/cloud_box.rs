@@ -8,7 +8,6 @@
 //! secret enrollment credentials are never written to receipt history.
 
 use super::{Admitted, Cloud};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -62,8 +61,7 @@ impl fmt::Display for CloudBoxError {
 impl std::error::Error for CloudBoxError {}
 
 /// Validated UUID identifying a persistent cloud gateway VM.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CloudBoxId(String);
 
 impl CloudBoxId {
@@ -85,8 +83,7 @@ impl fmt::Display for CloudBoxId {
 }
 
 /// Validated display label for a persistent cloud gateway VM.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudBoxName(String);
 
 impl CloudBoxName {
@@ -114,8 +111,7 @@ impl fmt::Display for CloudBoxName {
 
 /// Validated WebSocket endpoint URL for a cloud box gateway (`wss://` for
 /// remote hosts, or numeric loopback `ws://127.0.0.1` / `ws://[::1]` for tests).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudBoxUrl(String);
 
 impl CloudBoxUrl {
@@ -152,8 +148,7 @@ impl fmt::Display for CloudBoxUrl {
 }
 
 /// Observed lifecycle state of a persistent cloud gateway VM.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudBoxState {
     Provisioning,
     Running,
@@ -163,18 +158,17 @@ pub enum CloudBoxState {
 }
 
 /// Verified remote gateway reachability endpoint returned on create or wake.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudBoxEndpoint {
     pub gateway_id: String,
     pub url: CloudBoxUrl,
 }
 
 /// Non-secret summary of a persistent cloud gateway VM exposed to clients.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudBoxSummary {
     pub box_id: CloudBoxId,
     pub name: CloudBoxName,
-    #[serde(with = "serde_cloud")]
     pub cloud: Cloud,
     pub vm: String,
     pub gateway_id: String,
@@ -192,88 +186,13 @@ pub struct CloudBoxEnrollment {
     pub credential: Zeroizing<String>,
 }
 
-mod serde_cloud {
-    use crate::workspaces::domain::Cloud;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(cloud: &Cloud, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(cloud.as_str())
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Cloud, D::Error> {
-        let word = String::deserialize(deserializer)?;
-        Cloud::parse(&word)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown cloud provider `{word}`")))
-    }
-}
-
-mod serde_admitted {
-    use crate::workspaces::domain::{Admitted, EnvironmentIdentity, TemplateRelease};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    #[derive(Serialize, Deserialize)]
-    #[serde(untagged)]
-    enum Wire {
-        Boat(BoatWire),
-        Agent37(Agent37Wire),
-    }
-
-    #[derive(Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct BoatWire {
-        id: String,
-        name: String,
-        version_id: String,
-        version: u32,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Agent37Wire {
-        template: String,
-        revision: Option<u64>,
-        digest: Option<String>,
-    }
-
-    pub fn serialize<S: Serializer>(value: &Admitted, serializer: S) -> Result<S::Ok, S::Error> {
-        match value {
-            Admitted::Boat(v) => Wire::Boat(BoatWire {
-                id: v.id().into(),
-                name: v.name().into(),
-                version_id: v.version_id().into(),
-                version: v.version(),
-            }),
-            Admitted::Agent37(v) => Wire::Agent37(Agent37Wire {
-                template: v.template().into(),
-                revision: v.revision(),
-                digest: v.digest().map(str::to_owned),
-            }),
-        }
-        .serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Admitted, D::Error> {
-        match Wire::deserialize(deserializer)? {
-            Wire::Boat(w) => {
-                EnvironmentIdentity::new(w.id, w.name, w.version_id, w.version).map(Admitted::Boat)
-            }
-            Wire::Agent37(w) => {
-                TemplateRelease::new(w.template, w.revision, w.digest).map(Admitted::Agent37)
-            }
-        }
-        .map_err(|_| serde::de::Error::custom("invalid environment admission identity"))
-    }
-}
-
 /// Append-only durable receipt history record for one cloud box (ADR 1160).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CloudBoxRecord {
     /// Durable intent persisted before any provider VM creation call.
     Provisioning {
         box_id: CloudBoxId,
         name: CloudBoxName,
-        #[serde(with = "serde_cloud")]
         cloud: Cloud,
         created_at_ms: u64,
     },
@@ -281,11 +200,9 @@ pub enum CloudBoxRecord {
     Active {
         box_id: CloudBoxId,
         name: CloudBoxName,
-        #[serde(with = "serde_cloud")]
         cloud: Cloud,
         vm: String,
         image: String,
-        #[serde(with = "serde_admitted")]
         admission: Admitted,
         gateway_id: String,
         url: CloudBoxUrl,
@@ -297,7 +214,6 @@ pub enum CloudBoxRecord {
     Refused {
         box_id: CloudBoxId,
         name: CloudBoxName,
-        #[serde(with = "serde_cloud")]
         cloud: Cloud,
         reason: String,
         updated_at_ms: u64,
