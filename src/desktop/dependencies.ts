@@ -316,6 +316,10 @@ export function createDesktopDependencies(
           now,
           after,
           newId,
+          imageBytes: {
+            bytes: async (url) => (await fetch(url)).blob(),
+            digest: sha256Digest,
+          },
           connectRemote: options.connectRemote,
         })
       : undefined

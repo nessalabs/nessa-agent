@@ -318,4 +318,64 @@ describe("multiGatewaySource (ADR 1417 G1, G2, G6, G9, G10, G11)", () => {
     })
     unsub()
   })
+
+  it("preserves last known remote channels and sessions during transient reconnects, and drops them on removal", async () => {
+    const local = fakeWorkspaceSource("Local")
+    const cloud = fakeWorkspaceSource("Cloud")
+    const { backing, setEntries } = makeBacking([
+      {
+        gatewayId: LOCAL_GATEWAY_ID,
+        label: "This Mac",
+        status: "connected",
+        workspace: local.source,
+      },
+      {
+        gatewayId: "cloud-1",
+        label: "Cloud Box",
+        status: "connected",
+        workspace: cloud.source,
+      },
+    ])
+    const composite = multiGatewaySource(backing)
+
+    // First load populates cache for cloud-1.
+    const initial = await composite.index()
+    expect(initial.sessions.map((s) => s.id)).toEqual([
+      "sess-1",
+      qualifyEntityId("cloud-1", "sess-1"),
+    ])
+
+    // Transient reconnecting state preserves cloud-1's channels and sessions.
+    setEntries([
+      {
+        gatewayId: LOCAL_GATEWAY_ID,
+        label: "This Mac",
+        status: "connected",
+        workspace: local.source,
+      },
+      {
+        gatewayId: "cloud-1",
+        label: "Cloud Box",
+        status: "reconnecting",
+        workspace: cloud.source,
+      },
+    ])
+    const duringReconnect = await composite.index()
+    expect(duringReconnect.sessions.map((s) => s.id)).toEqual([
+      "sess-1",
+      qualifyEntityId("cloud-1", "sess-1"),
+    ])
+
+    // Explicit removal evicts cloud-1 from the index.
+    setEntries([
+      {
+        gatewayId: LOCAL_GATEWAY_ID,
+        label: "This Mac",
+        status: "connected",
+        workspace: local.source,
+      },
+    ])
+    const afterRemove = await composite.index()
+    expect(afterRemove.sessions.map((s) => s.id)).toEqual(["sess-1"])
+  })
 })

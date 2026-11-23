@@ -264,6 +264,41 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     registry.dispose()
   })
 
+  it("rejects and closes a reconnected endpoint reporting a different gatewayId", async () => {
+    const { store } = memoryStore()
+    const credentialStore = inMemoryGatewayCredentialStore()
+    const original = fakeRemoteClient("gw-original")
+    const imposter = fakeRemoteClient("gw-other-server")
+    let calls = 0
+    const connectRemote: RemoteClientConnector = vi.fn(async () => {
+      calls += 1
+      return calls === 1 ? original.client : imposter.client
+    })
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store,
+      credentialStore,
+      now: () => 1000,
+      after: () => () => {},
+      connectRemote,
+    })
+
+    await registry.add({
+      label: "Box",
+      url: "wss://box-1.example.com",
+      credential: "tok",
+    })
+    registry.updateEndpoint!("gw-original", "wss://box-reassigned.example.com")
+    // Allow reconnect promise to settle.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(imposter.closed).toHaveBeenCalledTimes(1)
+    expect(registry.list().find((g) => g.gatewayId === "gw-original")?.status).toBe(
+      "refused",
+    )
+    registry.dispose()
+  })
+
   it("coalesces concurrent wake() calls (G3) and marks refused on wake error (G4)", async () => {
     const { store } = memoryStore()
     const credentialStore = inMemoryGatewayCredentialStore()

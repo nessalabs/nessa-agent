@@ -48,7 +48,12 @@ import {
   type RemoteGatewayCredentialStore,
   type RemoteGatewayStore,
 } from "../storage/gateway-store"
-import { gatewaySource, type GatewayClient, type GatewaySource } from "./gateway-source"
+import {
+  gatewaySource,
+  type GatewayClient,
+  type GatewaySource,
+  type ImageBytes,
+} from "./gateway-source"
 import { terminalGateway, type TerminalClient } from "./terminal-gateway"
 import { channelGateway } from "./channel-gateway"
 import type { ManagedWorkspaceGateway } from "./multi-gateway-source"
@@ -82,6 +87,8 @@ export interface GatewayRegistryOptions {
   readonly now: () => number
   readonly after: (ms: number, run: () => void) => () => void
   readonly newId?: () => string
+  /** Attachment byte reader + digest for remote conversations (Codex P2). */
+  readonly imageBytes?: ImageBytes
   /** Injectable connector seam for tests; defaults to `NessaClient.connect`. */
   readonly connectRemote?: RemoteClientConnector
   /** Optional wake provider seam for sleeping Cloud VM gateways (Phase 3). */
@@ -325,6 +332,19 @@ export function createGatewayRegistry(
           void client.close()
           throw new GatewayRegistryError("offline", "Gateway was removed")
         }
+        const reportedGatewayId = client.productSession?.gatewayId?.trim() ?? ""
+        if (reportedGatewayId !== entry.record.gatewayId) {
+          try {
+            void client.close()
+          } catch {
+            // Ignore close failure on rejected identity.
+          }
+          entry.status = "refused"
+          entry.detail = "Connected endpoint reported a different gateway identity."
+          entry.updatedAtMs = options.now()
+          notifySnapshots()
+          throw new GatewayRegistryError("connect-failed", entry.detail)
+        }
         bindClientState(client)
         entry.status = "connected"
         entry.detail = undefined
@@ -336,10 +356,13 @@ export function createGatewayRegistry(
           markAuthRefused(entry, "Credentials were rejected — re-pair this gateway.")
           throw error
         }
-        entry.status = "disconnected"
-        entry.detail = error instanceof Error ? error.message : "Could not reach gateway"
-        entry.updatedAtMs = options.now()
-        notifySnapshots()
+        if (entry.status !== "refused") {
+          entry.status = "disconnected"
+          entry.detail =
+            error instanceof Error ? error.message : "Could not reach gateway"
+          entry.updatedAtMs = options.now()
+          notifySnapshots()
+        }
         throw error
       }
     }
@@ -347,6 +370,7 @@ export function createGatewayRegistry(
     const source = gatewaySource({
       connect,
       clock: { now: options.now, after: options.after },
+      imageBytes: options.imageBytes,
     })
     entry.source = source
     entry.terminals = terminalGateway({

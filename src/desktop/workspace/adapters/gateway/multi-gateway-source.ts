@@ -136,6 +136,11 @@ function offlineError(status: GatewayConnectionState): WorkspaceSourceError {
 export function multiGatewaySource(
   backing: MultiGatewayWorkspaceBacking,
 ): WorkspaceSource {
+  // Preserve each gateway's last known index across transient disconnects and
+  // reconnects so `indexLoaded` never treats an unavailable partition as
+  // authoritative session deletions (`removedSince` tombstones).
+  const lastKnownIndexByGateway = new Map<string, WorkspaceIndex>()
+
   function resolveOwner(qualifiedId: string): {
     gateway: ManagedWorkspaceGateway
     rawId: string
@@ -159,6 +164,12 @@ export function multiGatewaySource(
   return {
     async index(): Promise<WorkspaceIndex> {
       const entries = backing.entries()
+      const activeIds = new Set(entries.map((entry) => entry.gatewayId))
+      for (const cachedId of lastKnownIndexByGateway.keys()) {
+        if (!activeIds.has(cachedId)) {
+          lastKnownIndexByGateway.delete(cachedId)
+        }
+      }
       if (entries.length === 0) {
         return { sections: [], channels: [], sessions: [] }
       }
@@ -187,6 +198,7 @@ export function multiGatewaySource(
         if (result.status === "fulfilled") {
           succeeded += 1
           const { idx } = result.value
+          lastKnownIndexByGateway.set(gateway.gatewayId, idx)
           for (const section of idx.sections) {
             sections.push(qualifySection(gateway, section, multi))
           }
@@ -198,13 +210,26 @@ export function multiGatewaySource(
           }
         } else {
           if (firstError === null) firstError = result.reason
-          // G1: keep an offline/connecting gateway visible as a section in the
-          // sidebar so its status badge remains visible.
-          sections.push({
-            id: qualifyEntityId(gateway.gatewayId, "gateway"),
-            name: gateway.label,
-            gatewayId: gateway.gatewayId,
-          })
+          const cached = lastKnownIndexByGateway.get(gateway.gatewayId)
+          if (cached) {
+            for (const section of cached.sections) {
+              sections.push(qualifySection(gateway, section, multi))
+            }
+            for (const channel of cached.channels) {
+              channels.push(qualifyChannel(gateway.gatewayId, channel))
+            }
+            for (const session of cached.sessions) {
+              sessions.push(qualifySession(gateway.gatewayId, session))
+            }
+          } else {
+            // G1: keep a never-loaded offline/connecting gateway visible as a
+            // section in the sidebar so its status badge remains visible.
+            sections.push({
+              id: qualifyEntityId(gateway.gatewayId, "gateway"),
+              name: gateway.label,
+              gatewayId: gateway.gatewayId,
+            })
+          }
         }
       }
 
