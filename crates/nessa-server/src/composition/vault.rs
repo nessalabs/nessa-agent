@@ -54,6 +54,7 @@ pub(super) fn compose(namespace: &Path) -> Arc<VaultRoutes> {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum HeadlessVaultError {
     NotRegularFile,
+    #[cfg(unix)]
     InsecurePermissions,
     TooLarge,
     ReadFailed,
@@ -67,6 +68,7 @@ impl fmt::Display for HeadlessVaultError {
             Self::NotRegularFile => {
                 f.write_str("vault passphrase file must be a regular, non-symlink file")
             }
+            #[cfg(unix)]
             Self::InsecurePermissions => {
                 f.write_str("vault passphrase file must not be accessible to group or other users")
             }
