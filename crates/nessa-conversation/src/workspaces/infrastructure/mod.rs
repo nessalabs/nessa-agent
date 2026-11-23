@@ -7,6 +7,7 @@ mod agent37;
 mod agent37_settings;
 mod assignments;
 mod boat;
+mod cloud_boxes;
 mod cloud_choice;
 mod runtime;
 mod settings;
@@ -15,6 +16,9 @@ pub use agent37::{Agent37Provider, SdkAgent37Enrollment};
 pub use agent37_settings::Agent37VaultSettings;
 pub use assignments::FileAssignments;
 pub use boat::{vm_config, BoatProvider};
+pub use cloud_boxes::{
+    FileCloudBoxStore, IdleActiveWorkChecker, TracingCloudBoxAudit, WorkspaceCloudBoxProvider,
+};
 pub use cloud_choice::FileCloudChoice;
 pub use settings::VaultSettings;
 

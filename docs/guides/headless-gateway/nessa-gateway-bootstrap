@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Reference bootstrap helper installed at /opt/nessa/bin/nessa-gateway-bootstrap
+# inside persistent cloud gateway VM images (ADR 1417 / #1420).
+#
+# Contract:
+#   nessa-gateway-bootstrap create
+#     Ensures headless nessa-server is running and prints a single JSON line:
+#     {"gateway_id":"<id>","url":"wss://<host>","credential":"<one-time-token>"}
+#
+#   nessa-gateway-bootstrap status
+#     Ensures headless nessa-server is running after VM wake and prints:
+#     {"gateway_id":"<id>","url":"wss://<host>"}
+set -euo pipefail
+
+cmd="${1:-status}"
+state_dir="${NESSA_STATE_DIR:-/var/lib/nessa}"
+gateway_id_file="${state_dir}/gateway-id"
+url_file="${state_dir}/endpoint-url"
+token_file="${state_dir}/owner.token"
+
+systemctl is-active --quiet nessa-server.service || systemctl start nessa-server.service
+
+for _ in $(seq 1 30); do
+  if [[ -s "${gateway_id_file}" && -s "${url_file}" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+gateway_id="$(tr -d '\r\n' < "${gateway_id_file}")"
+url="$(tr -d '\r\n' < "${url_file}")"
+
+case "${cmd}" in
+  create)
+    credential="$(tr -d '\r\n' < "${token_file}")"
+    printf '{"gateway_id":"%s","url":"%s","credential":"%s"}\n' \
+      "${gateway_id}" "${url}" "${credential}"
+    ;;
+  status)
+    printf '{"gateway_id":"%s","url":"%s"}\n' "${gateway_id}" "${url}"
+    ;;
+  *)
+    echo "usage: $0 {create|status}" >&2
+    exit 2
+    ;;
+esac

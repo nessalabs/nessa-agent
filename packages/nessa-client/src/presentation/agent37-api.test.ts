@@ -58,4 +58,63 @@ describe("agent37 api", () => {
       ["cloud.choose", { cloud: "boat" }],
     ])
   })
+
+  it("validates cloud.boxes lifecycle responses and redacts errors to typed refusal codes", async () => {
+    const sample = {
+      boxId: "11111111-2222-3333-4444-555555555555",
+      name: "Cloud Box",
+      cloud: "agent37",
+      vm: "vm-1",
+      gatewayId: "gw-1",
+      url: "wss://box.example.com/",
+      state: "running",
+      createdAtMs: 100,
+      updatedAtMs: 200,
+    }
+    const cloud = createCloudApi({
+      request: async (method: string) => {
+        switch (method) {
+          case "cloud.boxes.list":
+            return { boxes: [sample] }
+          case "cloud.boxes.create":
+            return { cloudBox: sample, credential: "enroll-once" }
+          case "cloud.boxes.wake":
+            return {
+              boxId: sample.boxId,
+              gatewayId: "gw-1",
+              url: "wss://rotated.example.com/",
+            }
+          case "cloud.boxes.sleep":
+            throw new NessaRpcError("cloud_box_active_work", "active terminal pid=42")
+          case "cloud.boxes.rename":
+            return { cloudBox: { ...sample, name: "Prod Box" } }
+          case "cloud.boxes.delete":
+            return { boxId: sample.boxId, deleted: true }
+          default:
+            throw new Error(`unexpected ${method}`)
+        }
+      },
+    } as never)
+
+    expect(await cloud.boxes.list()).toEqual([sample])
+    expect(await cloud.boxes.create({ name: "Cloud Box", cloud: "agent37" })).toEqual({
+      cloudBox: sample,
+      credential: "enroll-once",
+    })
+    expect(await cloud.boxes.wake(sample.boxId)).toEqual({
+      boxId: sample.boxId,
+      gatewayId: "gw-1",
+      url: "wss://rotated.example.com/",
+    })
+    await expect(cloud.boxes.sleep(sample.boxId)).rejects.toMatchObject({
+      name: "NessaCloudBoxError",
+      refusal: "cloud_box_active_work",
+      message: "Cloud box refused (cloud_box_active_work)",
+    })
+    expect((await cloud.boxes.rename(sample.boxId, "Prod Box")).name).toBe("Prod Box")
+    expect(await cloud.boxes.delete(sample.boxId)).toEqual({
+      boxId: sample.boxId,
+      deleted: true,
+    })
+  })
 })
