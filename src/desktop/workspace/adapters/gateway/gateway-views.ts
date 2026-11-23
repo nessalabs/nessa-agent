@@ -212,6 +212,7 @@ const sameField: {
 } = {
   id: Object.is,
   channelId: Object.is,
+  gatewayId: Object.is,
   title: Object.is,
   model: (a, b) => a.provider === b.provider && a.modelId === b.modelId,
   status: Object.is,

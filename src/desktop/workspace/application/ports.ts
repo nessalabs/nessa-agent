@@ -590,6 +590,11 @@ export interface WorkspaceDependencies {
    * gateway built without terminals; ⌘J and the + menu then offer none.
    */
   readonly terminals?: TerminalSource
+  /**
+   * Multi-gateway connection registry (ADR 1417, #1419). Absent in sample /
+   * single-source test fixtures.
+   */
+  readonly gatewayRegistry?: import("./gateway-registry").GatewayRegistryPort
 }
 
 /** What a new terminal is asked for: a shell in a channel, or a Run in a conversation. */

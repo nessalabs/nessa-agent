@@ -48,6 +48,7 @@ import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
 import {
+  GatewayRegistryProvider,
   GithubProvider,
   githubAvatar,
   LinkedDevicesProvider,
@@ -313,91 +314,95 @@ createRoot(container).render(
                         : undefined
                     }
                   >
-                    <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                      <DevicesProvider gateway={dependencies.devices}>
-                        <ClipboardProvider write={writeClipboardText}>
-                          <SiteIconProvider render={faviconSiteIcon}>
-                            <HeldFilesProvider
-                              read={dependencies.heldFiles}
-                              save={saveFile}
-                            >
-                              <TerminalSourceProvider source={dependencies.terminals}>
-                                <DecisionsProvider source={dependencies.decisions}>
-                                  <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                                    <DecisionSettingsProvider
-                                      gateway={dependencies.decisionSettings}
+                    <GatewayRegistryProvider registry={dependencies.gatewayRegistry}>
+                      <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                        <DevicesProvider gateway={dependencies.devices}>
+                          <ClipboardProvider write={writeClipboardText}>
+                            <SiteIconProvider render={faviconSiteIcon}>
+                              <HeldFilesProvider
+                                read={dependencies.heldFiles}
+                                save={saveFile}
+                              >
+                                <TerminalSourceProvider source={dependencies.terminals}>
+                                  <DecisionsProvider source={dependencies.decisions}>
+                                    <NativeHooksProvider
+                                      gateway={dependencies.nativeHooks}
                                     >
-                                      <PermissionRulesProvider
-                                        gateway={dependencies.permissionRules}
+                                      <DecisionSettingsProvider
+                                        gateway={dependencies.decisionSettings}
                                       >
-                                        <BoatProvider gateway={dependencies.boat}>
-                                          <ReplyStyleProvider
-                                            gateway={dependencies.replyStyle}
-                                          >
-                                            <Agent37Provider
-                                              gateway={dependencies.agent37}
+                                        <PermissionRulesProvider
+                                          gateway={dependencies.permissionRules}
+                                        >
+                                          <BoatProvider gateway={dependencies.boat}>
+                                            <ReplyStyleProvider
+                                              gateway={dependencies.replyStyle}
                                             >
-                                              <GithubProvider
-                                                gateway={dependencies.github}
-                                                avatar={githubAvatar}
+                                              <Agent37Provider
+                                                gateway={dependencies.agent37}
                                               >
-                                                <VoiceKeyProvider
-                                                  gateway={dependencies.voiceKey}
+                                                <GithubProvider
+                                                  gateway={dependencies.github}
+                                                  avatar={githubAvatar}
                                                 >
-                                                  <SavedLoginsProvider
-                                                    gateway={dependencies.savedLogins}
+                                                  <VoiceKeyProvider
+                                                    gateway={dependencies.voiceKey}
                                                   >
-                                                    <VoiceProvider
-                                                      controller={voice}
-                                                      title={(sessionId) => {
-                                                        const sessions =
-                                                          store.getState().workspace
-                                                            .sessions
-                                                        return Object.hasOwn(
-                                                          sessions,
-                                                          sessionId,
-                                                        )
-                                                          ? sessions[sessionId].title
-                                                          : null
-                                                      }}
-                                                      showChat={(sessionId) =>
-                                                        void store.dispatch(
-                                                          openSession({ sessionId }),
-                                                        )
-                                                      }
+                                                    <SavedLoginsProvider
+                                                      gateway={dependencies.savedLogins}
                                                     >
-                                                      {/* The window is dark only (desktop.html's
+                                                      <VoiceProvider
+                                                        controller={voice}
+                                                        title={(sessionId) => {
+                                                          const sessions =
+                                                            store.getState().workspace
+                                                              .sessions
+                                                          return Object.hasOwn(
+                                                            sessions,
+                                                            sessionId,
+                                                          )
+                                                            ? sessions[sessionId].title
+                                                            : null
+                                                        }}
+                                                        showChat={(sessionId) =>
+                                                          void store.dispatch(
+                                                            openSession({ sessionId }),
+                                                          )
+                                                        }
+                                                      >
+                                                        {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                                      <CodeBlockProvider mode="dark">
-                                                        <DesktopWindow
-                                                          hostKind={host.kind}
-                                                          browserSurface={
-                                                            host.kind === "browser"
-                                                          }
-                                                          inspectable={
-                                                            import.meta.env.DEV
-                                                          }
-                                                        />
-                                                      </CodeBlockProvider>
-                                                    </VoiceProvider>
-                                                  </SavedLoginsProvider>
-                                                </VoiceKeyProvider>
-                                              </GithubProvider>
-                                            </Agent37Provider>
-                                          </ReplyStyleProvider>
-                                        </BoatProvider>
-                                      </PermissionRulesProvider>
-                                    </DecisionSettingsProvider>
-                                  </NativeHooksProvider>
-                                </DecisionsProvider>
-                              </TerminalSourceProvider>
-                            </HeldFilesProvider>
-                          </SiteIconProvider>
-                        </ClipboardProvider>
-                      </DevicesProvider>
-                    </LinkedDevicesProvider>
+                                                        <CodeBlockProvider mode="dark">
+                                                          <DesktopWindow
+                                                            hostKind={host.kind}
+                                                            browserSurface={
+                                                              host.kind === "browser"
+                                                            }
+                                                            inspectable={
+                                                              import.meta.env.DEV
+                                                            }
+                                                          />
+                                                        </CodeBlockProvider>
+                                                      </VoiceProvider>
+                                                    </SavedLoginsProvider>
+                                                  </VoiceKeyProvider>
+                                                </GithubProvider>
+                                              </Agent37Provider>
+                                            </ReplyStyleProvider>
+                                          </BoatProvider>
+                                        </PermissionRulesProvider>
+                                      </DecisionSettingsProvider>
+                                    </NativeHooksProvider>
+                                  </DecisionsProvider>
+                                </TerminalSourceProvider>
+                              </HeldFilesProvider>
+                            </SiteIconProvider>
+                          </ClipboardProvider>
+                        </DevicesProvider>
+                      </LinkedDevicesProvider>
+                    </GatewayRegistryProvider>
                   </McpServersProvider>
                 </DesktopIconFamilyProvider>
               </SubagentsProvider>

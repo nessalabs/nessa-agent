@@ -64,6 +64,8 @@ export interface ChannelDraft {
   readonly notes: string
   /** Absolute files and folders, in the order they were added, none twice. */
   readonly resources: readonly string[]
+  /** Owning gateway ID when creating a channel in a multi-gateway workspace. */
+  readonly gatewayId?: string
 }
 
 /** A draft before anything is answered, starting on `model`. */

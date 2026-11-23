@@ -69,6 +69,11 @@ export const settingsCategories = [
         label: "Linked devices",
         keywords: "pair phone fingerprint approve revoke native",
       },
+      {
+        id: "gateways",
+        label: "Gateways",
+        keywords: "remote server cloud box devbox wss connect multi gateway",
+      },
     ],
   },
   {
@@ -305,6 +310,14 @@ export const settingsEntries = [
     tab: "devices",
     label: "Linked devices",
     keywords: "pair pairing phone fingerprint approve revoke native listener",
+  },
+  // Connections › Gateways
+  {
+    id: "gateways",
+    tab: "gateways",
+    label: "Gateways",
+    detail: "Connect additional remote or cloud nessa-server gateways over wss://.",
+    keywords: "remote server cloud box devbox wss connect multi gateway",
   },
   // Privacy & Permissions › Access
   {

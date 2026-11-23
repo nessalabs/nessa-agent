@@ -86,6 +86,19 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ terminals: Readonly<Record<string, TerminalEntry>> }>,
     ) => panes.terminalsListed(state, payload.terminals),
+    gatewaysUpdated: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        gateways: readonly import("../../model/gateway-id").GatewaySnapshot[]
+      }>,
+    ) => ({
+      ...state,
+      gateways: Object.fromEntries(
+        payload.gateways.map((gateway) => [gateway.gatewayId, gateway]),
+      ),
+    }),
     openedBeside: (
       state,
       {
@@ -453,7 +466,7 @@ const workspaceSlice = createSlice({
     // Making a channel
     channelCreationOpened: (
       state,
-      { payload }: Payload<{ opening: string; model: ModelRef }>,
+      { payload }: Payload<{ opening: string; model: ModelRef; gatewayId?: string }>,
     ) => channelCreation.channelCreationOpened(state, payload),
     channelCreationClosed: (state, { payload }: Payload<{ opening: string }>) =>
       channelCreation.channelCreationClosed(state, payload),

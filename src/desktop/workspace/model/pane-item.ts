@@ -25,6 +25,7 @@
  */
 import { decodeId, encodeId } from "../../model/id-encoding"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
+import { isTerminalId } from "./gateway-id"
 
 export type PaneItem =
   | { readonly kind: "session"; readonly sessionId: string }
@@ -39,8 +40,6 @@ export type PaneItemKey = string & { readonly [paneItemBrand]: true }
 const sessionPrefix = "s:"
 const widgetPrefix = "w:"
 const terminalPrefix = "t:"
-/** A gateway terminal id: never holds a `:`, so the key reads back one way. */
-const terminalId = /^t_[0-9a-f]{32}$/
 
 /** The item showing a session, listed or new. */
 export function sessionItem(sessionId: string): PaneItem {
@@ -83,7 +82,7 @@ export function paneItemOf(key: string): PaneItem | null {
   if (key.startsWith(sessionPrefix)) return sessionItem(key.slice(sessionPrefix.length))
   if (key.startsWith(terminalPrefix)) {
     const id = key.slice(terminalPrefix.length)
-    return terminalId.test(id) ? terminalItem(id) : null
+    return isTerminalId(id) ? terminalItem(id) : null
   }
   if (!key.startsWith(widgetPrefix)) return null
   const parts = key.slice(widgetPrefix.length).split(":")
