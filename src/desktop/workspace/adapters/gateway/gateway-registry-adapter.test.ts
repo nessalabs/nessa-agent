@@ -419,4 +419,76 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     expect(credentialStore.read("gw-cloud-1")).toBeNull()
     registry.dispose()
   })
+
+  it("refuses expectedGatewayId mismatch, invalid wake URL, sleep-while-waking, and cleans up mid-dispose delete", async () => {
+    const { store, current } = memoryStore()
+    const credentialStore = inMemoryGatewayCredentialStore()
+    const imposter = fakeRemoteClient("gw-other")
+    const genuine = fakeRemoteClient("gw-box-2")
+    let connectCount = 0
+    const connectRemote: RemoteClientConnector = vi.fn(async () => {
+      connectCount += 1
+      return connectCount === 1 ? imposter.client : genuine.client
+    })
+    let resolveWake!: (res: { gatewayId: string; url: string }) => void
+    let resolveDelete!: () => void
+    const cloudBoxes = {
+      create: vi.fn(async () => ({
+        boxId: "22222222-3333-4444-5555-666666666666",
+        name: "Box 2",
+        cloud: "agent37" as const,
+        gatewayId: "gw-box-2",
+        url: "wss://box-2.example.com",
+        credential: "tok-2",
+      })),
+      wake: vi.fn(
+        () =>
+          new Promise<{ gatewayId: string; url: string }>((resolve) => {
+            resolveWake = resolve
+          }),
+      ),
+      sleep: vi.fn(async () => {}),
+      delete: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveDelete = resolve
+          }),
+      ),
+    }
+
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store,
+      credentialStore,
+      now: () => 3000,
+      after: () => () => {},
+      connectRemote,
+      cloudBoxes,
+    })
+
+    // M4: imposter gatewayId during createCloudBox is rejected and closed.
+    await expect(
+      registry.createCloudBox!({ name: "Box 2", cloud: "agent37" }),
+    ).rejects.toMatchObject({ reason: "connect-failed" })
+    expect(imposter.closed).toHaveBeenCalled()
+
+    // Genuine create succeeds.
+    await registry.createCloudBox!({ name: "Box 2", cloud: "agent37" })
+
+    // M5: sleepCloudBox refuses while wake is in flight, and invalid wake URL rejects.
+    const wakePromise = registry.wake!("gw-box-2")
+    await expect(registry.sleepCloudBox!("gw-box-2")).rejects.toMatchObject({
+      reason: "offline",
+    })
+    resolveWake({ gatewayId: "gw-box-2", url: "ws://insecure.example.com" })
+    await expect(wakePromise).rejects.toMatchObject({ reason: "invalid-url" })
+
+    // m5: dispose() mid-delete still cleans credentialStore and persisted store.
+    const deletePromise = registry.deleteCloudBox!("gw-box-2")
+    registry.dispose()
+    resolveDelete()
+    await deletePromise
+    expect(credentialStore.read("gw-box-2")).toBeNull()
+    expect(current()).toEqual([])
+  })
 })

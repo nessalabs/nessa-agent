@@ -658,6 +658,12 @@ export function createGatewayRegistry(
           const cloudBoxes = options.cloudBoxes
           return {
             async createCloudBox(input: CreateCloudBoxInput): Promise<GatewaySnapshot> {
+              if (registryDisposed) {
+                throw new GatewayRegistryError(
+                  "offline",
+                  "Gateway registry was disposed.",
+                )
+              }
               const name = input.name.trim()
               if (name === "") {
                 throw new GatewayRegistryError(
@@ -693,11 +699,7 @@ export function createGatewayRegistry(
               await cloudBoxes.sleep(boxId)
               if (registryDisposed) return
               const current = remotes.get(gatewayId)
-              if (
-                !current ||
-                current.disposed ||
-                current.record.cloudBox?.boxId !== boxId
-              ) {
+              if (!current || current !== entry || current.disposed) {
                 return
               }
               current.unsubState?.()

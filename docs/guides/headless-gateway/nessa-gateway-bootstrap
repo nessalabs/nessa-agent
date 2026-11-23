@@ -52,7 +52,7 @@ case "${cmd}" in
     ;;
   busy)
     if [[ -s "${active_work_file}" ]]; then
-      jq -c '{busy: (.busy // true)}' "${active_work_file}"
+      jq -c '{busy: (if .busy == false then false else true end)}' "${active_work_file}"
     else
       printf '{"busy":false}\n'
     fi

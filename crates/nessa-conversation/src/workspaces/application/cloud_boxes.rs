@@ -259,11 +259,16 @@ impl CloudBoxes {
                     Ok(()) => error.to_string(),
                     Err(receipt_err) => format!("{error}; refusal_receipt_error={receipt_err}"),
                 };
+                let after = if receipt_result.is_ok() {
+                    CloudBoxState::Refused
+                } else {
+                    CloudBoxState::Provisioning
+                };
                 let _ = self.audit.record(CloudBoxAuditEvent {
                     box_id,
                     cloud: Some(cloud),
                     before: Some(CloudBoxState::Provisioning),
-                    after: Some(CloudBoxState::Refused),
+                    after: Some(after),
                     action: "create_refused",
                     cause,
                     initiator,
