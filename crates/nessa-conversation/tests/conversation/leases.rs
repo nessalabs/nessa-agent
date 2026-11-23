@@ -8239,6 +8239,9 @@ struct MadeReady {
     steps: Arc<crate::application::SetupSteps>,
     id: ConversationId,
     gate: Arc<tokio::sync::Semaphore>,
+    /// When set, the machine says nothing until a permit comes.
+    ahead: Option<Arc<tokio::sync::Semaphore>>,
+    entered: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Environment for MadeReady {
     fn declaration(&self) -> EnvironmentDeclaration {
@@ -8251,6 +8254,11 @@ impl Environment for MadeReady {
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
+            self.entered
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(ahead) = &self.ahead {
+                let _said = ahead.acquire().await.unwrap();
+            }
             self.steps
                 .step(&self.id, crate::application::SetupStep::Creating);
             let _made = self.gate.acquire().await.unwrap();
@@ -8277,6 +8285,8 @@ async fn a_follower_reads_each_setup_step_while_the_machine_is_made_and_how_long
         steps: steps.clone(),
         id: id.clone(),
         gate: gate.clone(),
+        ahead: None,
+        entered: Arc::default(),
     });
     let binding = Arc::new(Provider::new(provider.clone()));
     let mut harness = harness(
@@ -8380,4 +8390,102 @@ async fn a_follower_reads_each_setup_step_while_the_machine_is_made_and_how_long
         ]
     );
     assert!(ready.steps.iter().all(|step| step.ended_at_ms.is_some()));
+}
+
+#[tokio::test]
+async fn a_follower_waiting_behind_a_send_reads_the_first_setup_step_when_it_comes() {
+    use nessa_protocol::conversation::view::ConversationSetupStepKind;
+    let root = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let id = ConversationId::new("00000000-0000-4000-8000-0000000000ab").unwrap();
+    let steps = crate::application::SetupSteps::new(Arc::new(TestClock));
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let ahead = Arc::new(tokio::sync::Semaphore::new(0));
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let environment = Arc::new(MadeReady {
+        inner: Arc::new(Substitute::new(SandboxProfiles::HARNESS_DEFAULT)),
+        steps: steps.clone(),
+        id: id.clone(),
+        gate: gate.clone(),
+        ahead: Some(ahead.clone()),
+        entered: entered.clone(),
+    });
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let mut harness = harness(
+        root.path(),
+        environment,
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    harness.id = id.clone();
+    harness.service.bind_setup_steps(steps.clone());
+    let harness = Arc::new(harness);
+    let created = tokio::spawn({
+        let harness = harness.clone();
+        async move { harness.create().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !entered.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the machine starts being made");
+    // The first message takes the selection lock and waits on the opening,
+    // before the machine has said its first step.
+    let service = harness.service.clone();
+    let sent = tokio::spawn({
+        let id = id.clone();
+        async move {
+            service
+                .submit(
+                    id,
+                    caller("turn-1"),
+                    "turn-1".into(),
+                    SubmittedMessage {
+                        uploads: Vec::new(),
+                        text: "hello".into(),
+                        images: Vec::new(),
+                        files: Vec::new(),
+                    },
+                    SubmissionMode::Queue,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !harness.service.selection_held(&id) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the send holds the selection lock");
+    assert!(!steps.running(&id));
+    // A follower arrives now and waits behind the send; the first step
+    // lets it read while the machine is still being made.
+    let read = tokio::spawn({
+        let service = harness.service.clone();
+        let id = id.clone();
+        async move {
+            service
+                .read_at(id, caller("read"), super::ReadOpening::LiveOnly)
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    ahead.add_permits(1);
+    let (view, _) = tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("the follower reads once the first step is said")
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.setup.len(), 1);
+    assert_eq!(
+        view.setup[0].steps[0].step,
+        ConversationSetupStepKind::Creating
+    );
+    gate.add_permits(1);
+    created.await.unwrap();
+    sent.await.unwrap().unwrap();
 }

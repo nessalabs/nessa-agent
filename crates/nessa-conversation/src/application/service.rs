@@ -3506,17 +3506,33 @@ impl ConversationService {
             // behind the send waiting on it (which holds this lock): it reads
             // the history and how far the setup got, and the agent's own
             // view once the opening ends (`SetupSteps` wakes it each step).
-            if matches!(opening, ReadOpening::LiveOnly)
-                && self
-                    .inner
-                    .setup
-                    .get()
-                    .is_some_and(|steps| steps.running(&id))
-                && !self.opened(&id).await
-            {
-                return self.read_unopened(&id, &caller).await;
+            // Asked again on each change while it waits, since the first
+            // step can come after the send took the lock.
+            let steps = self
+                .inner
+                .setup
+                .get()
+                .filter(|_| matches!(opening, ReadOpening::LiveOnly));
+            let mut changes = self.inner.live_changes.subscribe(&id);
+            let mode_changes = self.inner.records.mode_changes();
+            let locked = mode_changes.lock(&id);
+            tokio::pin!(locked);
+            loop {
+                let Some(steps) = steps else {
+                    break (&mut locked).await;
+                };
+                if steps.running(&id) && !self.opened(&id).await {
+                    return self.read_unopened(&id, &caller).await;
+                }
+                tokio::select! {
+                    guard = &mut locked => break guard,
+                    changed = changes.changed() => {
+                        if changed.is_err() {
+                            break (&mut locked).await;
+                        }
+                    }
+                }
             }
-            self.inner.records.mode_changes().lock(&id).await
         };
         match opening {
             ReadOpening::Open => {
@@ -3627,6 +3643,12 @@ impl ConversationService {
     }
     /// Whether `id` has an opening that has ended, opened or failed: one a
     /// read would not wait for.
+    /// Whether a send or change holds `id`'s selection lock now.
+    #[cfg(test)]
+    pub(crate) fn selection_held(&self, id: &ConversationId) -> bool {
+        self.inner.records.mode_changes().try_lock(id).is_none()
+    }
+
     async fn opened(&self, id: &ConversationId) -> bool {
         self.inner
             .conversations
