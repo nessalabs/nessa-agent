@@ -147,3 +147,42 @@ export type {
 export type { WorkspaceFailureReason } from "./model/failure"
 export { elapsed, sessionTime } from "./model/time-labels"
 export { ReadOnlyTranscript } from "./ui/transcript/read-only-transcript"
+export {
+  LOCAL_GATEWAY_ID,
+  gatewaySectionId,
+  gatewayStatusLabel,
+  normalizeGatewayUrl,
+  parseQualifiedId,
+  qualifyEntityId,
+  type GatewayConnectionState,
+  type GatewaySnapshot,
+  type PersistedRemoteGateway,
+} from "./model/gateway-id"
+export {
+  GatewayRegistryError,
+  type AddGatewayInput,
+  type GatewayRegistryFailure,
+  type GatewayRegistryPort,
+} from "./application/gateway-registry"
+export {
+  createGatewayRegistry,
+  type DesktopGatewayRegistry,
+  type RemoteClient,
+  type RemoteClientConnector,
+} from "./adapters/gateway/gateway-registry-adapter"
+export { multiGatewaySource } from "./adapters/gateway/multi-gateway-source"
+export { multiTerminalGateway } from "./adapters/gateway/multi-terminal-gateway"
+export { multiChannelGateway } from "./adapters/gateway/multi-channel-gateway"
+export {
+  inMemoryGatewayCredentialStore,
+  remoteGatewayStore,
+  type GatewayStorage,
+  type RemoteGatewayCredentialStore,
+  type RemoteGatewayStore,
+} from "./adapters/storage/gateway-store"
+export {
+  selectGateway,
+  selectGateways,
+  selectHasMultipleGateways,
+} from "./adapters/store/selectors"
+export { workspaceActions } from "./adapters/store/slice"

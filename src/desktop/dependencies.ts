@@ -136,6 +136,13 @@ import {
   channelGateway,
   terminalGateway,
   type TerminalClient,
+  createGatewayRegistry,
+  multiGatewaySource,
+  multiTerminalGateway,
+  multiChannelGateway,
+  remoteGatewayStore,
+  type RemoteClientConnector,
+  type RemoteGatewayStore,
   inMemoryChannels,
   windowPublisher,
   windowCommandInbox,
@@ -252,6 +259,10 @@ export function createDesktopDependencies(
     paths?: WorkspaceDependencies["paths"]
     /** Where channels are made, beside a given `workspace`; the gateway's own and the sample's are composed here. */
     channels?: WorkspaceDependencies["channels"]
+    /** Injectable storage for persisted remote gateways (tests). */
+    gatewayStore?: RemoteGatewayStore
+    /** Injectable connector for remote gateways (tests). */
+    connectRemote?: RemoteClientConnector
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own. The clock is a steady
@@ -282,8 +293,38 @@ export function createDesktopDependencies(
     options.workspace === undefined && gateway
       ? gatewayWorkspace(gateway, { now, after }, widgets, apps, options.reviewNotices)
       : undefined
+  const localChannels = source
+    ? channelGateway({ connected: () => source.connected() })
+    : undefined
+  const localTerminals = source
+    ? terminalGateway({
+        connected: () => source.connected(),
+        newId,
+      })
+    : undefined
+  const gatewayRegistry =
+    source && localChannels && localTerminals
+      ? createGatewayRegistry({
+          local: {
+            label: "This Mac",
+            url: "local",
+            workspace: source,
+            terminals: localTerminals,
+            channels: localChannels,
+          },
+          store: options.gatewayStore ?? remoteGatewayStore(),
+          now,
+          after,
+          newId,
+          connectRemote: options.connectRemote,
+        })
+      : undefined
   const workspace =
-    options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
+    options.workspace ??
+    (gatewayRegistry ? multiGatewaySource(gatewayRegistry) : undefined) ??
+    source ??
+    samples ??
+    inMemorySource({ now, after })
   // The clients the window publishes on: the changes asked of it arrive there.
   const windowClients = source ? clientsSeen(() => source.connected()) : undefined
   const publisher = windowClients
@@ -296,6 +337,7 @@ export function createDesktopDependencies(
     : undefined
   return {
     workspace,
+    gatewayRegistry,
     agentInstallations: source
       ? gatewayAgentInstallations(
           () => source.connected().then((client) => client.agents),
@@ -360,19 +402,14 @@ export function createDesktopDependencies(
         : options.sharing,
     // Channels are made on the gateway's own client; the sample makes them in
     // memory, and a window with neither offers no add button.
-    channels: source
-      ? channelGateway({ connected: () => source.connected() })
+    channels: gatewayRegistry
+      ? multiChannelGateway(gatewayRegistry)
       : samples
         ? inMemoryChannels({ add: (channel) => samples.addChannel(channel) })
         : options.channels,
     paths: options.paths,
     // Terminals are the gateway's own; the sample has none.
-    terminals: source
-      ? terminalGateway({
-          connected: () => source.connected(),
-          newId,
-        })
-      : undefined,
+    terminals: gatewayRegistry ? multiTerminalGateway(gatewayRegistry) : undefined,
     // What the window shows, for the person's agents, and the changes they
     // ask of it: only a gateway has any.
     windowPublisher: publisher,

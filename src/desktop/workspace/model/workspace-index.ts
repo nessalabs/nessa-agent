@@ -15,12 +15,16 @@ import {
 export interface Section {
   readonly id: string
   readonly name: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
 }
 
 export interface Channel {
   readonly id: string
   readonly name: string
   readonly sectionId: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
@@ -106,6 +110,8 @@ export interface OwnerAsk {
 export interface SessionSummary {
   readonly id: string
   readonly channelId: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
   readonly title: string
   /** The model the session runs on; its provider decides the agent. */
   readonly model: ModelRef

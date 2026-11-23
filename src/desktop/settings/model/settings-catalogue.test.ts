@@ -103,6 +103,7 @@ describe("the settings catalogue", () => {
       "integrations",
       "accounts",
       "devices",
+      "gateways",
     ])
     expect(tabsOf("privacy").map((tab) => tab.id)).toEqual(["access", "native-hooks"])
     // A page's title has no line under it.

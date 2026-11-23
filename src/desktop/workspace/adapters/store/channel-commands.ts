@@ -45,11 +45,11 @@ const openingOf = (state: {
  * no model to start on. Where the window has pickers, the person's home
  * folder is asked for once, so the paths they pick read from `~`.
  */
-export function openChannelCreation(): WorkspaceCommand {
+export function openChannelCreation(gatewayId?: string): WorkspaceCommand {
   return (dispatch, getState, { newId, paths }) => {
     const model = defaultModel()
     if (!model) return
-    dispatch(channelCreationOpened({ opening: newId(), model }))
+    dispatch(channelCreationOpened({ opening: newId(), model, gatewayId }))
     if (!paths || getState().workspace.channelMaking.home !== null) return
     void paths.home().then(
       (home) => {

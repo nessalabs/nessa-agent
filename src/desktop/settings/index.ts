@@ -71,6 +71,7 @@
 export { openSettings, SettingsHost, useSettingsOpening } from "./ui/settings-view"
 export { McpServersProvider } from "./ui/integrations-tab"
 export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
+export { GatewayRegistryProvider } from "./ui/gateways-tab"
 export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
 export { DeviceLoginsSwitch, SavedLoginsProvider } from "./ui/saved-logins"

@@ -301,6 +301,10 @@ export interface WorkspaceState {
     readonly sessionId: string
     readonly change: ShareChange
   } | null
+  /** Registered gateways keyed by `gatewayId`, updated live by `GatewayRegistryPort`. */
+  readonly gateways: Readonly<
+    Record<string, import("../model/gateway-id").GatewaySnapshot>
+  >
 }
 
 /**
@@ -500,6 +504,7 @@ export const initialWorkspace: WorkspaceState = {
   renaming: null,
   deleteAsked: null,
   shareChange: null,
+  gateways: {},
 }
 
 /**

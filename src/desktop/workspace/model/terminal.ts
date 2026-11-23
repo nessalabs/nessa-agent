@@ -45,6 +45,9 @@ export interface TerminalEntry {
   readonly exitStatus?: number
   readonly endedAtMs?: number
   readonly programStatus?: TerminalProgramStatus
+  /** Owning gateway ID and display label when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
+  readonly gatewayLabel?: string
 }
 
 const runsOnLabels: Readonly<Record<string, string>> = {

@@ -79,6 +79,14 @@ type Root = { workspace: WorkspaceState }
 
 export const selectFailure = (state: Root) => state.workspace.failure
 export const selectFailureStages = (state: Root) => state.workspace.failureStages
+export const selectGatewaysById = (state: Root) => state.workspace.gateways
+export const selectGateways = createSelector([selectGatewaysById], (gateways) =>
+  Object.values(gateways),
+)
+export const selectGateway = (state: Root, gatewayId: string) =>
+  entry(state.workspace.gateways, gatewayId)
+export const selectHasMultipleGateways = (state: Root) =>
+  Object.keys(state.workspace.gateways).length > 1
 export const selectChrome = (state: Root): Chrome => state.workspace.chrome
 /** Whether the sidebar is drawn: the person's choice, unless the window folded it for room. */
 export const selectSidebarOpen = (state: Root) =>

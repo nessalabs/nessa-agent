@@ -8,6 +8,11 @@
  * show, and what opening it does, is decided here per kind of item.
  */
 import { fitted as fittedColumn } from "../../../model/side-column"
+import {
+  parseQualifiedId,
+  parseRemoteQualifiedId,
+  qualifyEntityId,
+} from "../../model/gateway-id"
 import { defaultModel, type ModelRef } from "../../model/workspace-index"
 import {
   focusPane as focusLayoutPane,
@@ -349,9 +354,13 @@ export function createDraft(
 ): WorkspaceState {
   // With no pane at all (everything shown was removed), it opens alone.
   const side = state.panes ? beside : undefined
-  if (showable(state, sessionItem(draftId))) return state
   const home = draftHome(state, { channelId, model })
   if (!home) return state
+  const qualifiedDraftId =
+    parseRemoteQualifiedId(draftId) !== null
+      ? draftId
+      : qualifyEntityId(parseQualifiedId(home.channelId).gatewayId, draftId)
+  if (showable(state, sessionItem(qualifiedDraftId))) return state
   const kept = restore ? keptDraftIn(state, home.channelId) : undefined
   if (kept)
     return side
@@ -361,18 +370,18 @@ export function createDraft(
     ...state,
     drafts: {
       ...state.drafts,
-      [draftId]: { id: draftId, ...home },
+      [qualifiedDraftId]: { id: qualifiedDraftId, ...home },
     },
   }
   const placed = side
     ? openBeside(drafted, {
-        sessionId: draftId,
+        sessionId: qualifiedDraftId,
         target,
         side,
         room,
         replace: false,
       })
-    : openSession(drafted, { sessionId: draftId, pane: target })
+    : openSession(drafted, { sessionId: qualifiedDraftId, pane: target })
   // A draft no pane took is not kept.
   return placed === drafted ? state : placed
 }
