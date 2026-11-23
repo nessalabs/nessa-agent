@@ -331,6 +331,13 @@ impl CompositionRoot {
                 .await
                 .map_err(|error| RunError::Runtime(format!("headless vault task failed: {error}")))?
                 .map_err(|error| RunError::Authentication(error.to_string()))?;
+                if let Some(github) = &composed.routes.accounts.github {
+                    if github.connections.restore().await.is_err() {
+                        tracing::warn!(
+                            "headless vault unlocked; saved GitHub connection could not be restored"
+                        );
+                    }
+                }
                 Some(session)
             }
             None => None,

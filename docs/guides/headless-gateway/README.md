@@ -78,8 +78,10 @@ curl -fsS http://127.0.0.1:18789/health
 Read the tunnel reachability address and create a device pairing invitation:
 
 ```bash
-NESSA_STAGE=prod NESSA_DATA_DIR=/var/lib/nessa nessa call server.reach --params '{}'
-NESSA_STAGE=prod NESSA_DATA_DIR=/var/lib/nessa nessa call pairing.create --params '{}'
+NESSA_STAGE=prod NESSA_DATA_DIR=/var/lib/nessa nessa call server.reach \
+  --credential-file /var/lib/nessa/owner.token --params '{}'
+NESSA_STAGE=prod NESSA_DATA_DIR=/var/lib/nessa nessa call pairing.create \
+  --credential-file /var/lib/nessa/owner.token --params '{}'
 ```
 
 Use the reported `wss://` tunnel address and pairing code to pair Phone or
