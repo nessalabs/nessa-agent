@@ -91,6 +91,14 @@ pub(super) struct FilePassphraseSource(pub(super) PathBuf);
 
 impl PassphraseSource for FilePassphraseSource {
     fn read(&self) -> Result<Zeroizing<String>, HeadlessVaultError> {
+        #[cfg(not(unix))]
+        {
+            let link_meta =
+                std::fs::symlink_metadata(&self.0).map_err(|_| HeadlessVaultError::ReadFailed)?;
+            if !link_meta.file_type().is_file() {
+                return Err(HeadlessVaultError::NotRegularFile);
+            }
+        }
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
