@@ -277,6 +277,7 @@ impl CloudBoxRecord {
                 Self::Active {
                     cloud,
                     vm,
+                    admission,
                     gateway_id,
                     state,
                     ..
@@ -284,6 +285,20 @@ impl CloudBoxRecord {
                     if cloud != expected_cloud {
                         return Err(CloudBoxError::ReceiptUnavailable(
                             "cloud box cannot silently relocate across clouds".into(),
+                        ));
+                    }
+                    let admission_matches = matches!(
+                        (cloud, admission),
+                        (Cloud::Boat, Admitted::Boat(_)) | (Cloud::Agent37, Admitted::Agent37(_))
+                    );
+                    if !admission_matches {
+                        return Err(CloudBoxError::ReceiptUnavailable(
+                            "cloud box admission proof does not match its cloud provider".into(),
+                        ));
+                    }
+                    if vm.trim().is_empty() || gateway_id.trim().is_empty() {
+                        return Err(CloudBoxError::ReceiptUnavailable(
+                            "active receipt requires non-empty vm and gateway_id".into(),
                         ));
                     }
                     if !matches!(state, CloudBoxState::Running | CloudBoxState::Sleeping) {

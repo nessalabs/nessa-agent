@@ -19,8 +19,8 @@ use crate::{
         domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
             agent37_template, worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
-            FileAssignments, FileCloudBoxStore, FileCloudChoice, IdleActiveWorkChecker,
-            RuntimeSettingsAudit, SdkAgent37Enrollment, TracingCloudBoxAudit, VaultSettings,
+            FileAssignments, FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice,
+            ProviderActiveWorkChecker, RuntimeSettingsAudit, SdkAgent37Enrollment, VaultSettings,
             WorkspaceCloudBoxProvider,
         },
     },
@@ -361,7 +361,7 @@ pub(super) async fn product_state(
                     cloud: Cloud::Boat,
                     settings: boat_settings,
                     provider: Arc::new(WorkspaceCloudBoxProvider::new(
-                        boat_provider,
+                        boat_provider.clone(),
                         worker_image(),
                     )),
                 },
@@ -369,14 +369,17 @@ pub(super) async fn product_state(
                     cloud: Cloud::Agent37,
                     settings: agent37_settings,
                     provider: Arc::new(WorkspaceCloudBoxProvider::new(
-                        agent37_provider,
+                        agent37_provider.clone(),
                         agent37_template(),
                     )),
                 },
             ],
             Arc::new(FileCloudBoxStore::new(namespace.join("cloud-boxes"))),
-            Arc::new(IdleActiveWorkChecker),
-            Arc::new(TracingCloudBoxAudit),
+            Arc::new(ProviderActiveWorkChecker::new(vec![
+                (Cloud::Boat, boat_provider, worker_image()),
+                (Cloud::Agent37, agent37_provider, agent37_template()),
+            ])),
+            Arc::new(FileCloudBoxAudit::new(namespace.join("cloud-boxes-audit"))),
         ));
         (workspaces, cloud_boxes)
     };

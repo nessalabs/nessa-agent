@@ -10,6 +10,10 @@
 #   nessa-gateway-bootstrap status
 #     Ensures headless nessa-server is running after VM wake and prints:
 #     {"gateway_id":"<id>","url":"wss://<host>"}
+#
+#   nessa-gateway-bootstrap busy
+#     Checks whether any turns or terminals are currently active and prints:
+#     {"busy":true|false}
 set -euo pipefail
 
 cmd="${1:-status}"
@@ -17,6 +21,7 @@ state_dir="${NESSA_STATE_DIR:-/var/lib/nessa}"
 gateway_id_file="${state_dir}/gateway-id"
 url_file="${state_dir}/endpoint-url"
 token_file="${state_dir}/owner.token"
+active_work_file="${state_dir}/active-work.json"
 
 systemctl is-active --quiet nessa-server.service || systemctl start nessa-server.service
 
@@ -33,14 +38,27 @@ url="$(tr -d '\r\n' < "${url_file}")"
 case "${cmd}" in
   create)
     credential="$(tr -d '\r\n' < "${token_file}")"
-    printf '{"gateway_id":"%s","url":"%s","credential":"%s"}\n' \
-      "${gateway_id}" "${url}" "${credential}"
+    jq -cn \
+      --arg gateway_id "${gateway_id}" \
+      --arg url "${url}" \
+      --arg credential "${credential}" \
+      '{gateway_id: $gateway_id, url: $url, credential: $credential}'
     ;;
   status)
-    printf '{"gateway_id":"%s","url":"%s"}\n' "${gateway_id}" "${url}"
+    jq -cn \
+      --arg gateway_id "${gateway_id}" \
+      --arg url "${url}" \
+      '{gateway_id: $gateway_id, url: $url}'
+    ;;
+  busy)
+    if [[ -s "${active_work_file}" ]]; then
+      jq -c '{busy: (.busy // true)}' "${active_work_file}"
+    else
+      printf '{"busy":false}\n'
+    fi
     ;;
   *)
-    echo "usage: $0 {create|status}" >&2
+    echo "usage: $0 {create|status|busy}" >&2
     exit 2
     ;;
 esac

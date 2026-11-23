@@ -441,6 +441,10 @@ export function createGatewayRegistry(
         )
       }
 
+      if (registryDisposed) {
+        throw new GatewayRegistryError("offline", "Gateway registry was disposed.")
+      }
+
       // G7: Verify connectivity and handshake before persisting anything.
       let client: RemoteClient
       try {
@@ -468,6 +472,21 @@ export function createGatewayRegistry(
         throw new GatewayRegistryError(
           "connect-failed",
           "Gateway did not report a valid remote gatewayId.",
+        )
+      }
+
+      if (
+        input.expectedGatewayId !== undefined &&
+        verifiedGatewayId !== input.expectedGatewayId
+      ) {
+        try {
+          void client.close()
+        } catch {
+          // Ignore close failure on rejected handshake.
+        }
+        throw new GatewayRegistryError(
+          "connect-failed",
+          "Connected gateway reported a different gatewayId than expected.",
         )
       }
 
@@ -595,7 +614,13 @@ export function createGatewayRegistry(
           }
           if (entry.disposed) return
           const normalized = normalizeGatewayUrl(woken.url)
-          if (normalized && normalized !== entry.record.url) {
+          if (!normalized) {
+            throw new GatewayRegistryError(
+              "invalid-url",
+              "Woken Cloud Box returned an invalid endpoint URL.",
+            )
+          }
+          if (normalized !== entry.record.url) {
             // G8: rotate persisted endpoint URL and reconnect.
             registry.updateEndpoint?.(gatewayId, normalized)
           } else {
@@ -648,6 +673,7 @@ export function createGatewayRegistry(
                 label: created.name,
                 url: created.url,
                 credential: created.credential,
+                expectedGatewayId: created.gatewayId,
                 cloudBox: { boxId: created.boxId, cloud: created.cloud },
               })
             },
@@ -658,27 +684,41 @@ export function createGatewayRegistry(
               if (!entry || entry.disposed || !boxId) {
                 throw new GatewayRegistryError("not-found", "Unknown Cloud Box gateway")
               }
+              if (entry.wakeInFlight) {
+                throw new GatewayRegistryError(
+                  "offline",
+                  "Cloud Box is currently waking; wait before sleeping.",
+                )
+              }
               await cloudBoxes.sleep(boxId)
-              if (entry.disposed) return
-              entry.unsubState?.()
-              entry.unsubState = null
+              if (registryDisposed) return
+              const current = remotes.get(gatewayId)
+              if (
+                !current ||
+                current.disposed ||
+                current.record.cloudBox?.boxId !== boxId
+              ) {
+                return
+              }
+              current.unsubState?.()
+              current.unsubState = null
               try {
-                entry.source.dispose()
+                current.source.dispose()
               } catch {
                 // Ignore already-disposed source.
               }
-              if (entry.activeClient) {
+              if (current.activeClient) {
                 try {
-                  void entry.activeClient.close()
+                  void current.activeClient.close()
                 } catch {
                   // Ignore already-closed client.
                 }
-                entry.activeClient = null
+                current.activeClient = null
               }
-              entry.status = "disconnected"
-              entry.detail = "Sleeping"
-              entry.updatedAtMs = options.now()
-              notifySnapshots()
+              current.status = "disconnected"
+              current.detail = "Sleeping"
+              current.updatedAtMs = options.now()
+              notifyTopology()
             },
 
             async deleteCloudBox(gatewayId: string): Promise<void> {
@@ -688,6 +728,12 @@ export function createGatewayRegistry(
                 throw new GatewayRegistryError("not-found", "Unknown Cloud Box gateway")
               }
               await cloudBoxes.delete(boxId)
+              if (registryDisposed) {
+                credentialStore.remove(gatewayId)
+                persisted = removeRemoteGateway(persisted, gatewayId)
+                options.store.write(persisted)
+                return
+              }
               await registry.remove(gatewayId)
             },
           }

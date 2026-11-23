@@ -1,9 +1,10 @@
-//! Durable file-backed receipt store and provider adapter for persistent
-//! cloud gateway VMs (`<namespace>/cloud-boxes/<uuid>.json`), using atomic
-//! temp-file replacement inside a private directory
+//! Durable file-backed receipt store, durable audit log, and provider adapters
+//! for persistent cloud gateway VMs (`<namespace>/cloud-boxes/<uuid>.json`),
+//! using atomic temp-file replacement inside a private directory
 //! (`nessa_local_storage::PrivateDirectory`).
 
 use crate::domain::VmLifetime;
+use crate::timer::clock;
 use crate::workspaces::{
     application::{
         ActiveWorkChecker, BoxFuture, CloudBoxAudit, CloudBoxAuditEvent, CloudBoxProvider,
@@ -18,11 +19,13 @@ use crate::workspaces::{
 use nessa_local_storage::{create_directory, OpenMode, PrivateDirectory};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::UNIX_EPOCH,
 };
 use zeroize::Zeroizing;
 
@@ -35,6 +38,9 @@ const BOOTSTRAP_CREATE_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap creat
 /// Status command installed in gateway cloud images that ensures headless
 /// `nessa-server` is running after wake and prints its current JSON endpoint.
 const BOOTSTRAP_STATUS_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap status";
+/// Active-work probe installed in gateway cloud images that reports whether
+/// the running gateway currently has active turns or open terminals (G5).
+const BOOTSTRAP_BUSY_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap busy";
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,35 +77,43 @@ impl From<StoredState> for CloudBoxState {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredBoatAdmitted {
+    id: String,
+    name: String,
+    version_id: String,
+    version: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAgent37Admitted {
+    template: String,
+    revision: Option<u64>,
+    digest: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum StoredAdmitted {
-    Boat {
-        id: String,
-        name: String,
-        version_id: String,
-        version: u32,
-    },
-    Agent37 {
-        template: String,
-        revision: Option<u64>,
-        digest: Option<String>,
-    },
+    Boat(StoredBoatAdmitted),
+    Agent37(StoredAgent37Admitted),
 }
 
 impl From<&Admitted> for StoredAdmitted {
     fn from(value: &Admitted) -> Self {
         match value {
-            Admitted::Boat(v) => Self::Boat {
+            Admitted::Boat(v) => Self::Boat(StoredBoatAdmitted {
                 id: v.id().into(),
                 name: v.name().into(),
                 version_id: v.version_id().into(),
                 version: v.version(),
-            },
-            Admitted::Agent37(v) => Self::Agent37 {
+            }),
+            Admitted::Agent37(v) => Self::Agent37(StoredAgent37Admitted {
                 template: v.template().into(),
                 revision: v.revision(),
                 digest: v.digest().map(str::to_owned),
-            },
+            }),
         }
     }
 }
@@ -108,17 +122,12 @@ impl TryFrom<StoredAdmitted> for Admitted {
     type Error = CloudBoxError;
     fn try_from(value: StoredAdmitted) -> Result<Self, Self::Error> {
         match value {
-            StoredAdmitted::Boat {
-                id,
-                name,
-                version_id,
-                version,
-            } => EnvironmentIdentity::new(id, name, version_id, version).map(Admitted::Boat),
-            StoredAdmitted::Agent37 {
-                template,
-                revision,
-                digest,
-            } => TemplateRelease::new(template, revision, digest).map(Admitted::Agent37),
+            StoredAdmitted::Boat(b) => {
+                EnvironmentIdentity::new(b.id, b.name, b.version_id, b.version).map(Admitted::Boat)
+            }
+            StoredAdmitted::Agent37(a) => {
+                TemplateRelease::new(a.template, a.revision, a.digest).map(Admitted::Agent37)
+            }
         }
         .map_err(|_| CloudBoxError::ReceiptUnavailable("invalid admission identity".into()))
     }
@@ -296,10 +305,23 @@ impl TryFrom<StoredCloudBoxRecord> for CloudBoxRecord {
     }
 }
 
-fn decode_history(bytes: &[u8]) -> Result<Vec<CloudBoxRecord>, CloudBoxError> {
+fn decode_history(
+    bytes: &[u8],
+    expected_id: &CloudBoxId,
+) -> Result<Vec<CloudBoxRecord>, CloudBoxError> {
     let stored: Vec<StoredCloudBoxRecord> = serde_json::from_slice(bytes)
         .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-    stored.into_iter().map(CloudBoxRecord::try_from).collect()
+    let history: Vec<CloudBoxRecord> = stored
+        .into_iter()
+        .map(CloudBoxRecord::try_from)
+        .collect::<Result<_, _>>()?;
+    CloudBoxRecord::validate_history(&history)?;
+    if history.first().map(CloudBoxRecord::box_id) != Some(expected_id) {
+        return Err(CloudBoxError::ReceiptUnavailable(
+            "receipt file box_id does not match filename".into(),
+        ));
+    }
+    Ok(history)
 }
 
 fn encode_history(history: &[CloudBoxRecord]) -> Result<Vec<u8>, CloudBoxError> {
@@ -344,6 +366,12 @@ impl CloudBoxStore for FileCloudBoxStore {
             let Some(name) = path.file_name() else {
                 continue;
             };
+            let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+                CloudBoxError::ReceiptUnavailable("invalid receipt filename".into())
+            })?;
+            let expected_id = CloudBoxId::parse(stem).map_err(|_| {
+                CloudBoxError::ReceiptUnavailable("receipt filename is not a UUID".into())
+            })?;
             let file = dir
                 .open_file(name, OpenMode::ReadNonblocking)
                 .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
@@ -357,7 +385,7 @@ impl CloudBoxStore for FileCloudBoxStore {
                     path.display()
                 )));
             }
-            histories.push(decode_history(&bytes)?);
+            histories.push(decode_history(&bytes, &expected_id)?);
         }
         Ok(histories)
     }
@@ -383,7 +411,7 @@ impl CloudBoxStore for FileCloudBoxStore {
                 "cloud box receipt history exceeded maximum size".into(),
             ));
         }
-        decode_history(&bytes)
+        decode_history(&bytes, box_id)
     }
 
     fn append(&self, box_id: &CloudBoxId, record: CloudBoxRecord) -> Result<(), CloudBoxError> {
@@ -418,17 +446,30 @@ impl CloudBoxStore for FileCloudBoxStore {
     }
 }
 
+fn deserialize_zeroizing<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Zeroizing::new)
+}
+
 #[derive(Deserialize)]
 struct BootstrapCreateOutput {
     gateway_id: String,
     url: String,
-    credential: String,
+    #[serde(deserialize_with = "deserialize_zeroizing")]
+    credential: Zeroizing<String>,
 }
 
 #[derive(Deserialize)]
 struct BootstrapStatusOutput {
     gateway_id: String,
     url: String,
+}
+
+#[derive(Deserialize)]
+struct BootstrapBusyOutput {
+    busy: bool,
 }
 
 fn last_json_line(output: &str) -> Result<&str, CloudBoxError> {
@@ -468,6 +509,21 @@ impl WorkspaceCloudBoxProvider {
             pinned_image,
         }
     }
+
+    async fn rollback_or_uncertain(
+        &self,
+        account: &crate::workspaces::domain::CloudAccount,
+        vm: &str,
+        admission: &Admitted,
+        primary: CloudBoxError,
+    ) -> CloudBoxError {
+        match self.provider.remove(account, vm, admission).await {
+            Ok(()) => primary,
+            Err(cleanup_error) => CloudBoxError::CleanupUncertain(format!(
+                "vm={vm}; cause={primary}; cleanup={cleanup_error:?}"
+            )),
+        }
+    }
 }
 
 impl CloudBoxProvider for WorkspaceCloudBoxProvider {
@@ -487,13 +543,13 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
                 .map_err(map_provider_failure)?;
 
             if let Some(rejection) = receipt.refusal {
+                let primary = CloudBoxError::AdmissionRefused(format!("{rejection:?}"));
                 if receipt.disposition == RefusalDisposition::RollbackNewVm {
-                    let _ = self
-                        .provider
-                        .remove(&account, &receipt.vm, &receipt.admission)
-                        .await;
+                    return Err(self
+                        .rollback_or_uncertain(&account, &receipt.vm, &receipt.admission, primary)
+                        .await);
                 }
-                return Err(CloudBoxError::AdmissionRefused(format!("{rejection:?}")));
+                return Err(primary);
             }
 
             let runtime = match self
@@ -503,22 +559,28 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    let _ = self
-                        .provider
-                        .remove(&account, &receipt.vm, &receipt.admission)
-                        .await;
-                    return Err(map_provider_failure(error));
+                    return Err(self
+                        .rollback_or_uncertain(
+                            &account,
+                            &receipt.vm,
+                            &receipt.admission,
+                            map_provider_failure(error),
+                        )
+                        .await);
                 }
             };
 
             let raw = match runtime.run(BOOTSTRAP_CREATE_CMD.to_owned(), None).await {
-                Ok(raw) => raw,
+                Ok(raw) => Zeroizing::new(raw),
                 Err(error) => {
-                    let _ = self
-                        .provider
-                        .remove(&account, &receipt.vm, &receipt.admission)
-                        .await;
-                    return Err(CloudBoxError::BootstrapFailed(error.to_string()));
+                    return Err(self
+                        .rollback_or_uncertain(
+                            &account,
+                            &receipt.vm,
+                            &receipt.admission,
+                            CloudBoxError::BootstrapFailed(error.to_string()),
+                        )
+                        .await);
                 }
             };
 
@@ -528,11 +590,9 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
             }) {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    let _ = self
-                        .provider
-                        .remove(&account, &receipt.vm, &receipt.admission)
-                        .await;
-                    return Err(error);
+                    return Err(self
+                        .rollback_or_uncertain(&account, &receipt.vm, &receipt.admission, error)
+                        .await);
                 }
             };
 
@@ -541,13 +601,16 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
             let url = match CloudBoxUrl::new(parsed.url) {
                 Ok(url) if !gateway_id.is_empty() && !credential.is_empty() => url,
                 _ => {
-                    let _ = self
-                        .provider
-                        .remove(&account, &receipt.vm, &receipt.admission)
-                        .await;
-                    return Err(CloudBoxError::BootstrapFailed(
-                        "gateway bootstrap returned incomplete enrollment metadata".into(),
-                    ));
+                    return Err(self
+                        .rollback_or_uncertain(
+                            &account,
+                            &receipt.vm,
+                            &receipt.admission,
+                            CloudBoxError::BootstrapFailed(
+                                "gateway bootstrap returned incomplete enrollment metadata".into(),
+                            ),
+                        )
+                        .await);
                 }
             };
 
@@ -621,36 +684,118 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
     }
 }
 
-/// Tracing-backed [`CloudBoxAudit`] emitting structured audit events on every
-/// cloud box lifecycle transition (including refusal and rollback paths).
-pub struct TracingCloudBoxAudit;
+/// Durable file-backed [`CloudBoxAudit`] appending synced JSONL records inside
+/// a private directory (`<namespace>/cloud-boxes-audit/events.jsonl`).
+pub struct FileCloudBoxAudit {
+    root: PathBuf,
+    write_lock: Mutex<()>,
+}
 
-impl CloudBoxAudit for TracingCloudBoxAudit {
-    fn record(&self, event: CloudBoxAuditEvent) {
-        tracing::info!(
-            target: "nessa.audit.cloud_boxes",
-            box_id = event.box_id.as_str(),
-            cloud = event.cloud.map(|c| c.as_str()).unwrap_or("unknown"),
-            before = ?event.before,
-            after = ?event.after,
-            action = event.action,
-            cause = %event.cause,
-            initiator = %event.initiator,
-            "cloud box lifecycle transition"
-        );
+impl FileCloudBoxAudit {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            write_lock: Mutex::new(()),
+        }
     }
 }
 
-/// Default [`ActiveWorkChecker`] reporting no local work on the control-plane
-/// gateway (remote gateways enforce their own idle checks when queried).
-pub struct IdleActiveWorkChecker;
+#[derive(Serialize)]
+struct StoredAuditLine<'a> {
+    at_ms: u64,
+    box_id: &'a str,
+    cloud: Option<&'a str>,
+    before: Option<StoredState>,
+    after: Option<StoredState>,
+    action: &'a str,
+    cause: &'a str,
+    initiator: &'a str,
+}
 
-impl ActiveWorkChecker for IdleActiveWorkChecker {
+impl CloudBoxAudit for FileCloudBoxAudit {
+    fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| CloudBoxError::ReceiptUnavailable("audit lock poisoned".into()))?;
+        create_directory(&self.root)
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        let dir = PrivateDirectory::open_root(&self.root)
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        let at_ms = clock::wall_now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+            .unwrap_or(0);
+        let line = StoredAuditLine {
+            at_ms,
+            box_id: event.box_id.as_str(),
+            cloud: event.cloud.map(Cloud::as_str),
+            before: event.before.map(StoredState::from),
+            after: event.after.map(StoredState::from),
+            action: event.action,
+            cause: &event.cause,
+            initiator: &event.initiator,
+        };
+        let mut encoded = serde_json::to_vec(&line)
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        encoded.push(b'\n');
+        let mut file = dir
+            .open_file(OsStr::new("events.jsonl"), OpenMode::OpenOrCreate)
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        file.seek(SeekFrom::End(0))
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        file.write_all(&encoded)
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
+        Ok(())
+    }
+}
+
+/// Real [`ActiveWorkChecker`] enforcing G5 by querying the running cloud box's
+/// gateway bootstrap status (`BOOTSTRAP_BUSY_CMD`) over its authenticated
+/// runtime connection. Fails closed (`Err`) if active work cannot be verified.
+pub struct ProviderActiveWorkChecker {
+    providers: HashMap<Cloud, (Arc<dyn Provider>, Option<&'static str>)>,
+}
+
+impl ProviderActiveWorkChecker {
+    pub fn new(entries: Vec<(Cloud, Arc<dyn Provider>, Option<&'static str>)>) -> Self {
+        let providers = entries
+            .into_iter()
+            .map(|(cloud, provider, pinned)| (cloud, (provider, pinned)))
+            .collect();
+        Self { providers }
+    }
+}
+
+impl ActiveWorkChecker for ProviderActiveWorkChecker {
     fn has_active_work<'a>(
         &'a self,
-        _box_id: &'a CloudBoxId,
+        cloud: Cloud,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
     ) -> BoxFuture<'a, Result<bool, CloudBoxError>> {
-        Box::pin(async { Ok(false) })
+        Box::pin(async move {
+            let Some((provider, pinned)) = self.providers.get(&cloud) else {
+                return Err(CloudBoxError::AccountDisconnected);
+            };
+            let spec = connection.new_vm(*pinned, VmLifetime::Unlimited);
+            let runtime = provider
+                .connect(&connection.account(), &spec, "box-busy", vm, admission)
+                .await
+                .map_err(map_provider_failure)?;
+            let raw = runtime
+                .run(BOOTSTRAP_BUSY_CMD.to_owned(), None)
+                .await
+                .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))?;
+            let line = last_json_line(&raw)?;
+            let parsed: BootstrapBusyOutput = serde_json::from_str(line)
+                .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))?;
+            Ok(parsed.busy)
+        })
     }
 }
 
@@ -658,14 +803,14 @@ impl ActiveWorkChecker for IdleActiveWorkChecker {
 mod tests {
     use super::*;
     use crate::workspaces::{
-        application::{WorkspaceReceipt, WorkspaceRuntime},
+        application::{ServedCopy, WorkspaceReceipt, WorkspaceRuntime, WorkspaceStream},
         domain::{
             AdmissionRefusal, AdmissionRejection, BoatConnection, Cloud, CloudAccount,
             CloudBoxName, CloudBoxState, TemplateRelease, VmSpec,
         },
     };
     use async_trait::async_trait;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct FakeRuntime {
         output: String,
@@ -673,10 +818,7 @@ mod tests {
 
     #[async_trait]
     impl WorkspaceRuntime for FakeRuntime {
-        async fn serve(
-            &self,
-            _copy: crate::workspaces::application::ServedCopy,
-        ) -> Result<crate::workspaces::application::WorkspaceStream, Failure> {
+        async fn serve(&self, _copy: ServedCopy) -> Result<WorkspaceStream, Failure> {
             Err(Failure::Provider)
         }
         async fn image_protocol(&self) -> Option<String> {
@@ -695,6 +837,7 @@ mod tests {
         runtime_output: Mutex<String>,
         refusal: Mutex<Option<AdmissionRejection>>,
         removed: Mutex<Vec<String>>,
+        fail_remove: AtomicBool,
     }
 
     #[async_trait]
@@ -744,14 +887,19 @@ mod tests {
             _admission: &Admitted,
         ) -> Result<(), Failure> {
             self.removed.lock().unwrap().push(vm.to_owned());
-            Ok(())
+            if self.fail_remove.load(Ordering::SeqCst) {
+                Err(Failure::Provider)
+            } else {
+                Ok(())
+            }
         }
     }
 
     #[test]
-    fn round_trips_validated_history_atomically() {
+    fn round_trips_validated_history_atomically_and_persists_audit_lines() {
         let dir = tempfile::tempdir().unwrap();
         let store = FileCloudBoxStore::new(dir.path().join("cloud-boxes"));
+        let audit = FileCloudBoxAudit::new(dir.path().join("cloud-boxes-audit"));
         let id = CloudBoxId::parse("11111111-2222-3333-4444-555555555555").unwrap();
         let name = CloudBoxName::new("Cloud Box").unwrap();
 
@@ -795,10 +943,24 @@ mod tests {
             listed[0].last().unwrap().as_summary().unwrap().gateway_id,
             "gw-1"
         );
+
+        audit
+            .record(CloudBoxAuditEvent {
+                box_id: id,
+                cloud: Some(Cloud::Agent37),
+                before: Some(CloudBoxState::Provisioning),
+                after: Some(CloudBoxState::Running),
+                action: "create_admitted",
+                cause: "provisioned".into(),
+                initiator: "owner".into(),
+            })
+            .unwrap();
+        let logged = fs::read_to_string(dir.path().join("cloud-boxes-audit/events.jsonl")).unwrap();
+        assert!(logged.contains("\"action\":\"create_admitted\""));
     }
 
     #[tokio::test]
-    async fn workspace_cloud_box_provider_bootstraps_and_rolls_back_on_refusal() {
+    async fn workspace_cloud_box_provider_bootstraps_rolls_back_and_surfaces_cleanup_uncertain() {
         let connection = CloudConnection::Boat(
             BoatConnection::new("tok".into(), "env".into(), "img".into()).unwrap(),
         );
@@ -810,6 +972,7 @@ mod tests {
             ),
             refusal: Mutex::new(None),
             removed: Mutex::new(Vec::new()),
+            fail_remove: AtomicBool::new(false),
         });
         let adapter = WorkspaceCloudBoxProvider::new(inner.clone(), None);
         let provisioned = adapter.create_box(&connection, &id).await.unwrap();
@@ -826,6 +989,14 @@ mod tests {
             .unwrap();
         assert_eq!(woken.url.as_str(), "wss://gw99-new.example.com/");
 
+        // Active work checker reads busy JSON.
+        let checker = ProviderActiveWorkChecker::new(vec![(Cloud::Boat, inner.clone(), None)]);
+        *inner.runtime_output.lock().unwrap() = r#"{"busy":true}"#.into();
+        assert!(checker
+            .has_active_work(Cloud::Boat, &connection, "vm-99", &provisioned.admission)
+            .await
+            .unwrap());
+
         // Refusal triggers rollback.
         *inner.refusal.lock().unwrap() = Some(AdmissionRejection::new(
             AdmissionRefusal::WrongVersion,
@@ -836,5 +1007,12 @@ mod tests {
             CloudBoxError::AdmissionRefused(_)
         ));
         assert_eq!(inner.removed.lock().unwrap().as_slice(), ["vm-99"]);
+
+        // Failed rollback surfaces CleanupUncertain (M1).
+        inner.fail_remove.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            adapter.create_box(&connection, &id).await.unwrap_err(),
+            CloudBoxError::CleanupUncertain(_)
+        ));
     }
 }

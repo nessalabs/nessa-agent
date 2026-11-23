@@ -32,6 +32,7 @@ export interface AddGatewayInput {
   readonly label: string
   readonly url: string
   readonly credential: string
+  readonly expectedGatewayId?: string
   readonly cloudBox?: CloudBoxMetadata
 }
 

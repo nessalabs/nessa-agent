@@ -48,6 +48,7 @@ export function GatewaysTab() {
   const [credential, setCredential] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rowError, setRowError] = useState<string | null>(null)
   const [boxName, setBoxName] = useState("")
   const [boxCloud, setBoxCloud] = useState<"agent37" | "boat">("agent37")
   const [creatingBox, setCreatingBox] = useState(false)
@@ -74,12 +75,12 @@ export function GatewaysTab() {
     fallbackError: string,
   ) => {
     if (pendingIds.has(gatewayId)) return
-    setError(null)
+    setRowError(null)
     setPendingIds((prev) => new Set(prev).add(gatewayId))
     try {
       await action()
     } catch (err) {
-      setError(err instanceof Error ? err.message : fallbackError)
+      setRowError(err instanceof Error ? err.message : fallbackError)
     } finally {
       setPendingIds((prev) => {
         const next = new Set(prev)
@@ -135,7 +136,10 @@ export function GatewaysTab() {
     <>
       <Group
         title="Connected gateways"
-        note="Each gateway runs its own channels, agents, and terminals. Disconnecting one never disturbs the others."
+        note={
+          rowError ??
+          "Each gateway runs its own channels, agents, and terminals. Disconnecting one never disturbs the others."
+        }
       >
         {gateways.map((gateway) => {
           const isPending = pendingIds.has(gateway.gatewayId)

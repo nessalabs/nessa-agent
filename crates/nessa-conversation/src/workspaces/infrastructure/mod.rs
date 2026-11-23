@@ -17,7 +17,7 @@ pub use agent37_settings::Agent37VaultSettings;
 pub use assignments::FileAssignments;
 pub use boat::{vm_config, BoatProvider};
 pub use cloud_boxes::{
-    FileCloudBoxStore, IdleActiveWorkChecker, TracingCloudBoxAudit, WorkspaceCloudBoxProvider,
+    FileCloudBoxAudit, FileCloudBoxStore, ProviderActiveWorkChecker, WorkspaceCloudBoxProvider,
 };
 pub use cloud_choice::FileCloudChoice;
 pub use settings::VaultSettings;
