@@ -1,7 +1,10 @@
-use crate::cli::entrypoint::{parse, Command, GrantedAgents, LocalProvisioning, Ungranted};
+use crate::cli::entrypoint::{
+    parse, Command, GrantedAgents, LocalProvisioning, ServerOptions, Ungranted,
+};
 use nessa_agent_install::domain::AgentName;
 use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
+use std::path::PathBuf;
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -26,12 +29,61 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
     ));
     assert_eq!(
         parse(&args(&["server"])).unwrap(),
-        Command::Server(LocalProvisioning::Manual)
+        Command::Server(ServerOptions::new(LocalProvisioning::Manual))
     );
     assert_eq!(
         parse(&args(&["server", "--provision-local"])).unwrap(),
-        Command::Server(LocalProvisioning::Automatic)
+        Command::Server(ServerOptions::new(LocalProvisioning::Automatic))
     );
+    let passphrase_path = if cfg!(windows) {
+        r"C:\secrets\nessa_vault_passphrase"
+    } else {
+        "/run/secrets/nessa_vault_passphrase"
+    };
+    let other_path = if cfg!(windows) {
+        r"C:\secrets\other"
+    } else {
+        "/run/secrets/other"
+    };
+    assert_eq!(
+        parse(&args(&[
+            "server",
+            "--provision-local",
+            "--vault-passphrase-file",
+            passphrase_path,
+        ]))
+        .unwrap(),
+        Command::Server(ServerOptions {
+            provisioning: LocalProvisioning::Automatic,
+            vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+        })
+    );
+    assert_eq!(
+        parse(&args(&[
+            "server",
+            "--vault-passphrase-file",
+            passphrase_path,
+            "--provision-local",
+        ]))
+        .unwrap(),
+        Command::Server(ServerOptions {
+            provisioning: LocalProvisioning::Automatic,
+            vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+        })
+    );
+    assert_eq!(
+        parse(&args(&[
+            "server",
+            "--vault-passphrase-file",
+            passphrase_path,
+        ]))
+        .unwrap(),
+        Command::Server(ServerOptions {
+            provisioning: LocalProvisioning::Manual,
+            vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+        })
+    );
+    assert!(crate::cli::entrypoint::HELP.contains("--vault-passphrase-file"));
     assert_eq!(parse(&[]).unwrap(), Command::Help);
     for words in [
         vec!["auth", "init"],
@@ -43,6 +95,38 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         vec!["server", "extra"],
         vec!["server", "--provision-local", "--provision-local"],
         vec!["server", "--provision-local", "extra"],
+        vec!["server", "--vault-passphrase-file"],
+        vec!["server", "--vault-passphrase-file", "relative/path"],
+        vec!["server", "--vault-passphrase-file", ""],
+        vec![
+            "server",
+            "--vault-passphrase-file",
+            if cfg!(windows) {
+                "C:\\secrets\\a\0b"
+            } else {
+                "/run/secrets/a\0b"
+            },
+        ],
+        vec![
+            "server",
+            "--vault-passphrase-file",
+            passphrase_path,
+            "--vault-passphrase-file",
+            other_path,
+        ],
+        vec![
+            "server",
+            "--desktop-runtime",
+            passphrase_path,
+            "--provision-local",
+        ],
+        vec![
+            "server",
+            "--desktop-runtime",
+            passphrase_path,
+            "--vault-passphrase-file",
+            other_path,
+        ],
         vec!["--provision-local"],
         vec!["desktop-service", "/tmp"],
     ] {

@@ -16,7 +16,11 @@ use crate::workspaces::{
     domain::*,
     infrastructure::{FileAssignments, FileCloudChoice},
 };
-use crate::{cli::entrypoint::LocalProvisioning, composition::CompositionRoot, core::Launch};
+use crate::{
+    cli::entrypoint::{LocalProvisioning, ServerOptions},
+    composition::CompositionRoot,
+    core::Launch,
+};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::providers::AgentProvider,
@@ -94,9 +98,12 @@ async fn serve_gateway() {
     // The driver reads this gateway's log as it reads the real one's, so it
     // logs the same lines under the same filter.
     crate::core::logging::init();
-    CompositionRoot::serve(LocalProvisioning::Manual, &Launch::Standalone)
-        .await
-        .unwrap();
+    CompositionRoot::serve(
+        ServerOptions::new(LocalProvisioning::Manual),
+        &Launch::Standalone,
+    )
+    .await
+    .unwrap();
 }
 
 pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {

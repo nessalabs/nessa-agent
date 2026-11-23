@@ -1,4 +1,4 @@
-use crate::cli::entrypoint::{Command, LocalProvisioning, HELP};
+use crate::cli::entrypoint::{Command, LocalProvisioning, ServerOptions, HELP};
 use crate::conversation::application::{
     CatalogueReadError, ConversationError, RecordReadError, ReviewNoticeAuditor,
 };
@@ -80,7 +80,7 @@ impl CompositionRoot {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())
             }
-            Command::Server(provisioning) => Self::serve(provisioning, launch).await,
+            Command::Server(options) => Self::serve(options, launch).await,
             Command::Desktop(directory) => Self::serve_desktop(&directory, launch).await,
             Command::Offline(mut args) => {
                 if args.get(1).is_some_and(|v| v == "init")
@@ -247,19 +247,24 @@ impl CompositionRoot {
         }
     }
 
-    pub async fn serve(provisioning: LocalProvisioning, launch: &Launch) -> Result<(), RunError> {
-        Self::serve_runtime(None, provisioning, launch).await
+    pub async fn serve(options: ServerOptions, launch: &Launch) -> Result<(), RunError> {
+        Self::serve_runtime(None, options, launch).await
     }
 
     /// The packaged app owns its private namespace and has no operator to run the
     /// offline commands, so it always provisions what is missing.
     async fn serve_desktop(bundle: &std::path::Path, launch: &Launch) -> Result<(), RunError> {
-        Self::serve_runtime(Some(bundle), LocalProvisioning::Automatic, launch).await
+        Self::serve_runtime(
+            Some(bundle),
+            ServerOptions::new(LocalProvisioning::Automatic),
+            launch,
+        )
+        .await
     }
 
     async fn serve_runtime(
         bundle: Option<&std::path::Path>,
-        provisioning: LocalProvisioning,
+        options: ServerOptions,
         launch: &Launch,
     ) -> Result<(), RunError> {
         // A managed launch supersedes whatever its own registration last wrote
@@ -292,7 +297,7 @@ impl CompositionRoot {
             }
             _ => None,
         };
-        if provisioning == LocalProvisioning::Automatic {
+        if options.provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;
         }
         let dependencies = runtime_dependencies(&config);
@@ -303,6 +308,33 @@ impl CompositionRoot {
                 service.set_open_preparation(super::preparation_for(opener));
             }
         }
+        let mut headless_vault_session = match options.vault_passphrase_file {
+            Some(passphrase_file) => {
+                let vault = composed
+                    .routes
+                    .accounts
+                    .vault
+                    .as_ref()
+                    .ok_or_else(|| {
+                        RunError::Authentication(
+                            "vault is unavailable in this configuration".into(),
+                        )
+                    })?
+                    .vault
+                    .clone();
+                let session = tokio::task::spawn_blocking(move || {
+                    super::vault::bootstrap_headless(
+                        &vault,
+                        &super::vault::FilePassphraseSource(passphrase_file),
+                    )
+                })
+                .await
+                .map_err(|error| RunError::Runtime(format!("headless vault task failed: {error}")))?
+                .map_err(|error| RunError::Authentication(error.to_string()))?;
+                Some(session)
+            }
+            None => None,
+        };
         let super::local_auth::LocalProduct {
             routes: product,
             webhook_delivery,
@@ -700,6 +732,11 @@ impl CompositionRoot {
                 Duration::from_secs(30),
             )
             .await;
+            if let Some(mut session) = headless_vault_session.take() {
+                if let Err(error) = session.close() {
+                    tracing::warn!(?error, "headless vault session close failed");
+                }
+            }
         })
         .await;
         let native_failed = *native_failed.borrow();

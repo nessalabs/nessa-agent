@@ -119,7 +119,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::cli::entrypoint::parse;
-    use crate::cli::entrypoint::LocalProvisioning;
+    use crate::cli::entrypoint::{LocalProvisioning, ServerOptions};
 
     const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const RUNTIME: &str = "/Users/someone/Library/Application Support/Nessa/gateway-runtimes/x";
@@ -189,8 +189,8 @@ mod tests {
     fn a_command_nobody_registered_is_never_a_managed_launch() {
         let logs = PathBuf::from("/Users/someone/.nessa/logs");
         for command in [
-            Command::Server(LocalProvisioning::Manual),
-            Command::Server(LocalProvisioning::Automatic),
+            Command::Server(ServerOptions::new(LocalProvisioning::Manual)),
+            Command::Server(ServerOptions::new(LocalProvisioning::Automatic)),
             Command::Help,
             Command::Offline(vec!["auth".into(), "init".into()]),
             Command::Doctor {

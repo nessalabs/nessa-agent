@@ -1,0 +1,27 @@
+# Headless Linux nessa-server gateway systemd system unit (ADR 1417, #1418).
+# Install to /etc/systemd/system/nessa-server.service.
+[Unit]
+Description=Nessa Headless Gateway Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nessa
+Group=nessa
+WorkingDirectory=/home/nessa/workspace
+Environment=NESSA_STAGE=prod
+Environment=NESSA_DATA_DIR=/var/lib/nessa
+Environment=NESSA_HOST=127.0.0.1
+Environment=NESSA_PORT=18789
+# Remove --vault-passphrase-file if you unlock the vault interactively instead.
+ExecStart=/usr/local/bin/nessa server --provision-local --vault-passphrase-file /etc/nessa/vault-passphrase
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=35s
+NoNewPrivileges=true
+PrivateTmp=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
