@@ -870,7 +870,8 @@ describe("a source removing a session", () => {
         )
       })
       const bubble = () => pane()?.querySelector('[data-role="user"]')
-      const failure = () => pane()?.querySelector("[data-send-failure]")
+      // Said under the message now, not above the composer.
+      const failure = () => pane()?.querySelector("[data-unsent].workspace-unsent")
       expect(bubble()?.textContent).toContain("still sending")
       expect(failure()).not.toBeNull()
       await act(async () => {

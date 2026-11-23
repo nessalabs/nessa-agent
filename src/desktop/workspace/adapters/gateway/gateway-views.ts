@@ -69,6 +69,11 @@ import {
   type Section,
   type SessionSummary,
 } from "../../model/workspace-index"
+import {
+  runningSetup,
+  setupStepLabel,
+  type MachineSetup,
+} from "../../model/machine-setup"
 import { toolStep } from "./gateway-steps"
 import { gatewayToolWidget } from "./tool-widget"
 
@@ -467,6 +472,26 @@ export function transcriptFrom(
     listed,
     waitingIds,
   )
+  // Getting its machine ready, on the window's clock, as the gateway's
+  // deadlines are put on it.
+  const setups: MachineSetup[] = (view.setup ?? []).map((setup) => ({
+    state: setup.state,
+    ...(setup.executionId === undefined ? {} : { executionId: setup.executionId }),
+    steps: setup.steps.map((step) => ({
+      step: step.step,
+      startedAtMs: clientDueAtMs(step.startedAtMs, view.serverNowMs, receivedAtMs),
+      ...(step.endedAtMs === undefined
+        ? {}
+        : { endedAtMs: clientDueAtMs(step.endedAtMs, view.serverNowMs, receivedAtMs) }),
+    })),
+  }))
+  const readyFor = new Map(
+    setups.flatMap((setup) =>
+      setup.state === "ready" && setup.executionId !== undefined
+        ? [[setup.executionId, setup] as const]
+        : [],
+    ),
+  )
   const messages: Message[] = []
   const pushHandoffs = (left: readonly ConversationView["handoffs"][number][]) => {
     for (const handoff of left) {
@@ -607,11 +632,13 @@ export function transcriptFrom(
         : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
+      const ready = readyFor.get(turn.executionId)
       const agent: TurnMessage = {
         id: reply,
         role: "agent",
         at: seen(reply),
         parts,
+        ...(ready ? { setup: ready } : {}),
         // The turn's own status says whether its reply is still being written.
         ...(working ? { working: true as const } : {}),
       }
@@ -634,6 +661,16 @@ export function transcriptFrom(
     if (working && parts[parts.length - 1]?.kind !== "text")
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
+  // While its machine is made ready, that is what it is doing: named step by
+  // step, timed from the first, ahead of anything the agent says.
+  const setting = runningSetup(setups)
+  const step = setting?.steps.at(-1)
+  if (setting && step)
+    activity = {
+      label: setupStepLabel(step.step, view.runtime?.agent),
+      since: setting.steps[0]?.startedAtMs ?? step.startedAtMs,
+      setup: true,
+    }
   if (published.after.length > 0)
     messages.push({
       id: publishedAfterId,
@@ -733,6 +770,7 @@ export function transcriptFrom(
       : {}),
     // The view lists them oldest first; Chat context shows the newest first.
     published: view.artifacts.map(publishedPart).reverse(),
+    ...(setups.length ? { setups } : {}),
     lease: view.lease && {
       state: view.lease.state,
       environment: view.lease.environment,

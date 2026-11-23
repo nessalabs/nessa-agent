@@ -843,6 +843,19 @@ struct ModelBudget {
     identity: ProviderIdentity,
     reserved_output_tokens: u32,
 }
+/// Ends an opening of a conversation's machine as `end` when dropped, so a
+/// task that stops early still ends it (`SetupSteps::end`).
+struct SetupEnding {
+    steps: Arc<super::SetupSteps>,
+    id: ConversationId,
+    opening: super::SetupOpening,
+    end: super::SetupEnd,
+}
+impl Drop for SetupEnding {
+    fn drop(&mut self) {
+        self.steps.end(&self.id, self.opening, self.end);
+    }
+}
 enum AttachmentOwner {
     Running(JoinHandle<()>),
     Finished(Result<(), CreationTaskFault>),
@@ -1107,6 +1120,9 @@ struct Inner {
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
+    /// What getting each conversation's cloud machine ready is doing
+    /// (`bind_setup_steps`); unbound, no view lists any.
+    setup: OnceLock<Arc<super::SetupSteps>>,
     /// Remembered permission rules. Unbound, no turn is offered a remember
     /// choice and no review is answered by a rule.
     permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
@@ -1610,6 +1626,7 @@ impl ConversationService {
                 failure_backoff: OnceLock::new(),
                 retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
+                setup: OnceLock::new(),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
             }),
@@ -1937,7 +1954,13 @@ impl ConversationService {
                         None
                     };
                     entry.insert(slot.clone());
-                    service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
+                    service.start_slot(
+                        id.clone(),
+                        slot.clone(),
+                        actor.clone(),
+                        owned_preparation,
+                        true,
+                    );
                     slot
                 }
             };
@@ -2075,7 +2098,7 @@ impl ConversationService {
                 }
                 let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor.clone(), None);
+                self.start_slot(id.clone(), slot.clone(), actor.clone(), None, false);
                 slot
             };
             slot.touch(self.inner.clock.unix_milliseconds());
@@ -2130,11 +2153,21 @@ impl ConversationService {
         slot: Arc<Slot>,
         actor: ActionContext,
         owned_preparation: Option<Arc<dyn OwnedLifetime>>,
+        // Opened by a chat's creation, for no message yet.
+        for_creation: bool,
     ) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
             tokio::spawn(async move {
+                // Getting its machine ready, if it has one, is this
+                // opening's; ended with it, below and in the attachment
+                // owner.
+                let setup_opening = service
+                    .inner
+                    .setup
+                    .get()
+                    .map(|steps| (steps.clone(), steps.begin(&id, for_creation)));
                 // The pending switch this opening carries on, if it does:
                 // settled once the opening has ended (`handoffs`).
                 let carried = std::sync::Mutex::new(None);
@@ -2385,6 +2418,13 @@ impl ConversationService {
                                 }
                             };
                             let (environment, opening) = selection?;
+                            // Its machine reached, the agent is started there
+                            // next: a setup step where a machine was made ready.
+                            if opening.refusal.is_none() {
+                                if let Some(steps) = service.inner.setup.get() {
+                                    steps.starting(&id);
+                                }
+                            }
                             let lease = Arc::new(LiveLease::new(&opening));
                             owner.acquisition.acquired(lease.clone());
                             if let Some(handoff) = plan.handoff.clone() {
@@ -2591,7 +2631,17 @@ impl ConversationService {
                             let opening_failure: Arc<std::sync::Mutex<Option<AgentError>>> =
                                 Arc::default();
                             let failed_opening = opening_failure.clone();
+                            let setup_ending = setup_opening.clone().map(|(steps, opening)| SetupEnding {
+                                steps,
+                                id: id.clone(),
+                                opening,
+                                end: super::SetupEnd::Failed,
+                            });
                             let owner = tokio::spawn(async move {
+                                // However this task ends, an opening of the
+                                // machine under way ends with it: ready only
+                                // once the agent attached.
+                                let mut setup_ending = setup_ending;
                                 if let Some(readiness) = readiness {
                                     let cancellation = authorization.cancellation();
                                     tokio::select! {
@@ -2611,7 +2661,12 @@ impl ConversationService {
                                 if let Some(error) = failed {
                                     report_opening_failure(&attachment_id, &error);
                                     *failed_opening.lock().expect("opening failure") = Some(error);
+                                } else if attachment.attachment_status().phase() == AttachmentPhase::Attached {
+                                    if let Some(ending) = setup_ending.as_mut() {
+                                        ending.end = super::SetupEnd::Ready;
+                                    }
                                 }
+                                drop(setup_ending);
                                 // Attached or failed: the view's lifecycle
                                 // and capabilities follow the agent's.
                                 attachment_service
@@ -2670,7 +2725,14 @@ impl ConversationService {
                         };
                         match &result {
                             Ok(_) => { owner.acquisition.transferred(); owner.acquisition.complete(true, service.inner.deletion_budgets.stop).await; }
-                            Err(failure) => owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await,
+                            Err(failure) => {
+                                // Nothing was started: an opening of its
+                                // machine under way ends with it.
+                                if let Some((steps, opening)) = &setup_opening {
+                                    steps.end(&id, *opening, super::SetupEnd::Failed);
+                                }
+                                owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await
+                            }
                         }
                         result
                     })
@@ -3407,6 +3469,24 @@ impl ConversationService {
         caller: ConversationCaller,
         opening: ReadOpening,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
+        let setup = self.inner.setup.get().cloned();
+        let (mut view, cursor) = self
+            .read_at_without_setup(id.clone(), caller, opening)
+            .await?;
+        // Read after the rest: a step that began during the read is shown,
+        // and its change wakes the reader for the next one anyway.
+        if let Some(steps) = setup {
+            view.setup = steps.view(&id);
+        }
+        Ok((view, cursor))
+    }
+
+    async fn read_at_without_setup(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        opening: ReadOpening,
+    ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         let _admission = self.admit().await?;
         // An explicit Open can recover a stopped owner; a follower may only
         // publish a readable owner. The same ordering applies to both controls.
@@ -3421,7 +3501,38 @@ impl ConversationService {
             if let Some(read) = self.pending_change_view(&id, &caller).await? {
                 return Ok(read);
             }
-            self.inner.records.mode_changes().lock(&id).await
+            // While its cloud machine is made ready, which can take a minute
+            // or more, a follower is not held until the agent opens, nor
+            // behind the send waiting on it (which holds this lock): it reads
+            // the history and how far the setup got, and the agent's own
+            // view once the opening ends (`SetupSteps` wakes it each step).
+            // Asked again on each change while it waits, since the first
+            // step can come after the send took the lock.
+            let steps = self
+                .inner
+                .setup
+                .get()
+                .filter(|_| matches!(opening, ReadOpening::LiveOnly));
+            let mut changes = self.inner.live_changes.subscribe(&id);
+            let mode_changes = self.inner.records.mode_changes();
+            let locked = mode_changes.lock(&id);
+            tokio::pin!(locked);
+            loop {
+                let Some(steps) = steps else {
+                    break (&mut locked).await;
+                };
+                if steps.running(&id) && !self.opened(&id).await {
+                    return self.read_unopened(&id, &caller).await;
+                }
+                tokio::select! {
+                    guard = &mut locked => break guard,
+                    changed = changes.changed() => {
+                        if changed.is_err() {
+                            break (&mut locked).await;
+                        }
+                    }
+                }
+            }
         };
         match opening {
             ReadOpening::Open => {
@@ -3529,6 +3640,22 @@ impl ConversationService {
         let view = self.with_background_tasks(&id, view).await?;
         self.check_view_access(&id, &caller).await?;
         Ok((view, cursor))
+    }
+    /// Whether `id` has an opening that has ended, opened or failed: one a
+    /// read would not wait for.
+    /// Whether a send or change holds `id`'s selection lock now.
+    #[cfg(test)]
+    pub(crate) fn selection_held(&self, id: &ConversationId) -> bool {
+        self.inner.records.mode_changes().try_lock(id).is_none()
+    }
+
+    async fn opened(&self, id: &ConversationId) -> bool {
+        self.inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .is_none_or(|slot| slot.value.get().is_some())
     }
     /// The agent of `id` if one is live or opening (waited for), after the
     /// caller's access is checked; `None` when nothing has it open, or its
@@ -4075,6 +4202,14 @@ impl ConversationService {
         let _ = self.inner.drive.set(drive);
     }
 
+    /// Bind what tells each conversation's view how its cloud machine is
+    /// being made ready; the same steps its machine's connector is given.
+    /// A second bind is ignored.
+    pub fn bind_setup_steps(&self, steps: Arc<super::SetupSteps>) {
+        steps.publish_to(self.inner.live_changes.clone());
+        let _ = self.inner.setup.set(steps);
+    }
+
     /// Bind the remembered permission rules. A second bind is ignored.
     /// Unbound, reviews are asked and no remember choice is offered.
     pub fn bind_permission_rules(&self, rules: Arc<dyn PermissionRules>) {
@@ -4277,6 +4412,13 @@ impl ConversationService {
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.
+            // An opening this message waits on is its own: the view says
+            // so, and a reply says how long the machine took.
+            let _sending = service
+                .inner
+                .setup
+                .get()
+                .map(|steps| steps.sending(&id, &execution_id));
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;

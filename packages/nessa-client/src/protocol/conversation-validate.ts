@@ -827,6 +827,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "queueComplete",
     "transcriptState",
     "runtime",
+    "setup",
     "lease",
     "artifacts",
     "notes",
@@ -999,6 +1000,11 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Invalid conversation model context window")
     flag(runtime, "reasoning")
+  }
+  if (item.setup !== undefined) {
+    const setups = items(item, "setup", 2)
+    if (!setups.length) throw new Error("Invalid conversation setup")
+    for (const setup of setups) machineSetup(setup)
   }
   if (item.lease !== undefined) lease(item.lease)
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
@@ -1191,6 +1197,25 @@ const leaseShapes = {
     dropped: false,
   },
 } satisfies Record<ConversationLease["state"], LeaseShape>
+
+/** Getting the conversation's cloud machine ready: its steps, in order. */
+function machineSetup(item: Record<string, unknown>) {
+  exact(item, ["state", "executionId", "steps"])
+  if (!word(item, "state", ["running", "ready", "failed"]))
+    throw new Error("Invalid conversation setup state")
+  if (item.executionId !== undefined) identity(item, "executionId")
+  const steps = items(item, "steps", 8)
+  if (!steps.length) throw new Error("Invalid conversation setup steps")
+  for (const step of steps) {
+    exact(step, ["step", "startedAtMs", "endedAtMs"])
+    if (
+      !word(step, "step", ["creating", "waking", "installing", "connecting", "starting"])
+    )
+      throw new Error("Invalid conversation setup step")
+    time(step, "startedAtMs")
+    if (step.endedAtMs !== undefined) time(step, "endedAtMs")
+  }
+}
 
 /** The view's lease: the published shape, and only the fields its state
  * carries, so a lease that contradicts itself is refused rather than shown. */

@@ -14,7 +14,7 @@
 export const KNOBS = {
   vmBackgroundTasks: {
     default: 1,
-    what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward",
+    what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward; then a failed wake shown under its message (Container didn’t start, Send again) and a slow wake named step by step, its reply saying how long the container took",
   },
   cloudChoices: {
     default: 1,

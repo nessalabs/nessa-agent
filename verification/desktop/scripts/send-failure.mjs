@@ -19,26 +19,43 @@ await main(
           target.searchParams.set("surface", surface)
           const opened = await openPage(browser, { url: target.href, width, height: 800 })
           const page = opened.page
+          // A chat says it under the message that did not go, in two or
+          // three words; the overview's pill, with no transcript, on a card.
+          const inChat = surface === "conversation"
+          const selector = inChat ? css.unsent : css.sendFailure
+          const retry = inChat ? "Send again" : "Send Again"
+          const dismiss = inChat ? "Dismiss" : "Discard"
           try {
-            const notice = page.locator(css.sendFailure)
+            const notice = page.locator(selector)
             await notice.waitFor()
             const detail = await page.evaluate(() => window.__sendFailure)
             const text = await notice.innerText()
             if (
-              !text.includes(`Error sending · ${detail.code}`) ||
+              (inChat
+                ? !text.includes("Couldn’t send") || text.includes(detail.code)
+                : // The card names it and says why in words; the code is in Copy.
+                  !text.includes("Error sending")) ||
               text.includes(detail.diagnostic)
             )
-              throw new Error("failure is verbose or loses the actual code")
-            const placement = await page.evaluate((selector) => {
-              const row = document.querySelector(selector)
-              const field = document.querySelector("textarea")
-              return (
-                row &&
-                field &&
-                row.getBoundingClientRect().bottom <= field.getBoundingClientRect().top
+              throw new Error(`failure is verbose or says the wrong thing: ${text}`)
+            const placement = await page.evaluate(
+              ({ selector, inChat, message }) => {
+                const row = document.querySelector(selector)
+                const field = document.querySelector("textarea")
+                const bubble = document.querySelector(`${message}[data-role="user"]`)
+                if (!row || !field) return false
+                const box = row.getBoundingClientRect()
+                if (box.bottom > field.getBoundingClientRect().top) return false
+                return !inChat || (bubble?.contains(row) && box.top > 0)
+              },
+              { selector, inChat, message: css.message },
+            )
+            if (!placement)
+              throw new Error(
+                inChat
+                  ? "failure is not under its message"
+                  : "failure is not above the composer",
               )
-            }, css.sendFailure)
-            if (!placement) throw new Error("failure is not above the composer")
             const overflow = await page.evaluate(
               (selector) =>
                 [
@@ -49,7 +66,7 @@ await main(
                   const box = element.getBoundingClientRect()
                   return box.left < 0 || box.right > innerWidth + 1
                 }),
-              css.sendFailure,
+              selector,
             )
             if (overflow)
               throw new Error("recovery controls or message overflow the actual viewport")
@@ -67,7 +84,7 @@ await main(
                 path: resolve(options.shots, `${engine}-${surface}-${width}.png`),
               })
             }
-            await page.getByRole("button", { name: "Send Again", exact: true }).click()
+            await page.getByRole("button", { name: retry, exact: true }).click()
             await page.waitForFunction(() => window.__sendFailure.attempts === 2)
             await notice.waitFor()
             if (
@@ -75,15 +92,22 @@ await main(
               (await page.locator(`${css.message}[data-role="user"]`).count()) !== 1
             )
               throw new Error("retry duplicated the failed message")
-            await page.getByRole("button", { name: "Discard", exact: true }).click()
+            await page.getByRole("button", { name: dismiss, exact: true }).click()
             await notice.waitFor({ state: "detached" })
+            if (
+              inChat &&
+              (await page.locator(`${css.message}[data-role="user"]`).count()) !== 0
+            )
+              throw new Error("Dismiss left the message that did not go")
             rep.add({
               name: "compact-recovery",
               engine,
               surface,
               width,
               failures: [],
-              detail: "above composer; full Copy payload; retry once; discard",
+              detail: inChat
+                ? "under its message; two words; full Copy payload; retry once; dismiss"
+                : "above composer; full Copy payload; retry once; discard",
             })
           } finally {
             await opened.close()
@@ -225,8 +249,8 @@ await main(
             })
           }
           if (!firstUse) {
-            await page.getByRole("button", { name: "Send Again", exact: true }).click()
-            await page.locator(css.sendFailure).waitFor({ state: "detached" })
+            await page.getByRole("button", { name: "Send again", exact: true }).click()
+            await page.locator(css.unsent).waitFor({ state: "detached" })
             if ((await page.locator(`${css.message}[data-role="user"]`).count()) !== 1)
               throw new Error("setup retry duplicated the message")
           }

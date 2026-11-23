@@ -614,6 +614,15 @@ impl Workspaces {
             .await?;
         parts.settings.save(generation, connection).await
     }
+    /// Whether thread `id` has a VM made for it: an opening wakes that one
+    /// rather than making one. A receipt that cannot be read says no, so an
+    /// opening that then fails was only named for making one.
+    pub async fn has_vm(&self, id: &str) -> bool {
+        matches!(
+            self.recorded(id).await,
+            Ok(Some((_, Assignment::Assigned { .. })))
+        )
+    }
     /// Open `thread`'s VM. A thread with no VM yet gets one on `cloud`, or,
     /// when it names none, on the cloud new thread VMs go to
     /// ([`Self::cloud`]); a thread whose VM exists stays on its cloud.

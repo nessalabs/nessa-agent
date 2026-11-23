@@ -4,7 +4,7 @@
 use crate::conversation::{
     application::{
         ChannelStore, ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
-        EnvironmentFuture, EnvironmentLease, ThreadEnvironments,
+        EnvironmentFuture, EnvironmentLease, SetupStep, SetupSteps, ThreadEnvironments,
     },
     infrastructure::{
         channel_cloud, in_process_environment,
@@ -127,11 +127,12 @@ pub(super) fn environments(
     default: Arc<dyn ThreadEnvironments>,
     service: Arc<Workspaces>,
     channels: Arc<dyn ChannelStore>,
+    setup: Option<Arc<SetupSteps>>,
 ) -> Arc<dyn ThreadEnvironments> {
     if FIXTURE.get().is_none() {
         return default;
     }
-    Arc::new(FakeEnvironments(service, channels))
+    Arc::new(FakeEnvironments(service, channels, setup))
 }
 pub(super) fn limits(default: ConversationLimits) -> ConversationLimits {
     FIXTURE.get().map_or(default, |fixture| ConversationLimits {
@@ -352,13 +353,18 @@ impl WorkspaceRuntime for FakeVm {
         })
     }
 }
-struct FakeEnvironments(Arc<Workspaces>, Arc<dyn ChannelStore>);
+struct FakeEnvironments(
+    Arc<Workspaces>,
+    Arc<dyn ChannelStore>,
+    Option<Arc<SetupSteps>>,
+);
 impl ThreadEnvironments for FakeEnvironments {
     fn environment(&self, id: &ConversationId) -> Result<Arc<dyn Environment>, ConversationError> {
         Ok(Arc::new(FakeLease(
             self.0.clone(),
             id.clone(),
             self.1.clone(),
+            self.2.clone(),
         )))
     }
     fn available(&self) -> EnvironmentFuture<'_, bool> {
@@ -374,7 +380,20 @@ impl ThreadEnvironments for FakeEnvironments {
         })
     }
 }
-struct FakeLease(Arc<Workspaces>, ConversationId, Arc<dyn ChannelStore>);
+struct FakeLease(
+    Arc<Workspaces>,
+    ConversationId,
+    Arc<dyn ChannelStore>,
+    Option<Arc<SetupSteps>>,
+);
+impl FakeLease {
+    /// Says which setup step the machine is on, as the real connector does.
+    fn step(&self, step: SetupStep) {
+        if let Some(steps) = &self.3 {
+            steps.step(&self.1, step);
+        }
+    }
+}
 impl Environment for FakeLease {
     fn declaration(&self) -> EnvironmentDeclaration {
         let mut d = in_process_environment().declaration();
@@ -390,10 +409,26 @@ impl Environment for FakeLease {
         Box::pin(async move {
             // The channel's cloud, read as the real gateway reads it.
             let (channel, cloud) = channel_cloud(self.2.as_ref(), &self.1).await?;
+            let thread = self.1.to_string();
+            self.step(if self.0.has_vm(&thread).await {
+                SetupStep::Waking
+            } else {
+                SetupStep::Creating
+            });
+            // The driver makes a thread's next opening take this many
+            // milliseconds, so a person sees each step, by leaving this file
+            // beside the threads' folders.
+            let root = &FIXTURE.get().unwrap().root;
+            let slow = root.join(format!("slow-next-open-{thread}"));
+            if let Ok(ms) = std::fs::read_to_string(&slow) {
+                let _ = std::fs::remove_file(&slow);
+                tokio::time::sleep(Duration::from_millis(ms.trim().parse().unwrap_or(0))).await;
+            }
             self.0
                 .open(self.1.clone(), true, channel, cloud)
                 .await
                 .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+            self.step(SetupStep::Connecting);
             let mut opened = in_process_environment().open(lease, grant, binding).await?;
             opened.workspace = Some(folder(&self.1.to_string()).to_str().unwrap().into());
             Ok(opened)

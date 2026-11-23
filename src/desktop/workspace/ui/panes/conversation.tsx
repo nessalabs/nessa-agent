@@ -1,7 +1,7 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
 import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { entry } from "../../application/workspace-state"
-import { WorkspaceSendFailure } from "../send-failure"
+import { WorkspaceSendRecovery } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
@@ -208,7 +208,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const modelNote = modelPickerNote(modelChoice, modelControl, modelBusy)
   return (
     <>
-      <WorkspaceSendFailure sessionId={sessionId} />
+      <WorkspaceSendRecovery sessionId={sessionId} />
       <Composer
         text={text}
         onTextChange={onTextChange}

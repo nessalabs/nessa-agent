@@ -173,6 +173,7 @@ mod error_code;
 mod live_changes;
 mod mcp_apps;
 mod metadata_target;
+mod setup_steps;
 pub use metadata_target::load_conversation;
 mod agent_switches;
 mod model_changes;
@@ -286,6 +287,7 @@ pub use mcp_apps::{
 };
 pub use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
+pub use setup_steps::{Sending as SetupSending, SetupEnd, SetupOpening, SetupStep, SetupSteps};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
 pub use app_call_policy::{
     admit_app_question, message_skips_review, AppCallPolicyEvaluator, AppQuestion,

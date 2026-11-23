@@ -786,6 +786,7 @@ impl Projection {
                 lease: snapshot
                     .and_then(|snapshot| snapshot.lease.as_ref())
                     .map(lease_view),
+                setup: Vec::new(),
                 artifacts: snapshot.map_or_else(Vec::new, |snapshot| {
                     snapshot.artifacts
                         [snapshot.artifacts.len().saturating_sub(MAX_VIEW_ARTIFACTS)..]

@@ -734,6 +734,24 @@ export interface ConversationMcpTool {
   /** The call's arguments, one JSON object encoded, as the gateway's MCP connection saw them. The same bound as a review and an app's own call (maxMcpArgumentsBytes). Absent when the call did not go through that connection, the harness named no call id it could match, or the arguments did not fit — never cut. */
   argumentsJson?: string
 }
+/** One opening of a conversation's cloud machine: each step it took, while it runs and once it ended. */
+export interface ConversationSetup {
+  /** running: a step is under way. ready: the agent started. failed: the machine or the agent did not start; the send or turn that waited says why. */
+  state: "running" | "ready" | "failed"
+  /** The message whose send this opening served, when a send started it. Absent for an opening nothing sent. */
+  executionId?: string
+  /** The steps in the order they began. Only the last can still be under way. */
+  steps: ConversationSetupStep[]
+}
+/** One step of getting a cloud machine ready. */
+export interface ConversationSetupStep {
+  /** creating: a new machine is being made. waking: a resting machine is being started. installing: this build of Nessa is being put on it. connecting: the gateway is reaching it. starting: the agent is being started there. */
+  step: "creating" | "waking" | "installing" | "connecting" | "starting"
+  /** Unix milliseconds on the gateway's clock when the step began; measure against the view's serverNowMs. */
+  startedAtMs: number
+  /** Unix milliseconds on the gateway's clock when the step ended. Absent while it runs. */
+  endedAtMs?: number
+}
 /** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
 export interface ConversationView {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -767,6 +785,8 @@ export interface ConversationView {
     "not_loaded" | "partial" | "complete_empty" | "complete" | "stale" | "unknown"
   /** Configured provider, model and working directory for this conversation. */
   runtime?: ConversationRuntime
+  /** Getting a cloud machine ready for this conversation's agent, as this gateway saw it since it started, oldest first: the opening under way, if any, and the last one that finished. Held in memory only, so absent after a restart and for a conversation that runs on no cloud machine. */
+  setup?: ConversationSetup[]
   /** The conversation's latest lease: where its agent runs and under what limits, or why it could not. Absent before any lease was recorded. */
   lease?: ConversationLease
   /** Files its agent published under a lease that the conversation held when it recorded them, the newest 64 in the order they were recorded; empty before any was. A record is history and stays when the hold is let go, as closing the conversation does; whether the bytes are still held is asked when they are fetched. An older one is left out of the list, not out of the conversation, and the list may give up its oldest entries to bound the response. */

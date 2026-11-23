@@ -1790,6 +1790,58 @@
       },
       "required": ["server", "tool"]
     },
+    "ConversationSetup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One opening of a conversation's cloud machine: each step it took, while it runs and once it ended.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["running", "ready", "failed"],
+          "description": "running: a step is under way. ready: the agent started. failed: the machine or the agent did not start; the send or turn that waited says why."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The message whose send this opening served, when a send started it. Absent for an opening nothing sent."
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/ConversationSetupStep" },
+          "description": "The steps in the order they began. Only the last can still be under way."
+        }
+      },
+      "required": ["state", "steps"]
+    },
+    "ConversationSetupStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One step of getting a cloud machine ready.",
+      "properties": {
+        "step": {
+          "type": "string",
+          "enum": ["creating", "waking", "installing", "connecting", "starting"],
+          "description": "creating: a new machine is being made. waking: a resting machine is being started. installing: this build of Nessa is being put on it. connecting: the gateway is reaching it. starting: the agent is being started there."
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds on the gateway's clock when the step began; measure against the view's serverNowMs."
+        },
+        "endedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds on the gateway's clock when the step ended. Absent while it runs."
+        }
+      },
+      "required": ["step", "startedAtMs"]
+    },
     "ConversationView": {
       "type": "object",
       "additionalProperties": false,
@@ -1881,6 +1933,12 @@
         "runtime": {
           "$ref": "#/$defs/ConversationRuntime",
           "description": "Configured provider, model and working directory for this conversation."
+        },
+        "setup": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/ConversationSetup" },
+          "description": "Getting a cloud machine ready for this conversation's agent, as this gateway saw it since it started, oldest first: the opening under way, if any, and the last one that finished. Held in memory only, so absent after a restart and for a conversation that runs on no cloud machine."
         },
         "lease": {
           "$ref": "#/$defs/ConversationLease",
