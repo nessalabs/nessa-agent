@@ -47,34 +47,13 @@ pub enum TerminalKind {
     Run { command: String },
 }
 
-/// Where and how a local-pty-backed terminal starts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StartTarget {
-    /// A login shell on this gateway's machine, in `folder`.
-    Local { folder: PathBuf, shell: PathBuf },
-    /// A login shell on an SSH host, reached via `ssh -tt` inside a local PTY.
-    Ssh {
-        ssh_program: PathBuf,
-        host: String,
-        folder: PathBuf,
-    },
-}
-
 /// What to start, once the place is resolved.
 #[derive(Clone, Debug)]
 pub struct StartSpec {
-    pub target: StartTarget,
+    pub folder: PathBuf,
+    pub shell: PathBuf,
     pub kind: TerminalKind,
     pub size: GridSize,
-}
-
-/// The running engine handle and any metadata resolved once the remote
-/// target starts (e.g. a cloud VM's workspace folder, shell, and cloud name).
-pub struct StartedTerminal {
-    pub running: Box<dyn super::RunningTerminal>,
-    pub folder: Option<String>,
-    pub shell: Option<String>,
-    pub runs_on: Option<String>,
 }
 
 /// One terminal as the list shows it.

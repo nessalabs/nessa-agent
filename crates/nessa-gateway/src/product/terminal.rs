@@ -170,6 +170,14 @@ async fn open(
     let opened = match place {
         TerminalPlace::Here { folder } => {
             let Some(folder) = host.folder(&folder) else {
+                tracing::warn!(
+                    target: "nessa::terminal",
+                    principal = %link.owner().principal,
+                    channel_id = ?params.channel_id,
+                    conversation_id = ?params.conversation_id,
+                    reason = "terminal_folder_missing",
+                    "terminal open refused"
+                );
                 return failure(&id, "terminal_folder_missing");
             };
             let request = OpenRequest {
@@ -184,94 +192,17 @@ async fn open(
             };
             link.open(request, host.login_shell())
         }
-        TerminalPlace::Ssh {
-            host: ssh_host,
-            folder,
-        } => {
-            let runs_on = ssh_host.as_str().to_owned();
-            let target = crate::terminal::StartTarget::Ssh {
-                ssh_program: host.ssh_program(),
-                host: runs_on.clone(),
-                folder: folder.clone(),
-            };
-            let request = OpenRequest {
-                owner: link.owner().clone(),
-                request_id: params.request_id,
-                channel_id: params.channel_id,
-                conversation_id: params.conversation_id,
-                folder,
-                runs_on,
-                kind,
-                size,
-            };
-            link.open_target(request, target, "$SHELL".into())
+        TerminalPlace::Elsewhere => {
+            tracing::warn!(
+                target: "nessa::terminal",
+                principal = %link.owner().principal,
+                channel_id = ?params.channel_id,
+                conversation_id = ?params.conversation_id,
+                reason = "terminal_place_unsupported",
+                "terminal open refused"
+            );
+            return failure(&id, "terminal_place_unsupported");
         }
-        #[cfg(unix)]
-        TerminalPlace::CloudVm {
-            conversation,
-            channel,
-            cloud,
-            folder,
-        } => {
-            let Some(workspaces) = state.machines.workspaces.clone() else {
-                return failure(&id, "terminal_unavailable");
-            };
-            let runs_on = cloud
-                .map(|c| c.as_str().to_owned())
-                .unwrap_or_else(|| "boat".into());
-            let run_command = match &kind {
-                TerminalKind::Shell => None,
-                TerminalKind::Run { command } => Some(command.clone()),
-            };
-            let requested_folder = folder.map(|path| path.to_string_lossy().into_owned());
-            let request = OpenRequest {
-                owner: link.owner().clone(),
-                request_id: params.request_id,
-                channel_id: params.channel_id,
-                conversation_id: params.conversation_id,
-                folder: requested_folder
-                    .as_deref()
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_default(),
-                runs_on,
-                kind,
-                size,
-            };
-            link.open_with(
-                request,
-                "/bin/bash",
-                move |terminal_id, events, engine| async move {
-                    let runtime = workspaces
-                        .open(conversation, true, channel, cloud)
-                        .await
-                        .map_err(|error| TerminalError::Spawn(error.cause().as_str().to_owned()))?;
-                    let remote = runtime
-                        .terminal(crate::workspaces::application::WorkspaceTerminalSpec {
-                            id: terminal_id.clone(),
-                            folder: requested_folder,
-                            command: run_command,
-                            cols: size.cols,
-                            rows: size.rows,
-                        })
-                        .await
-                        .map_err(|error| TerminalError::Spawn(error.cause().as_str().to_owned()))?;
-                    let runs_on = remote.runs_on().to_owned();
-                    let folder = remote.folder().to_owned();
-                    let shell = remote.shell().to_owned();
-                    let running = engine.start_remote(&terminal_id, size, remote, events)?;
-                    Ok(crate::terminal::StartedTerminal {
-                        running,
-                        folder: Some(folder),
-                        shell: Some(shell),
-                        runs_on: Some(runs_on),
-                    })
-                },
-            )
-            .await
-        }
-        #[cfg(not(unix))]
-        TerminalPlace::CloudVm { .. } => return failure(&id, "terminal_place_unsupported"),
-        TerminalPlace::Elsewhere => return failure(&id, "terminal_place_unsupported"),
     };
     match opened {
         Ok(entry) => {

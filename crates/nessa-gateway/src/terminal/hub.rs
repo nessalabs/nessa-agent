@@ -216,12 +216,12 @@ impl TerminalHub {
         &self,
         owner: &TerminalOwner,
         id: &str,
-        started: Result<StartedTerminal, TerminalError>,
+        started: Result<Box<dyn RunningTerminal>, TerminalError>,
     ) -> Result<TerminalEntry, TerminalError> {
         let mut hub = self.lock();
         let index = hub.terminals.iter().position(|live| live.entry.id == id);
-        let started = match started {
-            Ok(started) => started,
+        let running = match started {
+            Ok(running) => running,
             Err(error) => {
                 // A retry may have been answered with this reservation; it
                 // goes, and that retry's terminal is not found from now on.
@@ -233,30 +233,12 @@ impl TerminalHub {
         };
         let Some(index) = index else {
             // Closed while it started: it is not one of theirs any more.
-            started.running.send(EngineCommand::Close);
+            running.send(EngineCommand::Close);
             return Err(TerminalError::NotFound);
         };
         let live = &mut hub.terminals[index];
-        if let Some(folder) = started.folder {
-            live.entry.folder = folder;
-        }
-        if let Some(shell) = started.shell {
-            if matches!(live.entry.kind, TerminalKind::Shell) {
-                if let Some(name) = std::path::Path::new(&shell)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .filter(|n| !n.is_empty())
-                {
-                    live.entry.title = name.to_owned();
-                }
-            }
-            live.entry.shell = shell;
-        }
-        if let Some(runs_on) = started.runs_on {
-            live.entry.runs_on = runs_on;
-        }
         let Process::Starting(waiting) =
-            std::mem::replace(&mut live.running, Process::Started(started.running))
+            std::mem::replace(&mut live.running, Process::Started(running))
         else {
             unreachable!("only this open starts its reservation");
         };
@@ -280,26 +262,13 @@ impl TerminalHub {
         shell: PathBuf,
     ) -> Result<TerminalEntry, TerminalError> {
         let shell_display = shell.to_string_lossy().into_owned();
-        let target = StartTarget::Local {
-            folder: request.folder.clone(),
-            shell,
-        };
-        self.open_target(request, target, shell_display)
-    }
-
-    /// Start a local or SSH-backed terminal through the engine.
-    pub fn open_target(
-        &self,
-        request: OpenRequest,
-        target: StartTarget,
-        shell_display: String,
-    ) -> Result<TerminalEntry, TerminalError> {
         let (entry, engine) = match self.reserve(&request, &shell_display)? {
             Reserved::Existing(entry) => return Ok(entry),
             Reserved::New { entry, engine } => (entry, engine),
         };
         let spec = StartSpec {
-            target,
+            folder: request.folder,
+            shell,
             kind: request.kind,
             size: request.size,
         };
@@ -309,41 +278,7 @@ impl TerminalHub {
             hub: self,
             id: &entry.id,
         };
-        let started = engine
-            .start(&entry.id, &spec, events)
-            .map(|running| StartedTerminal {
-                running,
-                folder: None,
-                shell: None,
-                runs_on: None,
-            });
-        std::mem::forget(reservation);
-        self.commit(&request.owner, &entry.id, started)
-    }
-
-    /// Reserve a terminal slot under the lock, then run `start` asynchronously
-    /// (for example to wake a cloud VM and start a workspace-sdk terminal).
-    /// Cancellation, panic, or failure removes the reservation cleanly.
-    pub async fn open_with<F, Fut>(
-        &self,
-        request: OpenRequest,
-        shell_display: &str,
-        start: F,
-    ) -> Result<TerminalEntry, TerminalError>
-    where
-        F: FnOnce(String, Arc<dyn EngineEvents>, Arc<dyn TerminalEngine>) -> Fut,
-        Fut: std::future::Future<Output = Result<StartedTerminal, TerminalError>>,
-    {
-        let (entry, engine) = match self.reserve(&request, shell_display)? {
-            Reserved::Existing(entry) => return Ok(entry),
-            Reserved::New { entry, engine } => (entry, engine),
-        };
-        let events: Arc<dyn EngineEvents> = Arc::new(HubEvents(self.me.clone()));
-        let reservation = Reservation {
-            hub: self,
-            id: &entry.id,
-        };
-        let started = start(entry.id.clone(), events, engine).await;
+        let started = engine.start(&entry.id, &spec, events);
         std::mem::forget(reservation);
         self.commit(&request.owner, &entry.id, started)
     }
@@ -660,28 +595,6 @@ impl TerminalLink {
         shell: PathBuf,
     ) -> Result<TerminalEntry, TerminalError> {
         self.hub()?.open(request, shell)
-    }
-
-    pub fn open_target(
-        &self,
-        request: OpenRequest,
-        target: StartTarget,
-        shell_display: String,
-    ) -> Result<TerminalEntry, TerminalError> {
-        self.hub()?.open_target(request, target, shell_display)
-    }
-
-    pub async fn open_with<F, Fut>(
-        &self,
-        request: OpenRequest,
-        shell_display: &str,
-        start: F,
-    ) -> Result<TerminalEntry, TerminalError>
-    where
-        F: FnOnce(String, Arc<dyn EngineEvents>, Arc<dyn TerminalEngine>) -> Fut,
-        Fut: std::future::Future<Output = Result<StartedTerminal, TerminalError>>,
-    {
-        self.hub()?.open_with(request, shell_display, start).await
     }
 
     pub fn attach(&self, id: &str, view: &str, fit: GridSize) -> Result<(), TerminalError> {
