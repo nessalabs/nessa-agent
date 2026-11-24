@@ -28,7 +28,7 @@ pub enum DirectoryRefusal {
     /// The marker was present and was not exactly 32 bytes. It was not rewritten.
     MarkerSize,
     /// Those marker bytes already belong to a directory at another path.
-    BindingCopied,
+    BindingCopied { audit_recorded: bool },
     /// The named path left the granted directory.
     Outside {
         leave: PathLeave,
@@ -75,7 +75,11 @@ impl std::fmt::Display for DirectoryRefusal {
             Self::Store => write!(formatter, "the directory grant could not be stored"),
             Self::PolicyUnavailable => write!(formatter, "directory policy could not decide"),
             Self::MarkerSize => write!(formatter, "the directory marker is the wrong size"),
-            Self::BindingCopied => write!(formatter, "the directory marker is a copy"),
+            Self::BindingCopied { audit_recorded } => write!(
+                formatter,
+                "the directory marker is a copy{}",
+                audit_note(*audit_recorded)
+            ),
             Self::Outside {
                 leave,
                 audit_recorded,
@@ -627,16 +631,42 @@ impl DirectoryAccess {
         let _lease = self.lease(&request.environment, &canonical);
         self.finish_cleanup_held(&request.environment, &canonical)?;
         match self.files.read_marker(&canonical)? {
-            MarkerBytes::Other => Err(DirectoryRefusal::MarkerSize),
+            MarkerBytes::Other => self.refuse_existing_or(
+                &request,
+                &canonical,
+                "marker-size",
+                DirectoryRefusal::MarkerSize,
+            ),
             MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes),
-            MarkerBytes::Absent => self.share_new(request, canonical),
-            MarkerBytes::Unusable => {
+            MarkerBytes::Absent => {
                 if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
-                    return self.mismatch(&resource, "marker-type", &request.initiator);
+                    return self.mismatch(&resource, "marker-missing", &request.initiator);
                 }
-                Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput))
+                self.share_new(request, canonical)
             }
+            MarkerBytes::Unusable => self.refuse_existing_or(
+                &request,
+                &canonical,
+                "marker-type",
+                DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput),
+            ),
         }
+    }
+
+    /// A share of a path that already has a resource, whose marker is gone or
+    /// no longer the stored binding. The grants are revoked. A path with no
+    /// resource keeps `bare`.
+    fn refuse_existing_or(
+        &self,
+        request: &ShareDirectory,
+        canonical: &str,
+        cause: &str,
+        bare: DirectoryRefusal,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        if let Some(resource) = self.store.resource_at(&request.environment, canonical)? {
+            return self.mismatch(&resource, cause, &request.initiator);
+        }
+        Err(bare)
     }
 
     /// Read a file inside a subject's directory.
@@ -997,8 +1027,19 @@ impl DirectoryAccess {
             self.flush_pending(&resource.resource_id)?;
             return self.insert_subject(request, resource);
         }
-        if self.store.resource_by_binding(&bytes)?.is_some() {
-            return Err(DirectoryRefusal::BindingCopied);
+        if let Some(existing) = self.store.resource_by_binding(&bytes)? {
+            let audit_recorded = self.deliver_or_keep(&DirectoryAuditRecord {
+                cause: "binding-copied".to_owned(),
+                resource_id: Some(existing.resource_id),
+                environment: request.environment.clone(),
+                canonical_path: canonical,
+                initiator: request.initiator.clone(),
+                before: Some("none".to_owned()),
+                after: Some("none".to_owned()),
+                profile: None,
+                at_ms: now_ms(),
+            });
+            return Err(DirectoryRefusal::BindingCopied { audit_recorded });
         }
         let resource = StoredDirectoryResource {
             resource_id: new_id(),

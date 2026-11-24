@@ -499,7 +499,141 @@ fn a_second_subject_reuses_the_resource_and_a_copied_marker_is_refused() {
             initiator: "owner".into(),
         })
         .unwrap_err();
-    assert!(matches!(refused, DirectoryRefusal::BindingCopied));
+    assert!(matches!(
+        refused,
+        DirectoryRefusal::BindingCopied {
+            audit_recorded: true
+        }
+    ));
+}
+
+#[test]
+fn sharing_again_after_the_marker_is_gone_or_the_wrong_size_revokes_the_grant() {
+    let root = private();
+    let missing = root.path().join("missing");
+    let wrong = root.path().join("wrong");
+    fs::create_dir(&missing).unwrap();
+    fs::create_dir(&wrong).unwrap();
+    fs::write(missing.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [25; BINDING_LEN],
+    );
+    let gone = share_read(&access, missing.to_str().unwrap(), "peer");
+    fs::remove_file(missing.join(".nessa-binding")).unwrap();
+    let again = access.share(ShareDirectory {
+        environment: "local".into(),
+        path: missing.to_str().unwrap().into(),
+        subject: DirectorySubject {
+            principal_id: Some("peer".into()),
+            receiver_id: None,
+        },
+        capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+        rules: crate::domain::CommandRules::none(),
+        initiator: "owner".into(),
+    });
+    match again.unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&gone.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::write(missing.join(".nessa-binding"), [25; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+
+    let sized_access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [27; BINDING_LEN],
+    );
+    let sized = share_read(&sized_access, wrong.to_str().unwrap(), "other");
+    fs::write(wrong.join(".nessa-binding"), vec![0; 33]).unwrap();
+    let refused = sized_access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: wrong.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("other".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-size"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(fs::read(wrong.join(".nessa-binding")).unwrap().len(), 33);
+    assert!(store
+        .grants_for_resource(&sized.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_copied_binding_records_the_existing_resource_and_the_offered_path() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [26; BINDING_LEN],
+    );
+    let first = share_read(&access, shared.to_str().unwrap(), "peer");
+    let copy = root.path().join("copy");
+    fs::create_dir(&copy).unwrap();
+    fs::copy(shared.join(".nessa-binding"), copy.join(".nessa-binding")).unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: copy.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("thief".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::BindingCopied { audit_recorded } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    assert!(refused.to_string().contains("the audit was not recorded"));
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "binding-copied")
+        .unwrap();
+    assert_eq!(
+        recorded.resource_id.as_deref(),
+        Some(first.resource_id.as_str())
+    );
+    assert_eq!(recorded.canonical_path, copy.to_str().unwrap());
+    assert_eq!(recorded.initiator, "owner");
+    assert_eq!(recorded.before.as_deref(), Some("none"));
+    assert_eq!(recorded.after.as_deref(), Some("none"));
 }
 
 #[test]
