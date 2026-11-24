@@ -30,9 +30,12 @@ pub enum DirectoryRefusal {
     /// Those marker bytes already belong to a directory at another path.
     BindingCopied,
     /// The named path left the granted directory.
-    Outside { leave: PathLeave },
+    Outside {
+        leave: PathLeave,
+        audit_recorded: bool,
+    },
     /// The named path is the marker file.
-    MarkerName,
+    MarkerName { audit_recorded: bool },
     /// The marker was missing or different. Grants for the resource are revoked.
     MarkerMismatch { cause: String, audit_recorded: bool },
     /// Exec was refused. `rules` are the Cedar policy ids.
@@ -49,7 +52,10 @@ pub enum DirectoryRefusal {
     /// Command rules are a constraint, and the harness hooks would answer first.
     HooksAnswerFirst,
     /// The grant does not include this capability.
-    Capability { rules: Vec<String> },
+    Capability {
+        rules: Vec<String>,
+        audit_recorded: bool,
+    },
     /// A marker this attempt created is still waiting to be removed.
     CleanupPending,
     /// No grant exists for this subject.
@@ -70,8 +76,19 @@ impl std::fmt::Display for DirectoryRefusal {
             Self::PolicyUnavailable => write!(formatter, "directory policy could not decide"),
             Self::MarkerSize => write!(formatter, "the directory marker is the wrong size"),
             Self::BindingCopied => write!(formatter, "the directory marker is a copy"),
-            Self::Outside { leave } => write!(formatter, "the path left the directory ({leave:?})"),
-            Self::MarkerName => write!(formatter, "the directory marker cannot be used"),
+            Self::Outside {
+                leave,
+                audit_recorded,
+            } => write!(
+                formatter,
+                "the path left the directory ({leave:?}){}",
+                audit_note(*audit_recorded)
+            ),
+            Self::MarkerName { audit_recorded } => write!(
+                formatter,
+                "the directory marker cannot be used{}",
+                audit_note(*audit_recorded)
+            ),
             Self::MarkerMismatch { audit_recorded, .. } => write!(
                 formatter,
                 "the directory marker does not match{}",
@@ -99,7 +116,11 @@ impl std::fmt::Display for DirectoryRefusal {
                     "harness hooks would answer before the command rules"
                 )
             }
-            Self::Capability { .. } => write!(formatter, "the directory grant does not allow this"),
+            Self::Capability { audit_recorded, .. } => write!(
+                formatter,
+                "the directory grant does not allow this{}",
+                audit_note(*audit_recorded)
+            ),
             Self::CleanupPending => {
                 write!(formatter, "the directory marker cleanup is still pending")
             }
@@ -107,6 +128,12 @@ impl std::fmt::Display for DirectoryRefusal {
             Self::Audit => write!(formatter, "the directory audit was not recorded"),
         }
     }
+}
+
+enum RefusalKind {
+    Marker,
+    Path,
+    Capability,
 }
 
 fn audit_note(recorded: bool) -> &'static str {
@@ -126,6 +153,8 @@ pub enum MarkerBytes {
     Exact([u8; BINDING_LEN]),
     /// Any other size. The file is not rewritten.
     Other,
+    /// The name is not a regular file. Grants that named it are revoked.
+    Unusable,
 }
 
 /// A subject of a directory grant.
@@ -601,6 +630,12 @@ impl DirectoryAccess {
             MarkerBytes::Other => Err(DirectoryRefusal::MarkerSize),
             MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes),
             MarkerBytes::Absent => self.share_new(request, canonical),
+            MarkerBytes::Unusable => {
+                if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
+                    return self.mismatch(&resource, "marker-type", &request.initiator);
+                }
+                Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput))
+            }
         }
     }
 
@@ -1095,21 +1130,29 @@ impl DirectoryAccess {
         {
             PolicyAnswer::Allow => Ok(()),
             PolicyAnswer::Deny { rules } => {
-                let (cause, error) =
+                let (cause, kind) =
                     if facts.marker || rules.iter().any(|id| id == "directory.marker") {
-                        ("marker-name", DirectoryRefusal::MarkerName)
+                        ("marker-name", RefusalKind::Marker)
                     } else if facts.leave != PathLeave::Inside
                         || rules.iter().any(|id| id == "directory.path")
                     {
-                        (
-                            "path-leaves",
-                            DirectoryRefusal::Outside { leave: facts.leave },
-                        )
+                        ("path-leaves", RefusalKind::Path)
                     } else {
-                        ("capability", DirectoryRefusal::Capability { rules })
+                        ("capability", RefusalKind::Capability)
                     };
-                self.record_refusal(resource, subject, relative, capability, cause);
-                Err(error)
+                let audit_recorded =
+                    self.record_refusal(resource, subject, relative, capability, cause);
+                Err(match kind {
+                    RefusalKind::Marker => DirectoryRefusal::MarkerName { audit_recorded },
+                    RefusalKind::Path => DirectoryRefusal::Outside {
+                        leave: facts.leave,
+                        audit_recorded,
+                    },
+                    RefusalKind::Capability => DirectoryRefusal::Capability {
+                        rules,
+                        audit_recorded,
+                    },
+                })
             }
         }
     }
@@ -1121,7 +1164,7 @@ impl DirectoryAccess {
         relative: &str,
         capability: &str,
         cause: &str,
-    ) {
+    ) -> bool {
         let record = DirectoryAuditRecord {
             cause: cause.to_owned(),
             resource_id: Some(resource.resource_id.clone()),
@@ -1133,7 +1176,7 @@ impl DirectoryAccess {
             profile: None,
             at_ms: now_ms(),
         };
-        let _ = self.deliver_or_keep(&record);
+        self.deliver_or_keep(&record)
     }
 
     /// The sink accepted the record. Otherwise it stays pending for the next delivery.
@@ -1161,6 +1204,9 @@ impl DirectoryAccess {
                 .map(|_| ()),
             MarkerBytes::Other => self
                 .mismatch(resource, "marker-size", initiator)
+                .map(|_| ()),
+            MarkerBytes::Unusable => self
+                .mismatch(resource, "marker-type", initiator)
                 .map(|_| ()),
         }
     }

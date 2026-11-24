@@ -27,14 +27,14 @@ impl DirectoryFiles for LocalDirectoryFiles {
 
     fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
         let root = open_directory(canonical)?;
-        let marker = match open_marker_file(root.as_raw_fd()) {
-            Ok(file) => file,
-            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
-                return Ok(MarkerBytes::Absent)
+        match open_marker_file(root.as_raw_fd()) {
+            Ok(file) => read_marker_bytes(&file),
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => Ok(MarkerBytes::Absent),
+            Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)) => {
+                Ok(MarkerBytes::Unusable)
             }
-            Err(error) => return Err(error),
-        };
-        read_marker_bytes(&marker)
+            Err(error) => Err(error),
+        }
     }
 
     fn create_marker(
@@ -114,13 +114,19 @@ impl DirectoryFiles for LocalDirectoryFiles {
         let root = open_directory(canonical)?;
         let (file, leave) = walk_from(root.as_raw_fd(), relative)?;
         if leave != PathLeave::Inside {
-            return Err(DirectoryRefusal::Outside { leave });
+            return Err(DirectoryRefusal::Outside {
+                leave,
+                audit_recorded: true,
+            });
         }
         let mut file = file.ok_or(DirectoryRefusal::Outside {
             leave: PathLeave::Missing,
+            audit_recorded: true,
         })?;
         if is_marker(root.as_raw_fd(), file.as_raw_fd()) {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(io)?;
@@ -136,13 +142,18 @@ impl DirectoryFiles for LocalDirectoryFiles {
         let root = open_directory(canonical)?;
         let (existing, leave) = walk_from(root.as_raw_fd(), relative)?;
         if leave != PathLeave::Inside && leave != PathLeave::Missing {
-            return Err(DirectoryRefusal::Outside { leave });
+            return Err(DirectoryRefusal::Outside {
+                leave,
+                audit_recorded: true,
+            });
         }
         if existing
             .as_ref()
             .is_some_and(|opened| is_marker(root.as_raw_fd(), opened.as_raw_fd()))
         {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         let parent = parent_file(root.as_raw_fd(), relative)?;
         let name = final_name(relative)?;
@@ -154,7 +165,9 @@ impl DirectoryFiles for LocalDirectoryFiles {
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
         if is_marker(root.as_raw_fd(), file.as_raw_fd()) {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         if unsafe { libc::ftruncate(file.as_raw_fd(), 0) } != 0 {
             return Err(io(std::io::Error::last_os_error()));
@@ -197,6 +210,9 @@ impl DirectorySession for HeldDirectory {
                 Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
                     return Ok(MarkerBytes::Absent)
                 }
+                Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)) => {
+                    return Ok(MarkerBytes::Unusable)
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -218,13 +234,19 @@ impl DirectorySession for HeldDirectory {
     fn read(&self, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
         let (file, leave) = walk_from(self.root.as_raw_fd(), relative)?;
         if leave != PathLeave::Inside {
-            return Err(DirectoryRefusal::Outside { leave });
+            return Err(DirectoryRefusal::Outside {
+                leave,
+                audit_recorded: true,
+            });
         }
         let mut file = file.ok_or(DirectoryRefusal::Outside {
             leave: PathLeave::Missing,
+            audit_recorded: true,
         })?;
         if self.same_marker(file.as_raw_fd()) {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(io)?;
@@ -234,13 +256,18 @@ impl DirectorySession for HeldDirectory {
     fn write(&self, relative: &str, bytes: &[u8]) -> Result<(), DirectoryRefusal> {
         let (existing, leave) = walk_from(self.root.as_raw_fd(), relative)?;
         if leave != PathLeave::Inside && leave != PathLeave::Missing {
-            return Err(DirectoryRefusal::Outside { leave });
+            return Err(DirectoryRefusal::Outside {
+                leave,
+                audit_recorded: true,
+            });
         }
         if existing
             .as_ref()
             .is_some_and(|opened| self.same_marker(opened.as_raw_fd()))
         {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         let parent = parent_file(self.root.as_raw_fd(), relative)?;
         let name = final_name(relative)?;
@@ -252,7 +279,9 @@ impl DirectorySession for HeldDirectory {
         }
         let mut file = unsafe { File::from_raw_fd(fd) };
         if self.same_marker(file.as_raw_fd()) {
-            return Err(DirectoryRefusal::MarkerName);
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
         }
         if unsafe { libc::ftruncate(file.as_raw_fd(), 0) } != 0 {
             return Err(io(std::io::Error::last_os_error()));
@@ -361,6 +390,7 @@ fn absolute(path: &str) -> Result<String, DirectoryRefusal> {
         if component == ".." {
             return Err(DirectoryRefusal::Outside {
                 leave: PathLeave::DotDot,
+                audit_recorded: true,
             });
         }
         out.push('/');
@@ -416,7 +446,7 @@ fn walk_from(root: RawFd, relative: &str) -> Result<(Option<File>, PathLeave), D
             Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => {
                 return Ok((None, PathLeave::Missing));
             }
-            Err(DirectoryRefusal::Outside { leave }) => return Ok((None, leave)),
+            Err(DirectoryRefusal::Outside { leave, .. }) => return Ok((None, leave)),
             Err(error) => return Err(error),
         }
     }
@@ -438,10 +468,14 @@ fn parent_file(root: RawFd, relative: &str) -> Result<File, DirectoryRefusal> {
     let parent = parts[..parts.len() - 1].join("/");
     let (file, leave) = walk_from(root, &parent)?;
     if leave != PathLeave::Inside {
-        return Err(DirectoryRefusal::Outside { leave });
+        return Err(DirectoryRefusal::Outside {
+            leave,
+            audit_recorded: true,
+        });
     }
     file.ok_or(DirectoryRefusal::Outside {
         leave: PathLeave::Missing,
+        audit_recorded: true,
     })
 }
 
@@ -452,6 +486,7 @@ fn final_name(relative: &str) -> Result<String, DirectoryRefusal> {
         .map(str::to_owned)
         .ok_or(DirectoryRefusal::Outside {
             leave: PathLeave::Missing,
+            audit_recorded: true,
         })
 }
 
@@ -582,6 +617,7 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
     if name == ".." {
         return Err(DirectoryRefusal::Outside {
             leave: PathLeave::DotDot,
+            audit_recorded: true,
         });
     }
     let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
@@ -601,6 +637,7 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
     if error.raw_os_error() == Some(libc::ELOOP) || is_symlink(dir, &name) {
         return Err(DirectoryRefusal::Outside {
             leave: PathLeave::Symlink,
+            audit_recorded: true,
         });
     }
     Err(io(error))
@@ -652,7 +689,9 @@ mod marker_identity {
         std::fs::rename(shared.join(MARKER_NAME), shared.join("alias")).unwrap();
         assert!(matches!(
             session.read("alias").unwrap_err(),
-            DirectoryRefusal::MarkerName
+            DirectoryRefusal::MarkerName {
+                audit_recorded: true
+            }
         ));
     }
 
@@ -665,13 +704,13 @@ mod marker_identity {
         let name = std::ffi::CString::new(marker.to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         let started = std::time::Instant::now();
-        let error = LocalDirectoryFiles
+        let marker_bytes = LocalDirectoryFiles
             .read_marker(shared.to_str().unwrap())
-            .unwrap_err();
+            .unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
         assert!(matches!(
-            error,
-            DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
+            marker_bytes,
+            crate::application::MarkerBytes::Unusable
         ));
         assert!(marker.exists());
         assert!(LocalDirectoryFiles

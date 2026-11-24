@@ -161,7 +161,8 @@ fn a_peer_reads_a_file_inside_and_not_a_path_that_leaves() {
     assert!(matches!(
         left,
         DirectoryRefusal::Outside {
-            leave: PathLeave::Symlink
+            leave: PathLeave::Symlink,
+            ..
         }
     ));
     assert!(!left.to_string().contains("secret"));
@@ -186,16 +187,16 @@ fn the_marker_and_a_hard_link_of_it_are_refused() {
     fs::hard_link(shared.join(".nessa-binding"), shared.join("alias")).unwrap();
     assert!(matches!(
         access.read("peer", ".nessa-binding").unwrap_err(),
-        DirectoryRefusal::MarkerName
+        DirectoryRefusal::MarkerName { .. }
     ));
     assert!(matches!(
         access.read("peer", "alias").unwrap_err(),
-        DirectoryRefusal::MarkerName
+        DirectoryRefusal::MarkerName { .. }
     ));
     let before = fs::read(shared.join(".nessa-binding")).unwrap();
     assert!(matches!(
         access.write("peer", ".nessa-binding", b"nope").unwrap_err(),
-        DirectoryRefusal::MarkerName
+        DirectoryRefusal::MarkerName { .. }
     ));
     assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), before);
 }
@@ -2132,7 +2133,7 @@ fn a_refused_read_or_write_records_who_asked_and_the_path() {
     share_read(&access, shared.to_str().unwrap(), "peer");
     assert!(matches!(
         access.read("peer", ".nessa-binding").unwrap_err(),
-        DirectoryRefusal::MarkerName
+        DirectoryRefusal::MarkerName { .. }
     ));
     assert!(matches!(
         access.write("peer", "../outside.txt", b"no").unwrap_err(),
@@ -2153,6 +2154,80 @@ fn a_refused_read_or_write_records_who_asked_and_the_path() {
     assert_eq!(outside.initiator, "peer");
     assert_eq!(outside.before.as_deref(), Some("directory.write"));
     assert_eq!(outside.after.as_deref(), Some("../outside.txt"));
+}
+
+#[test]
+fn a_refused_read_keeps_its_reason_when_the_audit_is_not_recorded() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [21; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    *audit.fail.lock().unwrap() = true;
+    match access.read("peer", ".nessa-binding").unwrap_err() {
+        DirectoryRefusal::MarkerName { audit_recorded } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    assert!(access
+        .read("peer", ".nessa-binding")
+        .unwrap_err()
+        .to_string()
+        .contains("the audit was not recorded"));
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    assert!(
+        audit
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.cause == "marker-name"
+                && line.after.as_deref() == Some(".nessa-binding"))
+    );
+}
+
+#[test]
+fn a_fifo_marker_revokes_the_grant_and_restoring_the_file_does_not() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [22; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    let marker = shared.join(".nessa-binding");
+    fs::remove_file(&marker).unwrap();
+    let name = std::ffi::CString::new(marker.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-type"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::remove_file(&marker).unwrap();
+    fs::write(&marker, [22; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
 }
 
 #[test]
