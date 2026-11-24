@@ -26,7 +26,7 @@ pub enum DirectoryRefusal {
     /// Cedar could not decide.
     PolicyUnavailable,
     /// The marker was present and was not exactly 32 bytes. It was not rewritten.
-    MarkerSize,
+    MarkerSize { audit_recorded: bool },
     /// Those marker bytes already belong to a directory at another path.
     BindingCopied { audit_recorded: bool },
     /// The named path left the granted directory.
@@ -74,7 +74,11 @@ impl std::fmt::Display for DirectoryRefusal {
             Self::Io(_) => write!(formatter, "the directory could not be opened"),
             Self::Store => write!(formatter, "the directory grant could not be stored"),
             Self::PolicyUnavailable => write!(formatter, "directory policy could not decide"),
-            Self::MarkerSize => write!(formatter, "the directory marker is the wrong size"),
+            Self::MarkerSize { audit_recorded } => write!(
+                formatter,
+                "the directory marker is the wrong size{}",
+                audit_note(*audit_recorded)
+            ),
             Self::BindingCopied { audit_recorded } => write!(
                 formatter,
                 "the directory marker is a copy{}",
@@ -631,12 +635,7 @@ impl DirectoryAccess {
         let _lease = self.lease(&request.environment, &canonical);
         self.finish_cleanup_held(&request.environment, &canonical)?;
         match self.files.read_marker(&canonical)? {
-            MarkerBytes::Other => self.refuse_existing_or(
-                &request,
-                &canonical,
-                "marker-size",
-                DirectoryRefusal::MarkerSize,
-            ),
+            MarkerBytes::Other => self.refuse_sized_marker(&request, &canonical),
             MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes, owed),
             MarkerBytes::Absent => {
                 if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
@@ -670,6 +669,30 @@ impl DirectoryAccess {
             return self.mismatch(&resource, cause, &request.initiator);
         }
         Err(bare)
+    }
+
+    /// An orphan marker that is not 32 bytes is refused and left in place.
+    /// The refusal names the offered path, no resource, and this share's initiator.
+    fn refuse_sized_marker(
+        &self,
+        request: &ShareDirectory,
+        canonical: &str,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        if let Some(resource) = self.store.resource_at(&request.environment, canonical)? {
+            return self.mismatch(&resource, "marker-size", &request.initiator);
+        }
+        let audit_recorded = self.deliver_or_keep(&DirectoryAuditRecord {
+            cause: "marker-size".to_owned(),
+            resource_id: None,
+            environment: request.environment.clone(),
+            canonical_path: canonical.to_owned(),
+            initiator: request.initiator.clone(),
+            before: Some("none".to_owned()),
+            after: Some("none".to_owned()),
+            profile: None,
+            at_ms: now_ms(),
+        });
+        Err(DirectoryRefusal::MarkerSize { audit_recorded })
     }
 
     /// Read a file inside a subject's directory.
@@ -970,9 +993,18 @@ impl DirectoryAccess {
     ) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
         match self.files.open_session(&resource.canonical_path) {
             Ok(session) => Ok(session),
-            Err(DirectoryRefusal::Io(std::io::ErrorKind::NotFound)) => Err(self
-                .mismatch(resource, "marker-missing", initiator)
-                .expect_err("a missing directory revokes its grants")),
+            Err(DirectoryRefusal::Io(
+                kind @ (std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory),
+            )) => {
+                let cause = if kind == std::io::ErrorKind::NotADirectory {
+                    "root-type"
+                } else {
+                    "marker-missing"
+                };
+                Err(self
+                    .mismatch(resource, cause, initiator)
+                    .expect_err("a missing or non-directory root revokes its grants"))
+            }
             Err(error) => Err(error),
         }
     }

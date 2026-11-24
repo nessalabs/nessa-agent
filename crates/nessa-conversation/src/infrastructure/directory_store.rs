@@ -526,7 +526,10 @@ impl DirectoryStore for SqliteDirectoryStore {
                     sequence: row.get(0)?,
                     record: DirectoryAuditRecord {
                         cause: row.get(2)?,
-                        resource_id: Some(row.get(1)?),
+                        resource_id: {
+                            let id: String = row.get(1)?;
+                            (!id.is_empty()).then_some(id)
+                        },
                         environment: row.get(4)?,
                         canonical_path: row.get(5)?,
                         initiator: row.get(3)?,

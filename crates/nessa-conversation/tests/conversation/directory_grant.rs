@@ -231,7 +231,12 @@ fn a_case_folded_marker_name_is_the_marker_when_the_disk_folds_case() {
                 initiator: "owner".into(),
             })
             .unwrap_err();
-        assert!(matches!(refused, DirectoryRefusal::MarkerSize));
+        assert!(matches!(
+            refused,
+            DirectoryRefusal::MarkerSize {
+                audit_recorded: true
+            }
+        ));
         assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), b"other");
     } else {
         share_read(&access, shared_path, "peer");
@@ -464,7 +469,12 @@ fn an_orphan_marker_of_32_bytes_is_adopted_and_a_longer_one_is_not_rewritten() {
             initiator: "owner".into(),
         })
         .unwrap_err();
-    assert!(matches!(refused, DirectoryRefusal::MarkerSize));
+    assert!(matches!(
+        refused,
+        DirectoryRefusal::MarkerSize {
+            audit_recorded: true
+        }
+    ));
     assert_eq!(fs::read(other.join(".nessa-binding")).unwrap().len(), 33);
 }
 
@@ -2451,6 +2461,100 @@ fn a_symlink_marker_revokes_the_grant_and_restoring_the_file_does_not() {
         access.read("peer", "note.txt").unwrap_err(),
         DirectoryRefusal::NotFound
     ));
+}
+
+#[test]
+fn a_file_where_the_directory_was_revokes_the_grant() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [24; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_dir_all(&shared).unwrap();
+    fs::write(&shared, b"not a directory").unwrap();
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "root-type"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::remove_file(&shared).unwrap();
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    fs::write(shared.join(".nessa-binding"), [24; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+    assert!(matches!(
+        access.write("peer", "note.txt", b"no").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+}
+
+#[test]
+fn a_short_orphan_marker_is_audited_and_left_in_place() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join(".nessa-binding"), b"short").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        audit.clone(),
+        [28; BINDING_LEN],
+    );
+    let path = shared.to_str().unwrap();
+    *audit.fail.lock().unwrap() = true;
+    let refused = access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: path.into(),
+            subject: DirectorySubject {
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err();
+    match refused {
+        DirectoryRefusal::MarkerSize { audit_recorded } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    assert!(refused.to_string().contains("the audit was not recorded"));
+    assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap(), b"short");
+    let offered = std::fs::canonicalize(&shared).unwrap();
+    let offered = offered.to_str().unwrap();
+    assert!(store.resource_at("local", offered).unwrap().is_none());
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "marker-size")
+        .unwrap();
+    assert!(recorded.resource_id.is_none());
+    assert_eq!(recorded.canonical_path, offered);
+    assert_eq!(recorded.initiator, "owner");
+    assert_eq!(recorded.before.as_deref(), Some("none"));
+    assert_eq!(recorded.after.as_deref(), Some("none"));
 }
 
 struct LateMarker {
