@@ -126,6 +126,8 @@ pub(super) struct PreparedNative {
     /// and `bind` binds `address`. A test that reserved the port hands the
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
+    #[cfg(test)]
+    record_head_probe: bool,
     /// The web tunnel, when one is on.
     #[cfg(unix)]
     tunnel: Option<super::tunnel::PreparedTunnel>,
@@ -156,6 +158,13 @@ impl PreparedNative {
     /// Serve `openEnvironment` with `environments`.
     pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
         self.environments = Some(environments);
+        self
+    }
+
+    /// Install the explicit enrolled Head lab only in this test composition.
+    #[cfg(test)]
+    pub(super) fn with_record_head_probe(mut self) -> Self {
+        self.record_head_probe = true;
         self
     }
 
@@ -271,6 +280,8 @@ pub(super) async fn prepare(
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
+            #[cfg(test)]
+            record_head_probe: false,
             #[cfg(unix)]
             tunnel: None,
         },
@@ -372,6 +383,8 @@ pub(super) async fn bind(
         relay,
         advertised_address,
         bound_socket,
+        #[cfg(test)]
+        record_head_probe,
         #[cfg(unix)]
         tunnel,
     } = prepared;
@@ -405,13 +418,22 @@ pub(super) async fn bind(
                 .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
         }
     }
-    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry.clone())));
+    let sessions = Arc::new(NativeSessions::new(
+        product,
+        Arc::new(RegistryDevices(registry.clone())),
+    ));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
-        .with_protected_sessions(Arc::new(sessions))
+        .with_protected_sessions(sessions.clone())
         .with_discovery(Arc::new(RegistryDiscovery {
             store: registry.clone(),
             clock: wall.clone(),
         }));
+    #[cfg(test)]
+    let connections = if record_head_probe {
+        connections.with_record_head_probe(sessions)
+    } else {
+        connections
+    };
     let connections = Arc::new(match environments {
         Some(environments) => connections.with_environment_peers(environments),
         None => connections,

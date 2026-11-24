@@ -61,6 +61,8 @@ pub use connection::{
     NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
     TunnelPermit,
 };
+#[cfg(feature = "test-support")]
+pub use connection::{RecordHeadProbe, RECORD_HEAD_PROBE_PREFIX};
 pub use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};

@@ -141,6 +141,8 @@ impl From<DeadlineError> for NativeConnectionError {
 /// One whose first envelope is `openEnvironment` moves to a third pool, also
 /// eight, the same way.
 pub struct NativeEnrollmentConnections {
+    #[cfg(feature = "test-support")]
+    record_head_probe: Option<Arc<dyn RecordHeadProbe>>,
     gateway: Arc<GatewayPairing>,
     clock: Arc<dyn Clock>,
     capacity: Arc<Semaphore>,
@@ -217,8 +219,17 @@ impl NativeEnrollmentConnections {
             relay: Pool::new(RELAY_CAPACITY),
             tunnel: Pool::new(TUNNEL_CAPACITY),
             discovery: None,
+            #[cfg(feature = "test-support")]
+            record_head_probe: None,
         }
     }
+    /// Attach the explicit record Head lab selector to direct and relay ingress.
+    #[cfg(feature = "test-support")]
+    pub fn with_record_head_probe(mut self, probe: Arc<dyn RecordHeadProbe>) -> Self {
+        self.record_head_probe = Some(probe);
+        self
+    }
+
     /// Serve `openDiscovery` with `discovery`. Without it the envelope is
     /// refused. Discovery does not enroll and does not take a session permit.
     pub fn with_discovery(mut self, discovery: Arc<dyn GrantorDiscovery>) -> Self {
@@ -364,6 +375,8 @@ impl NativeEnrollmentConnections {
                 pool: admission(&self.environment),
             }),
             discovery: self.discovery.clone(),
+            #[cfg(feature = "test-support")]
+            record_head_probe: self.record_head_probe.clone(),
         };
         let worker = tokio::task::spawn_blocking(move || {
             let _permit = permit;
@@ -561,6 +574,8 @@ impl std::fmt::Debug for TunnelPermit {
 }
 /// What the blocking worker may move a connection to, by its first envelope.
 struct Admissions {
+    #[cfg(feature = "test-support")]
+    record_head_probe: Option<Arc<dyn RecordHeadProbe>>,
     product: Option<ProductAdmission>,
     environment: Option<EnvironmentAdmission>,
     discovery: Option<Arc<dyn GrantorDiscovery>>,
@@ -668,6 +683,23 @@ pub(super) enum Served {
     /// connection, for the paired environment, and its environment permit.
     Environment(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
 }
+/// A lab-only first envelope selects a serial Head connection, not permission.
+#[cfg(feature = "test-support")]
+pub const RECORD_HEAD_PROBE_PREFIX: &[u8] = b"NESSA-RECORD-HEAD-LAB/1\0";
+
+/// A lab-only product Head probe on the original proved native transport.
+#[cfg(feature = "test-support")]
+pub trait RecordHeadProbe: Send + Sync {
+    /// Accept the selector's bounded fields, verify the issued credential and
+    /// run on this worker's original finite deadline and wake endpoint.
+    fn serve(
+        &self,
+        runtime: &Handle,
+        transport: NativeTransport<DeadlineStream>,
+        opening: &[u8],
+    ) -> Result<(), ErrorKind>;
+}
+
 fn serve_exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,
@@ -687,15 +719,35 @@ fn serve_exchange<R: RngCore + CryptoRng>(
         admissions.admit_tunneled(handle, channel.device_proof())?;
     }
     let mut channel = EnrollmentChannel::new(channel);
-    let result = exchange(
-        gateway,
-        handle,
-        &mut channel,
-        &deadline,
-        &mut entropy,
-        &admissions,
-        tunneled,
-    );
+    let first = begin_enrollment_phase(&deadline)
+        .map_err(NativeConnectionError::from)
+        .and_then(|()| channel.receive_envelope().map_err(frame_error));
+    #[cfg(feature = "test-support")]
+    if let (false, Some(probe), Ok(body)) = (tunneled, &admissions.record_head_probe, &first) {
+        if let Some(opening) = body.strip_prefix(RECORD_HEAD_PROBE_PREFIX) {
+            // Only a complete, distinct opening consumes this owner. It never
+            // reaches ordinary product or enrollment handling on a later failure.
+            check_deadline(&deadline)?;
+            return probe
+                .serve(handle, channel.into_transport(), opening)
+                .map(|()| Served::Enrollment)
+                .map_err(|kind| NativeConnectionFailure::Io(kind).into());
+        }
+    }
+    let result = first
+        .and_then(|bytes| decode_request(&bytes))
+        .and_then(|first| {
+            check_deadline(&deadline)?;
+            exchange(
+                gateway,
+                handle,
+                &mut channel,
+                &deadline,
+                &mut entropy,
+                &admissions,
+                (tunneled, first),
+            )
+        });
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
         Ok(Exchanged::EnvironmentSelected(permit)) => {
@@ -759,11 +811,8 @@ fn exchange<R: RngCore + CryptoRng>(
     deadline: &NativeDeadline,
     entropy: &mut R,
     admissions: &Admissions,
-    tunneled: bool,
+    (tunneled, first): (bool, NativePairingRequest),
 ) -> Result<Exchanged, NativeConnectionError> {
-    begin_enrollment_phase(deadline)?;
-    let first = read_request(channel)?;
-    check_deadline(deadline)?;
     // A credential lets a tunnel connection in, and only to its session:
     // pairing a code, a status and owner recovery need the local network.
     if tunneled
@@ -973,7 +1022,10 @@ fn read_request<S: Read + Write>(
 ) -> Result<NativePairingRequest, NativeConnectionError> {
     // `DeadlineStream` retries elapsed waits itself, so every error here is final.
     let bytes = channel.receive_envelope().map_err(frame_error)?;
-    wire::decode_request(&bytes).map_err(|error| NativeConnectionFailure::Wire(error).into())
+    decode_request(&bytes)
+}
+fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeConnectionError> {
+    wire::decode_request(bytes).map_err(|error| NativeConnectionFailure::Wire(error).into())
 }
 fn write_reply<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,

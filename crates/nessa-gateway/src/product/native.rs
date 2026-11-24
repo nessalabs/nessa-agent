@@ -14,12 +14,18 @@ use super::state::ProductRouteState;
 use axum::extract::ws::Message;
 use axum::Error;
 use futures_util::{Sink, Stream};
+#[cfg(feature = "test-support")]
+use nessa_auth::adapters::pairing::NativeTransport;
 use nessa_auth::application::{
     pairing::DeviceConnectionProof,
     ports::{AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
 };
 use nessa_auth::domain::AudienceId;
+#[cfg(feature = "test-support")]
+use nessa_device_pairing::infrastructure::RecordHeadProbe;
 use nessa_device_pairing::infrastructure::{ProtectedConnection, ProtectedSessions};
+#[cfg(feature = "test-support")]
+use nessa_protocol::pairing::socket::DeadlineStream;
 use nessa_protocol::product::generated::product_event;
 use nessa_protocol::product::handshake::accepted_termination;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
@@ -30,6 +36,8 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
+#[cfg(feature = "test-support")]
+use tokio::runtime::Handle;
 
 /// Verifies a device credential id against the key a live native connection
 /// proved. The registry implements it; the product asks it.
@@ -77,6 +85,23 @@ impl ProtectedSessions for NativeSessions {
         Box::pin(async move {
             serve_session(NativeSocket::new(connection), state, proof.as_ref()).await;
         })
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl RecordHeadProbe for NativeSessions {
+    fn serve(
+        &self,
+        runtime: &Handle,
+        transport: NativeTransport<DeadlineStream>,
+        opening: &[u8],
+    ) -> Result<(), ErrorKind> {
+        let proof = transport.device_proof().clone();
+        let verifier = ProvedKey {
+            credentials: self.proof.0.as_ref(),
+            proof: &proof,
+        };
+        super::record_read::probe::serve(runtime, &self.state, &verifier, transport, opening)
     }
 }
 
