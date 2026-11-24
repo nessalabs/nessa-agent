@@ -533,6 +533,7 @@ async fn cancelled_dns_waiter_keeps_the_physical_workers_permit() {
 
 #[tokio::test]
 async fn expired_preparation_refuses_before_polling_a_request() {
+    install_tls_backend();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
