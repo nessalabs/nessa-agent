@@ -264,16 +264,18 @@ impl CloudBoxes {
                 } else {
                     CloudBoxState::Provisioning
                 };
-                let _ = self.audit.record(CloudBoxAuditEvent {
-                    box_id,
-                    cloud: Some(cloud),
-                    before: Some(CloudBoxState::Provisioning),
-                    after: Some(after),
-                    action: "create_refused",
-                    cause,
-                    initiator,
-                });
-                return Err(error);
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(after),
+                        action: "create_refused",
+                        cause,
+                        initiator,
+                    },
+                    error,
+                ));
             }
         };
 
@@ -299,7 +301,7 @@ impl CloudBoxes {
                 .provider
                 .delete_box(&connection, &provisioned.vm, &provisioned.admission)
                 .await;
-            let _ = self.audit.record(CloudBoxAuditEvent {
+            let event = CloudBoxAuditEvent {
                 box_id,
                 cloud: Some(cloud),
                 before: Some(CloudBoxState::Provisioning),
@@ -310,14 +312,15 @@ impl CloudBoxes {
                     provisioned.vm
                 ),
                 initiator,
-            });
-            return match cleanup {
-                Ok(()) => Err(save_error),
-                Err(cleanup_error) => Err(CloudBoxError::CleanupUncertain(format!(
+            };
+            let operation_error = match cleanup {
+                Ok(()) => save_error,
+                Err(cleanup_error) => CloudBoxError::CleanupUncertain(format!(
                     "vm={}; save={save_error}; cleanup={cleanup_error}",
                     provisioned.vm
-                ))),
+                )),
             };
+            return Err(self.audit_failure(event, operation_error));
         }
 
         let summary = active_record
@@ -390,16 +393,18 @@ impl CloudBoxes {
         {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                let _ = self.audit.record(CloudBoxAuditEvent {
-                    box_id: box_id.clone(),
-                    cloud: Some(cloud),
-                    before: Some(state),
-                    after: Some(state),
-                    action: "wake_refused",
-                    cause: error.to_string(),
-                    initiator,
-                });
-                return Err(error);
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(state),
+                        action: "wake_refused",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
             }
         };
 
@@ -407,16 +412,18 @@ impl CloudBoxes {
             let error = CloudBoxError::BootstrapFailed(
                 "woken VM reported a different gateway_id than its receipt".into(),
             );
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "wake_identity_mismatch",
-                cause: error.to_string(),
-                initiator,
-            });
-            return Err(error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "wake_identity_mismatch",
+                    cause: error.to_string(),
+                    initiator,
+                },
+                error,
+            ));
         }
 
         let updated = CloudBoxRecord::Active {
@@ -433,16 +440,18 @@ impl CloudBoxes {
             updated_at_ms: Self::now_ms(),
         };
         if let Err(save_error) = self.store.append(box_id, updated) {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(CloudBoxState::Running),
-                action: "wake_receipt_failed",
-                cause: save_error.to_string(),
-                initiator,
-            });
-            return Err(save_error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Running),
+                    action: "wake_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
         }
         self.audit.record(CloudBoxAuditEvent {
             box_id: box_id.clone(),
@@ -508,42 +517,48 @@ impl CloudBoxes {
         {
             Ok(busy) => busy,
             Err(error) => {
-                let _ = self.audit.record(CloudBoxAuditEvent {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(state),
+                        action: "sleep_active_work_check_failed",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+        if busy {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
                     box_id: box_id.clone(),
                     cloud: Some(cloud),
                     before: Some(state),
                     after: Some(state),
-                    action: "sleep_active_work_check_failed",
-                    cause: error.to_string(),
+                    action: "sleep_refused",
+                    cause: "active_work_in_flight".into(),
                     initiator,
-                });
-                return Err(error);
-            }
-        };
-        if busy {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "sleep_refused",
-                cause: "active_work_in_flight".into(),
-                initiator,
-            });
-            return Err(CloudBoxError::ActiveWorkInFlight);
+                },
+                CloudBoxError::ActiveWorkInFlight,
+            ));
         }
 
         if let Err(error) = backend.provider.stop_box(&connection, &vm).await {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "sleep_failed",
-                cause: error.to_string(),
-                initiator,
-            });
-            return Err(error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "sleep_failed",
+                    cause: error.to_string(),
+                    initiator,
+                },
+                error,
+            ));
         }
 
         let updated = CloudBoxRecord::Active {
@@ -563,16 +578,18 @@ impl CloudBoxes {
             .as_summary()
             .expect("Active record always projects to summary");
         if let Err(save_error) = self.store.append(box_id, updated) {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(CloudBoxState::Sleeping),
-                action: "sleep_receipt_failed",
-                cause: save_error.to_string(),
-                initiator,
-            });
-            return Err(save_error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Sleeping),
+                    action: "sleep_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
         }
         self.audit.record(CloudBoxAuditEvent {
             box_id: box_id.clone(),
@@ -636,16 +653,18 @@ impl CloudBoxes {
             .as_summary()
             .expect("Active record always projects to summary");
         if let Err(save_error) = self.store.append(box_id, updated) {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "rename_receipt_failed",
-                cause: save_error.to_string(),
-                initiator,
-            });
-            return Err(save_error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "rename_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
         }
         self.audit.record(CloudBoxAuditEvent {
             box_id: box_id.clone(),
@@ -693,16 +712,18 @@ impl CloudBoxes {
             .delete_box(&connection, &vm, &admission)
             .await
         {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "delete_failed",
-                cause: error.to_string(),
-                initiator,
-            });
-            return Err(error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "delete_failed",
+                    cause: error.to_string(),
+                    initiator,
+                },
+                error,
+            ));
         }
 
         if let Err(save_error) = self.store.append(
@@ -713,16 +734,18 @@ impl CloudBoxes {
                 updated_at_ms: Self::now_ms(),
             },
         ) {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(CloudBoxState::Deleted),
-                action: "delete_receipt_failed",
-                cause: save_error.to_string(),
-                initiator,
-            });
-            return Err(save_error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "delete_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
         }
         self.audit.record(CloudBoxAuditEvent {
             box_id: box_id.clone(),
@@ -785,16 +808,18 @@ impl CloudBoxes {
             .as_summary()
             .expect("Active record always projects to summary");
         if let Err(save_error) = self.store.append(box_id, updated) {
-            let _ = self.audit.record(CloudBoxAuditEvent {
-                box_id: box_id.clone(),
-                cloud: Some(cloud),
-                before: Some(state),
-                after: Some(state),
-                action: "endpoint_update_receipt_failed",
-                cause: save_error.to_string(),
-                initiator,
-            });
-            return Err(save_error);
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "endpoint_update_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
         }
         self.audit.record(CloudBoxAuditEvent {
             box_id: box_id.clone(),
@@ -806,6 +831,19 @@ impl CloudBoxes {
             initiator,
         })?;
         Ok(summary)
+    }
+
+    /// Record required audit evidence on a failure/refusal/cleanup path,
+    /// preserving both the original operation failure and any audit delivery
+    /// failure so audit outages are never silently discarded.
+    fn audit_failure(&self, event: CloudBoxAuditEvent, original: CloudBoxError) -> CloudBoxError {
+        match self.audit.record(event) {
+            Ok(()) => original,
+            Err(audit_error) => CloudBoxError::AuditDeliveryFailed {
+                operation: Box::new(original),
+                audit: audit_error.to_string(),
+            },
+        }
     }
 }
 
@@ -905,6 +943,7 @@ mod tests {
         wake_url: StdMutex<String>,
         wake_gateway_id: StdMutex<String>,
         deleted: StdMutex<Vec<String>>,
+        fail_create: AtomicBool,
         fail_delete: AtomicBool,
     }
     impl FakeProvider {
@@ -913,6 +952,7 @@ mod tests {
                 wake_url: StdMutex::new("wss://box-rotated.example.com".into()),
                 wake_gateway_id: StdMutex::new("gw-box-1".into()),
                 deleted: StdMutex::new(Vec::new()),
+                fail_create: AtomicBool::new(false),
                 fail_delete: AtomicBool::new(false),
             }
         }
@@ -924,6 +964,9 @@ mod tests {
             _box_id: &'a CloudBoxId,
         ) -> BoxFuture<'a, Result<ProvisionedCloudBox, CloudBoxError>> {
             Box::pin(async move {
+                if self.fail_create.load(Ordering::SeqCst) {
+                    return Err(CloudBoxError::ProviderFailed("quota exceeded".into()));
+                }
                 Ok(ProvisionedCloudBox {
                     vm: "vm-box-1".into(),
                     image: "nessa-headless:v1".into(),
@@ -1096,5 +1139,102 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err2, CloudBoxError::CleanupUncertain(_)));
+    }
+
+    #[tokio::test]
+    async fn refusal_and_failure_paths_surface_both_operation_and_audit_delivery_errors() {
+        struct FailingOnActionAudit {
+            fail_action: StdMutex<Option<&'static str>>,
+        }
+        impl CloudBoxAudit for FailingOnActionAudit {
+            fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+                if *self.fail_action.lock().unwrap() == Some(event.action) {
+                    return Err(CloudBoxError::ReceiptUnavailable("audit disk full".into()));
+                }
+                Ok(())
+            }
+        }
+
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let active_work = Arc::new(FakeActiveWork(AtomicBool::new(true)));
+        let audit = Arc::new(FailingOnActionAudit {
+            fail_action: StdMutex::new(Some("create_refused")),
+        });
+        let service = CloudBoxes::new(
+            vec![CloudBoxBackend {
+                cloud: Cloud::Agent37,
+                settings: Arc::new(FakeSettings(Some(connected_account()))),
+                provider: provider.clone(),
+            }],
+            store.clone(),
+            active_work.clone(),
+            audit.clone(),
+        );
+
+        // 1. Create refusal + audit failure preserves both.
+        provider.fail_create.store(true, Ordering::SeqCst);
+        let refused_id = CloudBoxId::parse("44444444-3333-4444-5555-666666666666").unwrap();
+        let create_err = service
+            .create(
+                refused_id,
+                CloudBoxName::new("Fail Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            create_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::ProviderFailed(_))
+                    && audit.contains("audit disk full")
+        ));
+
+        // Provision a healthy box for sleep, wake, and delete failure checks.
+        provider.fail_create.store(false, Ordering::SeqCst);
+        *audit.fail_action.lock().unwrap() = None;
+        let box_id = CloudBoxId::parse("55555555-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                box_id.clone(),
+                CloudBoxName::new("Live Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+
+        // 2. Sleep refusal (active work) + audit failure preserves both.
+        *audit.fail_action.lock().unwrap() = Some("sleep_refused");
+        let sleep_err = service.sleep(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            sleep_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::ActiveWorkInFlight)
+                    && audit.contains("audit disk full")
+        ));
+
+        // 3. Wake identity mismatch + audit failure preserves both.
+        *provider.wake_gateway_id.lock().unwrap() = "gw-imposter".into();
+        *audit.fail_action.lock().unwrap() = Some("wake_identity_mismatch");
+        let wake_err = service.wake(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            wake_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::BootstrapFailed(_))
+                    && audit.contains("audit disk full")
+        ));
+
+        // 4. Delete failure + audit failure preserves both.
+        provider.fail_delete.store(true, Ordering::SeqCst);
+        *audit.fail_action.lock().unwrap() = Some("delete_failed");
+        let delete_err = service.delete(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            delete_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::ProviderFailed(_))
+                    && audit.contains("audit disk full")
+        ));
     }
 }

@@ -32,6 +32,12 @@ pub enum CloudBoxError {
     BootstrapFailed(String),
     ReceiptUnavailable(String),
     CleanupUncertain(String),
+    /// Both a lifecycle operation (or refusal/cleanup) and its required audit
+    /// delivery failed; preserves both typed causes without silent audit loss.
+    AuditDeliveryFailed {
+        operation: Box<CloudBoxError>,
+        audit: String,
+    },
 }
 
 impl fmt::Display for CloudBoxError {
@@ -54,6 +60,9 @@ impl fmt::Display for CloudBoxError {
             Self::BootstrapFailed(detail) => write!(f, "gateway bootstrap failed: {detail}"),
             Self::ReceiptUnavailable(detail) => write!(f, "cloud box receipt error: {detail}"),
             Self::CleanupUncertain(detail) => write!(f, "cloud box cleanup uncertain: {detail}"),
+            Self::AuditDeliveryFailed { operation, audit } => {
+                write!(f, "{operation}; audit delivery failed: {audit}")
+            }
         }
     }
 }

@@ -675,13 +675,25 @@ export function createGatewayRegistry(
                 name,
                 cloud: input.cloud,
               })
-              return registry.add({
-                label: created.name,
-                url: created.url,
-                credential: created.credential,
-                expectedGatewayId: created.gatewayId,
-                cloudBox: { boxId: created.boxId, cloud: created.cloud },
-              })
+              try {
+                return await registry.add({
+                  label: created.name,
+                  url: created.url,
+                  credential: created.credential,
+                  expectedGatewayId: created.gatewayId,
+                  cloudBox: { boxId: created.boxId, cloud: created.cloud },
+                })
+              } catch (enrollError) {
+                try {
+                  await cloudBoxes.delete(created.boxId)
+                } catch {
+                  throw new GatewayRegistryError(
+                    "offline",
+                    `Cloud Box ${created.boxId} could not be enrolled and rollback deletion failed; remove it manually.`,
+                  )
+                }
+                throw enrollError
+              }
             },
 
             async sleepCloudBox(gatewayId: string): Promise<void> {

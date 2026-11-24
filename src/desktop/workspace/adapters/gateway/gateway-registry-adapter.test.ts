@@ -448,13 +448,17 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
           }),
       ),
       sleep: vi.fn(async () => {}),
-      delete: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveDelete = resolve
-          }),
-      ),
+      delete: vi.fn(() => {
+        if (deleteCalls === 0) {
+          deleteCalls += 1
+          return Promise.resolve()
+        }
+        return new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        })
+      }),
     }
+    let deleteCalls = 0
 
     const registry = createGatewayRegistry({
       local: localStub,
@@ -466,11 +470,13 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
       cloudBoxes,
     })
 
-    // M4: imposter gatewayId during createCloudBox is rejected and closed.
+    // M4: imposter gatewayId during createCloudBox is rejected, closed, and rolled back.
     await expect(
       registry.createCloudBox!({ name: "Box 2", cloud: "agent37" }),
     ).rejects.toMatchObject({ reason: "connect-failed" })
     expect(imposter.closed).toHaveBeenCalled()
+    expect(cloudBoxes.delete).toHaveBeenCalledWith("22222222-3333-4444-5555-666666666666")
+    expect(current()).toEqual([])
 
     // Genuine create succeeds.
     await registry.createCloudBox!({ name: "Box 2", cloud: "agent37" })
@@ -490,5 +496,46 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     await deletePromise
     expect(credentialStore.read("gw-box-2")).toBeNull()
     expect(current()).toEqual([])
+  })
+
+  it("surfaces cleanup uncertainty if compensating delete fails after enrollment error", async () => {
+    const { store, current } = memoryStore()
+    const credentialStore = inMemoryGatewayCredentialStore()
+    const cloudBoxes = {
+      create: vi.fn(async () => ({
+        boxId: "33333333-4444-5555-6666-777777777777",
+        name: "Unreachable Box",
+        cloud: "agent37" as const,
+        gatewayId: "gw-box-3",
+        url: "wss://box-3.example.com",
+        credential: "tok-3",
+      })),
+      wake: vi.fn(async () => ({
+        gatewayId: "gw-box-3",
+        url: "wss://box-3.example.com",
+      })),
+      sleep: vi.fn(async () => {}),
+      delete: vi.fn(async () => {
+        throw new Error("provider unavailable")
+      }),
+    }
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store,
+      credentialStore,
+      now: () => 4000,
+      after: () => () => {},
+      connectRemote: async () => {
+        throw new Error("socket refused")
+      },
+      cloudBoxes,
+    })
+
+    await expect(
+      registry.createCloudBox!({ name: "Unreachable Box", cloud: "agent37" }),
+    ).rejects.toThrow("33333333-4444-5555-6666-777777777777")
+    expect(cloudBoxes.delete).toHaveBeenCalledWith("33333333-4444-5555-6666-777777777777")
+    expect(current()).toEqual([])
+    registry.dispose()
   })
 })

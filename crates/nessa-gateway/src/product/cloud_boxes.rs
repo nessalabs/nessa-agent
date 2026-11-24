@@ -206,7 +206,9 @@ fn code(error: &CloudBoxError) -> &'static str {
         CloudBoxError::ProviderFailed(_) | CloudBoxError::CleanupUncertain(_) => {
             "cloud_box_provider_failed"
         }
-        CloudBoxError::ReceiptUnavailable(_) => "cloud_box_storage_unavailable",
+        CloudBoxError::ReceiptUnavailable(_) | CloudBoxError::AuditDeliveryFailed { .. } => {
+            "cloud_box_storage_unavailable"
+        }
     }
 }
 
@@ -235,6 +237,10 @@ mod tests {
             CloudBoxError::BootstrapFailed("bad json".into()),
             CloudBoxError::ReceiptUnavailable("io".into()),
             CloudBoxError::CleanupUncertain("timeout".into()),
+            CloudBoxError::AuditDeliveryFailed {
+                operation: Box::new(CloudBoxError::ActiveWorkInFlight),
+                audit: "disk full".into(),
+            },
         ];
         for error in errors {
             let code = super::code(&error);
