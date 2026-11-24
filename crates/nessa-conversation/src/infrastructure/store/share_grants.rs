@@ -700,7 +700,7 @@ impl ShareGrants for LocalConversationStore {
             let after = i64::try_from(after).unwrap_or(i64::MAX);
             let mut statement = connection
                 .prepare(
-                    "SELECT position, conversation_id, capabilities, policy, policy_revision
+                    "SELECT position, conversation_id, resource_kind, capabilities, policy, policy_revision
                      FROM grants.grant_log
                      WHERE receiver_id = ?1 AND position > ?2
                      ORDER BY position",
@@ -708,18 +708,35 @@ impl ShareGrants for LocalConversationStore {
                 .map_err(failed)?;
             let rows = statement
                 .query_map(params![receiver_id, after], |row| {
-                    Ok(GrantLogEntry {
-                        position: u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
-                        conversation_id: row.get(1)?,
-                        capabilities: row.get(2)?,
-                        policy: row.get(3)?,
-                        policy_revision: row
-                            .get::<_, Option<i64>>(4)?
+                    let kind: String = row.get(2)?;
+                    Ok((
+                        u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                        row.get::<_, String>(1)?,
+                        kind,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<i64>>(5)?
                             .and_then(|value| u64::try_from(value).ok()),
-                    })
+                    ))
                 })
                 .map_err(failed)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(failed)
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(failed)?
+                .into_iter()
+                .map(|(position, conversation_id, kind, capabilities, policy, policy_revision)| {
+                    let resource_kind = ResourceKind::parse(&kind).ok_or_else(|| {
+                        unreadable("grants.grant_log", &receiver_id)
+                    })?;
+                    Ok(GrantLogEntry {
+                        position,
+                        conversation_id,
+                        resource_kind,
+                        capabilities,
+                        policy,
+                        policy_revision,
+                    })
+                })
+                .collect()
         })
     }
 
@@ -731,10 +748,10 @@ impl ShareGrants for LocalConversationStore {
         self.run(move |connection| {
             let mut statement = connection
                 .prepare(
-                    "SELECT resource_id, capabilities, policy, policy_revision
+                    "SELECT resource_kind, resource_id, capabilities, policy, policy_revision
                      FROM grants.share_grants
-                     WHERE resource_kind = 'conversation' AND receiver_id = ?1
-                     ORDER BY resource_id",
+                     WHERE receiver_id = ?1
+                     ORDER BY resource_kind, resource_id",
                 )
                 .map_err(failed)?;
             let rows = statement
@@ -742,15 +759,20 @@ impl ShareGrants for LocalConversationStore {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
                     ))
                 })
                 .map_err(failed)?;
             rows.map(|row| {
-                let (conversation_id, capabilities, policy, revision) = row.map_err(failed)?;
+                let (kind, conversation_id, capabilities, policy, revision) =
+                    row.map_err(failed)?;
+                let resource_kind = ResourceKind::parse(&kind)
+                    .ok_or_else(|| unreadable("grants.share_grants", &receiver_id))?;
                 Ok(GrantSnapshotEntry {
                     conversation_id,
+                    resource_kind,
                     capabilities,
                     policy,
                     policy_revision: u64::try_from(revision).unwrap_or(0),
@@ -870,8 +892,8 @@ fn append_receiver_log(
     transaction
         .execute(
             "INSERT INTO grants.grant_log
-             (receiver_id, position, conversation_id, capabilities, policy, policy_revision)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (receiver_id, position, conversation_id, resource_kind, capabilities, policy, policy_revision)
+             VALUES (?1, ?2, ?3, 'conversation', ?4, ?5, ?6)",
             params![
                 receiver,
                 position,

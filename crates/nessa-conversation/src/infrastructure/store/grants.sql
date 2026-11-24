@@ -190,12 +190,15 @@ CREATE TABLE grant_streams (
     head INTEGER NOT NULL
 ) STRICT;
 -- One record per grant commit for that receiver, in the same write as the
--- grant. `capabilities` NULL is a tombstone. Positions at or below
--- head - 1024 are deleted; trimming does not mint an incarnation.
+-- grant. `conversation_id` is the grant key. `resource_kind` says whether
+-- that key is a conversation or a directory. `capabilities` NULL is a
+-- tombstone. Positions at or below head - 1024 are deleted; trimming does
+-- not mint an incarnation.
 CREATE TABLE grant_log (
     receiver_id TEXT NOT NULL,
     position INTEGER NOT NULL,
     conversation_id TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
     capabilities TEXT,
     policy TEXT,
     policy_revision INTEGER,

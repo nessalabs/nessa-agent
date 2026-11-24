@@ -494,9 +494,11 @@ fn open_marker_file(dir: RawFd) -> Result<File, DirectoryRefusal> {
     let file = match open_named(dir, MARKER_NAME) {
         Ok(file) => file,
         Err(error) => {
-            // `O_NOFOLLOW` answers `ELOOP` for a symlink. That name is not the
-            // marker file, the same as a FIFO.
-            if c_name(MARKER_NAME).is_ok_and(|name| is_symlink(dir, &name)) {
+            // A socket's open fails with `ENXIO` before an fd exists to
+            // `fstat`. A symlink fails with `ELOOP`. Any name that is not a
+            // regular file is the same refusal as a FIFO; a missing name or a
+            // transient open error stays that error.
+            if marker_is_not_regular(dir) {
                 return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
             }
             return Err(error);
@@ -507,6 +509,19 @@ fn open_marker_file(dir: RawFd) -> Result<File, DirectoryRefusal> {
     } else {
         Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput))
     }
+}
+
+/// The marker name exists and is not a regular file: a socket, FIFO, device,
+/// directory, or symlink.
+fn marker_is_not_regular(dir: RawFd) -> bool {
+    let Ok(name) = c_name(MARKER_NAME) else {
+        return false;
+    };
+    let mut info: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+        return false;
+    }
+    mode_bits(info.st_mode) & mode_bits(libc::S_IFMT) != mode_bits(libc::S_IFREG)
 }
 
 fn open_named(dir: RawFd, name: &str) -> Result<File, DirectoryRefusal> {
@@ -726,6 +741,25 @@ mod marker_identity {
         assert!(LocalDirectoryFiles
             .release_created_marker(shared.to_str().unwrap(), &[1; BINDING_LEN])
             .unwrap());
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn a_socket_marker_is_unusable_and_left_in_place() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let marker = shared.join(MARKER_NAME);
+        let _listener = std::os::unix::net::UnixListener::bind(&marker).unwrap();
+        let started = std::time::Instant::now();
+        let marker_bytes = LocalDirectoryFiles
+            .read_marker(shared.to_str().unwrap())
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(matches!(
+            marker_bytes,
+            crate::application::MarkerBytes::Unusable
+        ));
         assert!(marker.exists());
     }
 

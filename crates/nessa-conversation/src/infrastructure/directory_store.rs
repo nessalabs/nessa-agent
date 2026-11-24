@@ -617,8 +617,8 @@ fn append_receiver_log(
     transaction
         .execute(
             "INSERT INTO grant_log
-             (receiver_id, position, conversation_id, capabilities, policy, policy_revision)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (receiver_id, position, conversation_id, resource_kind, capabilities, policy, policy_revision)
+             VALUES (?1, ?2, ?3, 'directory', ?4, ?5, ?6)",
             params![receiver, position, resource_id, capabilities, policy, epoch],
         )
         .map_err(store)?;

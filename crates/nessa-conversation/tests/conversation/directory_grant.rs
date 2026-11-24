@@ -154,8 +154,9 @@ fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
     assert_eq!(published.len(), 1);
     assert_eq!(published[0].0, 1);
     assert_eq!(published[0].1, owned.resource_id);
-    assert_eq!(published[0].2.as_deref(), Some("read"));
-    assert!(published[0].3.is_some());
+    assert_eq!(published[0].2, "directory");
+    assert_eq!(published[0].3.as_deref(), Some("read"));
+    assert!(published[0].4.is_some());
     fs::remove_file(shared.join(".nessa-binding")).unwrap();
     match access.read("dev-1", "note.txt").unwrap_err() {
         DirectoryRefusal::MarkerMismatch { .. } => {}
@@ -165,8 +166,9 @@ fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
     assert_eq!(revoked.len(), 2);
     assert_eq!(revoked[1].0, 2);
     assert_eq!(revoked[1].1, owned.resource_id);
-    assert!(revoked[1].2.is_none());
+    assert_eq!(revoked[1].2, "directory");
     assert!(revoked[1].3.is_none());
+    assert!(revoked[1].4.is_none());
     assert!(store
         .grants_for_resource(&owned.resource_id)
         .unwrap()
@@ -176,17 +178,23 @@ fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
 fn grant_log(
     path: &std::path::Path,
     receiver: &str,
-) -> Vec<(i64, String, Option<String>, Option<i64>)> {
+) -> Vec<(i64, String, String, Option<String>, Option<i64>)> {
     let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
     let mut statement = connection
         .prepare(
-            "SELECT position, conversation_id, capabilities, policy_revision
+            "SELECT position, conversation_id, resource_kind, capabilities, policy_revision
              FROM grant_log WHERE receiver_id = ?1 ORDER BY position",
         )
         .unwrap();
     statement
         .query_map([receiver], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })
         .unwrap()
         .map(|row| row.unwrap())
@@ -2461,6 +2469,42 @@ fn a_refused_read_keeps_its_reason_when_the_audit_is_not_recorded() {
             .any(|line| line.cause == "marker-name"
                 && line.after.as_deref() == Some(".nessa-binding"))
     );
+}
+
+#[test]
+fn a_socket_marker_revokes_the_grant_and_restoring_the_file_does_not() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [21; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    let marker = shared.join(".nessa-binding");
+    fs::remove_file(&marker).unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(&marker).unwrap();
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-type"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    drop(_listener);
+    fs::remove_file(&marker).unwrap();
+    fs::write(&marker, [21; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
 }
 
 #[test]

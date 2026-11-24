@@ -9,7 +9,8 @@
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use super::target::{Cursor, Run, Target, DELIVERY_TIMEOUT};
 use crate::conversation::application::{
-    GrantLogEntry, GrantSnapshotEntry, GrantStream, ShareGrants, EMPTY_GRANT_INCARNATION,
+    GrantLogEntry, GrantSnapshotEntry, GrantStream, ResourceKind, ShareGrants,
+    EMPTY_GRANT_INCARNATION,
 };
 use crate::product::{
     read_access::{self, paired_receiver},
@@ -298,11 +299,12 @@ async fn fresh_frame(
             .await
             .map_err(|_| ())?;
         entries.retain(|entry| entry.position <= stream.head);
+        let entries = conversation_log(entries);
         if continues_cursor(&entries, stream.head, position) {
             return Ok(incremental_frame(&entries, stream, position, snapshots));
         }
     }
-    let entries = grants.grant_snapshot(receiver).await.map_err(|_| ())?;
+    let entries = conversation_snapshot(grants.grant_snapshot(receiver).await.map_err(|_| ())?);
     *snapshots = snapshots.saturating_add(1);
     let mut pin = Pin {
         id: *snapshots,
@@ -450,6 +452,22 @@ fn copy_entry(entry: &GrantFrameEntry) -> GrantFrameEntry {
     }
 }
 
+/// Conversation commits only. A directory record stays in the log and the
+/// snapshot, and is not published as a conversation id.
+fn conversation_log(entries: Vec<GrantLogEntry>) -> Vec<GrantLogEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.resource_kind == ResourceKind::Conversation)
+        .collect()
+}
+
+fn conversation_snapshot(entries: Vec<GrantSnapshotEntry>) -> Vec<GrantSnapshotEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| entry.resource_kind == ResourceKind::Conversation)
+        .collect()
+}
+
 fn log_entry(entry: &GrantLogEntry) -> GrantFrameEntry {
     GrantFrameEntry {
         conversation_id: entry.conversation_id.clone(),
@@ -549,19 +567,55 @@ async fn wait_registered(
 #[cfg(test)]
 mod tests {
     use super::{
-        continues_cursor, copy_entry, event_len, fitting_prefix, page_continues, preview,
-        take_page, GrantLogEntry, Pin, MAX_PAYLOAD_BYTES,
+        continues_cursor, conversation_log, conversation_snapshot, copy_entry, event_len,
+        fitting_prefix, page_continues, preview, take_page, GrantLogEntry, GrantSnapshotEntry, Pin,
+        MAX_PAYLOAD_BYTES,
     };
+    use crate::conversation::application::ResourceKind;
     use nessa_protocol::product::generated::GrantFrameEntry;
 
     fn logged(position: u64) -> GrantLogEntry {
         GrantLogEntry {
             position,
             conversation_id: format!("conversation-{position}"),
+            resource_kind: ResourceKind::Conversation,
             capabilities: None,
             policy: None,
             policy_revision: None,
         }
+    }
+
+    #[test]
+    fn a_directory_record_is_not_replayed_or_snapshotted_as_a_conversation() {
+        let directory = GrantLogEntry {
+            position: 2,
+            conversation_id: "directory-resource".into(),
+            resource_kind: ResourceKind::Directory,
+            capabilities: Some("read".into()),
+            policy: None,
+            policy_revision: Some(4),
+        };
+        let conversation = logged(1);
+        let replay = conversation_log(vec![conversation.clone(), directory]);
+        assert_eq!(replay, vec![conversation]);
+        let snapshot = conversation_snapshot(vec![
+            GrantSnapshotEntry {
+                conversation_id: "directory-resource".into(),
+                resource_kind: ResourceKind::Directory,
+                capabilities: "read".into(),
+                policy: None,
+                policy_revision: 4,
+            },
+            GrantSnapshotEntry {
+                conversation_id: "conversation-1".into(),
+                resource_kind: ResourceKind::Conversation,
+                capabilities: "read".into(),
+                policy: None,
+                policy_revision: 1,
+            },
+        ]);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].resource_kind, ResourceKind::Conversation);
     }
 
     #[test]

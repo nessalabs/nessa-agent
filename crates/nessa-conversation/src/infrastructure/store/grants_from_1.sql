@@ -8,6 +8,7 @@ CREATE TABLE grant_log (
     receiver_id TEXT NOT NULL,
     position INTEGER NOT NULL,
     conversation_id TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
     capabilities TEXT,
     policy TEXT,
     policy_revision INTEGER,

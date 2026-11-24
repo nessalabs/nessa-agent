@@ -81,10 +81,12 @@ pub struct GrantStream {
 }
 
 /// One grant-log record, in commit order. `capabilities` is `None` on a tombstone.
+/// `conversation_id` is the grant key. `resource_kind` says what that key names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrantLogEntry {
     pub position: u64,
     pub conversation_id: String,
+    pub resource_kind: ResourceKind,
     pub capabilities: Option<String>,
     pub policy: Option<String>,
     pub policy_revision: Option<u64>,
@@ -94,6 +96,7 @@ pub struct GrantLogEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrantSnapshotEntry {
     pub conversation_id: String,
+    pub resource_kind: ResourceKind,
     pub capabilities: String,
     pub policy: Option<String>,
     pub policy_revision: u64,
@@ -298,9 +301,8 @@ pub struct HeldGrant {
     pub policy_revision: u64,
 }
 
-/// The resource a grant names. This slice writes [`Self::Conversation`] and
-/// the conversation id. A directory grant uses [`Self::Directory`] under the
-/// same primary key; this slice does not write one.
+/// The resource a grant names. A conversation grant's key is the conversation
+/// id. A directory grant's key is the directory resource id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceKind {
     Conversation,
@@ -312,6 +314,15 @@ impl ResourceKind {
         match self {
             Self::Conversation => "conversation",
             Self::Directory => "directory",
+        }
+    }
+
+    /// The stored spelling, or `None` when it is neither kind this build writes.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "conversation" => Some(Self::Conversation),
+            "directory" => Some(Self::Directory),
+            _ => None,
         }
     }
 }
