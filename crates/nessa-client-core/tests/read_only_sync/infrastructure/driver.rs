@@ -185,13 +185,13 @@ async fn driver_page_budget_resumes_after_reopen() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn driver_failure_retains_data_and_reports_unknown() {
+async fn driver_disconnect_reopens_and_resumes_at_the_saved_page() {
     let root = tempfile::tempdir().unwrap();
     let (scope, records) = source_records(root.path()).await;
     let path = cache_path(root.path(), "failure.sqlite3");
     let mut cache = cache(&path);
     let mut source = Source {
-        records,
+        records: records.clone(),
         reads: 0,
         fail_read: Some(2),
     };
@@ -235,8 +235,71 @@ async fn driver_failure_retains_data_and_reports_unknown() {
         CommittedViewState::Stale
     );
     drop(cache);
+    drop(source);
     let mut reopened = super::fixtures::cache(&path);
     assert_eq!(reopened.cached_progress(&scope).unwrap(), Some(saved));
+    let target = records.last().unwrap().position;
+    let mut fresh = ObservedSource {
+        source: Source {
+            records: records.clone(),
+            reads: 0,
+            fail_read: None,
+        },
+        cursors: Vec::new(),
+    };
+    let completed = run_records(
+        &scope,
+        &mut Allowed,
+        &mut fresh,
+        &mut reopened,
+        one_record(),
+        target as usize,
+        &FixedClock,
+    )
+    .unwrap();
+    assert_eq!(
+        (completed.downloaded, completed.pages, completed.complete),
+        (target, target as usize - 1, true)
+    );
+    assert_eq!(fresh.cursors, (1..target).collect::<Vec<_>>());
+    drop(reopened);
+    let reopened = super::fixtures::cache(&path);
+    let mut statement = reopened
+        .connection
+        .prepare("SELECT position, record_id, payload FROM transcript_records ORDER BY position")
+        .unwrap();
+    let rows: Vec<(Vec<u8>, String, Vec<u8>)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let expected: Vec<_> = records
+        .iter()
+        .map(|record| {
+            (
+                record.position.to_be_bytes().to_vec(),
+                record.id.as_str().to_owned(),
+                record.payload.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(rows, expected);
+}
+
+struct ObservedSource {
+    source: Source,
+    cursors: Vec<u64>,
+}
+
+impl RecordSource for ObservedSource {
+    fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
+        self.source.head(scope)
+    }
+
+    fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
+        self.cursors.push(request.after);
+        self.source.page(request)
+    }
 }
 
 struct CatalogueSourceFixture(ResolvedEntry);
