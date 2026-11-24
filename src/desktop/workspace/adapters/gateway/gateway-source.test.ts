@@ -571,31 +571,7 @@ describe("the index and the list subscription", () => {
       "c",
     ])
     expect(kinds(updates)).not.toContain("session-removed")
-    // The page cannot resume, so the walk starts again a few times, then
-    // keeps what it has. Nothing it left out is taken away.
-    expect(gateway.count("observe")).toBe(4)
-  })
-
-  it("a walk that cannot resume starts again and keeps a row the first page left out", async () => {
-    const { gateway, source, follow } = started()
-    follow()
-    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 1 }))
-    await source.index()
-    gateway.complete = false
-    gateway.listLimit = 1
-    gateway.observePageSize = 10
-    gateway.once("observe", () =>
-      Promise.resolve({
-        conversations: [row(conversationA, { updatedAtMs: 1 })],
-        complete: false,
-      }),
-    )
-    gateway.rows.set("shared", row("shared", { updatedAtMs: 3, title: "Shared chat" }))
-    gateway.publishList()
-    await flush()
-    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual(
-      [conversationA, "shared"].sort(),
-    )
+    expect(gateway.count("observe")).toBe(1)
   })
 
   it("D9: a list subscription that ends is a gap: opened again on the retry clock, never at once, and its first frame resyncs once", async () => {

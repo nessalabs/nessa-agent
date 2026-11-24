@@ -964,11 +964,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   ): Promise<ConversationListResult> => {
     const observed = new Map<string, ConversationSummary>()
     let cursor: ConversationObserveCursor | undefined
-    // A page that cannot resume — the replica list changed, so it carries no
-    // cursor — is not the end of the catalogue. The walk starts again from
-    // the first page. A few tries, then the rows seen so far stand and the
-    // catalogue is not claimed complete.
-    let restarts = 0
     for (;;) {
       if (!live() || !caller()) throw new WorkspaceSourceError("unavailable")
       const page = await connected.conversation.observe(
@@ -977,12 +972,6 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       for (const row of page.conversations) observed.set(row.conversationId, row)
       if (page.complete) return { conversations: [...observed.values()], complete: true }
       if (page.cursor === undefined || !cursorAdvances(cursor, page.cursor)) {
-        if (restarts < 3) {
-          restarts += 1
-          observed.clear()
-          cursor = undefined
-          continue
-        }
         const merged = new Map(
           listed.conversations.map((row) => [row.conversationId, row] as const),
         )
