@@ -535,7 +535,12 @@ fn rename_at(dir: RawFd, from: &str, to: &str, noreplace: bool) -> Result<(), Di
     }
 }
 
-fn rename_exclusive(dir: RawFd, from: &std::ffi::CStr, to: &std::ffi::CStr, noreplace: bool) -> i32 {
+fn rename_exclusive(
+    dir: RawFd,
+    from: &std::ffi::CStr,
+    to: &std::ffi::CStr,
+    noreplace: bool,
+) -> i32 {
     #[cfg(target_os = "linux")]
     {
         let flags = if noreplace { libc::RENAME_NOREPLACE } else { 0 };
