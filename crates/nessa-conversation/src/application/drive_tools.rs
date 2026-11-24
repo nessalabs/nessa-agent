@@ -317,7 +317,7 @@ impl InvocationHook for DriveToolHook {
 
 /// A paired grant is stored under its receiver. The turn's caller is the
 /// principal, which is a different id.
-fn directory_subject<'a>(caller: &'a str, initiation: &'a Initiation) -> &'a str {
+pub(crate) fn directory_subject<'a>(caller: &'a str, initiation: &'a Initiation) -> &'a str {
     match initiation.initiator() {
         Initiator::Grant(grant) => grant.grant(),
         Initiator::Owner | Initiator::Agent(_) => caller,

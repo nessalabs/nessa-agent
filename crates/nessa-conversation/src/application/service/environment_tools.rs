@@ -376,7 +376,10 @@ impl ConversationService {
                 SandboxProfile::HarnessDefault => SandboxKind::Harness,
             };
             if let Err(error) = directory.admit_execution(
-                actor.principal_id(),
+                crate::application::drive_tools::directory_subject(
+                    actor.principal_id(),
+                    &initiation,
+                ),
                 work.program(),
                 &arguments,
                 profile,
@@ -966,5 +969,16 @@ mod tests {
         let initiator = TurnInitiator::of(&AdmittedPolicies::default(), &initiation)
             .expect("agent initiation is not a missing grant policy");
         assert_eq!(initiator.ask(), CommandInitiator::Agent);
+    }
+
+    #[test]
+    fn a_gateway_command_is_checked_as_the_grants_receiver() {
+        use nessa_sdk::domain::agent_execution::executions::GrantInitiator;
+        let grant = GrantInitiator::new("dev-1", 4).unwrap();
+        let initiation = Initiation::checked_grant(grant);
+        assert_eq!(
+            crate::application::drive_tools::directory_subject("principal-x", &initiation),
+            "dev-1"
+        );
     }
 }
