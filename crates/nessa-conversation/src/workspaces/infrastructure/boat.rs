@@ -108,16 +108,11 @@ impl BoatProvider {
             link,
             self.relay_socket.clone(),
             self.relay_program.clone(),
-            root.clone(),
+            root,
             vm,
             super::ssh::BOAT_DATA_DIR,
         )?;
-        Ok(Arc::new(super::runtime::BoatRuntime {
-            access,
-            backend,
-            cloud: crate::workspaces::domain::Cloud::Boat,
-            workspace_root: root,
-        }))
+        Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
 }
 

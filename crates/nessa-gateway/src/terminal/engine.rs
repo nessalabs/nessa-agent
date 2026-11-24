@@ -7,11 +7,10 @@
 //! they stay on this thread and never meet the async executor.
 use super::wire::{self, Sent, ServerMessage, StyleTable, VERSION};
 use super::{
-    EngineCommand, EngineEvents, GridSize, RunningTerminal, StartSpec, StartTarget, TerminalEngine,
-    TerminalError, TerminalKind, TerminalSignal, ViewKey,
+    EngineCommand, EngineEvents, RunningTerminal, StartSpec, TerminalEngine, TerminalError,
+    TerminalKind, TerminalSignal, ViewKey,
 };
 use crate::timer::clock;
-use crate::workspaces::application::{WorkspaceTerminal, WorkspaceTerminalState};
 use pty_runtime::{
     ports::{ITerminal, ITerminalFactory, ProcessOperation},
     terminal::{TerminalConfig, TerminalPalette},
@@ -21,7 +20,6 @@ use pty_runtime::{
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{mpsc as std_mpsc, Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -37,15 +35,6 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const MESSAGE_BUDGET: usize = 48 * 1024;
 /// How long a hung-up program has before it is killed and forgotten.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
-/// Fast poll interval while a cloud VM terminal is actively producing output
-/// or receiving input.
-const REMOTE_POLL_FAST: Duration = Duration::from_millis(25);
-/// Idle poll interval when a cloud VM terminal is quiet.
-const REMOTE_POLL_IDLE: Duration = Duration::from_millis(200);
-/// Maximum bytes requested per cloud VM output read.
-const REMOTE_READ_LIMIT: u32 = 65_536;
-/// Maximum input chunk sent in one `write_input` call to a cloud VM terminal.
-const REMOTE_INPUT_CHUNK: usize = 65_536;
 
 /// Starts terminals on the runtime built at process start.
 pub struct GhosttyEngine {
@@ -79,7 +68,7 @@ impl TerminalEngine for GhosttyEngine {
     ) -> Result<Box<dyn RunningTerminal>, TerminalError> {
         let size = TerminalSize::new(spec.size.cols, spec.size.rows)
             .map_err(|_| TerminalError::Invalid)?;
-        let command = build_command_spec(&spec.target, &spec.kind)?;
+        let command = build_command_spec(spec)?;
         let session_id = SessionId::new(id.to_owned()).map_err(|_| TerminalError::Invalid)?;
         let mut options = SessionOptions::raw(size);
         options.replay_bytes = 1024 * 1024;
@@ -133,175 +122,40 @@ impl TerminalEngine for GhosttyEngine {
             .map_err(|error| TerminalError::Spawn(error.to_string()))?;
         Ok(Box::new(Thread(Mutex::new(sender))))
     }
-
-    fn start_remote(
-        &self,
-        id: &str,
-        size: GridSize,
-        remote: Box<dyn WorkspaceTerminal>,
-        events: Arc<dyn EngineEvents>,
-    ) -> Result<Box<dyn RunningTerminal>, TerminalError> {
-        let size = TerminalSize::new(size.cols, size.rows).map_err(|_| TerminalError::Invalid)?;
-        let factory = pty_runtime_infrastructure::terminal::GhosttyTerminalFactory;
-        let terminal = factory
-            .create(terminal_config(size))
-            .map_err(|error| TerminalError::Spawn(format!("{error:?}")))?;
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| TerminalError::Spawn("no async runtime for cloud terminal".into()))?;
-        let (remote_tx, remote_rx) = mpsc::unbounded_channel();
-        let (event_tx, event_rx) = std_mpsc::channel();
-        handle.spawn(drive_remote_terminal(remote, remote_rx, event_tx));
-        let (sender, commands) = std_mpsc::channel();
-        let terminal_id = id.to_owned();
-        std::thread::Builder::new()
-            .name(format!("terminal-{id}"))
-            .spawn(move || {
-                let mut run = Run {
-                    id: terminal_id,
-                    terminal,
-                    views: HashMap::new(),
-                    palette: blank_palette(),
-                    exit: None,
-                    program_status: super::ProgramStatusTracker::new(),
-                };
-                let mut transport = RemotePtyTransport {
-                    commands: remote_tx,
-                    events: event_rx,
-                };
-                run.drive(&mut transport, commands, &*events);
-                transport.finish();
-            })
-            .map_err(|error| TerminalError::Spawn(error.to_string()))?;
-        Ok(Box::new(Thread(Mutex::new(sender))))
-    }
 }
 
-fn build_command_spec(
-    target: &StartTarget,
-    kind: &TerminalKind,
-) -> Result<CommandSpec, TerminalError> {
+fn build_command_spec(spec: &StartSpec) -> Result<CommandSpec, TerminalError> {
     let mut environment: Vec<(OsString, OsString)> = vec![
         ("TERM".into(), "xterm-256color".into()),
         ("COLORTERM".into(), "truecolor".into()),
         ("TERM_PROGRAM".into(), "Nessa".into()),
     ];
-    match target {
-        StartTarget::Local { folder, shell } => {
-            // A login shell reads the person's profile, so PATH and the rest are
-            // theirs, not the gateway's. TERM says which sequences it may send.
-            let mut arguments: Vec<OsString> = vec!["-l".into()];
-            if let TerminalKind::Run { command } = kind {
-                // Drawn as it would be typed: the person's own prompt, the
-                // command, then what it prints. The text goes in the environment,
-                // never into the script, so no quoting can change what runs; eval
-                // keeps its exit status, and the profile's aliases.
-                arguments.extend(["-i".into(), "-c".into(), run_script(shell).into()]);
-                environment.push(("NESSA_RUN_COMMAND".into(), command.into()));
-            }
-            CommandSpec::new(shell.clone(), folder.clone(), arguments)
-                .and_then(|command| {
-                    command.with_environment(
-                        EnvironmentPolicy::Inherit,
-                        vec!["NO_COLOR".into(), "FORCE_COLOR".into()],
-                        environment,
-                    )
-                })
-                .map_err(|error| TerminalError::Spawn(format!("{error:?}")))
-        }
-        StartTarget::Ssh {
-            ssh_program,
-            host,
-            folder,
-        } => {
-            // Allocate a remote PTY (`-tt`) inside this local PTY so window
-            // resizes (SIGWINCH) and raw keys flow directly to the SSH host.
-            let remote_command = ssh_remote_command(folder, kind);
-            let arguments: Vec<OsString> = vec![
-                "-tt".into(),
-                "-o".into(),
-                "BatchMode=yes".into(),
-                "-o".into(),
-                "ForwardAgent=no".into(),
-                "-o".into(),
-                "ForwardX11=no".into(),
-                "-o".into(),
-                "ClearAllForwardings=yes".into(),
-                "-o".into(),
-                "ServerAliveInterval=15".into(),
-                "-o".into(),
-                "ServerAliveCountMax=3".into(),
-                "--".into(),
-                host.into(),
-                remote_command.into(),
-            ];
-            CommandSpec::new(ssh_program.clone(), PathBuf::from("/"), arguments)
-                .and_then(|command| {
-                    command.with_environment(
-                        EnvironmentPolicy::Inherit,
-                        vec!["NO_COLOR".into(), "FORCE_COLOR".into()],
-                        environment,
-                    )
-                })
-                .map_err(|error| TerminalError::Spawn(format!("{error:?}")))
-        }
+    // A login shell reads the person's profile, so PATH and the rest are
+    // theirs, not the gateway's. TERM says which sequences it may send.
+    let mut arguments: Vec<OsString> = vec!["-l".into()];
+    if let TerminalKind::Run { command } = &spec.kind {
+        // Drawn as it would be typed: the person's own prompt, the
+        // command, then what it prints. The text goes in the environment,
+        // never into the script, so no quoting can change what runs; eval
+        // keeps its exit status, and the profile's aliases.
+        arguments.extend(["-i".into(), "-c".into(), run_script(&spec.shell).into()]);
+        environment.push(("NESSA_RUN_COMMAND".into(), command.into()));
     }
-}
-
-/// POSIX single-quote `value` so no character is interpreted by a remote shell.
-pub(super) fn shell_quote(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            quoted.push_str("'\\''");
-        } else {
-            quoted.push(ch);
-        }
-    }
-    quoted.push('\'');
-    quoted
-}
-
-/// Remote POSIX shell command run over `ssh -tt` in `folder`.
-pub(super) fn ssh_remote_command(folder: &Path, kind: &TerminalKind) -> String {
-    let folder = shell_quote(&folder.to_string_lossy());
-    let env_prefix = "unset NO_COLOR FORCE_COLOR; export TERM=xterm-256color COLORTERM=truecolor TERM_PROGRAM=Nessa;";
-    match kind {
-        TerminalKind::Shell => {
-            format!(r#"cd {folder} && {{ {env_prefix} exec "${{SHELL:-/bin/sh}}" -l; }}"#)
-        }
-        TerminalKind::Run { command } => {
-            let cmd = shell_quote(command);
-            format!(
-                concat!(
-                    r#"cd {folder} && {{ {env_prefix} NESSA_RUN_COMMAND={cmd}; export NESSA_RUN_COMMAND; "#,
-                    r#"s="${{SHELL:-/bin/sh}}"; case "${{s##*/}}" in "#,
-                    r#"zsh) exec "$s" -l -i -c 'print -rn -- "${{(%)PROMPT}}"; print -r -- "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND"' ;; "#,
-                    r#"bash) exec "$s" -l -i -c 'if [ "${{BASH_VERSINFO[0]}}${{BASH_VERSINFO[1]}}" -ge 44 ] 2>/dev/null; then printf "%s" "${{PS1@P}}"; else printf "$ "; fi; printf "%s\n" "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND"' ;; "#,
-                    r#"*) exec "$s" -l -i -c 'printf "$ %s\n" "$NESSA_RUN_COMMAND"; eval "$NESSA_RUN_COMMAND"' ;; "#,
-                    r#"esac; }}"#,
-                ),
-                folder = folder,
-                env_prefix = env_prefix,
-                cmd = cmd,
+    CommandSpec::new(spec.shell.clone(), spec.folder.clone(), arguments)
+        .and_then(|command| {
+            command.with_environment(
+                EnvironmentPolicy::Inherit,
+                vec!["NO_COLOR".into(), "FORCE_COLOR".into()],
+                environment,
             )
-        }
-    }
+        })
+        .map_err(|error| TerminalError::Spawn(format!("{error:?}")))
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum TransportEvent {
+enum TransportEvent {
     Bytes(Vec<u8>),
     Gap,
     Exited(Option<i32>),
-    Failed(String),
-}
-
-trait PtyTransport {
-    fn pump_io(&mut self, pending_input: &mut VecDeque<u8>, exited: bool);
-    fn has_pending_write(&self) -> bool;
-    fn resize(&mut self, size: TerminalSize) -> Result<(), &'static str>;
-    fn try_next(&mut self) -> Result<Option<TransportEvent>, &'static str>;
 }
 
 struct LocalPtyTransport {
@@ -325,9 +179,7 @@ impl LocalPtyTransport {
         }
         let _ = self.runtime.forget(&self.session_id);
     }
-}
 
-impl PtyTransport for LocalPtyTransport {
     fn pump_io(&mut self, pending_input: &mut VecDeque<u8>, exited: bool) {
         // A write says how much the OS took; the rest goes back first.
         let finished = match &mut self.writing {
@@ -392,210 +244,6 @@ impl PtyTransport for LocalPtyTransport {
     }
 }
 
-pub(super) enum RemoteCommand {
-    Input(Vec<u8>),
-    Resize(TerminalSize),
-    Close,
-}
-
-struct RemotePtyTransport {
-    commands: mpsc::UnboundedSender<RemoteCommand>,
-    events: std_mpsc::Receiver<TransportEvent>,
-}
-
-impl RemotePtyTransport {
-    fn finish(self) {
-        let _ = self.commands.send(RemoteCommand::Close);
-    }
-}
-
-impl PtyTransport for RemotePtyTransport {
-    fn pump_io(&mut self, pending_input: &mut VecDeque<u8>, exited: bool) {
-        if !exited && !pending_input.is_empty() {
-            let take = pending_input.len().min(REMOTE_INPUT_CHUNK);
-            let bytes: Vec<u8> = pending_input.drain(..take).collect();
-            let _ = self.commands.send(RemoteCommand::Input(bytes));
-        }
-    }
-
-    fn has_pending_write(&self) -> bool {
-        false
-    }
-
-    fn resize(&mut self, size: TerminalSize) -> Result<(), &'static str> {
-        let _ = self.commands.send(RemoteCommand::Resize(size));
-        Ok(())
-    }
-
-    fn try_next(&mut self) -> Result<Option<TransportEvent>, &'static str> {
-        match self.events.try_recv() {
-            Ok(event) => Ok(Some(event)),
-            Err(std_mpsc::TryRecvError::Empty) => Ok(None),
-            Err(std_mpsc::TryRecvError::Disconnected) => Err("cloud terminal disconnected"),
-        }
-    }
-}
-
-/// Bridges an async cloud VM `WorkspaceTerminal` to the synchronous Ghostty
-/// projection thread. Dropping `remote` when this task exits releases the VM's
-/// `"terminal"` use guard, so every non-normal exit cancels the remote process
-/// while `remote` is still held.
-pub(super) async fn drive_remote_terminal(
-    remote: Box<dyn WorkspaceTerminal>,
-    mut commands: mpsc::UnboundedReceiver<RemoteCommand>,
-    events: std_mpsc::Sender<TransportEvent>,
-) {
-    let mut cursor = 0u64;
-    let mut delay = REMOTE_POLL_FAST;
-    let mut next_poll = clock::now();
-    let mut idle_ticks = 0u8;
-    loop {
-        tokio::select! {
-            biased;
-            // Poll first once its deadline arrives so sustained input or resize
-            // traffic cannot starve output reads.
-            () = clock::sleep_until(next_poll) => {
-                match remote.read_output(cursor, REMOTE_READ_LIMIT).await {
-                    Ok(out) => {
-                        if out.gap {
-                            cancel_before_release(&*remote, "output gap").await;
-                            let _ = events.send(TransportEvent::Gap);
-                            return;
-                        }
-                        if !out.bytes.is_empty() {
-                            cursor = out.next_cursor;
-                            delay = REMOTE_POLL_FAST;
-                            idle_ticks = 0;
-                            if events.send(TransportEvent::Bytes(out.bytes)).is_err() {
-                                cancel_before_release(&*remote, "projection receiver closed").await;
-                                return;
-                            }
-                        } else {
-                            idle_ticks = idle_ticks.saturating_add(1);
-                            if idle_ticks >= 4 {
-                                delay = REMOTE_POLL_IDLE;
-                            }
-                        }
-                        if out.complete {
-                            let status = match remote.state().await {
-                                Ok(WorkspaceTerminalState::Exited(code)) => code,
-                                _ => None,
-                            };
-                            let _ = events.send(TransportEvent::Exited(status));
-                            return;
-                        }
-                        if idle_ticks > 0 && idle_ticks.is_multiple_of(10) {
-                            match remote.state().await {
-                                Ok(WorkspaceTerminalState::Exited(code)) => {
-                                    if let Err(reason) = drain_remaining_output(
-                                        &*remote,
-                                        &mut cursor,
-                                        &events,
-                                    )
-                                    .await
-                                    {
-                                        cancel_before_release(&*remote, reason).await;
-                                        return;
-                                    }
-                                    let _ = events.send(TransportEvent::Exited(code));
-                                    return;
-                                }
-                                Ok(WorkspaceTerminalState::Lost(reason)) => {
-                                    cancel_before_release(&*remote, "remote terminal lost").await;
-                                    let _ = events.send(TransportEvent::Failed(reason));
-                                    return;
-                                }
-                                _ => {}
-                            }
-                        }
-                        next_poll = clock::now() + delay;
-                    }
-                    Err(_) => {
-                        cancel_before_release(&*remote, "output read failed").await;
-                        let _ = events.send(TransportEvent::Failed(
-                            "lost connection to cloud terminal".into(),
-                        ));
-                        return;
-                    }
-                }
-            }
-            command = commands.recv() => match command {
-                Some(RemoteCommand::Input(bytes)) => {
-                    let mut offset = 0;
-                    while offset < bytes.len() {
-                        let end = (offset + REMOTE_INPUT_CHUNK).min(bytes.len());
-                        match remote.write_input(&bytes[offset..end]).await {
-                            Ok(0) => break,
-                            Ok(accepted) => offset += accepted.min(end - offset),
-                            Err(_) => break,
-                        }
-                    }
-                    delay = REMOTE_POLL_FAST;
-                    idle_ticks = 0;
-                    next_poll = next_poll.min(clock::now() + REMOTE_POLL_FAST);
-                }
-                Some(RemoteCommand::Resize(size)) => {
-                    let _ = remote.resize(size.cols(), size.rows()).await;
-                    delay = REMOTE_POLL_FAST;
-                    idle_ticks = 0;
-                    next_poll = next_poll.min(clock::now() + REMOTE_POLL_FAST);
-                }
-                Some(RemoteCommand::Close) | None => {
-                    cancel_before_release(&*remote, "closed").await;
-                    return;
-                }
-            },
-        }
-    }
-}
-
-/// Cancel the remote process while `remote` (and its VM `"terminal"` use guard)
-/// is still owned.
-async fn cancel_before_release(remote: &dyn WorkspaceTerminal, reason: &str) {
-    if let Err(error) = remote.cancel().await {
-        tracing::warn!(
-            target: "nessa::terminal",
-            reason,
-            ?error,
-            "cloud terminal cancellation before release was not confirmed"
-        );
-    }
-}
-
-/// Drain every remaining output page after an observed exit before publishing
-/// `TransportEvent::Exited`, advancing `cursor` until completion or EOF.
-async fn drain_remaining_output(
-    remote: &dyn WorkspaceTerminal,
-    cursor: &mut u64,
-    events: &std_mpsc::Sender<TransportEvent>,
-) -> Result<(), &'static str> {
-    loop {
-        let tail = match remote.read_output(*cursor, REMOTE_READ_LIMIT).await {
-            Ok(tail) => tail,
-            Err(_) => {
-                let _ = events.send(TransportEvent::Failed(
-                    "lost connection to cloud terminal".into(),
-                ));
-                return Err("exit drain output read failed");
-            }
-        };
-        if tail.gap {
-            let _ = events.send(TransportEvent::Gap);
-            return Err("output gap during exit drain");
-        }
-        let prev = *cursor;
-        if !tail.bytes.is_empty() {
-            *cursor = tail.next_cursor;
-            if events.send(TransportEvent::Bytes(tail.bytes)).is_err() {
-                return Err("projection receiver closed during exit drain");
-            }
-        }
-        if tail.complete || tail.next_cursor <= prev {
-            return Ok(());
-        }
-    }
-}
-
 fn poll<F: Future + Unpin>(future: &mut F) -> Option<F::Output> {
     match Pin::new(future).poll(&mut Context::from_waker(Waker::noop())) {
         Poll::Ready(value) => Some(value),
@@ -649,7 +297,7 @@ struct Run {
 impl Run {
     fn drive(
         &mut self,
-        transport: &mut dyn PtyTransport,
+        transport: &mut LocalPtyTransport,
         commands: std_mpsc::Receiver<EngineCommand>,
         events: &dyn EngineEvents,
     ) {
@@ -750,9 +398,6 @@ impl Run {
                             events.exited(&self.id, status, self.program_status.current().cloned());
                             dirty = true;
                             break;
-                        }
-                        Ok(Some(TransportEvent::Failed(reason))) => {
-                            return self.fail(&reason, events);
                         }
                         Ok(None) => break,
                         Err(reason) => return self.fail(reason, events),

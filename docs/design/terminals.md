@@ -50,8 +50,8 @@ A terminal has one place for its whole life, fixed when it starts:
 
 | Started by | Machine | Folder |
 | --- | --- | --- |
-| ⌘J or "+" in a channel | the channel's place (this Mac, an SSH host, a cloud VM) | the channel's folder on that machine ([channels](channels.md#where-an-agent-works)) |
-| Run in a conversation | where that conversation's agent runs | that agent's working folder |
+| ⌘J or "+" in a channel | the gateway's machine | the channel's folder on that machine ([channels](channels.md#where-an-agent-works)) |
+| Run in a conversation | the gateway's machine | that agent's working folder |
 | Run again | same as the block's first run | same |
 
 A request never names a folder or a host. `terminal.open` names a
@@ -90,11 +90,11 @@ sequenceDiagram
     Gateway->>Runtime: resize_projected (only if the fit differs)
 ```
 
-- **This Mac and SSH hosts** run pty-runtime inside the gateway (the Runtime is
-  built on the main thread before Tokio starts, as pty-runtime requires).
-- **Cloud VMs** run it inside `env serve` through workspace-sdk's `Terminals`
-  capability, which already depends on pty-runtime; frames travel on the
-  existing workspace stream.
+- Every gateway (`nessa-server`, whether on this Mac, a remote Linux box, or a
+  persistent Cloud VM) runs pty-runtime locally for its own machine (the
+  Runtime is built on the main thread before Tokio starts, as pty-runtime
+  requires). Remote machines run their own `nessa-server` instead of tunneling
+  PTYs over SSH or polling workspace-sdk (`docs/adr/todo/1417-gateways-everywhere.md`).
 - The Ghostty model is built by `scripts/terminal/ghostty.sh`, which clones
   pty-runtime at the rev the gateway pins, builds the pinned libghostty-vt
   and prints `export PTY_RUNTIME_GHOSTTY_SOURCE=…`. The gateway carries
@@ -153,12 +153,10 @@ The state page with the TLA+ model is
   connection's views and its listing when the connection goes; the window
   lists and attaches every view again on the next one
   (`adapters/gateway/terminal-gateway.ts`).
-- This Mac, SSH hosts (`ssh -tt` inside a local pty-runtime session), and
-  Boat / Agent37 cloud VMs (via workspace-sdk's `Terminals` and `ManagedRuns`
-  capabilities, holding a `"terminal"` `NamedUse` so the VM stays awake while
-  the terminal runs) all run through the same Ghostty projection and
-  multi-view rules. Paired computers and pools remain refused with
-  `terminal_place_unsupported`.
+- Each gateway runs terminals locally in `pty-runtime` for channels and
+  conversations placed on its own machine (`Here`); non-local places are
+  refused with `terminal_place_unsupported` because remote machines run their
+  own `nessa-server` (ADR 1417).
 - A Run starts `$SHELL -l -i -c <command>` in the conversation's folder. The
   block finds its runs again by their open request id (`run <message> <part>
   <fence> #<attempt>`, `model/run-block.ts`); more than 8 KiB is refused
@@ -178,7 +176,7 @@ The state page with the TLA+ model is
 | Running | shell alive, views may attach | program exits (Exited), person closes or stops it (Closing) |
 | Closing | hang-up sent | process gone (Exited), or killed after 5 s |
 | Exited | exit status kept for the row and the Run block | person removes the row |
-| Failed | spawn refused (folder gone, host unreachable) | Run again or ⌘J starts a new one |
+| Failed | spawn refused (folder gone, shell failed to start) | Run again or ⌘J starts a new one |
 
 Closing a pane does not end the session; it only detaches that view, like
 closing a chat pane. The session row's close action, the stop icon, or the
@@ -209,6 +207,6 @@ follow-up.
 | T2 | nessa_ui Terminal primitive that paints frames, selection and the copy shimmer |
 | T3 | Desktop terminal pane kind, session rows, ⌘J, details popover; stress step `terminal` |
 | T4 | Run blocks with inline output, terminal and stop icons; stress step `run` |
-| T5 | Cloud VMs and SSH hosts through workspace-sdk `Terminals` |
+| T5 | ~~Cloud VMs and SSH hosts through workspace-sdk `Terminals`~~ (retired in #1421 / ADR 1417; remote hosts run their own `nessa-server`) |
 
 [client/PROTOCOL.md]: https://github.com/nessalabs/pty-runtime/blob/main/client/PROTOCOL.md

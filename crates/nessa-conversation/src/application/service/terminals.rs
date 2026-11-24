@@ -1,16 +1,16 @@
-//! Where a terminal the person opens runs (issue #1398,
+//! Where a terminal the person opens runs (issue #1398, ADR 1417,
 //! `docs/design/terminals.md`, "Where it runs"). A request names a channel
-//! (⌘J) or a conversation (Run), never a folder or a host: the place is
-//! resolved here, by the same rules an agent of that channel or conversation
-//! works by.
+//! (⌘J) or a conversation (Run), never a folder or a host: each gateway
+//! serves native local terminals (`Here`) for channels and conversations on
+//! its own machine; remote machines run their own `nessa-server` gateway.
 use super::{load_conversation, ConversationCaller, ConversationError, ConversationService};
 use crate::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     RequestShape,
 };
-use crate::domain::{ChannelId, Cloud, Place};
+use crate::domain::{ChannelId, Place};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, SshDestination};
+use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -30,19 +30,8 @@ pub enum TerminalOrigin {
 pub enum TerminalPlace {
     /// This gateway's machine, in `folder`.
     Here { folder: PathBuf },
-    /// A configured SSH host, in `folder` on that host.
-    Ssh {
-        host: SshDestination,
-        folder: PathBuf,
-    },
-    /// A cloud VM belonging to `conversation`.
-    CloudVm {
-        conversation: ConversationId,
-        channel: Option<ChannelId>,
-        cloud: Option<Cloud>,
-        folder: Option<PathBuf>,
-    },
-    /// Somewhere else (a paired computer or pool). Not served yet.
+    /// Somewhere other than this gateway; open the terminal on that machine's
+    /// own gateway directly (ADR 1417).
     Elsewhere,
 }
 
@@ -73,25 +62,9 @@ impl ConversationService {
         environment: &EnvironmentRef,
         workspace: Option<&String>,
     ) {
-        let place = match (environment, workspace) {
-            (EnvironmentRef::Here, Some(folder)) => TerminalPlace::Here {
-                folder: PathBuf::from(folder),
-            },
-            (EnvironmentRef::Here, None) => return,
-            (EnvironmentRef::Ssh(host), Some(folder)) => TerminalPlace::Ssh {
-                host: host.clone(),
-                folder: PathBuf::from(folder),
-            },
-            (EnvironmentRef::Ssh(_), None) => return,
-            (EnvironmentRef::Boat, folder) => TerminalPlace::CloudVm {
-                conversation: id.clone(),
-                channel: None,
-                cloud: None,
-                folder: folder.map(PathBuf::from),
-            },
-            (EnvironmentRef::Peer(_), _) => TerminalPlace::Elsewhere,
-        };
-        self.inner.workplaces.note(id, place);
+        if let Some(place) = workplace_for(environment, workspace) {
+            self.inner.workplaces.note(id, place);
+        }
     }
 
     /// Where a terminal `caller` asks for from `origin` runs.
@@ -129,22 +102,7 @@ impl ConversationService {
                 // Cedar decides on the conversation's own facts.
                 self.admit_terminal(caller, AccessResource::of(&record))?;
                 if let Some(place) = self.inner.workplaces.get(id) {
-                    return match place {
-                        TerminalPlace::CloudVm {
-                            conversation,
-                            folder,
-                            ..
-                        } => {
-                            let (channel, cloud) = self.conversation_cloud(caller, id).await?;
-                            Ok(TerminalPlace::CloudVm {
-                                conversation,
-                                channel,
-                                cloud,
-                                folder,
-                            })
-                        }
-                        other => Ok(other),
-                    };
+                    return Ok(place);
                 }
                 // Not open now: where its agent would work, by its channel.
                 let channel = self.channel_id_of(id).await?;
@@ -152,29 +110,6 @@ impl ConversationService {
                     .await
             }
         }
-    }
-
-    async fn conversation_cloud(
-        &self,
-        caller: &ConversationCaller,
-        conversation: &ConversationId,
-    ) -> Result<(Option<ChannelId>, Option<Cloud>), ConversationError> {
-        let Some(channel_id) = self
-            .channel_id_of(conversation)
-            .await?
-            .filter(|id| !id.is_default())
-        else {
-            return Ok((None, None));
-        };
-        let channel = self
-            .channel_for_action(caller, &channel_id, AccessAction::ChannelUse)
-            .await?;
-        let cloud = if *conversation == channel.coordinator_id() {
-            channel.execution().coordinator_cloud()
-        } else {
-            channel.execution().threads_cloud()
-        };
-        Ok((Some(channel_id), cloud))
     }
 
     async fn channel_terminal_place(
@@ -198,35 +133,12 @@ impl ConversationService {
                     .await?;
                 let is_coordinator =
                     conversation.is_none_or(|conv| *conv == channel.coordinator_id());
-                let (place, cloud) = if is_coordinator {
-                    (
-                        channel.execution().coordinator(),
-                        channel.execution().coordinator_cloud(),
-                    )
+                let place = if is_coordinator {
+                    channel.execution().coordinator()
                 } else {
-                    (
-                        channel.execution().threads(),
-                        channel.execution().threads_cloud(),
-                    )
+                    channel.execution().threads()
                 };
-                Ok(match place {
-                    Place::Here => TerminalPlace::Here {
-                        folder: channel.folder().path.as_path().to_path_buf(),
-                    },
-                    Place::Host(host) => TerminalPlace::Ssh {
-                        host: host.clone(),
-                        folder: channel.folder().path.as_path().to_path_buf(),
-                    },
-                    Place::CloudVm => TerminalPlace::CloudVm {
-                        conversation: conversation
-                            .cloned()
-                            .unwrap_or_else(|| channel.coordinator_id()),
-                        channel: Some(channel.id().clone()),
-                        cloud,
-                        folder: None,
-                    },
-                    Place::Peer(_) | Place::Pool => TerminalPlace::Elsewhere,
-                })
+                Ok(place_for(place, channel.folder().path.as_path()))
             }
         }
     }
@@ -252,5 +164,85 @@ impl ConversationService {
             AccessDecision::Deny(AccessDenial::Unavailable) => Err(ConversationError::Unavailable),
             AccessDecision::Deny(_) => Err(ConversationError::NotFound),
         }
+    }
+}
+
+fn workplace_for(
+    environment: &EnvironmentRef,
+    workspace: Option<&String>,
+) -> Option<TerminalPlace> {
+    match (environment, workspace) {
+        (EnvironmentRef::Here, Some(folder)) => Some(TerminalPlace::Here {
+            folder: PathBuf::from(folder),
+        }),
+        (EnvironmentRef::Here, None) => None,
+        (EnvironmentRef::Ssh(_) | EnvironmentRef::Boat | EnvironmentRef::Peer(_), _) => {
+            Some(TerminalPlace::Elsewhere)
+        }
+    }
+}
+
+fn place_for(place: &Place, folder: &std::path::Path) -> TerminalPlace {
+    match place {
+        Place::Here => TerminalPlace::Here {
+            folder: folder.to_path_buf(),
+        },
+        Place::Host(_) | Place::CloudVm | Place::Peer(_) | Place::Pool => TerminalPlace::Elsewhere,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
+    use std::path::Path;
+
+    #[test]
+    fn workplace_maps_here_with_folder_and_refuses_non_local_environments() {
+        let folder = "/tmp/project".to_owned();
+        let host = SshDestination::new("devbox").unwrap();
+        let peer = PeerEnvironment::new([1; 32]);
+        assert_eq!(
+            workplace_for(&EnvironmentRef::Here, Some(&folder)),
+            Some(TerminalPlace::Here {
+                folder: PathBuf::from("/tmp/project"),
+            })
+        );
+        assert_eq!(workplace_for(&EnvironmentRef::Here, None), None);
+        assert_eq!(
+            workplace_for(&EnvironmentRef::Ssh(host), Some(&folder)),
+            Some(TerminalPlace::Elsewhere)
+        );
+        assert_eq!(
+            workplace_for(&EnvironmentRef::Boat, Some(&folder)),
+            Some(TerminalPlace::Elsewhere)
+        );
+        assert_eq!(
+            workplace_for(&EnvironmentRef::Peer(peer), None),
+            Some(TerminalPlace::Elsewhere)
+        );
+    }
+
+    #[test]
+    fn channel_place_maps_here_and_refuses_non_local_places() {
+        let folder = Path::new("/tmp/channel");
+        let host = SshDestination::new("devbox").unwrap();
+        let peer = PeerEnvironment::new([1; 32]);
+        assert_eq!(
+            place_for(&Place::Here, folder),
+            TerminalPlace::Here {
+                folder: PathBuf::from("/tmp/channel"),
+            }
+        );
+        assert_eq!(
+            place_for(&Place::Host(host), folder),
+            TerminalPlace::Elsewhere
+        );
+        assert_eq!(place_for(&Place::CloudVm, folder), TerminalPlace::Elsewhere);
+        assert_eq!(
+            place_for(&Place::Peer(peer), folder),
+            TerminalPlace::Elsewhere
+        );
+        assert_eq!(place_for(&Place::Pool, folder), TerminalPlace::Elsewhere);
     }
 }
