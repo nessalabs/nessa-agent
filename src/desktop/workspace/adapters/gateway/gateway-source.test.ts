@@ -456,7 +456,10 @@ describe("the index and the list subscription", () => {
 
   it("a row the list frame names stays when the finished walk does not return it", async () => {
     const { gateway, source, follow } = started()
-    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 2, title: "Shared chat" }))
+    gateway.rows.set(
+      conversationA,
+      row(conversationA, { updatedAtMs: 2, title: "Shared chat" }),
+    )
     gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 1 }))
     gateway.listLimit = 1
     follow()
