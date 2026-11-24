@@ -128,6 +128,19 @@ impl RetainedTranscriptSnapshot {
 }
 
 impl RetainedCache {
+    /// The origin a follow stored this conversation's transcript under.
+    /// `None` when the chat has not been copied. A catalogue read does not
+    /// use this: its origin is the catalogue scope.
+    pub fn transcript_origin(
+        &self,
+        receiver: &str,
+        conversation: &str,
+    ) -> Result<Option<String>, ReadFailure> {
+        self.cache
+            .transcript_origin(receiver, conversation)
+            .map_err(|error| cache_failure(&error))
+    }
+
     /// Discover the actual saved catalogue scope in one cache snapshot. This
     /// is evidence for target selection, not a claim that a later page shares
     /// the same snapshot. Pages return their own scope and generation.

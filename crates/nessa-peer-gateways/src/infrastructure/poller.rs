@@ -917,6 +917,32 @@ impl Shared {
                 Ok(cache) => cache,
                 Err(failure) => return fail(failure),
             };
+            // The list and an open read the catalogue: its title and agent.
+            // The follow then stays up, and does not write that catalogue.
+            // Withdrawals found while filling the catalogue are not audited
+            // here. The follow reports the same revoke once.
+            let mut catalogue_withdrawn = Vec::new();
+            let (catalogued, retained) = cache.read_followed(
+                ReaderAccess {
+                    role: ReaderRole::GrantedPeer,
+                    address,
+                    relay: relay.as_ref(),
+                    identity: &identity,
+                    pin,
+                    credential: &id,
+                    receiver: &receiver,
+                    access_epoch,
+                    client_id: CLIENT_ID,
+                },
+                &rule,
+                &stop,
+                budget,
+                WITHDRAWN_PER_READ,
+                &mut catalogue_withdrawn,
+            );
+            if retained || catalogued.as_ref().is_ok_and(|report| report.moved) {
+                commands.note_shared_chats();
+            }
             let live_tx = live_tx.clone();
             let audit_tx = audit_tx.clone();
             cache.follow_grants(

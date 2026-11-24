@@ -25,6 +25,24 @@ impl ReadOnlyCache {
             .transpose()
     }
 
+    /// The origin a copied transcript was stored under. `stream` is the
+    /// conversation id. `None` when that chat has not been copied.
+    pub(crate) fn transcript_origin(
+        &self,
+        receiver: &str,
+        stream: &str,
+    ) -> Result<Option<String>, CacheError> {
+        self.connection
+            .query_row(
+                "SELECT origin FROM transcript_progress
+                 WHERE receiver = ?1 AND stream = ?2 LIMIT 1",
+                params![receiver, stream],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(super::rows::database_error)
+    }
+
     pub(crate) fn grant_ids(&self, receiver: &str) -> Result<Vec<String>, CacheError> {
         let mut statement = self
             .connection

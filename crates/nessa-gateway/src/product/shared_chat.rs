@@ -616,14 +616,13 @@ fn peer_earlier(
     after: Option<&ConversationPoint>,
 ) -> Result<EarlierHit, ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
-    let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
-        return Ok(EarlierHit::Elsewhere);
-    };
     let held = cache.conversation_ids(&peer.receiver)?;
     if !held.iter().any(|held| held == &id.to_string()) {
         return Ok(EarlierHit::Elsewhere);
     }
-    let origin = scope.origin().as_str().to_owned();
+    let Some((origin, _)) = held_place(&mut cache, &peer.receiver, id)? else {
+        return Ok(EarlierHit::NotLoaded);
+    };
     match cache.earlier(&peer.receiver, &origin, id, before, after) {
         Ok(Some(page)) => Ok(EarlierHit::Page(page)),
         Ok(None) => Ok(EarlierHit::NotLoaded),
@@ -769,6 +768,58 @@ enum PeerCopy {
     Unreadable,
 }
 
+/// Where a held chat's transcript was stored: the catalogue's origin and
+/// stream, or the follow's copy of this one conversation.
+fn held_place(
+    cache: &mut RetainedCache,
+    receiver: &str,
+    id: &ConversationId,
+) -> Result<Option<(String, String)>, ReadFailure> {
+    if let Some(scope) = cache.saved_catalogue_scope(receiver)? {
+        return Ok(Some((
+            scope.origin().as_str().to_owned(),
+            scope.stream().as_str().to_owned(),
+        )));
+    }
+    let name = id.to_string();
+    Ok(cache
+        .transcript_origin(receiver, &name)?
+        .map(|origin| (origin, name)))
+}
+
+/// List rows for chats a follow copied without a catalogue.
+fn grant_rows(
+    cache: &mut RetainedCache,
+    receiver: &str,
+) -> Result<Vec<ConversationSummary>, ReadFailure> {
+    let mut rows = Vec::new();
+    for id in cache.conversation_ids(receiver)? {
+        let Ok(conversation) = ConversationId::new(&id) else {
+            continue;
+        };
+        let Some(origin) = cache.transcript_origin(receiver, &id)? else {
+            continue;
+        };
+        let transcript = cache.transcript_view(receiver, &origin, &conversation, Uuid::nil())?;
+        let RetainedTranscript::Retained(snapshot) = transcript else {
+            continue;
+        };
+        let view = snapshot.view();
+        rows.push(ConversationSummary {
+            conversation_id: view.conversation_id.clone(),
+            title: view.title.clone(),
+            preview: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            running: false,
+            archived: false,
+            channel_id: None,
+            ask: None,
+        });
+    }
+    Ok(rows)
+}
+
 fn peer_rows(
     records: &PeerRecords,
     peer: &ActivePeer,
@@ -777,7 +828,7 @@ fn peer_rows(
 ) -> Result<Vec<ConversationSummary>, ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
     let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
-        return Ok(Vec::new());
+        return grant_rows(&mut cache, &peer.receiver);
     };
     let origin = scope.origin().as_str().to_owned();
     let stream = scope.stream().as_str().to_owned();
@@ -838,9 +889,6 @@ fn peer_open(
     project: bool,
 ) -> Result<PeerCopy, ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
-    let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
-        return Ok(PeerCopy::Absent);
-    };
     let held = cache.conversation_ids(&peer.receiver)?;
     let name = id.to_string();
     if !held.iter().any(|held| held == &name) {
@@ -849,9 +897,11 @@ fn peer_open(
     if !project {
         return Ok(PeerCopy::Opened(Box::new(placeholder(id))));
     }
-    let origin = scope.origin().as_str().to_owned();
-    let stream = scope.stream().as_str().to_owned();
-    let incarnation = scope.incarnation().as_str().to_owned();
+    // A catalogue read names its origin and stream. A follow stores each
+    // transcript under the conversation's own stream and writes no catalogue.
+    let Some((origin, stream)) = held_place(&mut cache, &peer.receiver, id)? else {
+        return Ok(PeerCopy::Absent);
+    };
     let selection = selection_for(&mut cache, &peer.receiver, &origin, &stream, id)?;
     let transcript = match cache.transcript_view(&peer.receiver, &origin, id, Uuid::nil()) {
         Ok(transcript) => transcript,
@@ -869,7 +919,7 @@ fn peer_open(
     }
     Ok(PeerCopy::Opened(Box::new(project_transcript(
         id,
-        incarnation,
+        String::new(),
         selection,
         transcript,
     ))))

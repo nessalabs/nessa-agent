@@ -1782,7 +1782,8 @@ conversation, including one archived or deleted, is not listed again from a
 peer. A later observe page trusts its offset only while the replica list is
 the one that minted it. When that list has changed, the page stays
 incomplete and carries no cursor, so the walk does not claim membership.
-A follow snapshot wakes the list as soon as the cache holds the chat,
+The catalogue is read so the list has the title and the agent, and a
+follow snapshot wakes that list as soon as the cache holds the chat,
 while the follow is still open. That cursor's id uses a UUID run `ConversationId`
 refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
 appended only into the room a list or observe page has left, and a page that
