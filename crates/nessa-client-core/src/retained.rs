@@ -67,6 +67,8 @@ use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordR
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
+#[cfg(feature = "test-support")]
+use nessa_sync::replication::application::{RecordSource, ScopeAuthorizer};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -822,6 +824,44 @@ pub struct RetainedCache {
     progressed: bool,
 }
 impl RetainedCache {
+    /// Drive one local-fixture record page through the existing retained pass
+    /// and private SQLite owner.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn one_record_page_for_test<A, S>(
+        &mut self,
+        scope: &Scope,
+        authorizer: &mut A,
+        source: &mut S,
+    ) -> Result<(u64, usize), ReadFailure>
+    where
+        A: ScopeAuthorizer,
+        S: RecordSource,
+    {
+        let policy = self.policy.suffix_page();
+        let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
+            .map_err(|_| ReadFailure::Protocol)?;
+        run_records(
+            scope,
+            authorizer,
+            source,
+            &mut self.cache,
+            limits,
+            1,
+            self.wall.as_ref(),
+        )
+        .map(|run| (run.downloaded, run.pages))
+        .map_err(|error| match error.cause {
+            RecordDriverCause::Cache(error) => cache_failure(&error),
+            RecordDriverCause::Core(SyncError::Store(_)) => self
+                .cache
+                .take_refusal()
+                .as_ref()
+                .map_or(ReadFailure::Cache, cache_failure),
+            RecordDriverCause::Core(_) => ReadFailure::Protocol,
+        })
+    }
+
     /// Open, or create, the cache at `path`, in a private directory that is
     /// already there. `wall` stamps what the cache records; `clock` measures
     /// the gateway deadlines.

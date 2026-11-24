@@ -1,7 +1,7 @@
-//! Test-support-only bridge from one proved native device to a binary Head.
+//! Test-support-only bridge from one proved native device to bounded record reads.
 use super::dispatch::use_case;
 use crate::conversation::application::{
-    PassiveRead, RecordHead, RecordReadError, RecordReadLease, RecordReadOperation, RecordReadValue,
+    PassiveRead, RecordReadError, RecordReadLease, RecordReadOperation, RecordReadValue,
 };
 use crate::product::state::ProductRouteState;
 use nessa_auth::{
@@ -14,7 +14,14 @@ use nessa_auth::{
 use nessa_protocol::{
     conversation::{domain::ConversationId, read_scope::ReadRefusal},
     pairing::socket::DeadlineStream,
-    product::{generated::RecordScope, passive_read::decode_scope},
+    product::{
+        generated::{
+            product_method::{CONVERSATION_RECORDS_HEAD, CONVERSATION_RECORDS_PAGE},
+            RecordScope, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+            MAX_RECORD_PAGE_RECORDS,
+        },
+        passive_read::decode_scope,
+    },
 };
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
 use nessa_sync::replication::{
@@ -26,8 +33,8 @@ use nessa_sync::replication::{
     },
 };
 use serde::Deserialize;
-use std::{cell::Cell, io::ErrorKind, time::Duration};
-use tokio::runtime::Handle;
+use std::{cell::Cell, io::ErrorKind, sync::Arc, time::Duration};
+use tokio::{runtime::Handle, sync::OwnedSemaphorePermit};
 
 const AUTH_BUDGET: Duration = Duration::from_secs(3);
 
@@ -38,6 +45,8 @@ struct Opening {
     receiver: String,
     epoch: u64,
     scope: RecordScope,
+    #[serde(default)]
+    page: bool,
 }
 
 pub(in crate::product) fn serve(
@@ -70,6 +79,7 @@ pub(in crate::product) fn serve(
     let conversation =
         ConversationId::new(scope.stream().as_str()).map_err(|_| ErrorKind::InvalidData)?;
     let taken = Cell::new(false);
+    let uncertain = Cell::new(false);
     let probe = Probe {
         runtime,
         state,
@@ -79,6 +89,8 @@ pub(in crate::product) fn serve(
         epoch: opening.epoch,
         scope: &scope,
         taken: &taken,
+        page: opening.page,
+        uncertain: &uncertain,
     };
     // The bounded Bind already checks Head policy before the physical read
     // and before release. Its source matches the selector to the physical
@@ -94,7 +106,12 @@ pub(in crate::product) fn serve(
         },
         &mut scope_policy,
         &mut operations,
-        |_| Ok(probe),
+        |_| {
+            Ok(View {
+                probe,
+                permit: None,
+            })
+        },
     )
     .map_err(|_| ErrorKind::InvalidData)
 }
@@ -109,39 +126,63 @@ struct Probe<'a> {
     epoch: u64,
     scope: &'a Scope,
     taken: &'a Cell<bool>,
+    page: bool,
+    uncertain: &'a Cell<bool>,
 }
 
-impl Probe<'_> {
-    fn read(&self) -> Result<RecordHead, SourceError> {
+// The binary codec keeps this view through bounded encoding, then drops it
+// before beginning a response write (the existing Product R64 handoff).
+struct View<'a> {
+    probe: Probe<'a>,
+    permit: Option<Arc<OwnedSemaphorePermit>>,
+}
+
+impl View<'_> {
+    fn read(&mut self, operation: RecordReadOperation) -> Result<RecordReadValue, SourceError> {
+        let probe = self.probe;
+        if probe.uncertain.get() {
+            return Err(SourceError::Unavailable);
+        }
+        if self.permit.is_none() {
+            self.permit = Some(Arc::new(
+                probe
+                    .state
+                    .admission
+                    .record_reads()
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| SourceError::Unavailable)?,
+            ));
+        }
         let permit = self
-            .state
-            .admission
-            .record_reads()
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| SourceError::Unavailable)?;
-        let use_case = use_case(self.state).map_err(|_| SourceError::Unavailable)?;
-        let result = self
-            .runtime
-            .block_on(async {
-                tokio::time::timeout(
-                    AUTH_BUDGET,
-                    use_case.execute(
-                        self.session,
-                        self.conversation,
-                        self.receiver,
-                        self.epoch,
-                        RecordReadOperation::Head,
-                        RecordReadLease::new(permit),
-                    ),
-                )
-                .await
-            })
-            .map_err(|_| SourceError::Unavailable)?
-            .map_err(read_error)?;
-        match result.value {
-            RecordReadValue::Head(head) if head.scope == *self.scope => Ok(head),
-            _ => Err(SourceError::IdentityChanged),
+            .permit
+            .as_ref()
+            .expect("view permit was acquired")
+            .clone();
+        let use_case = use_case(probe.state).map_err(|_| SourceError::Unavailable)?;
+        let result = probe.runtime.block_on(async {
+            tokio::time::timeout(
+                AUTH_BUDGET,
+                use_case.execute(
+                    probe.session,
+                    probe.conversation,
+                    probe.receiver,
+                    probe.epoch,
+                    operation,
+                    RecordReadLease::new(permit),
+                ),
+            )
+            .await
+        });
+        match result {
+            Ok(Ok(result)) => Ok(result.value),
+            Ok(Err(error)) => Err(read_error(error)),
+            Err(_) => {
+                // The worker can still own its lease. Do not admit a new read
+                // on this connection even if global capacity remains.
+                probe.uncertain.set(true);
+                Err(SourceError::Unavailable)
+            }
         }
     }
 }
@@ -176,24 +217,26 @@ impl RecordOperationAuthorizer for Probe<'_> {
         if scope != self.scope {
             return Access::IdentityChanged;
         }
-        match operation {
+        if self.uncertain.get() {
+            return Access::Unverifiable;
+        }
+        let (method, read) = match operation {
             // #121 asks Head independently for binding as well as HEAD_CAP.
             RecordOperation::Bind => return Access::Allowed(scope.clone()),
-            RecordOperation::Head => {}
+            RecordOperation::Head => (CONVERSATION_RECORDS_HEAD, PassiveRead::RecordHead),
+            RecordOperation::Authorize | RecordOperation::Page if self.page => {
+                (CONVERSATION_RECORDS_PAGE, PassiveRead::RecordPage)
+            }
             RecordOperation::Authorize | RecordOperation::Page => return Access::Denied,
-        }
+        };
         let Ok(use_case) = use_case(self.state) else {
             return Access::Unverifiable;
         };
         match self.runtime.block_on(async {
             tokio::time::timeout(AUTH_BUDGET, async {
-                crate::product::owner_phone::admit_method(
-                    self.state,
-                    self.session,
-                    nessa_protocol::product::generated::product_method::CONVERSATION_RECORDS_HEAD,
-                )
-                .await
-                .map_err(|_| ReadRefusal::Forbidden)?;
+                crate::product::owner_phone::admit_method(self.state, self.session, method)
+                    .await
+                    .map_err(|_| ReadRefusal::Forbidden)?;
                 use_case
                     .admission
                     .execute(
@@ -201,7 +244,7 @@ impl RecordOperationAuthorizer for Probe<'_> {
                         self.conversation,
                         self.receiver,
                         self.epoch,
-                        PassiveRead::RecordHead,
+                        read,
                     )
                     .await
             })
@@ -214,33 +257,48 @@ impl RecordOperationAuthorizer for Probe<'_> {
     }
 }
 
-impl RecordSource for Probe<'_> {
+impl RecordSource for View<'_> {
     fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
-        if scope != self.scope {
+        if scope != self.probe.scope {
             return Err(SourceError::IdentityChanged);
         }
-        Ok(self.read()?.head)
+        match self.read(RecordReadOperation::Head)? {
+            RecordReadValue::Head(head) if head.scope == *scope => Ok(head.head),
+            _ => Err(SourceError::IdentityChanged),
+        }
     }
 
-    fn page(&mut self, _: &PageRequest) -> Result<Page, SourceError> {
-        Err(SourceError::Denied)
+    fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
+        if !self.probe.page || self.probe.taken.replace(true) {
+            return Err(SourceError::Denied);
+        }
+        if request.scope != *self.probe.scope {
+            return Err(SourceError::IdentityChanged);
+        }
+        if request.max_records > MAX_RECORD_PAGE_RECORDS
+            || request.max_payload_bytes > MAX_RECORD_PAGE_PAYLOAD_BYTES
+            || request.max_record_bytes > MAX_PHYSICAL_RECORD_PAYLOAD_BYTES
+        {
+            return Err(SourceError::InvalidRequest);
+        }
+        match self.read(RecordReadOperation::Page(request.clone()))? {
+            RecordReadValue::Page(page) if page.request == *request => Ok(page),
+            _ => Err(SourceError::IdentityChanged),
+        }
     }
 }
 
-impl RecordReadView for Probe<'_> {
+impl RecordReadView for View<'_> {
     fn view_head(&mut self, scope: &Scope) -> Result<SourceHead, SourceError> {
-        // Only HEAD_CAP uses this allowance. Bind's advisory head is separate;
-        // the original finite native worker deadline still owns transport waits.
-        if self.taken.replace(true) {
+        // Head-only keeps its one-HEAD allowance. Page mode spends its one
+        // allowance on Page, whose capability response also reads Head.
+        if !self.probe.page && self.probe.taken.replace(true) {
             return Err(SourceError::Denied);
         }
-        let position = self.head(scope)?;
-        // The lab accepts only the Nessa physical immutable schema. Its HEAD
-        // asks for no extra Sync Engine reader features and exposes no writer.
-        if self.scope.schema() != &physical_record_schema() {
+        if self.probe.scope.schema() != &physical_record_schema() {
             return Err(SourceError::IdentityChanged);
         }
-        Ok(SourceHead::new(scope.clone(), position, 0, 0))
+        Ok(SourceHead::new(scope.clone(), self.head(scope)?, 0, 0))
     }
 }
 

@@ -12,6 +12,8 @@ default = ["cli"]
 # and the retained-sync composition behind them. A peer gateway links this
 # crate for its client without it (ADR 483).
 cli = []
+# Local enrolled binary record process fixture only.
+test-support = []
 
 [[example]]
 name = "read_only_sync"
