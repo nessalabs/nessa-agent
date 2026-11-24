@@ -12,6 +12,27 @@ use crate::read_only_sync::domain::{HeldFile, HeldRange};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_protocol::product::generated::{product_method, ArtifactReadParams, ArtifactReadResult};
 
+/// One `artifact.read` range, with the caller's own `max_bytes`. The answer's
+/// offset must be the one asked, and it must not be longer than that maximum.
+pub(crate) fn read_named(
+    connection: &GatewayConnection,
+    params: ArtifactReadParams,
+) -> Result<Vec<u8>, GatewayError> {
+    let asked = params.max_bytes;
+    let offset = params.offset;
+    let session = connection.0.clone();
+    settled(connection.run(|| {
+        let mut session = session.try_borrow_mut().map_err(|_| GatewayError::Busy)?;
+        let value = session.rpc(product_method::ARTIFACT_READ, &params, RpcKind::HeldFile)?;
+        let answer = decode(value).map_err(|error| session.fail(error))?;
+        if answer.offset != offset || u64::try_from(answer.bytes.len()).unwrap_or(u64::MAX) > asked
+        {
+            return Err(session.fail(GatewayError::Protocol));
+        }
+        Ok(answer.bytes)
+    })?)
+}
+
 impl HeldFileSource for GatewayConnection {
     fn read(&mut self, file: &HeldFile, range: HeldRange) -> Result<RangeAnswer, GatewayError> {
         let params = ArtifactReadParams {

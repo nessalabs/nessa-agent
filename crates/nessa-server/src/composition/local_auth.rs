@@ -600,6 +600,15 @@ pub(super) async fn product_state(
     )
     .await?;
     let caller_kinds = store.clone();
+    let catalogue_owner = store
+        .catalogue_owner()
+        .ok()
+        .and_then(|(organization, principal)| {
+            Some((
+                OrganizationId::new(organization).ok()?,
+                nessa_auth::domain::PrincipalId::new(principal).ok()?,
+            ))
+        });
     let mut product = ProductRouteState::new(
         gateway,
         organization,
@@ -630,6 +639,9 @@ pub(super) async fn product_state(
         PersistentSessions::open(&path, SystemClock.unix_seconds())
             .map_err(|cause| RunError::opening_browser_sessions(&path, cause))?
     }));
+    if let Some((organization, principal)) = catalogue_owner {
+        product = product.with_catalogue_owner(organization, principal);
+    }
     if let Some(runtime) = &webhooks {
         product = product.with_webhooks(runtime.clone());
     }
@@ -752,9 +764,15 @@ pub(super) async fn product_state(
     )));
     let native = match native {
         Some((prepared, commands, peers)) => {
+            let shared_chats = Arc::new(crate::product::shared_chat::PeerCacheChats::new(
+                peers.clone(),
+                product.clock.clone(),
+                product.uptime_clock.clone(),
+            ));
             product = product
                 .with_pairing(Arc::new(commands))
                 .with_peers(peers)
+                .with_shared_chats(shared_chats)
                 .with_tunnel_secrets(prepared.tunnel_secrets());
             let prepared = match listener_environments {
                 Some(environments) => prepared.with_environments(environments),

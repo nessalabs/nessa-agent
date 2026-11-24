@@ -8,9 +8,9 @@ use super::{
 use crate::conversation::application::{
     binding_of, error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
-    QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
-    RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
-    SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    QuestionChoiceInput, ReadOpening, Reader, RequestedAgent, RequestedConversation,
+    RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage,
+    SubmittedMessage, SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -23,21 +23,22 @@ use nessa_protocol::conversation::view::{
     ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
-    ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
-    ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
-    ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
-    ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
-    ConversationDecisionSettingsParams, ConversationDecisionsParams, ConversationDecisionsResult,
-    ConversationDeleteParams, ConversationForkParams, ConversationListParams,
-    ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
-    ConversationObserveParams, ConversationObserveResult, ConversationPauseAutoPickParams,
-    ConversationPauseAutoPickResult, ConversationPermissionAnswerErrorDetails,
-    ConversationPermissionReviewParams, ConversationPermissionReviewResult,
-    ConversationPermissionRulesParams, ConversationPermissionRulesResult,
-    ConversationPermissionSelectionState, ConversationQuestionReviewParams,
-    ConversationQuestionReviewResult, ConversationReadEarlierParams, ConversationReadParams,
-    ConversationReceiptParams, ConversationReceiptResult, ConversationRemoveParams,
-    ConversationRenameParams, ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ApprovalMode as WireApprovalMode, ApprovalModeChoice, ConversationAnswerParams,
+    ConversationAnswerQuestionParams, ConversationArchiveParams, ConversationCancelParams,
+    ConversationCloseParams, ConversationCommandOperation, ConversationCommandOutcome,
+    ConversationCommandReceipt, ConversationCommandStage, ConversationCreateParams,
+    ConversationCreateResult, ConversationDecisionSettingsParams, ConversationDecisionsParams,
+    ConversationDecisionsResult, ConversationDeleteParams, ConversationForkParams,
+    ConversationListParams, ConversationListResult, ConversationMutationResult,
+    ConversationObserveCursor, ConversationObserveParams, ConversationObserveResult,
+    ConversationPauseAutoPickParams, ConversationPauseAutoPickResult,
+    ConversationPermissionAnswerErrorDetails, ConversationPermissionReviewParams,
+    ConversationPermissionReviewResult, ConversationPermissionRulesParams,
+    ConversationPermissionRulesResult, ConversationPermissionSelectionState,
+    ConversationQuestionReviewParams, ConversationQuestionReviewResult,
+    ConversationReadEarlierParams, ConversationReadParams, ConversationReceiptParams,
+    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
+    ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationSetModelParams, ConversationSetModelResult,
@@ -159,6 +160,20 @@ async fn answer(
             {
                 return Ok(failure(&frame.id, code));
             }
+            // A granted chat is read from the peer cache. A command that
+            // would change it is refused here and is not sent to the grantor.
+            if !matches!(
+                frame.method.as_str(),
+                "conversation.read"
+                    | "conversation.readEarlier"
+                    | "conversation.peek"
+                    | "conversation.permissionReview"
+                    | "conversation.questionReview"
+                    | "conversation.receipt"
+                    | "conversation.messageStatus"
+            ) {
+                super::shared_chat::refuse_write(state, session, &id).await?;
+            }
             value
         }};
     }
@@ -260,6 +275,12 @@ async fn answer(
                 }
                 let before = point(params.before)?;
                 let after = params.after.map(point).transpose()?;
+                if let Some(page) =
+                    super::shared_chat::read_earlier(state, session, &id, &before, after.as_ref())
+                        .await?
+                {
+                    return Ok(success(&frame.id, &page));
+                }
                 let page = service
                     .read_earlier(&id, &caller(frame.id.clone()), &before, after.as_ref())
                     .await?;
@@ -431,24 +452,68 @@ async fn answer(
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
                 let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
-                let cursor = match params.cursor {
-                    Some(cursor) => Some(observation_cursor(cursor)?),
-                    None => None,
+                let archived = params.archived.unwrap_or(false);
+                // A cursor this gateway minted names the replicas the previous
+                // page could not hold. The local catalogue is already
+                // finished, so this page is those replicas.
+                let shared_mark = params
+                    .cursor
+                    .as_ref()
+                    .and_then(super::shared_chat::shared_page_mark);
+                let mut observed = if shared_mark.is_some() {
+                    ConversationObserveResult {
+                        conversations: Vec::new(),
+                        complete: true,
+                        cursor: None,
+                    }
+                } else {
+                    let cursor = match params.cursor.as_ref() {
+                        Some(cursor) => Some(observation_cursor(clone_observe_cursor(cursor))?),
+                        None => None,
+                    };
+                    let observed = service
+                        .observe_for(
+                            caller(frame.id.clone()),
+                            archived,
+                            cursor,
+                            &scope.reader,
+                            &scope.owner,
+                            scope.policy.as_deref(),
+                        )
+                        .await;
+                    trace_conversation_observe(observed.as_ref().err());
+                    observe_result(observed?)
                 };
-                let observed = service
-                    .observe_for(
-                        caller(frame.id.clone()),
-                        params.archived.unwrap_or(false),
-                        cursor,
-                        &scope.reader,
-                        &scope.owner,
-                        scope.policy.as_deref(),
-                    )
-                    .await;
-                trace_conversation_observe(observed.as_ref().err());
-                let observed = observe_result(observed?);
                 super::read_access::admit_index_rows(state, session, &observed.conversations)
                     .await?;
+                // Shared chats use the room this page has left. A full local
+                // page stays incomplete and carries a cursor, so the walk can
+                // take the ones that did not fit.
+                if let Some(appended) = append_shared(
+                    state,
+                    session,
+                    &scope.reader,
+                    archived,
+                    &mut SharedPage {
+                        rows: &mut observed.conversations,
+                        complete: &mut observed.complete,
+                        limit: nessa_sync::replication::catalogue::MAX_CATALOGUE_ENTRIES,
+                        skip: shared_mark.as_ref().map(|mark| mark.offset).unwrap_or(0),
+                        expected: shared_mark.map(|mark| mark.fingerprint),
+                    },
+                )
+                .await?
+                {
+                    if let Some(next) = appended.next {
+                        if observed.cursor.is_none() {
+                            observed.cursor = Some(super::shared_chat::shared_page_cursor(
+                                params.cursor.as_ref(),
+                                next,
+                                appended.fingerprint,
+                            ));
+                        }
+                    }
+                }
                 Ok(success(&frame.id, &observed))
             }
             "conversation.send" | "conversation.steer" => {
@@ -1218,6 +1283,28 @@ pub(super) async fn read_view(
     request_id: &str,
     opening: ReadOpening,
 ) -> Result<(WireConversationView, Option<CommittedCursor>), ConversationError> {
+    if let Some(opened) = super::shared_chat::open_replica(state, session, id).await? {
+        state
+            .local_timings
+            .observe(&opened.view, state.clock.unix_milliseconds());
+        // A replica with no transcript cursor is not a view. An empty
+        // incarnation is not one the client will accept.
+        if opened.cursor.incarnation.is_empty() {
+            return Err(ConversationError::Unavailable);
+        }
+        // The grantor's model may not be installed here. The transcript still
+        // renders; this gateway is not going to run that agent. A replica
+        // with no selection is not given a passive view: there is no saved
+        // agent to keep.
+        let view = match wire_view(state, opened.view.clone()).await {
+            Ok(view) => view,
+            Err(
+                ConversationError::ModelUnavailable | ConversationError::ApprovalModeUnavailable,
+            ) => passive_shared_view(state, opened.view).await?,
+            Err(error) => return Err(error),
+        };
+        return Ok((view, Some(opened.cursor)));
+    }
     let read = service
         .read_at(id.clone(), caller(session, request_id.to_owned()), opening)
         .await;
@@ -1255,9 +1342,113 @@ pub(super) async fn read_list(
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
     let (listed, head) = listed?;
-    let listed = list_result(listed);
+    let mut listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
+    if let Some(appended) = append_shared(
+        state,
+        session,
+        &scope.reader,
+        archived,
+        &mut SharedPage {
+            rows: &mut listed.conversations,
+            complete: &mut listed.complete,
+            limit: crate::conversation::application::MAX_LISTED_CONVERSATIONS,
+            skip: 0,
+            expected: None,
+        },
+    )
+    .await?
+    {
+        listed.shared_conversation_ids = appended.shared_ids;
+    }
+    // The frame keeps the newest rows. A granted chat appended after the
+    // local page would otherwise be the first row cut when the frame fills.
+    listed.conversations.sort_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+    });
     Ok((listed, head))
+}
+
+/// One catalogue page shared chats may be appended to.
+struct SharedPage<'a> {
+    rows: &'a mut Vec<ConversationSummary>,
+    complete: &'a mut bool,
+    limit: usize,
+    /// How many replicas an earlier page of this walk already returned.
+    skip: usize,
+    /// The replica-list fingerprint that `skip` was counted in. `None` on the
+    /// first page of a walk.
+    expected: Option<u32>,
+}
+
+/// The owner's list also names chats a peer granted, from the peer cache,
+/// when Cedar's `owner.list` allows this caller that catalogue. Rows are
+/// appended only when the local page is already complete. The shared ids are
+/// still returned then, so an incomplete local page can drop a revoked grant.
+/// Replicas that do not fit keep the page incomplete. The `Some` offset is
+/// where the next page starts, and only when this page could not hold them.
+/// A cache that cannot be read leaves the local rows in place and names no
+/// shared ids.
+async fn append_shared(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    reader: &Reader,
+    archived: bool,
+    page: &mut SharedPage<'_>,
+) -> Result<Option<super::shared_chat::SharedAppend>, ConversationError> {
+    if !matches!(reader, Reader::Owner) {
+        return Ok(None);
+    }
+    if !super::shared_chat::catalogue_admitted(state, session, true).await? {
+        return Ok(None);
+    }
+    let Some(chats) = super::shared_chat::source(state) else {
+        return Ok(None);
+    };
+    match chats.list(archived).await {
+        Ok(mut catalogue) => {
+            let local = super::shared_chat::local_ids(state, &catalogue.rows).await?;
+            catalogue.rows = super::shared_chat::omit_local(catalogue.rows, &local);
+            let shared_ids = catalogue
+                .complete
+                .then(|| {
+                    catalogue
+                        .rows
+                        .iter()
+                        .map(|row| row.conversation_id.clone())
+                        .collect()
+                })
+                .and_then(super::shared_chat::shared_membership);
+            if !*page.complete {
+                return Ok(Some(super::shared_chat::SharedAppend {
+                    next: None,
+                    fingerprint: super::shared_chat::replica_fingerprint(&catalogue.rows),
+                    shared_ids,
+                }));
+            }
+            let mut appended = super::shared_chat::append_catalogue(
+                page.rows,
+                catalogue,
+                page.limit,
+                page.complete,
+                page.skip,
+                page.expected,
+            );
+            appended.shared_ids = shared_ids;
+            Ok(Some(appended))
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "shared chats were left out of the conversation list"
+            );
+            *page.complete = false;
+            Ok(None)
+        }
+    }
 }
 
 fn usage_limit_preference_facts(
@@ -1672,6 +1863,74 @@ async fn wire_view(
     serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
 }
 
+/// A shared transcript whose agent or model is not in this gateway's catalog.
+/// The selection is kept as the grantor saved it. The runtime display facts
+/// that catalog would have supplied are left off, and every approval mode is
+/// offered so the saved one is still a choice the client accepts. Nothing
+/// here can be run.
+async fn passive_shared_view(
+    state: &ProductRouteState,
+    view: ApplicationConversationView,
+) -> Result<WireConversationView, ConversationError> {
+    let selection = view
+        .selection
+        .clone()
+        .ok_or(ConversationError::Unavailable)?;
+    let conversation_id = view.conversation_id.clone();
+    let mut value = serde_json::to_value(view).map_err(|_| ConversationError::Unavailable)?;
+    let fields = value
+        .as_object_mut()
+        .ok_or(ConversationError::Unavailable)?;
+    fields.insert(
+        "serverNowMs".into(),
+        json!(state.view_clock.unix_milliseconds()),
+    );
+    fields.insert(
+        "approvalMode".into(),
+        json!(selection.approval_mode.as_str()),
+    );
+    fields.insert("model".into(), json!(selection.model));
+    fields.insert("approvalModes".into(), passive_approval_modes()?);
+    // The catalog's context window and display name are not known here.
+    fields.remove("runtime");
+    if let Some(service) = state.conversation.service.as_ref() {
+        let id =
+            ConversationId::new(&conversation_id).map_err(|_| ConversationError::InvalidInput)?;
+        let snapshot = service.usage_limit_snapshot(&id).await?;
+        fields.insert("usageLimitAutoContinue".into(), json!(snapshot.enabled));
+    }
+    serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
+}
+
+/// Every persisted approval mode, so a saved selection stays a choice the
+/// client accepts. The set is [`ConversationApprovalMode::ALL`].
+fn passive_approval_modes() -> Result<Value, ConversationError> {
+    let choices = ConversationApprovalMode::ALL
+        .iter()
+        .copied()
+        .map(|mode| ApprovalModeChoice {
+            id: match mode {
+                ConversationApprovalMode::Ask => WireApprovalMode::Ask,
+                ConversationApprovalMode::Auto => WireApprovalMode::Auto,
+                ConversationApprovalMode::Full => WireApprovalMode::Full,
+            },
+            name: match mode {
+                ConversationApprovalMode::Ask => "Ask",
+                ConversationApprovalMode::Auto => "Auto",
+                ConversationApprovalMode::Full => "Full",
+            }
+            .to_owned(),
+            description: match mode {
+                ConversationApprovalMode::Ask => "The provider asks before it acts.",
+                ConversationApprovalMode::Auto => "The provider proceeds where it can.",
+                ConversationApprovalMode::Full => "The provider proceeds without asking.",
+            }
+            .to_owned(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_value(choices).map_err(|_| ConversationError::Unavailable)
+}
+
 /// The agent a creation names, if it names one.
 ///
 /// A name no adapter exists for is carried inward rather than refused here. It
@@ -1698,6 +1957,7 @@ fn fitted_list(mut list: ConversationListResult, request_id: &str) -> Conversati
     let empty = ConversationListResult {
         conversations: Vec::new(),
         complete: false,
+        shared_conversation_ids: list.shared_conversation_ids.clone(),
     };
     let Ok(empty) = success(request_id, &empty).to_wire_text() else {
         return list;
@@ -1743,6 +2003,16 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
             })
             .collect(),
         complete: listed.complete,
+        shared_conversation_ids: None,
+    }
+}
+
+fn clone_observe_cursor(cursor: &ConversationObserveCursor) -> ConversationObserveCursor {
+    ConversationObserveCursor {
+        incarnation: cursor.incarnation.clone(),
+        boundary: cursor.boundary.clone(),
+        creation: cursor.creation.clone(),
+        id: cursor.id.clone(),
     }
 }
 

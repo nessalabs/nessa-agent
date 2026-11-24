@@ -489,6 +489,12 @@ export interface FakeGateway {
   observeStops: boolean
   /** The stored history's incarnation: every cursor names it. */
   incarnation: string
+  /**
+   * Shared membership on the list frame. `null` omits the field. An array is
+   * the whole set, and a chat that leaves it is taken out of an incomplete
+   * frame.
+   */
+  sharedConversationIds: string[] | null
   /** The next call of `method` is answered by `behaviour` instead. */
   once(method: Exclude<Method, "answer">, behaviour: Behaviour): void
   /** Answer the next review with its captured SDK arguments, rather than a global last call. */
@@ -583,6 +589,9 @@ export function fakeGateway(
     observePageSize: null as number | null,
     observeStops: false,
     incarnation: "history-1",
+    // `null` omits the field. An array, including an empty one, is the
+    // shared membership the list claims.
+    sharedConversationIds: null as string[] | null,
   }
   const listedRows = () => {
     const stored = [...rows.values()]
@@ -599,6 +608,9 @@ export function fakeGateway(
     conversations: listedRows(),
     complete:
       fake.listLimit !== null && rows.size > fake.listLimit ? false : fake.complete,
+    ...(fake.sharedConversationIds === null
+      ? {}
+      : { sharedConversationIds: fake.sharedConversationIds }),
   })
   const observePage = (options: { cursor?: { id: string } } | undefined) => {
     if (fake.observePageSize === null || fake.observeStops) {

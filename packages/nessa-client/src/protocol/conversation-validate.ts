@@ -1752,7 +1752,7 @@ export function conversationList(
   archived: boolean,
 ): ConversationListResult {
   const item = record(value)
-  exact(item, ["conversations", "complete"])
+  exact(item, ["conversations", "complete", "sharedConversationIds"])
   flag(item, "complete")
   const seen = new Set<string>()
   const conversations = items(item, "conversations", bounds.maxListedConversations).map(
@@ -1764,7 +1764,19 @@ export function conversationList(
         "Conversation list row contradicts the archived filter",
       ),
   )
-  return { conversations, complete: item.complete as boolean }
+  if (!Object.hasOwn(item, "sharedConversationIds"))
+    return { conversations, complete: item.complete as boolean }
+  const shared = item.sharedConversationIds
+  if (!Array.isArray(shared) || shared.length > bounds.maxCataloguePageEntries)
+    throw new Error("Invalid conversation sharedConversationIds")
+  const sharedSeen = new Set<string>()
+  const sharedConversationIds = shared.map((id) => {
+    if (typeof id !== "string" || !conversationIdPattern.test(id) || sharedSeen.has(id))
+      throw new Error("Invalid conversation sharedConversationIds")
+    sharedSeen.add(id)
+    return id
+  })
+  return { conversations, complete: item.complete as boolean, sharedConversationIds }
 }
 
 /**

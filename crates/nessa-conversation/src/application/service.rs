@@ -38,8 +38,9 @@ use super::{
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
     tool_config::EnvironmentToolConfig,
-    AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
-    AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
+    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
+    AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
     ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
     ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
     ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
@@ -5223,6 +5224,72 @@ impl ConversationService {
             }),
         })
     }
+    /// Whether `caller` may list the catalogue `owner` holds. Cedar's
+    /// `owner.list` is the decision. A caller who is not that owner is
+    /// refused, the same way a list leaves out someone else's rows.
+    pub fn admits_shared_list(
+        &self,
+        caller: &ConversationCaller,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> Result<bool, ConversationError> {
+        self.admits_shared(
+            caller,
+            AccessAction::List,
+            AccessResource::Catalogue {
+                organization,
+                owner,
+            },
+        )
+    }
+
+    /// Whether `caller` may read a chat in `owner`'s catalogue. Cedar's
+    /// `owner.read` is the decision. The chat is not a local row; the
+    /// owner and organization are the local catalogue's.
+    pub fn admits_shared_read(
+        &self,
+        caller: &ConversationCaller,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> Result<bool, ConversationError> {
+        self.admits_shared(
+            caller,
+            AccessAction::Read,
+            AccessResource::Conversation {
+                organization,
+                owner,
+                deleted: false,
+                // A replica is not a local thread, so who created it is not
+                // what this read asks.
+                created_by: None,
+            },
+        )
+    }
+
+    fn admits_shared(
+        &self,
+        caller: &ConversationCaller,
+        action: AccessAction,
+        resource: AccessResource<'_>,
+    ) -> Result<bool, ConversationError> {
+        let ask = AccessAsk {
+            subject: AccessSubject::Person {
+                organization: &caller.organization_id,
+                principal: &caller.principal_id,
+            },
+            action,
+            resource,
+            held: None,
+            request: Default::default(),
+            target: None,
+        };
+        match self.inner.access_policy.evaluate(&ask) {
+            AccessDecision::Allow { .. } => Ok(true),
+            AccessDecision::Deny(AccessDenial::Unavailable) => Err(ConversationError::Unavailable),
+            AccessDecision::Deny(_) => Ok(false),
+        }
+    }
+
     /// The access policy, as every command's admission asks it.
     fn access(&self) -> OwnerAccess<'_> {
         OwnerAccess::new(self.inner.access_policy.as_ref())

@@ -295,7 +295,7 @@ test("a live workspace read without a reported success owns nothing", async () =
 
 test("a live workspace read reported as success owns the refused line", async () => {
   const f = fixture()
-  await f.observer.during(f.opened, async () => {
+  const observed = await f.observer.during(f.opened, async () => {
     f.fail(f.socket())
     const ws = f.socket()
     request(ws)
@@ -305,6 +305,7 @@ test("a live workspace read reported as success owns the refused line", async ()
     if (!(await f.observer.readable(10_000))) failures.push("unread")
     return failures.length === before
   })
+  assert.equal(observed, undefined)
   assert.deepEqual(f.lines.errors, [])
   assert.equal(f.lines.harmless.length, 1)
   assert.match(f.lines.harmless[0], /owned gateway restart; session reconnected/)

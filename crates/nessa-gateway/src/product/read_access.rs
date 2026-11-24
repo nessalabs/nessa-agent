@@ -319,6 +319,44 @@ pub(super) async fn admit_conversation(
         .map_err(paired_code)
 }
 
+/// Whether this session is a peer gateway that `grant.artifact_read` admits
+/// to `id`. `Ok(None)` is an owner surface or a device signed in as the
+/// binding owner: those keep the owner check. A peer signs in as itself, so
+/// that check would hide a file the grant allows.
+pub(super) async fn peer_artifact_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    id: &ConversationId,
+) -> Result<Option<()>, &'static str> {
+    let Some(binding) = paired_binding(state, session).await? else {
+        return Ok(None);
+    };
+    if &binding.owner_id == session.context().principal_id() {
+        return Ok(None);
+    }
+    let Some((_, conversations, grants)) = state.reads.passive_read.as_ref() else {
+        return Err("temporarily_unavailable");
+    };
+    let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
+    let (conversation, held) = paired_facts(
+        conversations.as_ref(),
+        grants.as_ref(),
+        &binding.receiver_id,
+        id,
+    )
+    .await
+    .map_err(paired_code)?;
+    access
+        .admit(
+            AccessAction::ArtifactRead,
+            &conversation,
+            held.as_ref().map(|held| held.capabilities),
+            RequestShape::default(),
+        )
+        .map(|()| Some(()))
+        .map_err(paired_code)
+}
+
 /// The handler supplies an ID only after canonical typed decoding. Existing
 /// metadata is independently scoped by Cedar before effects; absence remains
 /// the command owner's fact (missing target, missing receipt, or a new creation),

@@ -454,6 +454,110 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("an incomplete frame drops a shared chat its shared ids no longer name", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(
+      conversationA,
+      row(conversationA, { updatedAtMs: 2, title: "Shared chat" }),
+    )
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 1 }))
+    gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
+    gateway.sharedConversationIds = [conversationA]
+    follow()
+    await source.index()
+    gateway.rows.delete(conversationA)
+    gateway.sharedConversationIds = []
+    gateway.listLimit = 1
+    gateway.publishList()
+    await flush()
+    const ids = (await source.index()).sessions.map((session) => session.id)
+    expect(ids).not.toContain(conversationA)
+    expect(ids).toContain(conversationB)
+  })
+
+  it("a row the list frame names stays when the finished walk does not return it", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(
+      conversationA,
+      row(conversationA, { updatedAtMs: 2, title: "Shared chat" }),
+    )
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 1 }))
+    gateway.listLimit = 1
+    follow()
+    await source.index()
+    gateway.once("observe", () =>
+      Promise.resolve({
+        conversations: [row(conversationB, { updatedAtMs: 1 })],
+        complete: true,
+      }),
+    )
+    gateway.publishList()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      conversationA,
+      conversationB,
+    ])
+  })
+
+  it("an older walk cannot remove a row a newer frame named", async () => {
+    const { gateway, source, follow } = started()
+    for (const id of [conversationA, conversationB])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 1
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const held = deferred<void>()
+    let seen:
+      { conversations: { conversationId: string }[]; complete: boolean } | undefined
+    gateway.once("observe", async (normal) => {
+      seen = (await normal()) as {
+        conversations: { conversationId: string }[]
+        complete: boolean
+      }
+      await held.promise
+      return { ...seen, complete: true }
+    })
+    gateway.publishList()
+    await flush()
+    gateway.rows.set("d", row("d", { updatedAtMs: 1_000_000, title: "Shared chat" }))
+    gateway.publishList()
+    await flush()
+    held.resolve()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id)).toContain("d")
+  })
+
+  it("a row a newer list frame names is shown while an older walk is still running", async () => {
+    const { gateway, source, updates, follow } = started()
+    for (const id of [conversationA, conversationB, "c"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const held = deferred<void>()
+    gateway.once("observe", (normal) => held.promise.then(normal))
+    gateway.publishList()
+    await flush()
+    updates.length = 0
+    gateway.rows.set("d", row("d", { updatedAtMs: 1_000_000, title: "Shared chat" }))
+    gateway.publishList()
+    await flush()
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "d", title: "Shared chat" }),
+    })
+    held.resolve()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      conversationA,
+      conversationB,
+      "c",
+      "d",
+    ])
+  })
+
   it("D18: frames that come while a walk is on its way give way to the newest, which walks once", async () => {
     const { gateway, source, follow } = started()
     for (const id of [conversationA, conversationB, "c"])
@@ -3105,11 +3209,11 @@ describe("writes", () => {
     await archiving
     await flush()
     expect(updates).toEqual([
-      { kind: "session-removed", sessionId: conversationA, revision: 2 },
       {
         kind: "session",
         session: expect.objectContaining({ id: conversationB, preview: "moved" }),
       },
+      { kind: "session-removed", sessionId: conversationA, revision: 2 },
     ])
     expect((await source.index()).sessions.map((session) => session.id)).toEqual([
       conversationB,
