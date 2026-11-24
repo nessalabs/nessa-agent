@@ -100,6 +100,12 @@ export type GatewayConnectionState =
   | "waking"
   | "refused"
 
+/** Non-secret cloud VM linkage for a persistent Cloud Box gateway (Phase 3). */
+export interface CloudBoxMetadata {
+  readonly boxId: string
+  readonly cloud: "boat" | "agent37"
+}
+
 /** Read-only snapshot of a registered gateway exposed to the workspace & UI. */
 export interface GatewaySnapshot {
   readonly gatewayId: string
@@ -111,6 +117,8 @@ export interface GatewaySnapshot {
   readonly detail?: string
   /** Server-reported gatewayId verified during handshake. */
   readonly serverGatewayId?: string
+  /** Present when this gateway is backed by a managed persistent Cloud VM. */
+  readonly cloudBox?: CloudBoxMetadata
   readonly updatedAtMs: number
 }
 
@@ -122,6 +130,7 @@ export interface PersistedRemoteGateway {
   readonly gatewayId: string
   readonly label: string
   readonly url: string
+  readonly cloudBox?: CloudBoxMetadata
   readonly addedAtMs: number
 }
 

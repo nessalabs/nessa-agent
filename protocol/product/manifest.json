@@ -647,6 +647,36 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "cloud.boxes.list": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.boxes.create": {
+      "params": "CloudBoxCreateParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.boxes.wake": {
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.boxes.sleep": {
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.boxes.rename": {
+      "params": "CloudBoxRenameParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.boxes.delete": {
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "devices.pool": {
       "params": "DevicesPoolParams",
       "grant": "credential.manage",

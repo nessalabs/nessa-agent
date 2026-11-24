@@ -455,6 +455,30 @@
     "readOnly": false,
     "destructive": false
   },
+  "cloud.boxes.list": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "cloud.boxes.create": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "cloud.boxes.wake": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "cloud.boxes.sleep": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "cloud.boxes.rename": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "cloud.boxes.delete": {
+    "readOnly": false,
+    "destructive": true
+  },
   "devices.pool": {
     "readOnly": true,
     "destructive": false

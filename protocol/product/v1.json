@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 156,
+          "maxItems": 162,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -9901,6 +9901,202 @@
       },
       "required": ["cloud"],
       "description": "The cloud new thread VMs are made on."
+    },
+    "CloudBoxState": {
+      "type": "string",
+      "enum": ["provisioning", "running", "sleeping", "refused", "deleted"],
+      "description": "Lifecycle state of a persistent cloud gateway VM."
+    },
+    "CloudBoxSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxId": {
+          "type": "string",
+          "description": "Stable UUID identifying this cloud box."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable display name for this cloud box."
+        },
+        "cloud": {
+          "$ref": "#/$defs/Cloud",
+          "description": "Cloud provider hosting this persistent gateway VM."
+        },
+        "vm": { "type": "string", "description": "Provider-assigned VM identifier." },
+        "gatewayId": {
+          "type": "string",
+          "description": "Stable gateway ID reported by the headless nessa-server inside the VM."
+        },
+        "url": {
+          "type": "string",
+          "description": "Current wss:// endpoint URL for connecting to the cloud box gateway."
+        },
+        "state": {
+          "$ref": "#/$defs/CloudBoxState",
+          "description": "Current lifecycle state of the cloud box VM."
+        },
+        "createdAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix epoch timestamp in milliseconds when provisioning was requested."
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix epoch timestamp in milliseconds of the latest state transition."
+        }
+      },
+      "required": [
+        "boxId",
+        "name",
+        "cloud",
+        "vm",
+        "gatewayId",
+        "url",
+        "state",
+        "createdAtMs",
+        "updatedAtMs"
+      ],
+      "description": "Secret-free summary of a persistent cloud gateway VM."
+    },
+    "CloudBoxCreateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Display name for the new persistent cloud gateway VM."
+        },
+        "cloud": {
+          "$ref": "#/$defs/Cloud",
+          "description": "Connected cloud provider on which to create the VM."
+        }
+      },
+      "required": ["name", "cloud"],
+      "description": "Create and bootstrap a persistent cloud gateway VM."
+    },
+    "CloudBoxIdParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID identifying the target cloud box."
+        }
+      },
+      "required": ["boxId"],
+      "description": "Identify a persistent cloud gateway VM by its box ID."
+    },
+    "CloudBoxRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID identifying the cloud box to rename."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "New display name for the cloud box."
+        }
+      },
+      "required": ["boxId", "name"],
+      "description": "Rename a persistent cloud gateway VM."
+    },
+    "CloudBoxesListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CloudBoxSummary" },
+          "description": "Active persistent cloud gateway VMs ordered by creation time."
+        }
+      },
+      "required": ["boxes"],
+      "description": "All active persistent cloud gateway VMs."
+    },
+    "CloudBoxCreateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudBox": {
+          "$ref": "#/$defs/CloudBoxSummary",
+          "description": "Summary of the newly created cloud gateway VM."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One-time enrollment credential returned so the caller can pair immediately."
+        }
+      },
+      "required": ["cloudBox", "credential"],
+      "description": "Newly created cloud gateway VM summary and one-time enrollment credential."
+    },
+    "CloudBoxWakeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxId": { "type": "string", "description": "UUID of the woken cloud box." },
+        "gatewayId": {
+          "type": "string",
+          "description": "Verified gateway ID reported by the woken VM."
+        },
+        "url": {
+          "type": "string",
+          "description": "Current wss:// endpoint URL, refreshed if rotated on wake."
+        }
+      },
+      "required": ["boxId", "gatewayId", "url"],
+      "description": "Verified endpoint returned after waking a persistent cloud gateway VM."
+    },
+    "CloudBoxResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloudBox": {
+          "$ref": "#/$defs/CloudBoxSummary",
+          "description": "Updated cloud box summary."
+        }
+      },
+      "required": ["cloudBox"],
+      "description": "Updated persistent cloud gateway VM summary."
+    },
+    "CloudBoxDeleteResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "boxId": { "type": "string", "description": "UUID of the deleted cloud box." },
+        "deleted": {
+          "type": "boolean",
+          "description": "True once the cloud box VM has been destroyed and marked deleted."
+        }
+      },
+      "required": ["boxId", "deleted"],
+      "description": "Confirmation that a persistent cloud gateway VM was deleted."
+    },
+    "CloudBoxErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "vault_locked",
+        "cloud_not_configured",
+        "cloud_box_not_found",
+        "cloud_box_already_exists",
+        "cloud_box_not_active",
+        "cloud_box_active_work",
+        "cloud_box_admission_refused",
+        "cloud_box_bootstrap_failed",
+        "cloud_box_provider_failed",
+        "cloud_box_storage_unavailable"
+      ],
+      "description": "Typed refusal codes for persistent cloud gateway VM lifecycle operations."
     },
     "VmLifetimeMode": {
       "type": "string",

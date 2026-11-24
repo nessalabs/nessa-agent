@@ -268,6 +268,8 @@ pub struct MachineRoutes {
     pub default_device: Option<watch::Receiver<Option<String>>>,
     #[cfg(unix)]
     pub workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
+    #[cfg(unix)]
+    pub cloud_boxes: Option<Arc<crate::workspaces::application::CloudBoxes>>,
 }
 
 /// Credentials and accounts: credential admin, webhooks, GitHub, saved
@@ -511,6 +513,15 @@ impl ProductRouteState {
         workspaces: Arc<crate::workspaces::application::Workspaces>,
     ) -> Self {
         self.machines.workspaces = Some(workspaces);
+        self
+    }
+    /// Register persistent cloud gateway VM orchestration.
+    #[cfg(unix)]
+    pub fn with_cloud_boxes(
+        mut self,
+        cloud_boxes: Arc<crate::workspaces::application::CloudBoxes>,
+    ) -> Self {
+        self.machines.cloud_boxes = Some(cloud_boxes);
         self
     }
     /// Register the reusable vault independently of provider configuration.

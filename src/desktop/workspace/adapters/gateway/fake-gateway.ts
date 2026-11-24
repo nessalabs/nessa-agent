@@ -731,6 +731,24 @@ export function fakeGateway(
         if (cloud !== "boat") throw new Error("Agent37 is not connected in this fixture")
         return { cloud }
       },
+      boxes: {
+        list: async () => [],
+        create: async () => {
+          throw new Error("Cloud boxes are unavailable in this fixture")
+        },
+        wake: async () => {
+          throw new Error("Cloud boxes are unavailable in this fixture")
+        },
+        sleep: async () => {
+          throw new Error("Cloud boxes are unavailable in this fixture")
+        },
+        rename: async () => {
+          throw new Error("Cloud boxes are unavailable in this fixture")
+        },
+        delete: async () => {
+          throw new Error("Cloud boxes are unavailable in this fixture")
+        },
+      },
     },
     conversation: {
       share: notShared,

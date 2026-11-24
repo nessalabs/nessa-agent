@@ -916,6 +916,48 @@
       "destructive": false
     },
     {
+      "name": "cloud.boxes.list",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "cloud.boxes.create",
+      "params": "CloudBoxCreateParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "cloud.boxes.wake",
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "cloud.boxes.sleep",
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "cloud.boxes.rename",
+      "params": "CloudBoxRenameParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "cloud.boxes.delete",
+      "params": "CloudBoxIdParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
       "name": "devices.pool",
       "params": "DevicesPoolParams",
       "grant": "credential.manage",
