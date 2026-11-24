@@ -1793,9 +1793,7 @@ frame is a clock. A writer still working from an older frame cannot take
 out a row a newer frame has named, and cannot put back a row a newer
 complete frame left out. A finished observe walk keeps the rows its frame
 named. The title is the grantor's: something is said, then the chat is
-renamed, and that title is what the follower's row shows. A grant the catalogue already lists takes the later of
-the snapshot's update time and the copy's, so the copy is not the oldest
-row cut from a full frame. A walk still running for an older frame
+renamed, and that title is what the follower's row shows. A grant the catalogue already lists keeps the snapshot's update time unless the retained transcript's saved activity is later. That time is the fold's, so a later list read of an unchanged chat does not make it look newly updated. A walk still running for an older frame
 does not put that older membership back. A catalogue reset or a damaged
 cache is returned before the follow, so the poller empties the cache and
 reads it again. A replica whose transcript has no cursor is not opened. The agent is the

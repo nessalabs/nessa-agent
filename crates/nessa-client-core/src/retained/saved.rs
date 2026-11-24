@@ -115,6 +115,8 @@ pub enum RetainedTranscript {
 pub struct RetainedTranscriptSnapshot {
     progress: RetainedProgress,
     view: Box<ConversationView>,
+    created_at_ms: u64,
+    updated_at_ms: u64,
 }
 impl RetainedTranscriptSnapshot {
     /// Actual saved progress, independently of the presentation revision.
@@ -124,6 +126,16 @@ impl RetainedTranscriptSnapshot {
     /// Passive product view with no authority to execute live controls.
     pub fn view(&self) -> &ConversationView {
         &self.view
+    }
+    /// Earliest time the fold saved with an event, note, or handoff. `0` when
+    /// it saved none.
+    pub fn created_at_ms(&self) -> u64 {
+        self.created_at_ms
+    }
+    /// Latest time the fold saved with an event, note, or handoff. `0` when
+    /// it saved none. A list read does not replace this with its own clock.
+    pub fn updated_at_ms(&self) -> u64 {
+        self.updated_at_ms
     }
 }
 
@@ -202,12 +214,17 @@ impl RetainedCache {
         {
             SavedTranscript::NotLoaded => Ok(RetainedTranscript::NotLoaded),
             SavedTranscript::Deleted => Ok(RetainedTranscript::Deleted),
-            SavedTranscript::Retained { progress, view } => {
-                Ok(RetainedTranscript::Retained(RetainedTranscriptSnapshot {
-                    progress: RetainedProgress(progress),
-                    view,
-                }))
-            }
+            SavedTranscript::Retained {
+                progress,
+                view,
+                created_at_ms,
+                updated_at_ms,
+            } => Ok(RetainedTranscript::Retained(RetainedTranscriptSnapshot {
+                progress: RetainedProgress(progress),
+                view,
+                created_at_ms,
+                updated_at_ms,
+            })),
         }
     }
 

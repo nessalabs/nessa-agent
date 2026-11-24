@@ -1,18 +1,18 @@
 //! Projections are bounded display state, not permission or scheduling authority.
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
-use crate::projection::retained_view;
 use crate::projection::{
     agent_question, agent_review, bound_view, bound_view_within, clipped, question_entry,
     review_entry, Projection, MAX_LISTED_REVIEWS, MAX_QUESTION_ENTRY_BYTES,
     MAX_QUESTION_ENTRY_MESSAGE_BYTES, MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES,
     MAX_TEXT, MAX_VIEW_BYTES,
 };
+use crate::projection::{retained_activity, retained_view};
 #[allow(unused_imports)]
 use crate::{IntoView, ViewOf};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
-    ConversationApprovalMode, ConversationId, ConversationModelId,
+    ConversationApprovalMode, ConversationId, ConversationModelId, LATEST_TIME_MS,
 };
 use nessa_protocol::conversation::view::{
     ConversationAgentFeatures, ConversationAttachmentEvidenceFailure,
@@ -2322,6 +2322,27 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
     assert_eq!(view.model_change_effect, model_effect);
     assert_eq!(view.interaction_view_error, None);
     assert!(view.earlier);
+}
+
+#[test]
+fn a_retained_transcript_keeps_the_time_its_events_were_saved_at() {
+    let early =
+        event(ExecutionUpdate::Message(MessageChunk::text("hello"))).with_observed_at_ms(10);
+    let late = event(ExecutionUpdate::Message(MessageChunk::text("later"))).with_observed_at_ms(50);
+    let snapshot = completed_snapshot("timed", vec![early, late]);
+    assert_eq!(retained_activity(Some(&snapshot)), (10, 50));
+    let unstamped = completed_snapshot(
+        "plain",
+        vec![event(ExecutionUpdate::Message(MessageChunk::text("hello")))],
+    );
+    assert_eq!(retained_activity(Some(&unstamped)), (0, 0));
+    assert_eq!(retained_activity(None), (0, 0));
+    let wild = event(ExecutionUpdate::Message(MessageChunk::text("no")))
+        .with_observed_at_ms(LATEST_TIME_MS + 1);
+    assert_eq!(
+        retained_activity(Some(&completed_snapshot("wild", vec![wild]))),
+        (0, 0)
+    );
 }
 
 #[test]

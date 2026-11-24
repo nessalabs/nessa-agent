@@ -11,7 +11,7 @@ use nessa_local_database::{
     rusqlite::{Connection, TransactionBehavior},
     OpenError, Schema,
 };
-use nessa_projection::{earlier_turns, retained_view, NoMcpToolUis};
+use nessa_projection::{earlier_turns, retained_activity, retained_view, NoMcpToolUis};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::view::{ConversationEarlier, ConversationPoint};
 use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
@@ -68,15 +68,14 @@ impl ReadOnlyCache {
                 return Ok(SavedTranscript::NotLoaded);
             };
             let progress = loaded.progress.clone().ok_or(CacheError::Stale)?;
-            let view = retained_view(
-                conversation,
-                loaded.fold.snapshot(),
-                loaded.fold.status(),
-                revision,
-            );
+            let snapshot = loaded.fold.snapshot();
+            let (created_at_ms, updated_at_ms) = retained_activity(snapshot);
+            let view = retained_view(conversation, snapshot, loaded.fold.status(), revision);
             Ok(SavedTranscript::Retained {
                 progress,
                 view: Box::new(view),
+                created_at_ms,
+                updated_at_ms,
             })
         })();
         match result {

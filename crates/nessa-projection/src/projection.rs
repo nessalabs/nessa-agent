@@ -702,6 +702,42 @@ pub fn retained_view(
     bound_view(projection.read())
 }
 
+/// When the retained fold was created and last updated, from the times saved
+/// with its events, notes, and handoffs. A time no summary can hold is left
+/// out. Both are `0` when the fold recorded none: a list read does not
+/// substitute the clock it happens to run on.
+pub fn retained_activity(snapshot: Option<&SessionSnapshot>) -> (u64, u64) {
+    let Some(snapshot) = snapshot else {
+        return (0, 0);
+    };
+    let mut earliest = None;
+    let mut latest = None;
+    let mut note = |at: u64| {
+        if at > LATEST_TIME_MS {
+            return;
+        }
+        earliest = Some(earliest.map_or(at, |seen: u64| seen.min(at)));
+        latest = Some(latest.map_or(at, |seen: u64| seen.max(at)));
+    };
+    for invocation in &snapshot.invocations {
+        for event in &invocation.events {
+            if let Some(at) = event.observed_at_ms() {
+                note(at);
+            }
+        }
+    }
+    for saved in &snapshot.notes {
+        note(saved.accepted_at_ms);
+        if let Some(retired) = saved.retired {
+            note(retired.at_ms);
+        }
+    }
+    for handoff in &snapshot.handoffs {
+        note(handoff.at_ms);
+    }
+    (earliest.unwrap_or(0), latest.unwrap_or(0))
+}
+
 /// The agent and model the retained fold was opened under, when that provider
 /// is one this product has an agent for. A mode the fold did not record stays
 /// ask, which is the mode a new conversation is opened in.

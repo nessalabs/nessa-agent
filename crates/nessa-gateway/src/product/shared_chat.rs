@@ -816,15 +816,14 @@ fn grant_rows(
             continue;
         };
         let view = snapshot.view();
-        // Retained after the catalogue snapshot, so the list treats it as
-        // newer than the rows that snapshot already ordered.
-        let seen = cache.unix_milliseconds();
+        // The fold's saved activity, not the clock of this read. An idle
+        // chat stays where that time puts it.
         rows.push(ConversationSummary {
             conversation_id: view.conversation_id.clone(),
             title: view.title.clone(),
             preview: None,
-            created_at_ms: seen,
-            updated_at_ms: seen,
+            created_at_ms: snapshot.created_at_ms(),
+            updated_at_ms: snapshot.updated_at_ms(),
             running: false,
             archived: false,
             channel_id: None,
@@ -874,9 +873,10 @@ fn peer_rows(
 }
 
 /// Catalogue rows, plus retained grants the snapshot does not name. A grant
-/// the catalogue already lists stays that row, and takes the later of the
-/// two update times so a copy that just landed is not the oldest row in a
-/// full frame.
+/// the catalogue already lists stays that row. Its update time stays the
+/// catalogue's unless the retained transcript's saved activity is later.
+/// That activity is the fold's, so reading the list again does not move an
+/// unchanged chat.
 fn include_retained(
     mut rows: Vec<ConversationSummary>,
     retained: Vec<ConversationSummary>,
@@ -1159,6 +1159,13 @@ mod tests {
         assert_eq!(
             listed[0].updated_at_ms, 50,
             "the copy is newer than the snapshot"
+        );
+        let mut older = summary("already");
+        older.updated_at_ms = 80;
+        let kept = include_retained(vec![older], vec![summary("already")]);
+        assert_eq!(
+            kept[0].updated_at_ms, 80,
+            "an older copy leaves the catalogue time"
         );
     }
 
