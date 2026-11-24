@@ -1788,9 +1788,11 @@ while the follow is still open. A grant copied after that snapshot is
 still named: the list keeps the catalogue row when it has one, and adds
 the retained transcript when it does not. The combined list is ordered
 newest first, so a new shared chat is not the first row cut from a full
-frame. The rows a list frame names are on screen when the frame arrives.
-A walk still running for an older frame does not put that older membership
-back. A replica whose transcript has no cursor is not opened. The agent is the
+frame. The rows a list frame names are on screen when the frame arrives, and a
+finished observe walk keeps them. A walk still running for an older frame
+does not put that older membership back. A catalogue reset or a damaged
+cache is returned before the follow, so the poller empties the cache and
+reads it again. A replica whose transcript has no cursor is not opened. The agent is the
 catalogue entry's when the snapshot has one, and otherwise the provider the
 retained transcript was opened under. That cursor's id uses a UUID run `ConversationId`
 refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are

@@ -454,6 +454,25 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("a row the list frame names stays when the finished walk does not return it", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 2, title: "Shared chat" }))
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 1 }))
+    gateway.listLimit = 1
+    follow()
+    await source.index()
+    gateway.once("observe", () => ({
+      conversations: [row(conversationB, { updatedAtMs: 1 })],
+      complete: true,
+    }))
+    gateway.publishList()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      conversationA,
+      conversationB,
+    ])
+  })
+
   it("a row a newer list frame names is shown while an older walk is still running", async () => {
     const { gateway, source, updates, follow } = started()
     for (const id of [conversationA, conversationB, "c"])

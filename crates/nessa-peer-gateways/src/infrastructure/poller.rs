@@ -943,6 +943,15 @@ impl Shared {
             if retained || catalogued.as_ref().is_ok_and(|report| report.moved) {
                 commands.note_shared_chats();
             }
+            // A catalogue that cannot continue is emptied and read again by
+            // the outer cycle. Following grants on it would keep the stale
+            // transcripts and never return this failure.
+            if matches!(
+                catalogued,
+                Err(ReadFailure::ResetRequired | ReadFailure::CacheDamaged)
+            ) {
+                return (catalogued, retained);
+            }
             let live_tx = live_tx.clone();
             let audit_tx = audit_tx.clone();
             cache.follow_grants(

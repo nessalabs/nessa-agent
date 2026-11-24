@@ -970,7 +970,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         cursor === undefined ? {} : { cursor },
       )
       for (const row of page.conversations) observed.set(row.conversationId, row)
-      if (page.complete) return { conversations: [...observed.values()], complete: true }
+      if (page.complete) {
+        // The list frame already named these rows. A finished walk fills in
+        // what that frame cut; it does not drop a row the frame named, such
+        // as a granted chat the local catalogue page does not repeat.
+        const merged = new Map(
+          listed.conversations.map((row) => [row.conversationId, row] as const),
+        )
+        for (const [id, row] of observed) merged.set(id, row)
+        return { conversations: [...merged.values()], complete: true }
+      }
       if (page.cursor === undefined || !cursorAdvances(cursor, page.cursor)) {
         const merged = new Map(
           listed.conversations.map((row) => [row.conversationId, row] as const),
