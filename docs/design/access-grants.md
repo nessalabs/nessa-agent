@@ -1788,7 +1788,11 @@ while the follow is still open. A grant copied after that snapshot is
 still named: the list keeps the catalogue row when it has one, and adds
 the retained transcript when it does not. The combined list is ordered
 newest first, so a new shared chat is not the first row cut from a full
-frame. That cursor's id uses a UUID run `ConversationId`
+frame. The rows a list frame names are on screen when the frame arrives.
+A walk still running for an older frame does not put that older membership
+back. A replica whose transcript has no cursor is not opened. The agent is the
+catalogue entry's when the snapshot has one, and otherwise the provider the
+retained transcript was opened under. That cursor's id uses a UUID run `ConversationId`
 refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
 appended only into the room a list or observe page has left, and a page that
 cannot hold them stays incomplete. A paired device of the follower and the

@@ -454,6 +454,36 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("a row a newer list frame names is shown while an older walk is still running", async () => {
+    const { gateway, source, updates, follow } = started()
+    for (const id of [conversationA, conversationB, "c"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const held = deferred<void>()
+    gateway.once("observe", (normal) => held.promise.then(normal))
+    gateway.publishList()
+    await flush()
+    updates.length = 0
+    gateway.rows.set("d", row("d", { updatedAtMs: 1_000_000, title: "Shared chat" }))
+    gateway.publishList()
+    await flush()
+    expect(updates).toContainEqual({
+      kind: "session",
+      session: expect.objectContaining({ id: "d", title: "Shared chat" }),
+    })
+    held.resolve()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
+      conversationA,
+      conversationB,
+      "c",
+      "d",
+    ])
+  })
+
   it("D18: frames that come while a walk is on its way give way to the newest, which walks once", async () => {
     const { gateway, source, follow } = started()
     for (const id of [conversationA, conversationB, "c"])

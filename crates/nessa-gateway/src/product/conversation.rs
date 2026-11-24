@@ -1287,8 +1287,15 @@ pub(super) async fn read_view(
         state
             .local_timings
             .observe(&opened.view, state.clock.unix_milliseconds());
+        // A replica with no transcript cursor is not a view. An empty
+        // incarnation is not one the client will accept.
+        if opened.cursor.incarnation.is_empty() {
+            return Err(ConversationError::Unavailable);
+        }
         // The grantor's model may not be installed here. The transcript still
-        // renders; this gateway is not going to run that agent.
+        // renders; this gateway is not going to run that agent. A replica
+        // with no selection is not given a passive view: there is no saved
+        // agent to keep.
         let view = match wire_view(state, opened.view.clone()).await {
             Ok(view) => view,
             Err(

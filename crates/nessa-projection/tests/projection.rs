@@ -2325,6 +2325,25 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
 }
 
 #[test]
+fn a_retained_snapshot_keeps_the_provider_it_was_opened_under() {
+    let id = ConversationId::new("00000000-0000-4000-8000-000000000890").unwrap();
+    let mut snapshot = completed_snapshot("opened", vec![]);
+    snapshot.provider =
+        ProviderIdentity::new(AgentId::Claude.provider_name(), "claude-model", "workspace")
+            .unwrap();
+    let view = retained_view(
+        &id,
+        Some(&snapshot),
+        CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+        Uuid::from_u128(1),
+    );
+    let selection = view.selection.expect("the provider is the selection");
+    assert_eq!(selection.agent, AgentId::Claude);
+    assert_eq!(selection.model, "claude-model");
+    assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
+}
+
+#[test]
 fn retained_projection_uses_shared_bounds_status_and_injected_revision() {
     let id = ConversationId::new("00000000-0000-0000-0000-000000000001").unwrap();
     let revision = Uuid::from_u128(1);

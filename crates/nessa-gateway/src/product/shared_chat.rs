@@ -951,15 +951,20 @@ fn peer_open(
             return Ok(PeerCopy::Unreadable);
         }
     };
-    if matches!(transcript, RetainedTranscript::Deleted) {
+    if matches!(
+        transcript,
+        RetainedTranscript::NotLoaded | RetainedTranscript::Deleted
+    ) {
+        // Not loaded yet: there is no transcript cursor. An empty incarnation
+        // is not a view the client accepts, so the read stays unavailable
+        // until the copy has one.
         return Ok(PeerCopy::Unreadable);
     }
-    Ok(PeerCopy::Opened(Box::new(project_transcript(
-        id,
-        String::new(),
-        selection,
-        transcript,
-    ))))
+    let opened = project_transcript(id, String::new(), selection, transcript);
+    if opened.cursor.incarnation.is_empty() {
+        return Ok(PeerCopy::Unreadable);
+    }
+    Ok(PeerCopy::Opened(Box::new(opened)))
 }
 
 fn open_cache(
@@ -1024,8 +1029,11 @@ fn project_transcript(
         RetainedTranscript::Retained(snapshot) => {
             let progress = snapshot.progress();
             let mut view = snapshot.view().clone();
-            if view.selection.is_none() {
-                view.selection = selection;
+            // The catalogue snapshot names the agent the list shows. It wins
+            // over the provider the transcript fold recorded. A grant the
+            // snapshot does not name keeps that provider.
+            if let Some(selection) = selection {
+                view.selection = Some(selection);
             }
             OpenedReplica {
                 view,
@@ -1423,6 +1431,34 @@ mod tests {
                 read_through: 1,
             },
         })
+    }
+
+    #[tokio::test]
+    async fn a_replica_without_a_transcript_cursor_is_not_a_view() {
+        let held = replica();
+        let id = held.id.clone();
+        // An empty incarnation is what a transcript that has not loaded used
+        // to send. The client rejects it, so the read is unavailable.
+        let empty = Arc::new(Held {
+            id: id.clone(),
+            view: held.view.clone(),
+            cursor: CommittedCursor {
+                incarnation: String::new(),
+                position: 0,
+                observed_head: 0,
+                read_through: 0,
+            },
+        });
+        let (state, session) = owner_state(empty).await;
+        let read = ask(
+            &state,
+            &session,
+            "conversation.read",
+            json!({ "conversationId": id }),
+        )
+        .await;
+        assert!(!read.ok, "{read:?}");
+        assert_eq!(read.error.unwrap().code, "temporarily_unavailable");
     }
 
     #[tokio::test]

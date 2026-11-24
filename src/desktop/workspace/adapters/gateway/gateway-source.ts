@@ -1045,7 +1045,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             { subject: "index" },
           )
         } catch (error) {
-          if (!current()) return
+          if (!current() || mine !== listFrames) return
           // The rows the frame named still apply. The rest is not known, and
           // an unchanged list sends no frame to walk again: the list stays
           // unapplied, a gap, and the walk is owed to the retry clock, as an
@@ -1058,7 +1058,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           return
         }
       }
-      if (!current()) return
+      // A frame that arrived while this walk ran is the membership. Applying
+      // this older page would take its rows back out.
+      if (!current() || mine !== listFrames) return
       apply(applied)
       list.applied = true
       if (gap) resync()
@@ -1099,7 +1101,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           .list(
             {
               list: (result) => {
-                if (current()) listFrame(connected, result, current)
+                if (!current()) return
+                // The rows this frame names are the list now. An older walk
+                // still running does not put them off; it does not remove
+                // anyone, and a newer frame has already replaced it.
+                applyList({ ...result, complete: false })
+                listFrame(connected, result, current)
               },
               ended: (end) => {
                 if (current()) listEnded(end)
