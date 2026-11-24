@@ -419,11 +419,16 @@ impl CloudBoxStore for FileCloudBoxStore {
         history.push(record);
         CloudBoxRecord::validate_history(&history)?;
 
-        let bytes = encode_history(&history)?;
+        let mut bytes = encode_history(&history)?;
         if bytes.len() as u64 > MAX_HISTORY_BYTES {
-            return Err(CloudBoxError::ReceiptUnavailable(
-                "cloud box receipt history exceeded maximum size".into(),
-            ));
+            history = compact_history(&history);
+            CloudBoxRecord::validate_history(&history)?;
+            bytes = encode_history(&history)?;
+            if bytes.len() as u64 > MAX_HISTORY_BYTES {
+                return Err(CloudBoxError::ReceiptUnavailable(
+                    "cloud box receipt history exceeded maximum size".into(),
+                ));
+            }
         }
 
         create_directory(&self.root)
@@ -444,6 +449,32 @@ impl CloudBoxStore for FileCloudBoxStore {
             .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
         Ok(())
     }
+}
+
+/// Compact a validated receipt history so repeated wake/sleep/rename/URL
+/// updates never exhaust `MAX_HISTORY_BYTES`, while preserving the full
+/// ADR 1160 provenance chain:
+/// 1. The initial `Provisioning` intent record (index 0).
+/// 2. The first `Active` record that established `(cloud, vm, admission, gateway_id)`.
+/// 3. The latest record (current `Active` state or terminal `Refused`/`Deleted`).
+fn compact_history(history: &[CloudBoxRecord]) -> Vec<CloudBoxRecord> {
+    if history.len() <= 3 {
+        return history.to_vec();
+    }
+    let last_idx = history.len() - 1;
+    let first_active_idx = history
+        .iter()
+        .position(|record| matches!(record, CloudBoxRecord::Active { .. }));
+    let mut keep = vec![0usize];
+    if let Some(active_idx) = first_active_idx {
+        if active_idx != 0 && active_idx != last_idx {
+            keep.push(active_idx);
+        }
+    }
+    if last_idx != 0 {
+        keep.push(last_idx);
+    }
+    keep.into_iter().map(|idx| history[idx].clone()).collect()
 }
 
 fn deserialize_zeroizing<'de, D>(deserializer: D) -> Result<Zeroizing<String>, D::Error>
@@ -1014,5 +1045,76 @@ mod tests {
             adapter.create_box(&connection, &id).await.unwrap_err(),
             CloudBoxError::CleanupUncertain(_)
         ));
+    }
+
+    #[test]
+    fn file_store_compacts_repeated_active_transitions_without_exhausting_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileCloudBoxStore::new(dir.path().join("cloud-boxes"));
+        let id = CloudBoxId::parse("22222222-3333-4444-5555-666666666666").unwrap();
+        let admission =
+            Admitted::Agent37(TemplateRelease::new("v2026.1".into(), None, None).unwrap());
+
+        store
+            .append(
+                &id,
+                CloudBoxRecord::Provisioning {
+                    box_id: id.clone(),
+                    name: CloudBoxName::new("Long Lived Box").unwrap(),
+                    cloud: Cloud::Agent37,
+                    created_at_ms: 100,
+                },
+            )
+            .unwrap();
+
+        // Simulate 300 wake/sleep/rename cycles (~90+ KiB uncompacted, well above 64 KiB).
+        for step in 0..300u64 {
+            let state = if step % 2 == 0 {
+                CloudBoxState::Running
+            } else {
+                CloudBoxState::Sleeping
+            };
+            store
+                .append(
+                    &id,
+                    CloudBoxRecord::Active {
+                        box_id: id.clone(),
+                        name: CloudBoxName::new(format!("Box #{step}")).unwrap(),
+                        cloud: Cloud::Agent37,
+                        vm: "vm-persistent".into(),
+                        admission: admission.clone(),
+                        gateway_id: "gw-persistent".into(),
+                        url: CloudBoxUrl::new(format!("wss://box-{step}.example.com")).unwrap(),
+                        state,
+                        image: "nessa-gateway:v1".into(),
+                        created_at_ms: 100,
+                        updated_at_ms: 200 + step,
+                    },
+                )
+                .unwrap();
+        }
+
+        let history = store.read(&id).unwrap();
+        assert!(
+            history.len() <= 301 && history.len() >= 3,
+            "compacted history should retain provenance chain"
+        );
+        assert!(matches!(history[0], CloudBoxRecord::Provisioning { .. }));
+        assert!(matches!(history[1], CloudBoxRecord::Active { .. }));
+        let latest = history.last().unwrap().as_summary().unwrap();
+        assert_eq!(latest.name.as_str(), "Box #299");
+        assert_eq!(latest.state, CloudBoxState::Sleeping);
+        assert_eq!(latest.vm, "vm-persistent");
+        assert_eq!(latest.gateway_id, "gw-persistent");
+        CloudBoxRecord::validate_history(&history).unwrap();
+
+        let file_len = fs::metadata(
+            dir.path()
+                .join("cloud-boxes")
+                .join(FileCloudBoxStore::file_name(&id)),
+        )
+        .unwrap()
+        .len();
+        assert!(file_len <= MAX_HISTORY_BYTES);
     }
 }

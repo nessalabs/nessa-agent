@@ -123,6 +123,13 @@ export class NessaCloudBoxError extends Error {
   }
 }
 
+/** Minimum RPC deadline for creating and bootstrapping a persistent Cloud Box VM. */
+export const CLOUD_BOX_CREATE_TIMEOUT_MS = 240_000
+/** Minimum RPC deadline for waking a sleeping persistent Cloud Box VM. */
+export const CLOUD_BOX_WAKE_TIMEOUT_MS = 150_000
+/** Minimum RPC deadline for sleeping or deleting a persistent Cloud Box VM. */
+export const CLOUD_BOX_MUTATION_TIMEOUT_MS = 60_000
+
 export function createCloudApi(session: RpcRequester): CloudApi {
   const callChoice = async (method: string, params: Record<string, unknown>) => {
     try {
@@ -135,9 +142,14 @@ export function createCloudApi(session: RpcRequester): CloudApi {
     method: string,
     params: Record<string, unknown>,
     parse: (raw: unknown) => T,
+    atLeastMs?: number,
   ): Promise<T> => {
     try {
-      return parse(await session.request(method, params))
+      const raw =
+        atLeastMs !== undefined
+          ? await session.request(method, params, { atLeastMs })
+          : await session.request(method, params)
+      return parse(raw)
     } catch (cause) {
       throw new NessaCloudBoxError(cause)
     }
@@ -157,37 +169,52 @@ export function createCloudApi(session: RpcRequester): CloudApi {
         return items.map(parseCloudBoxSummary)
       }),
     create: (params) =>
-      callBox(ProductMethod.CloudBoxesCreate, { ...params }, (raw) => {
-        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-          throw new TypeError("Invalid cloud box create result")
-        }
-        const obj = raw as Record<string, unknown>
-        const cloudBox = parseCloudBoxSummary(
-          Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null,
-        )
-        const credential = readOwnString(obj, "credential")
-        return { cloudBox, credential }
-      }),
+      callBox(
+        ProductMethod.CloudBoxesCreate,
+        { ...params },
+        (raw) => {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            throw new TypeError("Invalid cloud box create result")
+          }
+          const obj = raw as Record<string, unknown>
+          const cloudBox = parseCloudBoxSummary(
+            Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null,
+          )
+          const credential = readOwnString(obj, "credential")
+          return { cloudBox, credential }
+        },
+        CLOUD_BOX_CREATE_TIMEOUT_MS,
+      ),
     wake: (boxId) =>
-      callBox(ProductMethod.CloudBoxesWake, { boxId }, (raw) => {
-        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-          throw new TypeError("Invalid cloud box wake result")
-        }
-        const obj = raw as Record<string, unknown>
-        return {
-          boxId: readOwnString(obj, "boxId"),
-          gatewayId: readOwnString(obj, "gatewayId"),
-          url: readOwnString(obj, "url"),
-        }
-      }),
+      callBox(
+        ProductMethod.CloudBoxesWake,
+        { boxId },
+        (raw) => {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            throw new TypeError("Invalid cloud box wake result")
+          }
+          const obj = raw as Record<string, unknown>
+          return {
+            boxId: readOwnString(obj, "boxId"),
+            gatewayId: readOwnString(obj, "gatewayId"),
+            url: readOwnString(obj, "url"),
+          }
+        },
+        CLOUD_BOX_WAKE_TIMEOUT_MS,
+      ),
     sleep: (boxId) =>
-      callBox(ProductMethod.CloudBoxesSleep, { boxId }, (raw) => {
-        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-          throw new TypeError("Invalid cloud box sleep result")
-        }
-        const obj = raw as Record<string, unknown>
-        return parseCloudBoxSummary(Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null)
-      }),
+      callBox(
+        ProductMethod.CloudBoxesSleep,
+        { boxId },
+        (raw) => {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            throw new TypeError("Invalid cloud box sleep result")
+          }
+          const obj = raw as Record<string, unknown>
+          return parseCloudBoxSummary(Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null)
+        },
+        CLOUD_BOX_MUTATION_TIMEOUT_MS,
+      ),
     rename: (boxId, name) =>
       callBox(ProductMethod.CloudBoxesRename, { boxId, name }, (raw) => {
         if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -197,20 +224,25 @@ export function createCloudApi(session: RpcRequester): CloudApi {
         return parseCloudBoxSummary(Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null)
       }),
     delete: (boxId) =>
-      callBox(ProductMethod.CloudBoxesDelete, { boxId }, (raw) => {
-        if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-          throw new TypeError("Invalid cloud box delete result")
-        }
-        const obj = raw as Record<string, unknown>
-        const deleted = Object.hasOwn(obj, "deleted") ? obj.deleted : undefined
-        if (deleted !== true) {
-          throw new TypeError("Invalid cloud box delete confirmation")
-        }
-        return {
-          boxId: readOwnString(obj, "boxId"),
-          deleted: true,
-        }
-      }),
+      callBox(
+        ProductMethod.CloudBoxesDelete,
+        { boxId },
+        (raw) => {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            throw new TypeError("Invalid cloud box delete result")
+          }
+          const obj = raw as Record<string, unknown>
+          const deleted = Object.hasOwn(obj, "deleted") ? obj.deleted : undefined
+          if (deleted !== true) {
+            throw new TypeError("Invalid cloud box delete confirmation")
+          }
+          return {
+            boxId: readOwnString(obj, "boxId"),
+            deleted: true,
+          }
+        },
+        CLOUD_BOX_MUTATION_TIMEOUT_MS,
+      ),
   }
 
   return {

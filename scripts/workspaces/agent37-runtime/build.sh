@@ -19,6 +19,9 @@ cargo build --release --locked -p nessa-mcp
 rm -rf "$out" && mkdir -p "$out/opt/nessa/bin" "$out/opt/nessa/harnesses"
 cp "$here/Dockerfile" "$out/"
 cp target/release/nessa target/release/nessa-mcp "$sdk/target/release/workspace-supervisor" "$out/opt/nessa/bin/"
+cp "$repo/docs/guides/headless-gateway/nessa-gateway-bootstrap" "$out/opt/nessa/bin/nessa-gateway-bootstrap"
+chmod +x "$out/opt/nessa/bin/nessa-gateway-bootstrap"
+cp "$repo/docs/guides/headless-gateway/nessa-server.service" "$out/opt/nessa/nessa-server.service"
 cp "$(command -v node)" "$out/opt/nessa/bin/node"
 for harness in codex-acp claude-acp; do
   cp crates/nessa-sdk/harnesses/$harness/package.json "$out/opt/nessa/harnesses/$harness.json"

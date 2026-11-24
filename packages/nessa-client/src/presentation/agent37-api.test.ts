@@ -71,8 +71,10 @@ describe("agent37 api", () => {
       createdAtMs: 100,
       updatedAtMs: 200,
     }
+    const seenOptions = new Map<string, unknown>()
     const cloud = createCloudApi({
-      request: async (method: string) => {
+      request: async (method: string, _params?: unknown, options?: unknown) => {
+        seenOptions.set(method, options)
         switch (method) {
           case "cloud.boxes.list":
             return { boxes: [sample] }
@@ -116,5 +118,9 @@ describe("agent37 api", () => {
       boxId: sample.boxId,
       deleted: true,
     })
+    expect(seenOptions.get("cloud.boxes.create")).toEqual({ atLeastMs: 240_000 })
+    expect(seenOptions.get("cloud.boxes.wake")).toEqual({ atLeastMs: 150_000 })
+    expect(seenOptions.get("cloud.boxes.sleep")).toEqual({ atLeastMs: 60_000 })
+    expect(seenOptions.get("cloud.boxes.delete")).toEqual({ atLeastMs: 60_000 })
   })
 })

@@ -21,12 +21,14 @@ RUN bash -lc 'eval "$(scripts/terminal/ghostty.sh)" && cargo build --release --l
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl bash \
+    && apt-get install -y --no-install-recommends ca-certificates curl bash jq \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --shell /bin/bash --uid 10001 nessa \
-    && mkdir -p /data /workspace \
+    && mkdir -p /data /workspace /opt/nessa/bin \
     && chown nessa:nessa /data /workspace
 COPY --from=build /src/target/release/nessa /usr/local/bin/nessa
+COPY docs/guides/headless-gateway/nessa-gateway-bootstrap /opt/nessa/bin/nessa-gateway-bootstrap
+RUN chmod 0755 /opt/nessa/bin/nessa-gateway-bootstrap
 USER nessa
 ENV NESSA_DATA_DIR=/data \
     NESSA_STAGE=prod \
