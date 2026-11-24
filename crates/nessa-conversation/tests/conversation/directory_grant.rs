@@ -152,11 +152,11 @@ fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
         .unwrap();
     let published = grant_log(&database, "dev-1");
     assert_eq!(published.len(), 1);
-    assert_eq!(published[0].0, 1);
-    assert_eq!(published[0].1, owned.resource_id);
-    assert_eq!(published[0].2, "directory");
-    assert_eq!(published[0].3.as_deref(), Some("read"));
-    assert!(published[0].4.is_some());
+    assert_eq!(published[0].position, 1);
+    assert_eq!(published[0].key, owned.resource_id);
+    assert_eq!(published[0].kind, "directory");
+    assert_eq!(published[0].capabilities.as_deref(), Some("read"));
+    assert!(published[0].revision.is_some());
     fs::remove_file(shared.join(".nessa-binding")).unwrap();
     match access.read("dev-1", "note.txt").unwrap_err() {
         DirectoryRefusal::MarkerMismatch { .. } => {}
@@ -164,21 +164,26 @@ fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
     }
     let revoked = grant_log(&database, "dev-1");
     assert_eq!(revoked.len(), 2);
-    assert_eq!(revoked[1].0, 2);
-    assert_eq!(revoked[1].1, owned.resource_id);
-    assert_eq!(revoked[1].2, "directory");
-    assert!(revoked[1].3.is_none());
-    assert!(revoked[1].4.is_none());
+    assert_eq!(revoked[1].position, 2);
+    assert_eq!(revoked[1].key, owned.resource_id);
+    assert_eq!(revoked[1].kind, "directory");
+    assert!(revoked[1].capabilities.is_none());
+    assert!(revoked[1].revision.is_none());
     assert!(store
         .grants_for_resource(&owned.resource_id)
         .unwrap()
         .is_empty());
 }
 
-fn grant_log(
-    path: &std::path::Path,
-    receiver: &str,
-) -> Vec<(i64, String, String, Option<String>, Option<i64>)> {
+struct LoggedGrant {
+    position: i64,
+    key: String,
+    kind: String,
+    capabilities: Option<String>,
+    revision: Option<i64>,
+}
+
+fn grant_log(path: &std::path::Path, receiver: &str) -> Vec<LoggedGrant> {
     let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
     let mut statement = connection
         .prepare(
@@ -188,13 +193,13 @@ fn grant_log(
         .unwrap();
     statement
         .query_map([receiver], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
+            Ok(LoggedGrant {
+                position: row.get(0)?,
+                key: row.get(1)?,
+                kind: row.get(2)?,
+                capabilities: row.get(3)?,
+                revision: row.get(4)?,
+            })
         })
         .unwrap()
         .map(|row| row.unwrap())
