@@ -30,8 +30,8 @@ Reuse the existing native worker's finite phase deadline (or shorten it),
 existing connection permit, the existing gateway record semaphore, and
 shutdown wake. Do not add a detached Tokio worker, nest TLS or switch after
 the product stream began. The binary phase is one opt-in connection with one
-advisory HEAD_CAP; Bind's own Head authorization is still mandatory. The probe's
-operation adapter denies Page and every operation not selected by this lab.
+advisory HEAD_CAP; Bind's own Head authorization is still mandatory. In
+HEAD-only mode the adapter denies Page and unselected operations.
 The existing physical source refuses pruned streams; HEAD_CAP publishes only
 the correlated scope and position, with no extra capability requirements for
 this schema. It does not claim an origin epoch or offer writes. The upstream
@@ -53,3 +53,36 @@ returns the exact correlated terminal cause `CredentialRevoked`. The
 separate probe then closes before NSR1 with EOF or a connection reset, not a
 typed NSR1 refusal from an authenticated session. No reply byte or timeout
 qualifies. This test does not qualify revocation mid-frame.
+
+## Explicit two-page restart fixture
+
+The Page fixture sets `page: true` on the existing lab opening. Omission
+or `false` keeps HEAD-only mode. The lab is mounted only by the test fixture
+and uses the one finite native TLS connection, one exact conversation scope,
+and one Page allowance per connection. Opening proves the original enrolled
+TLS device; current credential, receiver, access epoch and grant checks use
+the ordinary Page authority. Limits come from the existing Product record
+ceilings; this receipt requests one record per page. The binary session does
+not fall back to Product. The codec also maps its combined OPEN to the Page
+permission; this fixture only sends fixed-target Pages.
+
+Each Page uses the existing gateway physical record worker and one existing
+global permit. The operation view keeps that permit through canonical
+encoding, but releases it before the writer can send a byte. If the physical
+wait is uncertain, the worker keeps its lease and this connection can admit
+no further source reads. The fixture does not retry that case.
+
+For each route, the fixture commits exactly one bounded row, closes the
+connection, and reopens the same SQLite cache after a gateway restart.
+A fresh pinned connection fetches the next row with the saved cursor. The
+existing retained pass and cache own validation and commit. Both prefix rows
+must match positions, IDs and bytes from the ordinary authorized Product
+read. The receipt reports actual decoded payload and protocol byte counts;
+it excludes the underlying TLS and relay carrier bytes. This is a two-page
+prefix, not a full download, mid-frame loss, live failover or performance
+qualification.
+
+The ordinary Nessa receiver/access epoch gates a product grant. It does
+not prove an origin authority epoch, and cannot substitute for a separately
+trusted origin claim/ledger and stamped receiver commit. Catalogue reads
+retain their separate scope, permission, manifests and deletion coverage.

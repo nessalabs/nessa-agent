@@ -7,6 +7,7 @@ use nessa_auth::{
 };
 use nessa_client_core::retained::{dial_gateway, RetainedTranscript};
 use nessa_device_pairing::infrastructure::RECORD_HEAD_PROBE_PREFIX;
+use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
     conversation::domain::ConversationId,
     pairing::{
@@ -20,8 +21,8 @@ use nessa_protocol::{
     relay::RelayAddress,
 };
 use nessa_sync::replication::{
-    application::{RecordHeadSource, SourceError},
-    domain::{CapabilitySupport, Scope, SourceHead},
+    application::{RecordHeadSource, RecordSource, SourceError},
+    domain::{CapabilitySupport, Page, PageRequest, Scope, SourceHead},
     infrastructure::session::{
         CapabilityRecordSession, InterruptibleSessionIo, RecordSessionError, SessionInterrupt,
         SessionLimits, TcpSessionIo,
@@ -126,6 +127,7 @@ fn open_probe(
     device: &Device,
     relay: Option<&RelayAddress>,
     scope: &Scope,
+    page: bool,
 ) -> Result<EnrolledIo, ProbeRefusal> {
     let tcp = TcpSessionIo::new(dial(device, relay)?).map_err(|_| ProbeRefusal::Dial)?;
     let interrupt = tcp.interrupt_handle();
@@ -140,6 +142,7 @@ fn open_probe(
             "receiver": device.receiver,
             "epoch": device.access_epoch,
             "scope": wire_scope(scope),
+            "page": page,
         }))
         .unwrap(),
     );
@@ -157,7 +160,7 @@ fn probe(
     relay: Option<&RelayAddress>,
     scope: &Scope,
 ) -> Result<SourceHead, ProbeRefusal> {
-    let native = open_probe(device, relay, scope)?;
+    let native = open_probe(device, relay, scope, false)?;
     let session = CapabilityRecordSession::connect(
         native,
         scope.clone(),
@@ -249,7 +252,7 @@ fn enrolled_head_matches_the_existing_product_read_on_direct_and_relay() {
         expect_revoked_status(&device, route);
         // Revocation closes the opted-in probe before NSR1. Await that close
         // without racing a binary write against it; no byte or timeout qualifies.
-        let mut opened = open_probe(&device, route, before.scope()).unwrap();
+        let mut opened = open_probe(&device, route, before.scope(), false).unwrap();
         match opened.read(&mut [0_u8; 1]) {
             Ok(0) => {}
             Err(error)
@@ -261,4 +264,160 @@ fn enrolled_head_matches_the_existing_product_read_on_direct_and_relay() {
         }
     }
     assert_eq!(saved(), before);
+}
+
+struct RecordRequests<S> {
+    source: S,
+    after: Vec<u64>,
+}
+
+impl<S: RecordSource> RecordSource for RecordRequests<S> {
+    fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
+        self.source.head(scope)
+    }
+
+    fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
+        self.after.push(request.after);
+        self.source.page(request)
+    }
+}
+
+fn scoped_raw_rows(device: &Device, name: &str, scope: &Scope) -> Vec<(u64, String, Vec<u8>)> {
+    let db =
+        Connection::open_with_flags(device.caches.join(name), OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut query = db
+        .prepare(
+            "SELECT position, record_id, payload FROM transcript_records
+         WHERE receiver = ?1 AND origin = ?2 AND stream = ?3 ORDER BY position LIMIT 3",
+        )
+        .unwrap();
+    query
+        .query_map(
+            params![
+                scope.receiver().as_str(),
+                scope.origin().as_str(),
+                scope.stream().as_str()
+            ],
+            |row| {
+                Ok((
+                    u64::from_be_bytes(row.get::<_, [u8; 8]>(0)?),
+                    row.get(1)?,
+                    row.get(2)?,
+                ))
+            },
+        )
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[test]
+fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
+    for use_relay in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut gateway, device) = Device::start(directory.path(), "record-head-probe");
+        device.wait_registered();
+        let setup: Setup =
+            serde_json::from_slice(&std::fs::read(device.root.join("setup.json")).unwrap())
+                .unwrap();
+        let conversation = ConversationId::new(&setup.conversation).unwrap();
+        let mut ordinary = device.cache("page-baseline.sqlite3");
+        assert!(
+            completion::finish(|budget| device.read_for(
+                &mut ordinary,
+                device.address,
+                None,
+                budget,
+                8
+            ))
+            .unwrap()
+            .complete
+        );
+        let catalogue = ordinary
+            .saved_catalogue_scope(&device.receiver)
+            .unwrap()
+            .unwrap();
+        let RetainedTranscript::Retained(baseline) = ordinary
+            .transcript_view(
+                &device.receiver,
+                catalogue.origin().as_str(),
+                &conversation,
+                Uuid::nil(),
+            )
+            .unwrap()
+        else {
+            panic!("ordinary baseline did not save the authorized target");
+        };
+        let scope = baseline.progress().scope();
+        drop(ordinary);
+        let expected = scoped_raw_rows(&device, "page-baseline.sqlite3", scope);
+        assert!(expected.len() >= 2);
+        assert_eq!((expected[0].0, expected[1].0), (1, 2));
+
+        let name = "binary-staged.sqlite3";
+        for after in [0_u64, 1] {
+            if after > 0 {
+                drop(gateway);
+                gateway = Gateway::start_relayed(&device.root, "record-head-probe");
+                device.wait_registered();
+            }
+            let relay = device.relay();
+            let io = open_probe(&device, use_relay.then_some(&relay), scope, true).unwrap();
+            let session = CapabilityRecordSession::connect(
+                io,
+                scope.clone(),
+                SessionLimits {
+                    control_bytes: 2048,
+                    bindings: 1,
+                },
+                CapabilitySupport::current(),
+            )
+            .unwrap();
+            let (mut auth, source) = session.parts();
+            let mut source = RecordRequests {
+                source,
+                after: Vec::new(),
+            };
+            let mut retained = device.cache(name);
+            if after > 0 {
+                let RetainedTranscript::Retained(saved) = retained
+                    .transcript_view(
+                        &device.receiver,
+                        scope.origin().as_str(),
+                        &conversation,
+                        Uuid::nil(),
+                    )
+                    .unwrap()
+                else {
+                    panic!("the reopened cache must own the first committed cursor");
+                };
+                assert_eq!(saved.progress().scope(), scope);
+                assert_eq!(saved.progress().downloaded(), after);
+            }
+            let (position, pages) = retained
+                .one_record_page_for_test(scope, &mut auth, &mut source)
+                .unwrap();
+            assert_eq!((position, pages), (after + 1, 1));
+            assert_eq!(source.after, [after]);
+            let counters = session.counters().unwrap();
+            assert_eq!(
+                counters.payload_bytes as usize,
+                expected[after as usize].2.len()
+            );
+            assert_eq!(counters.duplicate_bytes, 0);
+            eprintln!(
+                "enrolled_page route={} after={after} durable={position} records=1 payload_bytes={} protocol_bytes={} exchanges={}",
+                if use_relay { "opaque-local-relay" } else { "direct" },
+                counters.payload_bytes, counters.protocol_bytes, counters.exchanges,
+            );
+            session.close().unwrap();
+            drop(retained);
+            assert_eq!(
+                scoped_raw_rows(&device, name, scope),
+                expected[..position as usize]
+            );
+        }
+        drop(gateway);
+    }
 }
