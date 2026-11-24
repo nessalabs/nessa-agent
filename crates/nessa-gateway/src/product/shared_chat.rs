@@ -530,7 +530,12 @@ fn list_cached(
     let mut complete = true;
     for peer in peers {
         match peer_rows(records, peer, &wall, &monotonic) {
-            Ok(rows) => found.push(rows),
+            Ok((rows, rows_complete)) => {
+                if !rows_complete {
+                    complete = false;
+                }
+                found.push(rows);
+            }
             Err(error) => {
                 tracing::warn!(
                     receiver = %peer.receiver,
@@ -795,11 +800,16 @@ fn held_place(
 }
 
 /// List rows for chats a follow copied without a catalogue.
+///
+/// The boolean is false when a retained transcript could not be read. Those
+/// rows are left out, and the list stays incomplete, so the omission is not
+/// a claim that the chat is gone.
 fn grant_rows(
     cache: &mut RetainedCache,
     receiver: &str,
-) -> Result<Vec<ConversationSummary>, ReadFailure> {
+) -> Result<(Vec<ConversationSummary>, bool), ReadFailure> {
     let mut rows = Vec::new();
+    let mut complete = true;
     for id in cache.conversation_ids(receiver)? {
         let Ok(conversation) = ConversationId::new(&id) else {
             continue;
@@ -807,10 +817,11 @@ fn grant_rows(
         let Some(origin) = cache.transcript_origin(receiver, &id)? else {
             continue;
         };
-        let transcript = match cache.transcript_view(receiver, &origin, &conversation, Uuid::nil())
-        {
-            Ok(transcript) => transcript,
-            Err(_) => continue,
+        let Some(transcript) = listed_transcript(
+            cache.transcript_view(receiver, &origin, &conversation, Uuid::nil()),
+            &mut complete,
+        ) else {
+            continue;
         };
         let RetainedTranscript::Retained(snapshot) = transcript else {
             continue;
@@ -830,7 +841,28 @@ fn grant_rows(
             ask: None,
         });
     }
-    Ok(rows)
+    Ok((rows, complete))
+}
+
+/// A transcript the cache could not read is not proof the chat is gone.
+/// `complete` becomes false so the list does not treat the omission as a
+/// withdrawal. A transcript the cache did answer, including one not loaded
+/// yet, leaves `complete` as it was.
+fn listed_transcript(
+    transcript: Result<RetainedTranscript, ReadFailure>,
+    complete: &mut bool,
+) -> Option<RetainedTranscript> {
+    match transcript {
+        Ok(transcript) => Some(transcript),
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                "a retained transcript was left out of the conversation list"
+            );
+            *complete = false;
+            None
+        }
+    }
 }
 
 fn peer_rows(
@@ -838,7 +870,7 @@ fn peer_rows(
     peer: &ActivePeer,
     wall: &Arc<dyn WallClock>,
     monotonic: &Arc<dyn MonotonicClock>,
-) -> Result<Vec<ConversationSummary>, ReadFailure> {
+) -> Result<(Vec<ConversationSummary>, bool), ReadFailure> {
     let mut cache = open_cache(records, peer, wall, monotonic)?;
     let Some(scope) = cache.saved_catalogue_scope(&peer.receiver)? else {
         return grant_rows(&mut cache, &peer.receiver);
@@ -865,11 +897,10 @@ fn peer_rows(
         after = Some(next);
     }
     // A grant copied after this catalogue snapshot is not one of its entries.
-    // Leaving it out reports a complete list that does not name the chat.
-    Ok(include_retained(
-        rows,
-        grant_rows(&mut cache, &peer.receiver)?,
-    ))
+    // A transcript that could not be read leaves the list incomplete rather
+    // than reporting a complete list that does not name the chat.
+    let (retained, retained_complete) = grant_rows(&mut cache, &peer.receiver)?;
+    Ok((include_retained(rows, retained), retained_complete))
 }
 
 /// Catalogue rows, plus retained grants the snapshot does not name. A grant
@@ -1167,6 +1198,26 @@ mod tests {
             kept[0].updated_at_ms, 80,
             "an older copy leaves the catalogue time"
         );
+    }
+
+    #[test]
+    fn a_transcript_that_cannot_be_read_leaves_the_list_incomplete() {
+        let mut complete = true;
+        assert!(super::listed_transcript(
+            Err(nessa_client_core::retained::ReadFailure::Cache),
+            &mut complete,
+        )
+        .is_none());
+        assert!(!complete);
+        let mut complete = true;
+        assert!(matches!(
+            super::listed_transcript(
+                Ok(nessa_client_core::retained::RetainedTranscript::NotLoaded),
+                &mut complete,
+            ),
+            Some(nessa_client_core::retained::RetainedTranscript::NotLoaded)
+        ));
+        assert!(complete);
     }
 
     struct Held {
