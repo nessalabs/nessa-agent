@@ -50,19 +50,26 @@ claim that every source statement, interleaving or operating system was tested.
 
 ## Coverage snapshot
 
-The feature owners below currently link **102 executable models**.
+The feature owners below currently link **104 executable models**.
 TLC results shown are the last saved bounded run. Source guards, policy evaluators,
 storage and process owners remain implementation authority; model exploration is
 design evidence. See [provenance](provenance.md) for executed checks and exclusions.
+The disposition counts were read from the catalog at source `f2d721112a96beeb4b335314d56a90083acde9e9`
+after the sync pages were added. Saved TLC results in the tables below were not re-run.
+Two implemented gateway pages remain unmapped, so `pnpm docs:state:coverage` still
+fails: [Call a gateway method from the CLI or MCP](services/gateway/call-a-method-from-the-cli-or-mcp.md)
+and [Pair a gateway as the same person](services/gateway/same-person.md). The sync
+pages did not change those owners.
 
 | Disposition | Pages | Meaning |
 | --- | --- | --- |
-| Value or representation contract | 5 | Accounted for; this is not a TLC pass. |
-| Direct model | 102 | A unique linked spec/config and declared safety rules. |
+| Value or representation contract | 6 | Accounted for; this is not a TLC pass. |
+| Direct model | 104 | A unique linked spec/config and declared safety rules. |
 | External source boundary | 5 | Accounted for; this is not a TLC pass. |
-| Component/feature index | 20 | Accounted for; this is not a TLC pass. |
-| Reference guide | 8 | Accounted for; this is not a TLC pass. |
+| Component/feature index | 21 | Accounted for; this is not a TLC pass. |
+| Reference guide | 16 | Accounted for; this is not a TLC pass. |
 | Shared owner; partial scope | 33 | Open the owner link for the modeled part; inspect the feature for exclusions. |
+| Unmapped stateful page | 2 | `docs:state:coverage` fails until each has a model or an explicit boundary. |
 
 ## Auth features
 
@@ -283,6 +290,20 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [Usage limits and scheduled continuation](services/sdk/runtime/usage-limit-continuation.md) | Direct model | 5 rules held; 9 states |
 | [Submission scheduling and recovery](services/sdk/scheduling.md) | Direct model | 7 rules held; 81 states |
 | [Finish a captured Stop after restart](services/sdk/stop-recovery.md) | Direct model | 5 rules held; 42 states |
+
+## Sync features
+
+These pages explain the pinned sync engine and the followers in this repository.
+They are an index, a value contract, and reference guides. They do not add a model.
+
+| Feature or index | Disposition | Model owner and saved result |
+| --- | --- | --- |
+| [How Nessa sync works](services/sync/README.md) | Component/feature index | Not a checked lifecycle |
+| [Sync data model](services/sync/data-model.md) | Value or representation contract | Not a checked lifecycle |
+| [One record change, end to end](services/sync/one-record-change.md) | Reference guide | Not a checked lifecycle |
+| [Ordering and conflict rules](services/sync/ordering.md) | Reference guide | Not a checked lifecycle |
+| [Failure and retry](services/sync/failure.md) | Reference guide | Not a checked lifecycle |
+| [Where the sync code lives](services/sync/code-map.md) | Reference guide | Not a checked lifecycle |
 
 ## Storage features
 
