@@ -28,6 +28,7 @@ diagramLinks:
   GitHubRelay: "github-webhooks"
   Environment: "gateway-environment-leases"
   Peers: "gateway-peer-gateways"
+  Sync: "sync"
 ---
 
 # Nessa system
@@ -62,6 +63,7 @@ flowchart TB
     GitHubRelay[Optional hosted GitHub relay]
     Environment[Remote environment lease worker]
     Peers[Paired peer gateways]
+    Sync[Sync engine and followers]
     Host -->|mounts surfaces| Desktop
     Host -->|manages release gateway| Gateway
     Desktop -->|product commands| Client
@@ -78,6 +80,7 @@ flowchart TB
     Tooling -->|build artifacts| Host
     Gateway -->|bounded remote work leases| Environment
     Gateway -->|authorized peer record reads| Peers
+    Gateway -->|record and catalogue pages| Sync
     GitHubRelay -->|opt-in retained events| Gateway
 ```
 
@@ -140,6 +143,7 @@ The browser connects to an existing gateway using its browser session. The nativ
 | Validated agent secret namespaces | [Credential values](services/credentials/README.md) |
 | MCP Apps and external UI package boundaries | [Extensions and UI](services/extensions/README.md) |
 | Runtime assembly and release operations | [Tooling](services/tooling/README.md) |
+| Record and catalogue copies, and the other readers beside them | [Sync](services/sync/README.md) |
 
 ## Feature ownership and model coverage
 
