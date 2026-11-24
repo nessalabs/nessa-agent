@@ -464,10 +464,12 @@ describe("the index and the list subscription", () => {
     gateway.listLimit = 1
     follow()
     await source.index()
-    gateway.once("observe", () => ({
-      conversations: [row(conversationB, { updatedAtMs: 1 })],
-      complete: true,
-    }))
+    gateway.once("observe", () =>
+      Promise.resolve({
+        conversations: [row(conversationB, { updatedAtMs: 1 })],
+        complete: true,
+      }),
+    )
     gateway.publishList()
     await flush()
     expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual([
