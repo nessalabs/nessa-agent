@@ -22,11 +22,11 @@ use nessa_protocol::pairing::socket::{
     NativeDeadline, NativeWakeReport, WakeEndpoint, WakeEndpoints, NATIVE_CONNECTION_CAPACITY,
 };
 use nessa_protocol::pairing::{
-    wire::{self, NativePairingRequest, NativeWireError},
+    wire::{self, NativePairingRequest, NativeWireError, RecordCarrierOpen},
     DevicePairingStatus, EnrollmentChannel, NativeFrameError,
 };
 use std::{
-    io::{ErrorKind, Read, Write},
+    io::{ErrorKind, Read, Result as IoResult, Write},
     net::TcpStream,
     sync::{Arc, Mutex, PoisonError},
 };
@@ -141,8 +141,7 @@ impl From<DeadlineError> for NativeConnectionError {
 /// One whose first envelope is `openEnvironment` moves to a third pool, also
 /// eight, the same way.
 pub struct NativeEnrollmentConnections {
-    #[cfg(feature = "test-support")]
-    record_head_probe: Option<Arc<dyn RecordHeadProbe>>,
+    record_carrier: Option<Arc<dyn RecordCarrier>>,
     gateway: Arc<GatewayPairing>,
     clock: Arc<dyn Clock>,
     capacity: Arc<Semaphore>,
@@ -219,14 +218,13 @@ impl NativeEnrollmentConnections {
             relay: Pool::new(RELAY_CAPACITY),
             tunnel: Pool::new(TUNNEL_CAPACITY),
             discovery: None,
-            #[cfg(feature = "test-support")]
-            record_head_probe: None,
+            record_carrier: None,
         }
     }
-    /// Attach the explicit record Head lab selector to direct and relay ingress.
-    #[cfg(feature = "test-support")]
-    pub fn with_record_head_probe(mut self, probe: Arc<dyn RecordHeadProbe>) -> Self {
-        self.record_head_probe = Some(probe);
+    /// Mount the explicit record carrier for direct and joined relay ingress.
+    /// The default is unmounted.
+    pub fn with_record_carrier(mut self, carrier: Arc<dyn RecordCarrier>) -> Self {
+        self.record_carrier = Some(carrier);
         self
     }
 
@@ -351,7 +349,7 @@ impl NativeEnrollmentConnections {
         ))?;
         wake.register(&endpoint);
         let lease = Arc::new(ConnectionPermit {
-            permit: Some(permit),
+            permit: Mutex::new(Some(permit)),
             drained: self.drained.clone(),
             endpoint: Some(endpoint),
         });
@@ -375,15 +373,20 @@ impl NativeEnrollmentConnections {
                 pool: admission(&self.environment),
             }),
             discovery: self.discovery.clone(),
-            #[cfg(feature = "test-support")]
-            record_head_probe: self.record_head_probe.clone(),
+            record_carrier: self.record_carrier.clone(),
         };
         let worker = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             // Locals unwind physical IO and its runtime before the original permit.
             let runtime = gateway;
             serve_exchange(
-                &runtime, &handle, stream, deadline, entropy, admissions, tunneled,
+                &runtime,
+                &handle,
+                stream,
+                deadline,
+                entropy,
+                admissions,
+                (tunneled, &_permit),
             )
         });
         drop(wake);
@@ -529,14 +532,27 @@ impl NativeConnectionCompletion {
 }
 struct ConnectionPermit {
     endpoint: Option<Arc<WakeEndpoint>>,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Mutex<Option<OwnedSemaphorePermit>>,
     drained: Arc<Notify>,
+}
+impl ConnectionPermit {
+    /// Return ingress once. Worker and listener still share the inert handle.
+    fn release_capacity(&self) {
+        let permit = self
+            .permit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(permit) = permit {
+            drop(permit);
+            self.drained.notify_waiters();
+        }
+    }
 }
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
         drop(self.endpoint.take());
-        drop(self.permit.take());
-        self.drained.notify_waiters();
+        self.release_capacity();
     }
 }
 fn endpoint_of(lease: &ConnectionPermit) -> Arc<WakeEndpoint> {
@@ -574,8 +590,7 @@ impl std::fmt::Debug for TunnelPermit {
 }
 /// What the blocking worker may move a connection to, by its first envelope.
 struct Admissions {
-    #[cfg(feature = "test-support")]
-    record_head_probe: Option<Arc<dyn RecordHeadProbe>>,
+    record_carrier: Option<Arc<dyn RecordCarrier>>,
     product: Option<ProductAdmission>,
     environment: Option<EnvironmentAdmission>,
     discovery: Option<Arc<dyn GrantorDiscovery>>,
@@ -652,7 +667,8 @@ impl Admission {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.endpoint);
         Ok(PoolPermit {
-            endpoint: Some(self.endpoint.clone()),
+            endpoint: self.endpoint.clone(),
+            wake: self.wake.clone(),
             permit: Some(permit),
             drained: self.drained.clone(),
         })
@@ -660,14 +676,20 @@ impl Admission {
 }
 /// One product session's or environment's permit, held until it ends.
 pub(super) struct PoolPermit {
-    endpoint: Option<Arc<WakeEndpoint>>,
+    endpoint: Arc<WakeEndpoint>,
+    wake: Arc<Mutex<WakeEndpoints>>,
     permit: Option<OwnedSemaphorePermit>,
     drained: Arc<Notify>,
 }
 impl Drop for PoolPermit {
     fn drop(&mut self) {
-        drop(self.endpoint.take());
+        // The ingress completion may still hold this endpoint after the
+        // stream closes. Retire the exact membership before returning the
+        // slot, under the admission/shutdown lock.
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        wake.remove(&self.endpoint);
         drop(self.permit.take());
+        drop(wake);
         self.drained.notify_waiters();
     }
 }
@@ -683,21 +705,87 @@ pub(super) enum Served {
     /// connection, for the paired environment, and its environment permit.
     Environment(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
 }
-/// A lab-only first envelope selects a serial Head connection, not permission.
-#[cfg(feature = "test-support")]
-pub const RECORD_HEAD_PROBE_PREFIX: &[u8] = b"NESSA-RECORD-HEAD-LAB/1\0";
-
-/// A lab-only product Head probe on the original proved native transport.
-#[cfg(feature = "test-support")]
-pub trait RecordHeadProbe: Send + Sync {
-    /// Accept the selector's bounded fields, verify the issued credential and
-    /// run on this worker's original finite deadline and wake endpoint.
+/// The mounted carrier, entered on the original finite native worker.
+pub trait RecordCarrier: Send + Sync {
+    /// Authenticate and admit the requested operation before consuming
+    /// `selection` to refuse or accept; acceptance moves the session owner.
     fn serve(
         &self,
         runtime: &Handle,
-        transport: NativeTransport<DeadlineStream>,
-        opening: &[u8],
-    ) -> Result<(), ErrorKind>;
+        selection: PendingRecordCarrier<'_>,
+        opening: RecordCarrierOpen,
+    ) -> Result<(), NativeConnectionError>;
+}
+
+/// A proved first envelope before it owns a Product session place.
+/// Neither raw record I/O nor writing Accepted is available in this state.
+pub struct PendingRecordCarrier<'a> {
+    channel: EnrollmentChannel<DeadlineStream>,
+    ingress: &'a ConnectionPermit,
+    product: &'a Admission,
+}
+
+impl PendingRecordCarrier<'_> {
+    /// Device possession evidence from the original TLS handshake.
+    pub fn device_proof(&self) -> &DeviceConnectionProof {
+        self.channel.transport().device_proof()
+    }
+
+    /// Send the existing redacted refusal and end this connection.
+    pub fn refuse(mut self) -> Result<(), NativeConnectionError> {
+        write_reply(&mut self.channel, wire::encode_refused())
+    }
+
+    /// Move this proved, application-admitted channel to existing Product
+    /// capacity. Publish Accepted only after ingress has been returned.
+    pub fn accept(mut self) -> Result<SelectedRecordCarrier, NativeConnectionError> {
+        let permit = match self.product.admit(NativeConnectionFailure::ProductCapacity) {
+            Ok(permit) => permit,
+            Err(error) => {
+                // Capacity refusal never advances the carrier. Keep the
+                // original cause if even the redacted refusal cannot be sent.
+                write_reply(&mut self.channel, wire::encode_refused()).ok();
+                return Err(error);
+            }
+        };
+        let mut owned = PoolOwned {
+            io: self.channel,
+            permit,
+        };
+        self.ingress.release_capacity();
+        write_reply(&mut owned.io, wire::encode_record_carrier_accepted())?;
+        let PoolOwned { io, permit } = owned;
+        Ok(SelectedRecordCarrier(PoolOwned {
+            io: io.into_transport(),
+            permit,
+        }))
+    }
+}
+
+// Drop the physical stream before giving the pool its place back, including
+// when writing Accepted fails or the worker unwinds.
+struct PoolOwned<T> {
+    io: T,
+    permit: PoolPermit,
+}
+
+/// The selected byte stream and its inseparable existing Product pool permit.
+pub struct SelectedRecordCarrier(PoolOwned<NativeTransport<DeadlineStream>>);
+
+impl Read for SelectedRecordCarrier {
+    fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
+        self.0.io.read(bytes)
+    }
+}
+
+impl Write for SelectedRecordCarrier {
+    fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+        self.0.io.write(bytes)
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        self.0.io.flush()
+    }
 }
 
 fn serve_exchange<R: RngCore + CryptoRng>(
@@ -707,7 +795,7 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     deadline: Arc<NativeDeadline>,
     mut entropy: R,
     admissions: Admissions,
-    tunneled: bool,
+    (tunneled, ingress): (bool, &ConnectionPermit),
 ) -> Result<Served, NativeConnectionError> {
     stream.blocking()?;
     let channel = NativeTransport::accept(stream, gateway.identity())
@@ -721,22 +809,27 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     let mut channel = EnrollmentChannel::new(channel);
     let first = begin_enrollment_phase(&deadline)
         .map_err(NativeConnectionError::from)
-        .and_then(|()| channel.receive_envelope().map_err(frame_error));
-    #[cfg(feature = "test-support")]
-    if let (false, Some(probe), Ok(body)) = (tunneled, &admissions.record_head_probe, &first) {
-        if let Some(opening) = body.strip_prefix(RECORD_HEAD_PROBE_PREFIX) {
-            // Only a complete, distinct opening consumes this owner. It never
-            // reaches ordinary product or enrollment handling on a later failure.
-            check_deadline(&deadline)?;
-            return probe
-                .serve(handle, channel.into_transport(), opening)
-                .map(|()| Served::Enrollment)
-                .map_err(|kind| NativeConnectionFailure::Io(kind).into());
+        .and_then(|()| read_request(&mut channel));
+    let result = match first {
+        Ok(NativePairingRequest::OpenRecordCarrierV1(opening)) if !tunneled => {
+            if let (Some(carrier), Some(product)) =
+                (&admissions.record_carrier, &admissions.product)
+            {
+                check_deadline(&deadline)?;
+                // This selection consumes the native owner. A refusal or
+                // failure cannot fall through into another native phase.
+                let selection = PendingRecordCarrier {
+                    channel,
+                    ingress,
+                    product: &product.pool,
+                };
+                return carrier
+                    .serve(handle, selection, opening)
+                    .map(|()| Served::Enrollment);
+            }
+            Err(NativeConnectionFailure::Phase.into())
         }
-    }
-    let result = first
-        .and_then(|bytes| decode_request(&bytes))
-        .and_then(|first| {
+        other => other.and_then(|first| {
             check_deadline(&deadline)?;
             exchange(
                 gateway,
@@ -747,22 +840,35 @@ fn serve_exchange<R: RngCore + CryptoRng>(
                 &admissions,
                 (tunneled, first),
             )
-        });
+        }),
+    };
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
         Ok(Exchanged::EnvironmentSelected(permit)) => {
-            Ok(Served::Environment(Box::new(channel), permit))
+            let mut owned = PoolOwned {
+                io: channel,
+                permit,
+            };
+            write_reply(&mut owned.io, wire::encode_serving())
+                .map_err(|error| refuse_failed_exchange(&mut owned.io, error))?;
+            let PoolOwned { io, permit } = owned;
+            Ok(Served::Environment(Box::new(io), permit))
         }
         Ok(Exchanged::Finished) => Ok(Served::Enrollment),
-        Err(error) => {
-            if answers_with_refusal(error.failure) {
-                // Best effort: the primary failure is what this connection reports,
-                // whether or not the peer receives the refusal.
-                write_reply(&mut channel, wire::encode_refused()).ok();
-            }
-            Err(error)
-        }
+        Err(error) => Err(refuse_failed_exchange(&mut channel, error)),
     }
+}
+
+fn refuse_failed_exchange(
+    channel: &mut EnrollmentChannel<DeadlineStream>,
+    error: NativeConnectionError,
+) -> NativeConnectionError {
+    if answers_with_refusal(error.failure) {
+        // Best effort: report the primary failure whether or not the peer
+        // receives the refusal.
+        write_reply(channel, wire::encode_refused()).ok();
+    }
+    error
 }
 /// A decision the gateway made on a readable channel gets a redacted `Refused`
 /// reply; physical failures do not, because the channel may be unusable.
@@ -797,7 +903,7 @@ enum Exchanged {
     /// The first envelope selected the product session, admitted to its pool.
     ProductSelected(PoolPermit),
     /// The first envelope selected the environment phase, admitted to its
-    /// pool and answered `serving`.
+    /// pool. The stream owner will answer `serving`.
     EnvironmentSelected(PoolPermit),
 }
 /// One enrollment exchange. Only a first envelope can select the product
@@ -891,7 +997,6 @@ fn exchange<R: RngCore + CryptoRng>(
             let permit = environment
                 .pool
                 .admit(NativeConnectionFailure::EnvironmentCapacity)?;
-            write_reply(channel, wire::encode_serving())?;
             return Ok(Exchanged::EnvironmentSelected(permit));
         }
         NativePairingRequest::Status(public) => {
@@ -1022,10 +1127,7 @@ fn read_request<S: Read + Write>(
 ) -> Result<NativePairingRequest, NativeConnectionError> {
     // `DeadlineStream` retries elapsed waits itself, so every error here is final.
     let bytes = channel.receive_envelope().map_err(frame_error)?;
-    decode_request(&bytes)
-}
-fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeConnectionError> {
-    wire::decode_request(bytes).map_err(|error| NativeConnectionFailure::Wire(error).into())
+    wire::decode_request(&bytes).map_err(|error| NativeConnectionFailure::Wire(error).into())
 }
 fn write_reply<S: Read + Write>(
     channel: &mut EnrollmentChannel<S>,
@@ -1053,4 +1155,77 @@ fn frame_error(error: NativeFrameError) -> NativeConnectionError {
         NativeFrameError::Wire(error) => NativeConnectionFailure::Wire(error),
     }
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        endpoint_of, Admission, ConnectionPermit, NativeConnectionFailure, Pool, PoolOwned,
+        PRODUCT_SESSION_CAPACITY,
+    };
+    use nessa_protocol::pairing::socket::WakeEndpoint;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
+
+    #[test]
+    fn a_closed_product_slot_can_be_reused_while_ingress_completion_still_owns_its_endpoint() {
+        let product = Pool::new(PRODUCT_SESSION_CAPACITY);
+        let ingress = Pool::new(PRODUCT_SESSION_CAPACITY);
+        let drained = Arc::new(Notify::new());
+        let arrive = |port| {
+            let endpoint = WakeEndpoint::new(([127, 0, 0, 1], port).into());
+            let permit = ingress.capacity.clone().try_acquire_owned().unwrap();
+            ingress.wake.lock().unwrap().register(&endpoint);
+            let completion = ConnectionPermit {
+                endpoint: Some(endpoint.clone()),
+                permit: Mutex::new(Some(permit)),
+                drained: drained.clone(),
+            };
+            let admission = Admission {
+                capacity: product.capacity.clone(),
+                wake: product.wake.clone(),
+                connections: ingress.wake.clone(),
+                endpoint,
+                drained: drained.clone(),
+            };
+            (completion, admission)
+        };
+        let finish_admission = |completion: &ConnectionPermit, admission: &Admission| {
+            let permit = admission
+                .admit(NativeConnectionFailure::ProductCapacity)
+                .unwrap();
+            completion.release_capacity();
+            PoolOwned { io: (), permit }
+        };
+        let peer = 12000;
+        let (prior_completion, first_opening) = arrive(peer);
+        let first = finish_admission(&prior_completion, &first_opening);
+        drop(first_opening);
+        let other_sessions = (1..PRODUCT_SESSION_CAPACITY as u16)
+            .map(|index| {
+                let (completion, admission) = arrive(peer + index);
+                finish_admission(&completion, &admission)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(product.capacity.available_permits(), 0);
+        assert!(ingress.drained());
+
+        // Closing the first stream returns Product capacity before the outer
+        // completion is consumed. A new connection can reuse its address,
+        // but it must occupy a different wake membership.
+        drop(first);
+        assert_eq!(product.capacity.available_permits(), 1);
+        let (replacement_completion, replacement_opening) = arrive(peer);
+        let replacement = finish_admission(&replacement_completion, &replacement_opening);
+        assert_eq!(product.capacity.available_permits(), 0);
+
+        product.close();
+        let report = product.report().unwrap();
+        assert_eq!(report.iter().count(), PRODUCT_SESSION_CAPACITY);
+        assert!(!endpoint_of(&prior_completion).woken());
+        assert!(endpoint_of(&replacement_completion).woken());
+        drop(replacement);
+        drop(other_sessions);
+        assert!(product.drained());
+    }
 }

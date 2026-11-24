@@ -3,21 +3,19 @@ use super::{completion, Device, Gateway, REFUSED};
 use crate::composition::read_only_online_tests::fixtures::Setup;
 use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeTransport},
-    domain::pairing::TerminalCause,
+    domain::{pairing::TerminalCause, CredentialId},
 };
 use nessa_client_core::retained::{dial_gateway, RetainedTranscript};
-use nessa_device_pairing::infrastructure::RECORD_HEAD_PROBE_PREFIX;
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
     conversation::domain::ConversationId,
     pairing::{
         wire::{
             decode_reply, encode_request, NativePairingReply, NativePairingRequest,
-            NativePairingStatus,
+            NativePairingStatus, RecordCarrierMode, RecordCarrierOpen,
         },
         EnrollmentChannel,
     },
-    product::passive_read::wire_scope,
     relay::RelayAddress,
 };
 use nessa_sync::replication::{
@@ -28,7 +26,6 @@ use nessa_sync::replication::{
         SessionLimits, TcpSessionIo,
     },
 };
-use serde_json::json;
 use std::{
     io::{self, ErrorKind, Read, Write},
     net::TcpStream,
@@ -70,6 +67,8 @@ enum ProbeRefusal {
     Dial,
     Tls,
     Opening,
+    Selection,
+    Refused,
     Binding(RecordSessionError),
     Head(SourceError),
     Close(RecordSessionError),
@@ -135,20 +134,41 @@ fn open_probe(
         NativeTransport::connect(tcp, &device.identity, GatewayTrust::Pinned(device.pin))
             .map_err(|_| ProbeRefusal::Tls)?;
     let mut channel = EnrollmentChannel::new(transport);
-    let mut opening = RECORD_HEAD_PROBE_PREFIX.to_vec();
-    opening.extend(
-        serde_json::to_vec(&json!({
-            "credential": device.credential,
-            "receiver": device.receiver,
-            "epoch": device.access_epoch,
-            "scope": wire_scope(scope),
-            "page": page,
-        }))
-        .unwrap(),
-    );
+    let request = NativePairingRequest::OpenRecordCarrierV1(RecordCarrierOpen {
+        credential: CredentialId::new(device.credential.clone()).unwrap(),
+        access_epoch: device.access_epoch,
+        scope: scope.clone(),
+        mode: if page {
+            RecordCarrierMode::Page
+        } else {
+            RecordCarrierMode::Head
+        },
+    });
     channel
-        .send_envelope(&opening)
+        .send_envelope(&encode_request(&request).map_err(|_| ProbeRefusal::Opening)?)
         .map_err(|_| ProbeRefusal::Opening)?;
+    let reply = channel
+        .receive_envelope()
+        .map_err(|_| ProbeRefusal::Selection)?;
+    match decode_reply(&reply).map_err(|_| ProbeRefusal::Selection)? {
+        NativePairingReply::RecordCarrierV1Accepted => {}
+        NativePairingReply::Refused => {
+            let mut transport = channel.into_transport();
+            return match transport.read(&mut [0_u8; 1]) {
+                Ok(0) => Err(ProbeRefusal::Refused),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
+                    ) =>
+                {
+                    Err(ProbeRefusal::Refused)
+                }
+                _ => Err(ProbeRefusal::Selection),
+            };
+        }
+        _ => return Err(ProbeRefusal::Selection),
+    }
     Ok(EnrolledIo {
         tls: channel.into_transport(),
         interrupt,
@@ -225,11 +245,11 @@ fn enrolled_head_matches_the_existing_product_read_on_direct_and_relay() {
     device.wait_registered();
     assert!(matches!(
         probe(&device, None, before.scope()),
-        Err(ProbeRefusal::Binding(_))
+        Err(ProbeRefusal::Refused)
     ));
     assert!(matches!(
         probe(&device, Some(&relay), before.scope()),
-        Err(ProbeRefusal::Binding(_))
+        Err(ProbeRefusal::Refused)
     ));
     let mut ordinary = device.cache("record-head-ordinary-default.sqlite3");
     assert!(
@@ -250,18 +270,11 @@ fn enrolled_head_matches_the_existing_product_read_on_direct_and_relay() {
     device.wait_registered();
     for route in [None, Some(&relay)] {
         expect_revoked_status(&device, route);
-        // Revocation closes the opted-in probe before NSR1. Await that close
-        // without racing a binary write against it; no byte or timeout qualifies.
-        let mut opened = open_probe(&device, route, before.scope(), false).unwrap();
-        match opened.read(&mut [0_u8; 1]) {
-            Ok(0) => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
-                ) => {}
-            outcome => panic!("revoked probe did not close before its binary phase: {outcome:?}"),
-        }
+        // The current registry refusal is terminal for the selected carrier.
+        assert!(matches!(
+            open_probe(&device, route, before.scope(), false),
+            Err(ProbeRefusal::Refused)
+        ));
     }
     assert_eq!(saved(), before);
 }

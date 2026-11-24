@@ -3,9 +3,10 @@
 mod owner_phone;
 use crate::pairing::{
     wire::{
-        decode_reply, decode_request, encode_challenge, encode_hello, encode_refused,
-        encode_request, encode_status, NativePairingReply, NativePairingRequest,
-        NativePairingStatus, NativeWireError, MAX_ENROLLMENT_ENVELOPE_BYTES,
+        decode_reply, decode_request, encode_challenge, encode_hello,
+        encode_record_carrier_accepted, encode_refused, encode_request, encode_status,
+        NativePairingReply, NativePairingRequest, NativePairingStatus, NativeWireError,
+        RecordCarrierMode, MAX_ENROLLMENT_ENVELOPE_BYTES,
     },
     DevicePairingStatus,
 };
@@ -987,4 +988,45 @@ fn discovery_request_carries_exact_enrollment_and_nonsecret_credential_identifie
     missing.as_object_mut().unwrap().remove("credential");
     assert!(decode_request(&serde_json::to_vec(&missing).unwrap()).is_err());
     assert!(decode_request(br#"{"kind":"openDiscovery"}"#).is_err());
+}
+
+#[test]
+fn record_carrier_has_one_exact_versioned_selector_and_reply() {
+    let mut request = json!({
+        "kind": "openRecordCarrierV1",
+        "credential": "device-credential",
+        "accessEpoch": 7,
+        "scope": {
+            "receiver": "device",
+            "origin": "source",
+            "stream": "conversation",
+            "incarnation": "generation",
+            "schema": "schema",
+            "accessEpoch": "epoch-7"
+        },
+        "mode": "page"
+    });
+    let encoded = serde_json::to_vec(&request).unwrap();
+    let decoded = decode_request(&encoded).unwrap();
+    let NativePairingRequest::OpenRecordCarrierV1(open) = &decoded else {
+        panic!("expected the versioned native record selector");
+    };
+    assert_eq!(open.mode, RecordCarrierMode::Page);
+    assert_eq!(open.access_epoch, 7);
+    assert_eq!(open.scope.receiver().as_str(), "device");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encode_request(&decoded).unwrap()).unwrap(),
+        request
+    );
+    let accepted = encode_record_carrier_accepted().unwrap();
+    assert_eq!(accepted, br#"{"kind":"recordCarrierV1Accepted"}"#);
+    assert!(matches!(
+        decode_reply(&accepted).unwrap(),
+        NativePairingReply::RecordCarrierV1Accepted
+    ));
+    request["kind"] = json!("openRecordCarrierV2");
+    assert_eq!(
+        decode_request(&serde_json::to_vec(&request).unwrap()).unwrap_err(),
+        NativeWireError::Invalid
+    );
 }

@@ -23,7 +23,9 @@ use nessa_auth::{
     domain::{AudienceId, Credential, CredentialId, Grant, OrganizationId, Resource, ResourceId},
 };
 use nessa_client_core::pairing::NativeEnrollmentClient;
-use nessa_device_pairing::infrastructure::ProtectedSessions;
+use nessa_device_pairing::infrastructure::{
+    NativeEnrollmentConnections, NativeEnrollmentListener, ProtectedSessions, TcpEnrollmentAccept,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -32,7 +34,8 @@ use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::{
     encode_frame,
     wire::{
-        decode_reply, encode_request, NativePairingReply, NativePairingRequest, NativePairingStatus,
+        decode_reply, encode_request, NativePairingReply, NativePairingRequest,
+        NativePairingStatus, RecordCarrierMode, RecordCarrierOpen,
     },
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES, MAX_PROTECTED_RESPONSE_BYTES,
 };
@@ -52,13 +55,15 @@ use nessa_server::{
     },
     product::{DeviceCredentials, NativeSessions, ProductDependencies, ProductRouteState},
 };
-use nessa_sync::replication::domain::Id;
+use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::{json, Value};
 use std::{
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpStream},
     sync::Arc,
+    time::Duration,
 };
+use tokio::{net::TcpListener as TokioTcpListener, sync::oneshot};
 use uuid::Uuid;
 
 /// The checked-in conversation access policy, as composition builds it.
@@ -160,7 +165,7 @@ fn sessions_on(
     fixture: &Fixture,
     devices: Arc<dyn DeviceCredentials>,
     metadata: Arc<LocalConversationStore>,
-) -> Arc<dyn ProtectedSessions> {
+) -> Arc<NativeSessions> {
     let state = ProductRouteState::new(
         ResourceId::new("gateway").unwrap(),
         OrganizationId::new("org").unwrap(),
@@ -1492,6 +1497,149 @@ async fn protected_sessions_have_their_own_pool_and_are_woken_by_shutdown() {
     assert_eq!(connections.product_wake_report().unwrap().iter().count(), 8);
     let closed = blocking(move || held.into_iter().all(|mut probe| probe.value().is_none())).await;
     assert!(closed, "every held session was closed by the wake");
+    fixture.gateway.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_record_carrier_uses_product_wake_while_status_and_product_keep_serving() {
+    let fixture = Fixture::phone_owner().await;
+    let metadata = conversation_store(&fixture);
+    let sessions = sessions_on(
+        &fixture,
+        Arc::new(Devices(fixture.registry.clone())),
+        metadata.clone(),
+    );
+    let connections = Arc::new(
+        NativeEnrollmentConnections::new(
+            fixture.gateway.clone(),
+            RuntimeDependencies::default().clock,
+        )
+        .with_protected_sessions(sessions.clone())
+        .with_record_carrier(sessions),
+    );
+    let socket = TcpEnrollmentAccept::new(TokioTcpListener::bind("127.0.0.1:0").await.unwrap());
+    let address = socket.local_address().unwrap();
+    let listener = NativeEnrollmentListener::new(socket, connections.clone());
+    let (stop, stopped) = oneshot::channel();
+    let serving = tokio::spawn(listener.run(
+        OsEntropy::default,
+        async { stopped.await.unwrap() },
+        |_| panic!("listener failed"),
+    ));
+    let phone = pair_as(
+        &fixture,
+        address,
+        "record-owner",
+        ConsentClass::OwnerPhoneReadWrite,
+    )
+    .await;
+    let conversation = Conversation::new(
+        ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+        fixture.session.context().organization_id().clone(),
+        fixture.session.context().principal_id().clone(),
+        "panel".into(),
+        "create".into(),
+        1,
+        AgentId::Claude,
+        ConversationModelId::new("model").unwrap(),
+        ConversationApprovalMode::Ask,
+    )
+    .unwrap();
+    let stream = Id::new(conversation.id().to_string()).unwrap();
+    metadata.create(conversation).await.unwrap();
+    let scope = Scope::new(
+        Id::new(&phone.receiver).unwrap(),
+        Id::new("gateway").unwrap(),
+        stream,
+        Id::new("fixture-generation").unwrap(),
+        Id::new("fixture-schema").unwrap(),
+        Id::new(format!("epoch-{}", phone.epoch)).unwrap(),
+    );
+    let credential = phone.credential.clone();
+    let saved = phone.store.clone();
+    let epoch = phone.epoch;
+    let (mut idle, target) = blocking(move || {
+        let (key, pin) = device_key(&saved);
+        let identity = NativeIdentity::restore(key).unwrap();
+        let socket = TcpStream::connect(address).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let target = socket.local_addr().unwrap();
+        let transport =
+            NativeTransport::connect(socket, &identity, GatewayTrust::Pinned(pin)).unwrap();
+        let mut channel = EnrollmentChannel::new(transport);
+        let selected = NativePairingRequest::OpenRecordCarrierV1(RecordCarrierOpen {
+            credential: CredentialId::new(credential).unwrap(),
+            access_epoch: epoch,
+            scope,
+            mode: RecordCarrierMode::Head,
+        });
+        channel
+            .send_envelope(&encode_request(&selected).unwrap())
+            .unwrap();
+        assert!(matches!(
+            decode_reply(&channel.receive_envelope().unwrap()).unwrap(),
+            NativePairingReply::RecordCarrierV1Accepted
+        ));
+        // No source request is sent; the selected worker waits for Bind.
+        (channel.into_transport(), target)
+    })
+    .await;
+
+    let enrollment =
+        NativeEnrollmentClient::new(phone.store.clone(), RuntimeDependencies::default().clock);
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            enrollment.status(TcpStream::connect(address).unwrap(), None)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        NativePairingStatus::Active { .. }
+    ));
+    enrollment.shutdown().await;
+    blocking(move || {
+        let mut product = Probe::open(address, &phone.store);
+        let nonce = product.nonce.clone();
+        assert_eq!(
+            product.authenticate(&phone.credential, &nonce).unwrap()["ok"],
+            true
+        );
+        assert_eq!(
+            product.call("server.health", json!({})).unwrap()["ok"],
+            true
+        );
+    })
+    .await;
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), serving)
+        .await
+        .expect("wake drains the idle record worker without waiting for its phase deadline")
+        .unwrap()
+        .unwrap();
+    assert!(connections
+        .product_wake_report()
+        .unwrap()
+        .iter()
+        .any(|wake| wake.target() == target));
+    assert!(!connections
+        .wake_report()
+        .unwrap()
+        .iter()
+        .any(|wake| wake.target() == target));
+    blocking(move || match idle.read(&mut [0_u8; 1]) {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
+            ) => {}
+        outcome => panic!("shutdown did not close the original record stream: {outcome:?}"),
+    })
+    .await;
     fixture.gateway.shutdown().await;
 }
 
