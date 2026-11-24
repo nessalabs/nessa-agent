@@ -420,7 +420,12 @@ impl CloudBoxes {
     ) -> Result<CloudBoxEnrollment, CloudBoxError> {
         let provisioned = match backend.provider.create_box(connection, &box_id).await {
             Ok(provisioned) => provisioned,
-            Err(error) => {
+            // Only an admission refusal is a settled answer: the provider
+            // answered, and any new VM was rolled back (a failed rollback is
+            // `CleanupUncertain`). Anything else may have left a VM under this
+            // box's key, so the intent stays `Provisioning`: asking again
+            // resumes it, and `delete` can still find and remove the VM.
+            Err(error @ CloudBoxError::AdmissionRefused(_)) => {
                 let receipt_result = self.store.append(
                     &box_id,
                     CloudBoxRecord::Refused {
@@ -448,6 +453,20 @@ impl CloudBoxes {
                         after: Some(after),
                         action: "create_refused",
                         cause,
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(CloudBoxState::Provisioning),
+                        action: "create_unsettled",
+                        cause: error.to_string(),
                         initiator,
                     },
                     error,
@@ -779,6 +798,7 @@ impl CloudBoxes {
         CloudBoxRecord::validate_history(&history)?;
 
         let CloudBoxRecord::Active {
+            name: old_name,
             cloud,
             vm,
             image,
@@ -791,6 +811,13 @@ impl CloudBoxes {
         else {
             unreachable!()
         };
+        // Receipt history is compacted, so the audit line is what keeps
+        // every rename's before and after.
+        let renamed_cause = format!(
+            "user_request; from={:?}; to={:?}",
+            old_name.as_str(),
+            new_name.as_str()
+        );
 
         let updated = CloudBoxRecord::Active {
             box_id: box_id.clone(),
@@ -815,7 +842,7 @@ impl CloudBoxes {
                     before: Some(state),
                     after: Some(state),
                     action: "rename_receipt_failed",
-                    cause: save_error.to_string(),
+                    cause: format!("{renamed_cause}; save={save_error}"),
                     initiator,
                 },
                 save_error,
@@ -827,7 +854,7 @@ impl CloudBoxes {
             before: Some(state),
             after: Some(state),
             action: "renamed",
-            cause: "user_request".into(),
+            cause: renamed_cause,
             initiator,
         })?;
         Ok(summary)
@@ -850,15 +877,32 @@ impl CloudBoxes {
         }
         CloudBoxRecord::validate_history(&history)?;
 
-        let CloudBoxRecord::Active {
-            cloud,
-            vm,
-            admission,
-            state,
-            ..
-        } = Self::latest_active(&history)?
-        else {
-            unreachable!()
+        let latest = history.last().cloned().expect("history is not empty");
+        let (cloud, vm, admission, state) = match latest {
+            CloudBoxRecord::Active {
+                cloud,
+                vm,
+                admission,
+                state,
+                ..
+            } => (cloud, vm, admission, state),
+            // A delete whose receipt was saved but whose answer or audit was
+            // lost: the VM is gone, so finishing it is recording the audit.
+            CloudBoxRecord::Deleted { .. } => {
+                return self.audit.record(CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: None,
+                    before: Some(CloudBoxState::Deleted),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "deleted",
+                    cause: "already_deleted".into(),
+                    initiator,
+                });
+            }
+            CloudBoxRecord::Provisioning { cloud, .. } => {
+                return self.delete_unsettled(box_id, cloud, initiator).await;
+            }
+            CloudBoxRecord::Refused { .. } => return Err(CloudBoxError::BoxRefused),
         };
 
         let (backend, connection) = self.load_connection(cloud).await?;
@@ -912,6 +956,92 @@ impl CloudBoxes {
             initiator,
         })?;
         Ok(())
+    }
+
+    /// Delete a box whose creation never settled. The provider may hold a VM
+    /// under the box's key, so it is asked for it under that key (it answers
+    /// with the VM it made, or makes and bootstraps one) and that VM is
+    /// removed. A creation that fails in the asking already removed its new
+    /// VM, unless it says the cleanup was uncertain.
+    async fn delete_unsettled(
+        &self,
+        box_id: &CloudBoxId,
+        cloud: Cloud,
+        initiator: String,
+    ) -> Result<(), CloudBoxError> {
+        let (backend, connection) = self.load_connection(cloud).await?;
+        let vm = match backend.provider.create_box(&connection, box_id).await {
+            Ok(provisioned) => {
+                if let Err(error) = backend
+                    .provider
+                    .delete_box(&connection, &provisioned.vm, &provisioned.admission)
+                    .await
+                {
+                    return Err(self.audit_failure(
+                        CloudBoxAuditEvent {
+                            box_id: box_id.clone(),
+                            cloud: Some(cloud),
+                            before: Some(CloudBoxState::Provisioning),
+                            after: Some(CloudBoxState::Provisioning),
+                            action: "delete_failed",
+                            cause: format!("vm={}; {error}", provisioned.vm),
+                            initiator,
+                        },
+                        error,
+                    ));
+                }
+                Some(provisioned.vm)
+            }
+            // The provider refused, or bootstrap failed and its new VM was
+            // removed: nothing is left under the key.
+            Err(CloudBoxError::AdmissionRefused(_) | CloudBoxError::BootstrapFailed(_)) => None,
+            // Anything else (a lost answer, an uncertain cleanup) may still
+            // hold a VM, so the box stays to be deleted again.
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(CloudBoxState::Provisioning),
+                        action: "delete_failed",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+        if let Err(save_error) = self.store.append(
+            box_id,
+            CloudBoxRecord::Deleted {
+                box_id: box_id.clone(),
+                vm,
+                updated_at_ms: Self::now_ms(),
+            },
+        ) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(CloudBoxState::Provisioning),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "delete_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(CloudBoxState::Provisioning),
+            after: Some(CloudBoxState::Deleted),
+            action: "deleted",
+            cause: "user_request; creation_unsettled".into(),
+            initiator,
+        })
     }
 
     /// Record required audit evidence on a failure/refusal/cleanup path,
@@ -1027,6 +1157,7 @@ mod tests {
         enrolled: StdMutex<Vec<String>>,
         deleted: StdMutex<Vec<String>>,
         fail_create: AtomicBool,
+        refuse_admission: AtomicBool,
         fail_wake: AtomicBool,
         fail_delete: AtomicBool,
     }
@@ -1038,6 +1169,7 @@ mod tests {
                 enrolled: StdMutex::new(Vec::new()),
                 deleted: StdMutex::new(Vec::new()),
                 fail_create: AtomicBool::new(false),
+                refuse_admission: AtomicBool::new(false),
                 fail_wake: AtomicBool::new(false),
                 fail_delete: AtomicBool::new(false),
             }
@@ -1054,6 +1186,9 @@ mod tests {
                 .unwrap()
                 .push(box_id.as_str().to_owned());
             Box::pin(async move {
+                if self.refuse_admission.load(Ordering::SeqCst) {
+                    return Err(CloudBoxError::AdmissionRefused("template retired".into()));
+                }
                 if self.fail_create.load(Ordering::SeqCst) {
                     return Err(CloudBoxError::ProviderFailed("quota exceeded".into()));
                 }
@@ -1279,7 +1414,7 @@ mod tests {
         );
 
         // 1. Create refusal + audit failure preserves both.
-        provider.fail_create.store(true, Ordering::SeqCst);
+        provider.refuse_admission.store(true, Ordering::SeqCst);
         let refused_id = CloudBoxId::parse("44444444-3333-4444-5555-666666666666").unwrap();
         let create_err = service
             .create(
@@ -1293,12 +1428,12 @@ mod tests {
         assert!(matches!(
             create_err,
             CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
-                if matches!(**operation, CloudBoxError::ProviderFailed(_))
+                if matches!(**operation, CloudBoxError::AdmissionRefused(_))
                     && audit.contains("audit disk full")
         ));
 
         // Provision a healthy box for sleep, wake, and delete failure checks.
-        provider.fail_create.store(false, Ordering::SeqCst);
+        provider.refuse_admission.store(false, Ordering::SeqCst);
         *audit.fail_action.lock().unwrap() = None;
         let box_id = CloudBoxId::parse("55555555-3333-4444-5555-666666666666").unwrap();
         service
@@ -1460,13 +1595,13 @@ mod tests {
         );
         let name = || CloudBoxName::new("Box").unwrap();
 
-        provider.fail_create.store(true, Ordering::SeqCst);
+        provider.refuse_admission.store(true, Ordering::SeqCst);
         let refused = CloudBoxId::parse("88888888-3333-4444-5555-666666666666").unwrap();
         assert!(service
             .create(refused.clone(), name(), Cloud::Agent37, "owner")
             .await
             .is_err());
-        provider.fail_create.store(false, Ordering::SeqCst);
+        provider.refuse_admission.store(false, Ordering::SeqCst);
         assert_eq!(
             service
                 .create(refused, name(), Cloud::Agent37, "owner")
@@ -1495,5 +1630,118 @@ mod tests {
                 .unwrap_err(),
             CloudBoxError::NotActive
         );
+    }
+
+    #[tokio::test]
+    async fn a_failure_that_is_not_a_refusal_leaves_the_box_resumable_and_deletable() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let name = || CloudBoxName::new("Box").unwrap();
+
+        // A provider failure is not an answer that no VM exists: it stays
+        // Provisioning and asking again resumes it under the same key.
+        provider.fail_create.store(true, Ordering::SeqCst);
+        let id = CloudBoxId::parse("12121212-3333-4444-5555-666666666666").unwrap();
+        assert!(matches!(
+            service
+                .create(id.clone(), name(), Cloud::Agent37, "owner")
+                .await
+                .unwrap_err(),
+            CloudBoxError::ProviderFailed(_)
+        ));
+        assert!(matches!(
+            store.read(&id).unwrap().last(),
+            Some(CloudBoxRecord::Provisioning { .. })
+        ));
+        provider.fail_create.store(false, Ordering::SeqCst);
+        service
+            .create(id.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.created.lock().unwrap().as_slice(),
+            [id.as_str(), id.as_str()]
+        );
+
+        // An unsettled creation can be deleted: the provider is asked again
+        // under the same key and whatever VM it answers with is removed.
+        let unsettled = CloudBoxId::parse("13131313-3333-4444-5555-666666666666").unwrap();
+        provider.fail_create.store(true, Ordering::SeqCst);
+        assert!(service
+            .create(unsettled.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .is_err());
+        provider.fail_create.store(false, Ordering::SeqCst);
+        service.delete(&unsettled, "owner").await.unwrap();
+        assert_eq!(
+            provider.deleted.lock().unwrap().as_slice(),
+            ["vm-box-1".to_owned()]
+        );
+        assert!(matches!(
+            store.read(&unsettled).unwrap().last(),
+            Some(CloudBoxRecord::Deleted { .. })
+        ));
+        let actions: Vec<_> = audit.0.lock().unwrap().iter().map(|e| e.action).collect();
+        assert!(actions.contains(&"create_unsettled"));
+        assert!(!actions.contains(&"create_refused"));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_deleted_box_again_succeeds_without_asking_the_provider() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let id = CloudBoxId::parse("14141414-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        service.delete(&id, "owner").await.unwrap();
+        service.delete(&id, "owner").await.unwrap();
+        assert_eq!(provider.deleted.lock().unwrap().len(), 1);
+        let deleted: Vec<_> = audit
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.action == "deleted")
+            .map(|e| e.cause.clone())
+            .collect();
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted[1].contains("already_deleted"));
+    }
+
+    #[tokio::test]
+    async fn a_rename_audit_names_the_old_and_the_new_name() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let id = CloudBoxId::parse("15151515-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Old").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        service
+            .rename(&id, CloudBoxName::new("New").unwrap(), "owner")
+            .await
+            .unwrap();
+        let events = audit.0.lock().unwrap();
+        let renamed = events.iter().find(|e| e.action == "renamed").unwrap();
+        assert!(renamed.cause.contains("\"Old\""), "{}", renamed.cause);
+        assert!(renamed.cause.contains("\"New\""), "{}", renamed.cause);
     }
 }

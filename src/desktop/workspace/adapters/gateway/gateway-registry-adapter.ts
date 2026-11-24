@@ -157,8 +157,6 @@ const FINAL_CLOUD_BOX_REFUSALS: ReadonlySet<string> = new Set([
   "cloud_box_already_exists",
   "cloud_box_not_active",
   "cloud_box_admission_refused",
-  "cloud_box_bootstrap_failed",
-  "cloud_box_provider_failed",
 ])
 
 function isFinalCloudBoxRefusal(error: unknown): boolean {

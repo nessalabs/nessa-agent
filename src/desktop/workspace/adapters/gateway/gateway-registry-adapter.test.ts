@@ -547,6 +547,55 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     registry.dispose()
   })
 
+  it("asks again for the same box after a provider failure, which leaves the creation resumable", async () => {
+    const { store } = memoryStore()
+    const credentialStore = inMemoryGatewayCredentialStore()
+    const genuine = fakeRemoteClient("gw-box-4")
+    let createCount = 0
+    const cloudBoxes = {
+      create: vi.fn(async ({ boxId }: { boxId: string }) => {
+        createCount += 1
+        if (createCount === 1) {
+          throw Object.assign(new Error("Cloud box provider failed"), {
+            refusal: "cloud_box_provider_failed",
+          })
+        }
+        return {
+          boxId,
+          name: "Retry Box",
+          cloud: "agent37" as const,
+          url: "wss://box-4.example.com",
+          credential: "tok-4",
+        }
+      }),
+      wake: vi.fn(async () => ({ url: "wss://unused.example.com" })),
+      sleep: vi.fn(async () => {}),
+      delete: vi.fn(async () => {}),
+    }
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store,
+      credentialStore,
+      now: () => 3700,
+      after: () => () => {},
+      connectRemote: async () => genuine.client,
+      cloudBoxes,
+      newId: () => "44444444-3333-4444-5555-666666666666",
+    })
+
+    const created = await registry.createCloudBox!({
+      name: "Retry Box",
+      cloud: "agent37",
+    })
+    expect(created.gatewayId).toBe("gw-box-4")
+    expect(cloudBoxes.create).toHaveBeenCalledTimes(2)
+    for (const [input] of cloudBoxes.create.mock.calls) {
+      expect(input.boxId).toBe("44444444-3333-4444-5555-666666666666")
+    }
+    expect(cloudBoxes.delete).not.toHaveBeenCalled()
+    registry.dispose()
+  })
+
   it("deletes a box it still cannot enroll after every attempt, and names it when that delete fails", async () => {
     const { store, current } = memoryStore()
     const credentialStore = inMemoryGatewayCredentialStore()
