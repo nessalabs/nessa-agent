@@ -870,6 +870,11 @@ impl RetainedCache {
         })
     }
 
+    /// The wall time the cache stamps records with, in Unix milliseconds.
+    pub fn unix_milliseconds(&self) -> u64 {
+        self.wall.unix_milliseconds()
+    }
+
     /// The conversations the cache holds for `receiver`, by id, read from
     /// the cache alone.
     pub fn conversation_ids(&mut self, receiver: &str) -> Result<Vec<String>, ReadFailure> {

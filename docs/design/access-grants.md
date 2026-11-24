@@ -1784,7 +1784,11 @@ the one that minted it. When that list has changed, the page stays
 incomplete and carries no cursor, so the walk does not claim membership.
 The catalogue is read so the list has the title and the agent, and a
 follow snapshot wakes that list as soon as the cache holds the chat,
-while the follow is still open. That cursor's id uses a UUID run `ConversationId`
+while the follow is still open. A grant copied after that snapshot is
+still named: the list keeps the catalogue row when it has one, and adds
+the retained transcript when it does not. The combined list is ordered
+newest first, so a new shared chat is not the first row cut from a full
+frame. That cursor's id uses a UUID run `ConversationId`
 refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
 appended only into the room a list or observe page has left, and a page that
 cannot hold them stays incomplete. A paired device of the follower and the

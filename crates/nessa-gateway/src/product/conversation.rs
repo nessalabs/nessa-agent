@@ -1351,6 +1351,14 @@ pub(super) async fn read_list(
         },
     )
     .await?;
+    // The frame keeps the newest rows. A granted chat appended after the
+    // local page would otherwise be the first row cut when the frame fills.
+    listed.conversations.sort_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+    });
     Ok((listed, head))
 }
 

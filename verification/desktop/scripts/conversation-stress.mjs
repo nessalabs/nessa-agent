@@ -4789,9 +4789,17 @@ const steps = {
       linked = true
       await setWindowLinking(run, true)
       const opened = await grantSharedChat(run, grantor, step, enrolled)
-      // The API list names the chat before the window's subscription does,
-      // especially after linking has just restarted. The click below only
-      // waits fifteen seconds.
+      // The chat is in the default channel. A step before this one can leave
+      // the list on another channel, or fold the list, and the row is then
+      // not visible there.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      if ((await run.page.locator(css.workspace).getAttribute("data-list")) !== "open")
+        await run.page.keyboard.press(keys.toggleSessionList)
       const columns = await run.page.locator(css.sessionList).count()
       const listedRow = run.page.locator(
         columns

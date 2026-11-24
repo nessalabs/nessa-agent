@@ -775,16 +775,23 @@ fn held_place(
     receiver: &str,
     id: &ConversationId,
 ) -> Result<Option<(String, String)>, ReadFailure> {
-    if let Some(scope) = cache.saved_catalogue_scope(receiver)? {
-        return Ok(Some((
-            scope.origin().as_str().to_owned(),
-            scope.stream().as_str().to_owned(),
-        )));
-    }
+    let catalogue = cache.saved_catalogue_scope(receiver)?;
     let name = id.to_string();
-    Ok(cache
-        .transcript_origin(receiver, &name)?
-        .map(|origin| (origin, name)))
+    // A follow can copy a transcript after the catalogue snapshot. That copy's
+    // origin is the one the transcript was stored under, which is not the
+    // catalogue's when the catalogue was read first.
+    let origin = match cache.transcript_origin(receiver, &name)? {
+        Some(origin) => origin,
+        None => match catalogue.as_ref() {
+            Some(scope) => scope.origin().as_str().to_owned(),
+            None => return Ok(None),
+        },
+    };
+    let stream = catalogue
+        .as_ref()
+        .map(|scope| scope.stream().as_str().to_owned())
+        .unwrap_or(name);
+    Ok(Some((origin, stream)))
 }
 
 /// List rows for chats a follow copied without a catalogue.
@@ -800,17 +807,24 @@ fn grant_rows(
         let Some(origin) = cache.transcript_origin(receiver, &id)? else {
             continue;
         };
-        let transcript = cache.transcript_view(receiver, &origin, &conversation, Uuid::nil())?;
+        let transcript = match cache.transcript_view(receiver, &origin, &conversation, Uuid::nil())
+        {
+            Ok(transcript) => transcript,
+            Err(_) => continue,
+        };
         let RetainedTranscript::Retained(snapshot) = transcript else {
             continue;
         };
         let view = snapshot.view();
+        // Retained after the catalogue snapshot, so the list treats it as
+        // newer than the rows that snapshot already ordered.
+        let seen = cache.unix_milliseconds();
         rows.push(ConversationSummary {
             conversation_id: view.conversation_id.clone(),
             title: view.title.clone(),
             preview: None,
-            created_at_ms: 0,
-            updated_at_ms: 0,
+            created_at_ms: seen,
+            updated_at_ms: seen,
             running: false,
             archived: false,
             channel_id: None,
@@ -851,7 +865,30 @@ fn peer_rows(
         };
         after = Some(next);
     }
-    Ok(rows)
+    // A grant copied after this catalogue snapshot is not one of its entries.
+    // Leaving it out reports a complete list that does not name the chat.
+    Ok(include_retained(
+        rows,
+        grant_rows(&mut cache, &peer.receiver)?,
+    ))
+}
+
+/// Catalogue rows, plus retained grants the snapshot does not name. A grant
+/// the catalogue already lists stays that row.
+fn include_retained(
+    mut rows: Vec<ConversationSummary>,
+    retained: Vec<ConversationSummary>,
+) -> Vec<ConversationSummary> {
+    let mut seen = HashSet::new();
+    for row in &rows {
+        seen.insert(row.conversation_id.clone());
+    }
+    for row in retained {
+        if seen.insert(row.conversation_id.clone()) {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 fn summary_of(entry: &RetainedCatalogueEntry) -> Option<ConversationSummary> {
@@ -1048,6 +1085,8 @@ fn placeholder(id: &ConversationId) -> OpenedReplica {
 mod tests {
     use std::sync::Arc;
 
+    use super::include_retained;
+
     use async_trait::async_trait;
     use nessa_auth::adapters::cedar::CedarPolicyEvaluator;
     use nessa_auth::adapters::local::{BootstrapRequest, LocalCredentialStore};
@@ -1075,6 +1114,29 @@ mod tests {
     use crate::conversation::application::ConversationLimits;
     use crate::product::conversation::dispatch;
     use crate::product::{ProductDependencies, ProductRouteState};
+
+    fn summary(id: &str) -> ConversationSummary {
+        ConversationSummary {
+            conversation_id: id.to_owned(),
+            title: Some(id.to_owned()),
+            preview: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            running: false,
+            archived: false,
+            channel_id: None,
+            ask: None,
+        }
+    }
+
+    #[test]
+    fn a_grant_the_catalogue_snapshot_missed_is_listed_once() {
+        let catalogue = vec![summary("already")];
+        let retained = vec![summary("already"), summary("later")];
+        let listed = include_retained(catalogue, retained);
+        let ids: Vec<_> = listed.into_iter().map(|row| row.conversation_id).collect();
+        assert_eq!(ids, ["already", "later"]);
+    }
 
     struct Held {
         id: String,
