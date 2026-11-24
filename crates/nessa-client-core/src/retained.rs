@@ -898,6 +898,26 @@ impl RetainedCache {
         Ok(ids)
     }
 
+    /// Grants saved for `receiver`, once a complete grant frame has been
+    /// stored. `None` before that frame: the catalogue snapshot is still the
+    /// membership the last catalogue read narrowed to the grants it saw.
+    /// After the frame, this is the membership, including when it is empty
+    /// because the last grant was revoked. The catalogue snapshot is not
+    /// read again while the follow stays up.
+    pub fn saved_grants(&mut self, receiver: &str) -> Result<Option<Vec<String>>, ReadFailure> {
+        let cursor = self
+            .cache
+            .grant_cursor(receiver)
+            .map_err(|error| cache_failure(&error))?;
+        if cursor.is_none() {
+            return Ok(None);
+        }
+        self.cache
+            .grant_ids(receiver)
+            .map(Some)
+            .map_err(|error| cache_failure(&error))
+    }
+
     /// Read what the gateway grants `access` into this cache, within
     /// `budget` on the injected clock. An unchanged catalogue head ends the
     /// read after one call only when the cache notes a finished walk at that

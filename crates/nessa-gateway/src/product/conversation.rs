@@ -1344,7 +1344,7 @@ pub(super) async fn read_list(
     let (listed, head) = listed?;
     let mut listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    append_shared(
+    if let Some(appended) = append_shared(
         state,
         session,
         &scope.reader,
@@ -1357,7 +1357,10 @@ pub(super) async fn read_list(
             expected: None,
         },
     )
-    .await?;
+    .await?
+    {
+        listed.shared_conversation_ids = appended.shared_ids;
+    }
     // The frame keeps the newest rows. A granted chat appended after the
     // local page would otherwise be the first row cut when the frame fills.
     listed.conversations.sort_by(|left, right| {
@@ -1382,11 +1385,13 @@ struct SharedPage<'a> {
 }
 
 /// The owner's list also names chats a peer granted, from the peer cache,
-/// when Cedar's `owner.list` allows this caller that catalogue. A page that
-/// is not already complete is left alone. Replicas that do not fit keep the
-/// page incomplete. The `Some` offset is where the next page starts, and only
-/// when this page could not hold them. A cache that cannot be read leaves the
-/// local rows in place.
+/// when Cedar's `owner.list` allows this caller that catalogue. Rows are
+/// appended only when the local page is already complete. The shared ids are
+/// still returned then, so an incomplete local page can drop a revoked grant.
+/// Replicas that do not fit keep the page incomplete. The `Some` offset is
+/// where the next page starts, and only when this page could not hold them.
+/// A cache that cannot be read leaves the local rows in place and names no
+/// shared ids.
 async fn append_shared(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -1394,7 +1399,7 @@ async fn append_shared(
     archived: bool,
     page: &mut SharedPage<'_>,
 ) -> Result<Option<super::shared_chat::SharedAppend>, ConversationError> {
-    if !matches!(reader, Reader::Owner) || !*page.complete {
+    if !matches!(reader, Reader::Owner) {
         return Ok(None);
     }
     if !super::shared_chat::catalogue_admitted(state, session, true).await? {
@@ -1407,14 +1412,30 @@ async fn append_shared(
         Ok(mut catalogue) => {
             let local = super::shared_chat::local_ids(state, &catalogue.rows).await?;
             catalogue.rows = super::shared_chat::omit_local(catalogue.rows, &local);
-            Ok(Some(super::shared_chat::append_catalogue(
+            let shared_ids = catalogue.complete.then(|| {
+                catalogue
+                    .rows
+                    .iter()
+                    .map(|row| row.conversation_id.clone())
+                    .collect()
+            });
+            if !*page.complete {
+                return Ok(Some(super::shared_chat::SharedAppend {
+                    next: None,
+                    fingerprint: super::shared_chat::replica_fingerprint(&catalogue.rows),
+                    shared_ids,
+                }));
+            }
+            let mut appended = super::shared_chat::append_catalogue(
                 page.rows,
                 catalogue,
                 page.limit,
                 page.complete,
                 page.skip,
                 page.expected,
-            )))
+            );
+            appended.shared_ids = shared_ids;
+            Ok(Some(appended))
         }
         Err(error) => {
             tracing::warn!(
@@ -1933,6 +1954,7 @@ fn fitted_list(mut list: ConversationListResult, request_id: &str) -> Conversati
     let empty = ConversationListResult {
         conversations: Vec::new(),
         complete: false,
+        shared_conversation_ids: list.shared_conversation_ids.clone(),
     };
     let Ok(empty) = success(request_id, &empty).to_wire_text() else {
         return list;
@@ -1978,6 +2000,7 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
             })
             .collect(),
         complete: listed.complete,
+        shared_conversation_ids: None,
     }
 }
 

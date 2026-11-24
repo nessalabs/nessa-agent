@@ -454,6 +454,27 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("an incomplete frame drops a shared chat its shared ids no longer name", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(
+      conversationA,
+      row(conversationA, { updatedAtMs: 2, title: "Shared chat" }),
+    )
+    gateway.rows.set(conversationB, row(conversationB, { updatedAtMs: 1 }))
+    gateway.rows.set("c", row("c", { updatedAtMs: 3 }))
+    gateway.sharedConversationIds = [conversationA]
+    follow()
+    await source.index()
+    gateway.rows.delete(conversationA)
+    gateway.sharedConversationIds = []
+    gateway.listLimit = 1
+    gateway.publishList()
+    await flush()
+    const ids = (await source.index()).sessions.map((session) => session.id)
+    expect(ids).not.toContain(conversationA)
+    expect(ids).toContain(conversationB)
+  })
+
   it("a row the list frame names stays when the finished walk does not return it", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set(

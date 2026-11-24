@@ -1777,7 +1777,10 @@ owner Cedar admits. The grantor admits that range through `grant.artifact_read`
 when the peer's grant includes read. A peer cache that cannot be read leaves the list
 incomplete, so a chat it holds is not treated as gone. One retained transcript
 that cannot be read does the same: the rows that were read stay, and the list
-stays incomplete, so the missing row is not a withdrawal. Two peers that grant
+stays incomplete, so the missing row is not a withdrawal. Once a grant frame
+is stored, it is the membership: a catalogue row whose grant was revoked is
+not listed. The list names that set even when the local page is incomplete,
+so unshare takes the row off the window without waiting for the page to finish. Two peers that grant
 the same conversation id contribute one row, the first peer's, and that
 copy's archived flag is the one the list uses. A local
 conversation, including one archived or deleted, is not listed again from a

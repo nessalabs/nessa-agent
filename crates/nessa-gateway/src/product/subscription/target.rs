@@ -930,6 +930,7 @@ fn fitted(mut list: ConversationListResult, id: &str) -> ConversationListResult 
         list: ConversationListResult {
             conversations: Vec::new(),
             complete: false,
+            shared_conversation_ids: list.shared_conversation_ids.clone(),
         },
     })
     .expect("generated payload serializes")
@@ -1125,6 +1126,7 @@ mod tests {
         let small = ConversationListResult {
             conversations: (0..3).map(|n| row(n, 10)).collect(),
             complete: true,
+            shared_conversation_ids: None,
         };
         let kept = fitted(small, "1");
         assert!(kept.complete);
@@ -1132,6 +1134,7 @@ mod tests {
         let large = ConversationListResult {
             conversations: (0..500).map(|n| row(n, 400)).collect(),
             complete: true,
+            shared_conversation_ids: None,
         };
         let cut = fitted(large, "1");
         assert!(!cut.complete);
@@ -1162,6 +1165,7 @@ mod tests {
                 ConversationListResult {
                     conversations: rows,
                     complete: true,
+                    shared_conversation_ids: None,
                 },
                 None,
             )
@@ -1188,6 +1192,7 @@ mod tests {
                 ConversationListResult {
                     conversations: vec![row(1, 10)],
                     complete: false,
+                    shared_conversation_ids: None,
                 },
                 Some(CatalogueHead {
                     incarnation: "metadata".into(),

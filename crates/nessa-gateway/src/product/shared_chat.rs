@@ -359,6 +359,9 @@ pub(super) fn append_bounded(
 pub(super) struct SharedAppend {
     pub next: Option<u64>,
     pub fingerprint: u32,
+    /// Every shared chat this filter includes, when the cache was read.
+    /// `None` when it was not read or the read was incomplete.
+    pub shared_ids: Option<Vec<String>>,
 }
 
 pub(super) fn append_catalogue(
@@ -382,11 +385,13 @@ pub(super) fn append_catalogue(
         return SharedAppend {
             next: None,
             fingerprint,
+            shared_ids: None,
         };
     }
     SharedAppend {
         next: append_bounded(rows, catalogue.rows, limit, complete, skip),
         fingerprint,
+        shared_ids: None,
     }
 }
 
@@ -896,6 +901,11 @@ fn peer_rows(
         };
         after = Some(next);
     }
+    // The catalogue snapshot stays as it was when the follow opened. A grant
+    // revoked after that is gone from the replica and is not a row, even
+    // though the snapshot still names it.
+    let granted = cache.saved_grants(&peer.receiver)?;
+    rows = rows_still_granted(rows, granted.as_deref());
     // A grant copied after this catalogue snapshot is not one of its entries.
     // A transcript that could not be read leaves the list incomplete rather
     // than reporting a complete list that does not name the chat.
@@ -903,11 +913,24 @@ fn peer_rows(
     Ok((include_retained(rows, retained), retained_complete))
 }
 
+/// Catalogue rows, kept only when `granted` is absent or names them. A saved
+/// grant frame is that membership: a row the snapshot still has after the
+/// grant was revoked is not listed.
+fn rows_still_granted(
+    rows: Vec<ConversationSummary>,
+    granted: Option<&[String]>,
+) -> Vec<ConversationSummary> {
+    let Some(granted) = granted else {
+        return rows;
+    };
+    rows.into_iter()
+        .filter(|row| granted.iter().any(|id| id == &row.conversation_id))
+        .collect()
+}
+
 /// Catalogue rows, plus retained grants the snapshot does not name. A grant
 /// the catalogue already lists stays that row. Its update time stays the
 /// catalogue's unless the retained transcript's saved activity is later.
-/// That activity is the fold's, so reading the list again does not move an
-/// unchanged chat.
 fn include_retained(
     mut rows: Vec<ConversationSummary>,
     retained: Vec<ConversationSummary>,
@@ -1198,6 +1221,19 @@ mod tests {
             kept[0].updated_at_ms, 80,
             "an older copy leaves the catalogue time"
         );
+    }
+
+    #[test]
+    fn a_revoked_grant_drops_the_catalogue_row_the_snapshot_still_has() {
+        let catalogue = vec![summary("revoked"), summary("kept")];
+        let listed = super::rows_still_granted(catalogue, Some(&["kept".to_owned()]));
+        let ids: Vec<_> = listed
+            .iter()
+            .map(|row| row.conversation_id.as_str())
+            .collect();
+        assert_eq!(ids, ["kept"]);
+        let before = super::rows_still_granted(vec![summary("revoked")], None);
+        assert_eq!(before.len(), 1);
     }
 
     #[test]

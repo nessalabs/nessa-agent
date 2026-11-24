@@ -4819,6 +4819,24 @@ const steps = {
         10_000,
       )
       if (!transcript) failures.push("the granted chat opened no transcript")
+      const copied = await waitFor(async () => {
+        const text = await run.page.locator(".workspace-transcript").innerText()
+        return text.includes("hello from the grantor") ? text : null
+      }, 15_000)
+      if (!copied) failures.push("the granted chat did not show what the grantor said")
+      const followerView = await run.client.conversation.read(opened.id)
+      const said = (view) =>
+        (view.messages ?? []).map((message) => message.userText).filter((text) => text)
+      const followerSaid = said(followerView)
+      const grantorSaid = said(await grantor.client.conversation.read(opened.id))
+      const prefix = JSON.stringify(grantorSaid.slice(0, followerSaid.length))
+      if (
+        !followerSaid.includes("hello from the grantor") ||
+        JSON.stringify(followerSaid) !== prefix
+      )
+        failures.push(
+          `the copied transcript ${JSON.stringify(followerSaid)} is not the grantor's ${JSON.stringify(grantorSaid)}`,
+        )
       const note = `a note composed on the follower ${step.index}`
       const box = dock(run.page).locator("textarea")
       await box.fill(note)

@@ -889,6 +889,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   let listClock = 0
   const namedAt = new Map<string, number>()
   const omittedAt = new Map<string, number>()
+  // Shared chats the last list named in `sharedConversationIds`. That set is
+  // the whole shared membership even when the local page is incomplete, so a
+  // grant that leaves it is taken out without waiting for a finished walk.
+  let sharedSeen = new Set<string>()
 
   /** Lets a conversation's subscription go: no frame or end of it applies after. */
   const unfollow = (sessionId: string, why: unknown) => {
@@ -942,6 +946,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         if ((namedAt.get(sessionId) ?? 0) > clock) continue
         remove(sessionId)
       }
+    const sharedIds = result.sharedConversationIds
+    if (sharedIds) {
+      const now = new Set(sharedIds)
+      for (const sessionId of sharedSeen) {
+        if (now.has(sessionId)) continue
+        omittedAt.set(sessionId, Math.max(omittedAt.get(sessionId) ?? 0, clock))
+        if (takenOut(sessionId)) continue
+        if ((namedAt.get(sessionId) ?? 0) > clock) continue
+        remove(sessionId)
+      }
+      sharedSeen = now
+    }
     noteAsks()
   }
 
