@@ -138,7 +138,9 @@ async fn gateway_child() {
         let mut changes = Vec::new();
         for index in 0..800 {
             let context = ProviderContext::recorded_after(
-                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(), 0);
+                ExecutionSessionId::new(format!("remote-{index:04}-{}", "x".repeat(120))).unwrap(),
+                0,
+            );
             changes.push(SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
                 after: context.clone(),
@@ -157,7 +159,9 @@ async fn gateway_child() {
             .unwrap();
         for index in 0..20 {
             let context = ProviderContext::recorded_after(
-                ExecutionSessionId::new(format!("tail-{index}")).unwrap(), 0);
+                ExecutionSessionId::new(format!("tail-{index}")).unwrap(),
+                0,
+            );
             writer
                 .save_changes(
                     writer.load().await.unwrap().binding().clone(),
@@ -281,6 +285,24 @@ impl ProductSource {
     fn request(scope: &Scope) -> Value {
         serde_json::to_value(wire_scope(scope)).unwrap()
     }
+
+    fn page_reply(&mut self, request: &PageRequest, epoch: &str) -> Value {
+        self.call(
+            "conversation.recordsPage",
+            json!({
+                "conversationId": CONVERSATION,
+                "accessEpoch": epoch,
+                "request": {
+                    "scope": Self::request(&request.scope),
+                    "after": request.after.to_string(),
+                    "target": request.target.to_string(),
+                    "maxRecords": request.max_records,
+                    "maxPayloadBytes": request.max_payload_bytes,
+                    "maxRecordBytes": request.max_record_bytes,
+                },
+            }),
+        )
+    }
 }
 impl RecordSource for ProductSource {
     fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
@@ -291,7 +313,7 @@ impl RecordSource for ProductSource {
         Ok(head)
     }
     fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
-        let reply = self.call("conversation.recordsPage", json!({"conversationId":CONVERSATION,"accessEpoch":"3","request":{"scope":Self::request(&request.scope),"after":request.after.to_string(),"target":request.target.to_string(),"maxRecords":request.max_records,"maxPayloadBytes":request.max_payload_bytes,"maxRecordBytes":request.max_record_bytes}}));
+        let reply = self.page_reply(request, "3");
         if reply["ok"] != true {
             return Err(SourceError::Unavailable);
         }
@@ -487,6 +509,18 @@ fn receiver_child() {
         tx.commit().unwrap();
         downloaded = next.position();
         if mode == "partial" {
+            // A prior success on this socket does not grant the same page under
+            // stale authority. Check the raw reply, not the client error mapping.
+            let refused = source.page_reply(&request, "2");
+            assert_eq!(refused["ok"], false, "{refused}");
+            assert_eq!(
+                serde_json::from_value::<RecordReadErrorCode>(refused["error"]["code"].clone())
+                    .unwrap(),
+                RecordReadErrorCode::StaleEpoch
+            );
+            assert!(refused.get("payload").is_none(), "{refused}");
+            assert!(refused["error"].get("records").is_none(), "{refused}");
+            assert!(refused["error"].get("scope").is_none(), "{refused}");
             return;
         }
     }
