@@ -10,6 +10,7 @@ description = "The Nessa gateway's request path: sockets, product routes, admiss
 # Lets nessa-server's tests use the gateway fixtures these tests use.
 test-support = [
     "nessa-conversation/test-support",
+    "nessa-device-pairing/test-support",
 ]
 # Terminals (docs/design/terminals.md): pty-runtime sessions read through
 # Ghostty's terminal model. Needs the pinned Ghostty library built first

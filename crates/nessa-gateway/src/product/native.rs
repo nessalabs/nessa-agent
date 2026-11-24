@@ -80,6 +80,25 @@ impl ProtectedSessions for NativeSessions {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl nessa_device_pairing::infrastructure::RecordHeadProbe for NativeSessions {
+    fn serve(
+        &self,
+        runtime: &tokio::runtime::Handle,
+        transport: nessa_auth::adapters::pairing::NativeTransport<
+            nessa_protocol::pairing::socket::DeadlineStream,
+        >,
+        opening: &[u8],
+    ) -> Result<(), ErrorKind> {
+        let proof = transport.device_proof().clone();
+        let verifier = ProvedKey {
+            credentials: self.proof.0.as_ref(),
+            proof: &proof,
+        };
+        super::record_read::probe::serve(runtime, &self.state, &verifier, transport, opening)
+    }
+}
+
 struct DeviceProof(Arc<dyn DeviceCredentials>);
 impl SessionProof<NativeSocket> for DeviceProof {
     fn verifier<'a>(

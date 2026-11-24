@@ -11,12 +11,15 @@
 //! every catalogue/record continuation checkpoint. Tampered reads stay single-shot.
 #[path = "relay_reading/completion.rs"]
 mod completion;
+#[path = "relay_reading/record_head.rs"]
+mod record_head;
 #[path = "relay_reading/transport.rs"]
 mod transport;
 use super::fixtures::Gateway;
 use nessa_auth::{
     adapters::pairing::{relay_key, FilePairingState, NativeIdentity},
     application::{pairing::ClientPendingStore, ports::Clock as WallClock},
+    domain::pairing::PublicIntent,
 };
 use nessa_client_core::retained::{
     ReadFailure, ReadReport, ReadStop, ReaderAccess, ReaderRole, RetainedCache,
@@ -71,6 +74,7 @@ struct Device {
     credential: String,
     receiver: String,
     access_epoch: u64,
+    public: PublicIntent,
 }
 impl Device {
     /// Start the fixture's gateway in `mode`, relayed, under `directory`,
@@ -117,7 +121,7 @@ impl Device {
         runtime.block_on(client.shutdown());
         let saved = state.load_credential().unwrap().unwrap();
         let credential = saved.credential().as_str().to_owned();
-        let (key, pin, _) = saved.into_enrollment().into_parts();
+        let (key, pin, public) = saved.into_enrollment().into_parts();
         let device = Self {
             root,
             caches,
@@ -127,6 +131,7 @@ impl Device {
             credential,
             receiver,
             access_epoch,
+            public,
         };
         (gateway, device)
     }
