@@ -9,6 +9,7 @@ use nessa_local_database::{OpenError, Schema};
 use crate::application::{
     DirectoryAuditRecord, DirectoryRefusal, DirectoryStore, PendingAudit, PendingCleanup,
     PendingOpenAudit, RevokeMismatch, StoredDirectoryGrant, StoredDirectoryResource,
+    GRANT_LOG_RETAINED,
 };
 use crate::domain::{ArgvPattern, CommandMatcher, CommandRules, RuleEffect, BINDING_LEN};
 use crate::timer::clock::wall_now;
@@ -16,6 +17,9 @@ use crate::timer::clock::wall_now;
 /// SQLite directory grants. A version other than this build's is refused and not rewritten.
 pub struct SqliteDirectoryStore {
     connection: Mutex<nessa_local_database::rusqlite::Connection>,
+    /// The grant subscription's wake, when this store shares the conversation
+    /// store's grant database. A receiver log append notifies it after commit.
+    grant_wake: Mutex<Option<std::sync::Arc<tokio::sync::Notify>>>,
 }
 
 impl SqliteDirectoryStore {
@@ -25,7 +29,19 @@ impl SqliteDirectoryStore {
             nessa_local_database::open(path, &Schema::new(include_str!("store/grants.sql"))?)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            grant_wake: Mutex::new(None),
         })
+    }
+
+    /// Wake this notify after a receiver's directory grant log moves.
+    pub fn wake_grant_log(&self, notify: std::sync::Arc<tokio::sync::Notify>) {
+        *self.grant_wake.lock().expect("grant wake") = Some(notify);
+    }
+
+    fn wake_subscribers(&self) {
+        if let Some(notify) = self.grant_wake.lock().expect("grant wake").as_ref() {
+            notify.notify_waiters();
+        }
     }
 }
 
@@ -164,7 +180,20 @@ impl DirectoryStore for SqliteDirectoryStore {
                 ],
             )
             .map_err(store)?;
+        if let Some(receiver) = grant.receiver_id.as_deref() {
+            append_receiver_log(
+                &transaction,
+                receiver,
+                &grant.resource_id,
+                Some(&grant.capabilities),
+                policy.as_deref(),
+                Some(revision),
+            )?;
+        }
         transaction.commit().map_err(store)?;
+        if grant.receiver_id.is_some() {
+            self.wake_subscribers();
+        }
         Ok(())
     }
 
@@ -299,6 +328,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 .map_err(store)?;
         }
         let now = now_ms();
+        let mut published = false;
         for (principal, receiver, credential, capabilities, policy, revision) in grants {
             transaction
                 .execute(
@@ -320,6 +350,10 @@ impl DirectoryStore for SqliteDirectoryStore {
                     ],
                 )
                 .map_err(store)?;
+            if let Some(receiver) = receiver.as_deref() {
+                append_receiver_log(&transaction, receiver, resource_id, None, None, None)?;
+                published = true;
+            }
         }
         transaction
             .execute(
@@ -347,6 +381,9 @@ impl DirectoryStore for SqliteDirectoryStore {
             )
             .map_err(store)?;
         transaction.commit().map_err(store)?;
+        if published {
+            self.wake_subscribers();
+        }
         Ok(RevokeMismatch {
             cause: cause.to_owned(),
             initiator: initiator.to_owned(),
@@ -554,6 +591,55 @@ impl DirectoryStore for SqliteDirectoryStore {
             .map_err(store)?;
         Ok(())
     }
+}
+
+/// One grant-log record for a receiver, in this transaction. `capabilities`
+/// `None` is a tombstone. The log's conversation column is the grant key,
+/// which for a directory is the resource id.
+fn append_receiver_log(
+    transaction: &nessa_local_database::rusqlite::Transaction<'_>,
+    receiver: &str,
+    resource_id: &str,
+    capabilities: Option<&str>,
+    policy: Option<&str>,
+    epoch: Option<i64>,
+) -> Result<(), DirectoryRefusal> {
+    let found: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT incarnation, head FROM grant_streams WHERE receiver_id = ?1",
+            params![receiver],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(store)?;
+    let (incarnation, head) = found.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), 0));
+    let position = head.checked_add(1).ok_or(DirectoryRefusal::Store)?;
+    transaction
+        .execute(
+            "INSERT INTO grant_log
+             (receiver_id, position, conversation_id, capabilities, policy, policy_revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![receiver, position, resource_id, capabilities, policy, epoch],
+        )
+        .map_err(store)?;
+    transaction
+        .execute(
+            "INSERT INTO grant_streams (receiver_id, incarnation, head)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(receiver_id) DO UPDATE SET head = excluded.head",
+            params![receiver, incarnation, position],
+        )
+        .map_err(store)?;
+    let floor = position.saturating_sub(i64::try_from(GRANT_LOG_RETAINED).unwrap_or(1024));
+    if floor > 0 {
+        transaction
+            .execute(
+                "DELETE FROM grant_log WHERE receiver_id = ?1 AND position <= ?2",
+                params![receiver, floor],
+            )
+            .map_err(store)?;
+    }
+    Ok(())
 }
 
 fn row_resource(

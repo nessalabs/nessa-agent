@@ -1975,6 +1975,8 @@ async fn conversations(
         let directory_store =
             crate::conversation::infrastructure::SqliteDirectoryStore::open(&grants_path)
                 .map_err(|error| RunError::Agent(format!("directory grants: {error}")))?;
+        use crate::conversation::application::ShareGrants;
+        directory_store.wake_grant_log(metadata.grant_log_notify());
         let directory_policy =
             crate::conversation::infrastructure::CedarDirectoryPolicyEvaluator::new().map_err(
                 |_| RunError::Agent("the directory policy bundle does not validate".into()),

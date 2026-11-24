@@ -121,6 +121,79 @@ fn a_resource_id_is_not_a_subject_and_a_receiver_is_its_subject() {
 }
 
 #[test]
+fn a_receiver_grant_publishes_its_log_and_a_mismatch_appends_a_tombstone() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let database = store_dir.path().join("grants.sqlite3");
+    let store = Arc::new(SqliteDirectoryStore::open(&database).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [8; BINDING_LEN],
+    );
+    let owned = share_read(&access, shared.to_str().unwrap(), "owner");
+    assert!(grant_log(&database, "dev-1").is_empty());
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: None,
+                receiver_id: Some("dev-1".into()),
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    let published = grant_log(&database, "dev-1");
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].0, 1);
+    assert_eq!(published[0].1, owned.resource_id);
+    assert_eq!(published[0].2.as_deref(), Some("read"));
+    assert!(published[0].3.is_some());
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    match access.read("dev-1", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { .. } => {}
+        other => panic!("{other:?}"),
+    }
+    let revoked = grant_log(&database, "dev-1");
+    assert_eq!(revoked.len(), 2);
+    assert_eq!(revoked[1].0, 2);
+    assert_eq!(revoked[1].1, owned.resource_id);
+    assert!(revoked[1].2.is_none());
+    assert!(revoked[1].3.is_none());
+    assert!(store
+        .grants_for_resource(&owned.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+fn grant_log(
+    path: &std::path::Path,
+    receiver: &str,
+) -> Vec<(i64, String, Option<String>, Option<i64>)> {
+    let connection = nessa_local_database::rusqlite::Connection::open(path).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT position, conversation_id, capabilities, policy_revision
+             FROM grant_log WHERE receiver_id = ?1 ORDER BY position",
+        )
+        .unwrap();
+    statement
+        .query_map([receiver], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+#[test]
 fn a_write_creates_a_file_under_a_directory_inside_the_share() {
     let root = private();
     let shared = root.path().join("shared");
