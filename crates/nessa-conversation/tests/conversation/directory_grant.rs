@@ -302,6 +302,7 @@ fn exec_names_the_sandbox_fact_that_refused_it() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::None,
             roots: std::slice::from_ref(&shared.to_str().unwrap().to_owned()),
             hooks_answer_first: false,
@@ -320,6 +321,7 @@ fn exec_names_the_sandbox_fact_that_refused_it() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Container,
             roots: &[outside.to_str().unwrap().to_owned()],
             hooks_answer_first: false,
@@ -337,6 +339,7 @@ fn exec_names_the_sandbox_fact_that_refused_it() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Container,
             roots: std::slice::from_ref(&directory),
             hooks_answer_first: false,
@@ -380,6 +383,7 @@ fn hooks_that_answer_first_do_not_skip_command_rules() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Harness,
             roots: &[shared.to_str().unwrap().to_owned()],
             hooks_answer_first: true,
@@ -623,8 +627,8 @@ impl DirectoryStore for FailResource {
     ) -> Result<RevokeMismatch, DirectoryRefusal> {
         self.inner.revoke_mismatch(resource_id, cause, initiator)
     }
-    fn mark_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal> {
-        self.inner.mark_open_audit(resource_id)
+    fn mark_open_audit(&self, resource_id: &str, epoch: i64) -> Result<(), DirectoryRefusal> {
+        self.inner.mark_open_audit(resource_id, epoch)
     }
     fn pending_open_audit(
         &self,
@@ -813,6 +817,7 @@ fn a_sandbox_root_beside_the_directory_is_outside() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Container,
             roots: &[beside.to_str().unwrap().to_owned()],
             hooks_answer_first: false,
@@ -848,6 +853,7 @@ fn exec_of_a_recreated_directory_revokes_the_grant() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Container,
             roots: &[shared.to_str().unwrap().to_owned()],
             hooks_answer_first: false,
@@ -902,6 +908,7 @@ fn an_allowed_exec_is_not_reported_when_the_audit_sink_is_down() {
             subject: "peer",
             program: "ls",
             argv: &[],
+            shell: None,
             profile: SandboxKind::Container,
             roots: &[shared.to_str().unwrap().to_owned()],
             hooks_answer_first: false,
@@ -1582,6 +1589,185 @@ fn an_unasked_call_is_not_forgotten_when_the_audit_sink_is_down() {
         .any(|line| line.cause == "outside-nessa-gate"));
 }
 
+#[test]
+fn every_unasked_call_is_kept_when_the_audit_sink_is_down() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [16; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    *audit.fail.lock().unwrap() = true;
+    assert!(matches!(
+        access.report_unasked("peer", "Bash").unwrap_err(),
+        DirectoryRefusal::Audit
+    ));
+    assert!(matches!(
+        access.report_unasked("peer", "Read").unwrap_err(),
+        DirectoryRefusal::Audit
+    ));
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    let lines = audit.lines.lock().unwrap();
+    assert!(lines
+        .iter()
+        .any(|line| line.cause == "outside-nessa-gate" && line.after.as_deref() == Some("Bash")));
+    assert!(lines
+        .iter()
+        .any(|line| line.cause == "outside-nessa-gate" && line.after.as_deref() == Some("Read")));
+}
+
+#[test]
+fn a_quoted_shell_keeps_its_text_in_the_refusal_audit() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [17; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let refused = access
+        .admit_shell("peer", "cat \".nessa-binding\"", SandboxKind::None, &[])
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Exec { .. }));
+    let lines = audit.lines.lock().unwrap();
+    let recorded = lines
+        .iter()
+        .find(|line| line.cause == "exec-refused")
+        .unwrap();
+    assert_eq!(recorded.after.as_deref(), Some("cat \".nessa-binding\""));
+}
+
+#[test]
+fn a_sandbox_root_through_a_symlink_is_the_shared_directory() {
+    let root = private();
+    let real = root.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let shared = real.join("shared");
+    fs::create_dir(&shared).unwrap();
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let through_alias = alias.join("shared");
+    let beside = root.path().join("beside");
+    fs::create_dir(&beside).unwrap();
+    let beside_link = root.path().join("beside-link");
+    std::os::unix::fs::symlink(&beside, &beside_link).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(MarkerHidden {
+            inner: LocalDirectoryFiles,
+        }),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [18; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let outside = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            argv: &[],
+            shell: None,
+            profile: SandboxKind::Container,
+            roots: &[beside_link.to_str().unwrap().to_owned()],
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    match outside {
+        DirectoryRefusal::Exec { rules, .. } => {
+            assert!(rules.iter().any(|id| id == "directory.exec_root"));
+        }
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = true;
+    let refused = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            argv: &[],
+            shell: None,
+            profile: SandboxKind::Container,
+            roots: &[through_alias.to_str().unwrap().to_owned()],
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    assert!(matches!(refused, DirectoryRefusal::Audit));
+}
+
+#[test]
+fn an_older_mismatch_delivery_does_not_acknowledge_a_later_revocation() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        audit.clone(),
+        [19; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    *audit.fail.lock().unwrap() = true;
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::MarkerMismatch { .. }
+    ));
+    let first = store
+        .pending_open_audit(&granted.resource_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.cause, "marker-missing");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    store
+        .insert_grant(
+            &StoredDirectoryGrant {
+                resource_id: granted.resource_id.clone(),
+                principal_id: Some("peer".into()),
+                receiver_id: None,
+                capabilities: "read".into(),
+                rules: crate::domain::CommandRules::none(),
+            },
+            "owner",
+        )
+        .unwrap();
+    let replaced = store
+        .revoke_mismatch(&granted.resource_id, "marker-different", "later")
+        .unwrap();
+    assert_ne!(replaced.epoch, first.epoch);
+    store
+        .mark_open_audit(&granted.resource_id, first.epoch)
+        .unwrap();
+    let still = store
+        .pending_open_audit(&granted.resource_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(still.cause, "marker-different");
+    assert_eq!(still.epoch, replaced.epoch);
+    store
+        .mark_open_audit(&granted.resource_id, still.epoch)
+        .unwrap();
+    assert!(store
+        .pending_open_audit(&granted.resource_id)
+        .unwrap()
+        .is_none());
+}
+
 struct FailUnlink {
     inner: LocalDirectoryFiles,
     fail: Mutex<bool>,
@@ -1725,10 +1911,10 @@ fn an_unenclosed_command_is_not_admitted_for_a_directory_grant() {
         other => panic!("{other:?}"),
     }
     access
-        .admit_shell("stranger", SandboxKind::None, &[])
+        .admit_shell("stranger", "cat \".nessa-binding\"", SandboxKind::None, &[])
         .unwrap();
     let quoted = access
-        .admit_shell("peer", SandboxKind::None, &[])
+        .admit_shell("peer", "cat \".nessa-binding\"", SandboxKind::None, &[])
         .unwrap_err();
     match quoted {
         DirectoryRefusal::Exec { rules, .. } => {
@@ -1790,6 +1976,7 @@ fn a_failed_audit_retry_still_revokes_another_directory() {
                 subject: "delta",
                 program: "cat",
                 argv: &[".nessa-binding".to_owned()],
+                shell: None,
                 profile: SandboxKind::None,
                 roots: &[],
                 hooks_answer_first: false,
@@ -2052,6 +2239,7 @@ fn a_refused_exec_is_kept_when_the_audit_sink_is_down() {
             subject: "peer",
             program: "cat",
             argv: &[".nessa-binding".to_owned()],
+            shell: None,
             profile: SandboxKind::None,
             roots: &[],
             hooks_answer_first: false,

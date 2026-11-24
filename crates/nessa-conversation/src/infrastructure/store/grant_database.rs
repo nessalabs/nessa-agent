@@ -111,7 +111,7 @@ fn validate_shape(connection: &Connection, database: &str) -> Result<(), OpenErr
         ("person_link_changes","sequence, organization_id, gateway_principal, credential_id, invitation, person_before, person_after, cause, initiator_kind, initiator_id, observed_at_ms"),
         ("directory_resources","resource_id, environment, canonical_path, binding"),
         ("directory_cleanup","environment, canonical_path, binding, unlinked, audit_done, initiator"),
-        ("directory_open_audits","resource_id, cause, initiator, audit_done"),
+        ("directory_open_audits","resource_id, cause, initiator, audit_done, epoch"),
         ("directory_pending_audits","sequence, resource_id, cause, initiator, environment, canonical_path, profile, before, after, at_ms"),
         ("grant_streams","receiver_id, incarnation, head"),
         ("grant_log","receiver_id, position, conversation_id, capabilities, policy, policy_revision"),

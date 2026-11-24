@@ -234,11 +234,17 @@ impl DirectoryStore for SqliteDirectoryStore {
             rows.collect::<Result<Vec<_>, _>>().map_err(store)?
         };
         if grants.is_empty() {
-            if let Some((stored_cause, stored_initiator)) = transaction
+            if let Some((stored_cause, stored_initiator, epoch)) = transaction
                 .query_row(
-                    "SELECT cause, initiator FROM directory_open_audits WHERE resource_id = ?1",
+                    "SELECT cause, initiator, epoch FROM directory_open_audits WHERE resource_id = ?1",
                     params![resource_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(store)?
@@ -248,11 +254,12 @@ impl DirectoryStore for SqliteDirectoryStore {
                     cause: stored_cause,
                     initiator: stored_initiator,
                     removed_now: false,
+                    epoch,
                 });
             }
             transaction
                 .execute(
-                    "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done) VALUES (?1, ?2, ?3, 0)",
+                    "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done, epoch) VALUES (?1, ?2, ?3, 0, 1)",
                     params![resource_id, cause, initiator],
                 )
                 .map_err(store)?;
@@ -261,6 +268,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 cause: cause.to_owned(),
                 initiator: initiator.to_owned(),
                 removed_now: true,
+                epoch: 1,
             });
         }
         if let Some((stored_cause, stored_initiator)) = transaction
@@ -321,13 +329,21 @@ impl DirectoryStore for SqliteDirectoryStore {
             .map_err(store)?;
         transaction
             .execute(
-                "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done)
-                 VALUES (?1, ?2, ?3, 0)
+                "INSERT INTO directory_open_audits (resource_id, cause, initiator, audit_done, epoch)
+                 VALUES (?1, ?2, ?3, 0, 1)
                  ON CONFLICT(resource_id) DO UPDATE SET
                     cause = excluded.cause,
                     initiator = excluded.initiator,
-                    audit_done = 0",
+                    audit_done = 0,
+                    epoch = directory_open_audits.epoch + 1",
                 params![resource_id, cause, initiator],
+            )
+            .map_err(store)?;
+        let epoch = transaction
+            .query_row(
+                "SELECT epoch FROM directory_open_audits WHERE resource_id = ?1",
+                params![resource_id],
+                |row| row.get::<_, i64>(0),
             )
             .map_err(store)?;
         transaction.commit().map_err(store)?;
@@ -335,15 +351,17 @@ impl DirectoryStore for SqliteDirectoryStore {
             cause: cause.to_owned(),
             initiator: initiator.to_owned(),
             removed_now: true,
+            epoch,
         })
     }
 
-    fn mark_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal> {
+    fn mark_open_audit(&self, resource_id: &str, epoch: i64) -> Result<(), DirectoryRefusal> {
         let connection = self.connection.lock().expect("directory grants");
         connection
             .execute(
-                "UPDATE directory_open_audits SET audit_done = 1 WHERE resource_id = ?1",
-                params![resource_id],
+                "UPDATE directory_open_audits SET audit_done = 1
+                 WHERE resource_id = ?1 AND epoch = ?2 AND audit_done = 0",
+                params![resource_id, epoch],
             )
             .map_err(store)?;
         Ok(())
@@ -374,12 +392,13 @@ impl DirectoryStore for SqliteDirectoryStore {
         let connection = self.connection.lock().expect("directory grants");
         connection
             .query_row(
-                "SELECT cause, initiator FROM directory_open_audits WHERE resource_id = ?1 AND audit_done = 0",
+                "SELECT cause, initiator, epoch FROM directory_open_audits WHERE resource_id = ?1 AND audit_done = 0",
                 params![resource_id],
                 |row| {
                     Ok(PendingOpenAudit {
                         cause: row.get(0)?,
                         initiator: row.get(1)?,
+                        epoch: row.get(2)?,
                     })
                 },
             )

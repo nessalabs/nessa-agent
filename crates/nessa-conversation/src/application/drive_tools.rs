@@ -295,13 +295,17 @@ impl InvocationHook for DriveToolHook {
             }
         }
         let mut reported = std::collections::HashSet::new();
+        let mut failure = None;
         for (id, name) in calls {
             if asked.contains(&id) || !reported.insert(id) {
                 continue;
             }
-            directory
-                .report_unasked(&self.directory_subject, &name)
-                .map_err(|error| HookError::Failed(error.to_string()))?;
+            if let Err(error) = directory.report_unasked(&self.directory_subject, &name) {
+                failure.get_or_insert(error);
+            }
+        }
+        if let Some(error) = failure {
+            return Err(HookError::Failed(error.to_string()));
         }
         Ok(())
     }
@@ -311,9 +315,9 @@ fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Optio
     let directory = hook.directory.get()?;
     match command_arguments(call.arguments_json()) {
         ParsedCommand::Skip => None,
-        ParsedCommand::Unsafe => {
+        ParsedCommand::Unsafe(command) => {
             if let Err(error) =
-                directory.admit_shell(&hook.directory_subject, SandboxKind::None, &[])
+                directory.admit_shell(&hook.directory_subject, &command, SandboxKind::None, &[])
             {
                 return Some(error.to_string());
             }
@@ -343,8 +347,9 @@ fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Optio
 enum ParsedCommand {
     /// The review is not a command.
     Skip,
-    /// A shell string whose programs cannot all be named.
-    Unsafe,
+    /// A shell string whose programs cannot all be named. The string is the
+    /// original input, kept for the refusal audit.
+    Unsafe(String),
     /// One program and its literal arguments.
     Run {
         program: String,
@@ -367,12 +372,12 @@ fn command_arguments(json: &str) -> ParsedCommand {
         let mut parts = Vec::new();
         for item in argv {
             let Some(text) = item.as_str() else {
-                return ParsedCommand::Unsafe;
+                return ParsedCommand::Unsafe(json.to_owned());
             };
             parts.push(text.to_owned());
         }
         let Some(program) = parts.first().cloned() else {
-            return ParsedCommand::Unsafe;
+            return ParsedCommand::Unsafe(json.to_owned());
         };
         return ParsedCommand::Run {
             program,
@@ -386,17 +391,17 @@ fn command_arguments(json: &str) -> ParsedCommand {
         .chars()
         .any(|character| character.is_whitespace() && character != ' ')
     {
-        return ParsedCommand::Unsafe;
+        return ParsedCommand::Unsafe(command.to_owned());
     }
     let mut parts = Vec::new();
     for token in command.split_whitespace() {
         if !literal_token(token) {
-            return ParsedCommand::Unsafe;
+            return ParsedCommand::Unsafe(command.to_owned());
         }
         parts.push(token.to_owned());
     }
     let Some(program) = parts.first().cloned() else {
-        return ParsedCommand::Unsafe;
+        return ParsedCommand::Unsafe(command.to_owned());
     };
     ParsedCommand::Run {
         program,
@@ -434,19 +439,19 @@ mod command_parse {
     fn a_shell_string_that_runs_another_program_is_refused() {
         assert!(matches!(
             command_arguments(r#"{"command":"ls .; rm victim"}"#),
-            ParsedCommand::Unsafe
+            ParsedCommand::Unsafe(_)
         ));
         assert!(matches!(
             command_arguments(r#"{"command":"ls | rm"}"#),
-            ParsedCommand::Unsafe
+            ParsedCommand::Unsafe(_)
         ));
         assert!(matches!(
             command_arguments(r#"{"command":"ls $(rm victim)"}"#),
-            ParsedCommand::Unsafe
+            ParsedCommand::Unsafe(_)
         ));
         assert!(matches!(
             command_arguments("{\"command\":\"ls .\\nrm victim\"}"),
-            ParsedCommand::Unsafe
+            ParsedCommand::Unsafe(_)
         ));
         match command_arguments(
             r#"{"server":"nessa","tool":"shell","arguments":{"command":"cat .nessa-binding"}}"#,
@@ -455,6 +460,10 @@ mod command_parse {
                 assert_eq!(program, "cat");
                 assert_eq!(arguments, [".nessa-binding"]);
             }
+            other => panic!("{other:?}"),
+        }
+        match command_arguments(r#"{"command":"cat \".nessa-binding\""}"#) {
+            ParsedCommand::Unsafe(command) => assert_eq!(command, "cat \".nessa-binding\""),
             other => panic!("{other:?}"),
         }
         match command_arguments(r#"{"command":"ls -l"}"#) {

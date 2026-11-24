@@ -267,7 +267,15 @@ impl DirectorySession for HeldDirectory {
         }
         let mut leave = PathLeave::Inside;
         for root in roots {
+            // The grant stores the canonical directory. A sandbox root may name
+            // that same directory through an ancestor symlink (`/var` on macOS
+            // is `/private/var`). Resolve it before the prefix comparison.
             let absolute = absolute(root)?;
+            let resolved = std::fs::canonicalize(&absolute).map_err(io)?;
+            let absolute = resolved
+                .to_str()
+                .ok_or(DirectoryRefusal::Io(std::io::ErrorKind::InvalidData))?
+                .to_owned();
             let Some(rest) = relative_inside(canonical, &absolute) else {
                 return Ok(PathLeave::Outside);
             };

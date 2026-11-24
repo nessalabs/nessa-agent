@@ -156,11 +156,14 @@ CREATE TABLE directory_cleanup (
 -- The latest revocation of this resource. A later share's grants are still
 -- removed on the next mismatch; this row does not mean those grants are gone.
 -- `audit_done` stays 0 until the audit sink accepts that revocation.
+-- `epoch` is that revocation. A delivery acknowledges its own epoch, so an
+-- older delivery cannot mark a later revocation done.
 CREATE TABLE directory_open_audits (
     resource_id TEXT PRIMARY KEY,
     cause TEXT NOT NULL,
     initiator TEXT NOT NULL,
-    audit_done INTEGER NOT NULL CHECK (audit_done IN (0, 1))
+    audit_done INTEGER NOT NULL CHECK (audit_done IN (0, 1)),
+    epoch INTEGER NOT NULL
 ) STRICT;
 
 -- An admission or share whose audit sink refused the record. The operation

@@ -303,8 +303,8 @@ pub trait DirectoryStore: Send + Sync {
         cause: &str,
         initiator: &str,
     ) -> Result<RevokeMismatch, DirectoryRefusal>;
-    /// Mark the open audit recorded.
-    fn mark_open_audit(&self, resource_id: &str) -> Result<(), DirectoryRefusal>;
+    /// Mark this revocation recorded. A different epoch is left pending.
+    fn mark_open_audit(&self, resource_id: &str, epoch: i64) -> Result<(), DirectoryRefusal>;
     /// An open audit that has not been recorded.
     fn pending_open_audit(
         &self,
@@ -382,6 +382,8 @@ pub struct RevokeMismatch {
     pub initiator: String,
     /// Whether this call wrote the revoke.
     pub removed_now: bool,
+    /// The revocation this call observed. An acknowledgement names this epoch.
+    pub epoch: i64,
 }
 
 /// An open audit waiting for the sink.
@@ -391,6 +393,8 @@ pub struct PendingOpenAudit {
     pub cause: String,
     /// The original initiator.
     pub initiator: String,
+    /// The revocation this row is.
+    pub epoch: i64,
 }
 
 /// A marker waiting to be unlinked and audited.
@@ -535,6 +539,9 @@ pub struct ExecAsk<'a> {
     pub program: &'a str,
     /// Arguments after the program.
     pub argv: &'a [String],
+    /// A shell string that is not one literal program. The refusal audit keeps
+    /// this text rather than an empty argv.
+    pub shell: Option<&'a str>,
     /// Sandbox profile.
     pub profile: SandboxKind,
     /// Sandbox roots.
@@ -671,7 +678,10 @@ impl DirectoryAccess {
                     canonical_path: resources.canonical_path,
                     initiator: ask.subject.to_owned(),
                     before: (!rules.is_empty()).then(|| rules.join(",")),
-                    after: Some(attempted_command(ask.program, ask.argv)),
+                    after: Some(match ask.shell {
+                        Some(command) => command.to_owned(),
+                        None => attempted_command(ask.program, ask.argv),
+                    }),
                     profile: Some(ask.profile.as_str().to_owned()),
                     at_ms: now_ms(),
                 });
@@ -725,6 +735,7 @@ impl DirectoryAccess {
             subject,
             program,
             argv,
+            shell: None,
             profile,
             roots,
             hooks_answer_first: false,
@@ -738,6 +749,7 @@ impl DirectoryAccess {
     pub fn admit_shell(
         &self,
         subject: &str,
+        command: &str,
         profile: SandboxKind,
         roots: &[String],
     ) -> Result<(), DirectoryRefusal> {
@@ -748,6 +760,7 @@ impl DirectoryAccess {
             subject,
             program: "",
             argv: &[],
+            shell: Some(command),
             profile,
             roots,
             hooks_answer_first: false,
@@ -818,14 +831,13 @@ impl DirectoryAccess {
 
     /// A call the harness made without asking. Recorded when the subject has a grant.
     pub fn report_unasked(&self, subject: &str, tool: &str) -> Result<(), DirectoryRefusal> {
-        self.reconcile()?;
+        let owed = self.reconcile().err();
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.first() else {
-            return Ok(());
+            return owed.map_or(Ok(()), Err);
         };
         let resource = self.resource_of(grant)?;
-        let _ = tool;
-        self.flush_pending(&grant.resource_id)?;
+        let flush = self.flush_pending(&grant.resource_id).err();
         self.audit_required(DirectoryAuditRecord {
             cause: "outside-nessa-gate".to_owned(),
             resource_id: Some(grant.resource_id.clone()),
@@ -833,10 +845,11 @@ impl DirectoryAccess {
             canonical_path: resource.canonical_path,
             initiator: subject.to_owned(),
             before: None,
-            after: None,
+            after: Some(tool.to_owned()),
             profile: None,
             at_ms: now_ms(),
-        })
+        })?;
+        owed.or(flush).map_or(Ok(()), Err)
     }
 
     fn open_root(
@@ -890,7 +903,7 @@ impl DirectoryAccess {
                 at_ms: now_ms(),
             })
             .map_err(|_| DirectoryRefusal::Store)?;
-        self.store.mark_open_audit(resource_id)
+        self.store.mark_open_audit(resource_id, pending.epoch)
     }
 
     fn share_existing(
@@ -1001,7 +1014,9 @@ impl DirectoryAccess {
             })
             .is_ok();
         if recorded {
-            let _ = self.store.mark_open_audit(&resource.resource_id);
+            let _ = self
+                .store
+                .mark_open_audit(&resource.resource_id, revoked.epoch);
         }
         let _ = self.flush_pending(&resource.resource_id);
         Err(DirectoryRefusal::MarkerMismatch {
