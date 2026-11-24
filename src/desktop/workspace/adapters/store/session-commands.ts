@@ -3,6 +3,7 @@
  * answer, stop, pin, archive, rename, delete — and whether this host can
  * open a provider's login. Re-exported by `commands.ts`, the one list.
  */
+import type { ChatgptSignInEnd } from "@nessa/client"
 import { applyStagedModel, modelChanging } from "./model-commands"
 import {
   atWork,
@@ -733,6 +734,21 @@ export const signInForBoat =
       throw new Error("Boat sign-in is unavailable on this host.")
     await dependencies.boatClaudeSignIn.signIn()
   }
+
+/** Sign a ChatGPT account in for Codex on other computers; how it ended.
+ * `opened` is told where the browser was sent. */
+export const signInWithChatgpt =
+  (opened: (authorizeUrl: string) => void): WorkspaceCommand<Promise<ChatgptSignInEnd>> =>
+  async (_dispatch, _getState, dependencies) => {
+    if (!dependencies.codexChatgptSignIn)
+      throw new Error("ChatGPT sign-in is unavailable in this window.")
+    return dependencies.codexChatgptSignIn.signIn(opened)
+  }
+
+/** Whether a ChatGPT sign-in can be offered, without starting one. */
+export const chatgptSignInAvailable =
+  (): WorkspaceCommand<Promise<boolean>> => async (_dispatch, _getState, dependencies) =>
+    (await dependencies.codexChatgptSignIn?.available()) ?? false
 
 /** Whether a Boat sign-in can be offered, without starting one. */
 export const boatSignInAvailable =

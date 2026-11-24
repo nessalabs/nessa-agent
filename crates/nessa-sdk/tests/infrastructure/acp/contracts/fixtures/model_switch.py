@@ -14,6 +14,9 @@ adjust = "adjust" in sys.argv[2:]
 steering = "steer" in sys.argv[2:]
 steers = 0
 handoff = "handoff" in sys.argv[2:]
+# The agent keeps its permission mode across a model change, as Claude does.
+keep = "keep" in sys.argv[2:]
+mode_changes = []
 prompt_models = []
 model_changes = []
 effort = "high" if adjust else None
@@ -31,9 +34,9 @@ def options():
     return {"configOptions": values}
 
 def observed():
-    if steering or handoff:
+    if steering or handoff or keep:
         with open("model-steering-observed", "w") as record:
-            json.dump({"steers": steers, "prompts": prompts, "promptModels": prompt_models, "modelChanges": model_changes}, record)
+            json.dump({"steers": steers, "prompts": prompts, "promptModels": prompt_models, "modelChanges": model_changes, "modeChanges": mode_changes}, record)
 
 def text(value):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": value}}}})
@@ -56,10 +59,13 @@ for line in sys.stdin:
             model_changes.append(model)
             observed()
             if adjust and model in ("claude-haiku-4-5-20251001", "gpt-5.6-terra"):
-                mode = "default" if profile == "claude" else "read-only"
+                if not keep:
+                    mode = "default" if profile == "claude" else "read-only"
                 effort = None if profile == "claude" else "medium"
         elif params["configId"] == "mode":
             mode = params["value"]
+            mode_changes.append(mode)
+            observed()
         elif params["configId"] in ("effort", "reasoning_effort"):
             effort = params["value"]
         else:
@@ -75,7 +81,7 @@ for line in sys.stdin:
         prompt_models.append(model)
         observed()
         text("native turn running")
-        if prompts == 1:
+        if prompts == 1 and not keep:
             active = id
         else:
             result(id, {"stopReason": "end_turn"})

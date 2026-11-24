@@ -8,7 +8,9 @@
 //! behaviour now that the Rust is gone.
 use super::*;
 use crate::application::{AccessAction, OwnerAccess, PairedAccess, PairedParty, PairedRefusal};
-use crate::domain::{Conversation, ConversationDeletion, ConversationRefusal};
+use crate::domain::{
+    Conversation, ConversationDeletion, ConversationRefusal, Setting, SettingLevel,
+};
 use nessa_auth::domain::{
     Action, Grant, MembershipRole, OrganizationId, PrincipalId, Resource, ResourceId,
 };
@@ -259,7 +261,8 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             AccessAction::List
             | AccessAction::Write
             | AccessAction::ChannelCreate
-            | AccessAction::ChannelList => AccessResource::Catalogue {
+            | AccessAction::ChannelList
+            | AccessAction::TerminalUse => AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
             },
@@ -273,13 +276,24 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                     owner: &owner,
                 }
             }
+            AccessAction::CloseCreated => AccessResource::created(&live, Some("creator")),
+            AccessAction::SettingChange => AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting: Setting::Access,
+            },
             _ => on(&live),
         };
         let subject = match action {
-            AccessAction::AgentTools => AccessSubject::AgentTurn {
+            AccessAction::AgentTools
+            | AccessAction::ReadTurns
+            | AccessAction::AskOwner
+            | AccessAction::RequestAccess
+            | AccessAction::CloseCreated => AccessSubject::AgentTurn {
                 organization: &org,
                 principal: &owner,
                 owner_initiated: true,
+                conversation: "creator",
             },
             AccessAction::ReviewNotice => AccessSubject::ReviewRecipient {
                 organization: &org,
@@ -318,6 +332,143 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             action.name()
         );
     }
+}
+
+#[test]
+fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let person = |organization, principal| AccessSubject::Person {
+        organization,
+        principal,
+    };
+    let turn = |organization, principal, owner_initiated| AccessSubject::AgentTurn {
+        organization,
+        principal,
+        owner_initiated,
+        conversation: "thread",
+    };
+    let change = |subject, setting| {
+        policy.evaluate(&AccessAsk {
+            subject,
+            action: AccessAction::SettingChange,
+            resource: AccessResource::Setting {
+                organization: &org,
+                owner: &owner,
+                setting,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    for setting in Setting::ALL {
+        let name = setting.as_str();
+        // The owner, on their own surface, changes every level.
+        assert_eq!(
+            allowed_by(&change(person(&org, &owner), setting)),
+            Some(&["owner.setting_change".to_owned()][..]),
+            "{name}"
+        );
+        // A turn the owner started changes only what an agent may.
+        let agent = change(turn(&org, &owner, true), setting);
+        if setting.level() == SettingLevel::AgentChanges {
+            assert_eq!(
+                allowed_by(&agent),
+                Some(&["agent.setting_change".to_owned()][..]),
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                agent,
+                AccessDecision::Deny(AccessDenial::NotPermitted),
+                "{name}"
+            );
+        }
+        // Nobody else, and no turn the owner did not start.
+        for refused in [
+            person(&org, &other),
+            person(&elsewhere, &owner),
+            turn(&org, &owner, false),
+            turn(&org, &other, true),
+            turn(&elsewhere, &owner, true),
+        ] {
+            assert!(!allowed(&change(refused, setting)), "{name} {refused:?}");
+        }
+        // The helper callers use answers the same, rule and all.
+        assert_eq!(
+            crate::application::setting_change(
+                &policy,
+                turn(&org, &owner, true),
+                &org,
+                &owner,
+                setting
+            ),
+            agent,
+            "{name}"
+        );
+    }
+    // Every level has a setting, and raising access is never an agent's.
+    for level in SettingLevel::ALL {
+        assert!(
+            Setting::ALL.iter().any(|setting| setting.level() == level),
+            "{}",
+            level.as_str()
+        );
+    }
+    assert_eq!(Setting::Access.level(), SettingLevel::RaisesAccess);
+    assert_eq!(Setting::ReplyStyle.level(), SettingLevel::AgentChanges);
+    assert_eq!(Setting::VoiceKey.level(), SettingLevel::OwnerTypes);
+    assert_eq!(Setting::McpServers.level(), SettingLevel::AgentFills);
+}
+
+/// `ALL` lists each setting and level once, in order. The matches below
+/// have no default arm, so a new variant does not compile until it is given
+/// a place here, and a place past the end of `ALL` fails the length check.
+#[test]
+fn every_setting_and_level_is_listed_once() {
+    let place = |setting: Setting| match setting {
+        Setting::ReplyStyle => 0,
+        Setting::Model => 1,
+        Setting::UsageLimitAutoContinue => 2,
+        Setting::McpServers => 3,
+        Setting::ChannelCoordinator => 4,
+        Setting::ChannelPlacement => 5,
+        Setting::Devices => 6,
+        Setting::CloudRuntime => 7,
+        Setting::VoiceKey => 8,
+        Setting::GitHub => 9,
+        Setting::Credentials => 10,
+        Setting::McpSignIn => 11,
+        Setting::Access => 12,
+        Setting::PermissionRules => 13,
+        Setting::AppTrust => 14,
+        Setting::Shares => 15,
+        Setting::Linking => 16,
+        Setting::AgentHooks => 17,
+    };
+    for (at, setting) in Setting::ALL.into_iter().enumerate() {
+        assert_eq!(place(setting), at, "{}", setting.as_str());
+    }
+    assert_eq!(place(Setting::AgentHooks) + 1, Setting::ALL.len());
+    let level_place = |level: SettingLevel| match level {
+        SettingLevel::AgentChanges => 0,
+        SettingLevel::AgentFills => 1,
+        SettingLevel::OwnerTypes => 2,
+        SettingLevel::RaisesAccess => 3,
+    };
+    for (at, level) in SettingLevel::ALL.into_iter().enumerate() {
+        assert_eq!(level_place(level), at, "{}", level.as_str());
+    }
+    assert_eq!(
+        level_place(SettingLevel::RaisesAccess) + 1,
+        SettingLevel::ALL.len()
+    );
 }
 
 // One allow and one deny for each rule, by its @id.
@@ -362,6 +513,34 @@ fn owner_act_admits_the_owner_until_the_conversation_is_deleted() {
         "org",
         "owner"
     )));
+}
+
+#[test]
+fn owner_terminal_run_admits_the_owner_until_the_conversation_is_deleted() {
+    let policy = policy();
+    assert_eq!(
+        allowed_by(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation("org", "owner", false),
+            "org",
+            "owner"
+        )),
+        Some(&["owner.terminal_run".to_owned()][..])
+    );
+    for (conversation, org, who) in [
+        (conversation("org", "owner", true), "org", "owner"),
+        (conversation("org", "owner", false), "org", "someone"),
+        (conversation("org", "owner", false), "other", "owner"),
+    ] {
+        assert!(!allowed(&person(
+            &policy,
+            AccessAction::TerminalUse,
+            &conversation,
+            org,
+            who
+        )));
+    }
 }
 
 #[test]
@@ -760,38 +939,46 @@ fn grant_comment_and_drive_need_their_capability() {
     }
 }
 
+/// A peer holding drive comments and drives. Holding only read, it does
+/// neither. Removing `capabilities.contains` from the permit would let the
+/// read-only peer through: the other conditions already hold.
 #[test]
-fn paired_peer_gateway_never_comments_or_drives() {
+fn a_peer_comments_and_drives_when_the_grant_names_the_capability() {
     let policy = policy();
     let live = conversation("org", "owner", false);
-    for action in [AccessAction::Comment, AccessAction::Drive] {
-        let device = Paired {
-            held: Some(Capabilities::drive()),
-            ..Paired::default()
-        };
-        assert!(allowed(&paired(&policy, action, on(&live), &device)));
+    let peer = |held| Paired {
+        signed_in_as: "gateway:peer",
+        held,
+        ..Paired::default()
+    };
+    for (action, id) in [
+        (AccessAction::Comment, "grant.comment"),
+        (AccessAction::Drive, "grant.drive"),
+    ] {
         assert_eq!(
-            paired(
+            allowed_by(&paired(
                 &policy,
                 action,
                 on(&live),
-                &Paired {
-                    signed_in_as: "gateway:peer",
-                    ..device
-                }
-            ),
-            AccessDecision::Deny(AccessDenial::NotPermitted)
+                &peer(Some(Capabilities::drive()))
+            )),
+            Some(&[id.to_owned()][..])
         );
     }
-    // A peer still reads what it was granted.
+    assert_eq!(
+        paired(
+            &policy,
+            AccessAction::Drive,
+            on(&live),
+            &peer(Some(Capabilities::read()))
+        ),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
     assert!(allowed(&paired(
         &policy,
         AccessAction::Read,
         on(&live),
-        &Paired {
-            signed_in_as: "gateway:peer",
-            ..Paired::default()
-        }
+        &peer(Some(Capabilities::read()))
     )));
 }
 
@@ -1016,8 +1203,8 @@ fn owner_access_the_policy_cannot_decide_is_unavailable() {
 
 /// What a paired reader may do, for every binding, signer, deletion and
 /// role: it reads its grantor's live conversation with any role; comments
-/// with Comment or Drive and drives with Drive, as a device and never as a
-/// peer gateway; sees a granted tombstone in its catalogue; and never writes,
+/// with Comment or Drive and drives with Drive, a device and a peer gateway
+/// alike; sees a granted tombstone in its catalogue; and never writes,
 /// shares or takes owner write commands. A device lists its grant scope.
 #[test]
 fn paired_access_answers_its_truth_table() {
@@ -1044,9 +1231,9 @@ fn paired_access_answers_its_truth_table() {
                         owned && held.is_some(),
                         "read {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}"
                     );
-                    // A peer gateway neither comments nor drives; each
-                    // role is listed with what it allows.
-                    let device = signed_in_as == binding_owner;
+                    // Comment and drive follow the capability, for a device
+                    // and for a peer. Removing `capabilities.contains` from
+                    // the permit would allow a read-only grant.
                     for (action, roles) in [
                         (
                             AccessAction::Comment,
@@ -1056,7 +1243,7 @@ fn paired_access_answers_its_truth_table() {
                     ] {
                         assert_eq!(
                             allowed(&paired(&policy, action, on(&record), &facts)),
-                            device && owned && held.is_some_and(|held| roles.contains(&held)),
+                            owned && held.is_some_and(|held| roles.contains(&held)),
                             "{} {org} {binding_owner} {signed_in_as} {held:?} deleted={deleted}",
                             action.name()
                         );
@@ -1207,7 +1394,7 @@ fn owner_share_answers_its_truth_table() {
 
 /// What a paired party is told, for every signer, role held, deletion and
 /// request: allowed; a party that may read the conversation, a peer gateway
-/// included, forbidden what its role, request or signer does not allow; a
+/// included, forbidden what its capability or request does not allow; a
 /// granted tombstone told it was deleted when the party signed in as its
 /// owner, as the socket's owner check told it; and anything else told it
 /// does not exist, as an ungranted id is (rows G1, J11 to J14). A peer
@@ -1404,7 +1591,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             Some(Capabilities::comment()),
             false,
             text,
-            Err(Forbidden),
+            Ok(()),
         ),
         (
             true,
@@ -1420,7 +1607,7 @@ fn paired_access_tells_each_refusal_as_its_table_says() {
             Some(Capabilities::drive()),
             false,
             text,
-            Err(Forbidden),
+            Ok(()),
         ),
         (true, AccessAction::Drive, None, true, text, Err(NotFound)),
         (
@@ -1578,6 +1765,7 @@ fn agent_tools_require_an_owner_origin_and_matching_live_source_owner() {
                             organization: &org,
                             principal: &owner,
                             owner_initiated,
+                            conversation: "source",
                         },
                         action: AccessAction::AgentTools,
                         resource: AccessResource::of(&source),
@@ -1593,4 +1781,172 @@ fn agent_tools_require_an_owner_origin_and_matching_live_source_owner() {
             }
         }
     }
+}
+
+/// A turn another agent started reads where the owner's turns came from, and
+/// still holds none of the owner's other agent tools. Another owner's
+/// conversation, and a deleted one, it cannot read.
+#[test]
+fn an_agent_started_turn_reads_turns_but_holds_no_other_agent_tool() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |action, conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &live, false),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &live, true),
+        AccessDecision::Allow { .. }
+    ));
+    assert!(matches!(
+        ask(AccessAction::AgentTools, &live, false),
+        AccessDecision::Deny(_)
+    ));
+    let others = conversation("org", "someone-else", false);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &others, false),
+        AccessDecision::Deny(_)
+    ));
+    let deleted = conversation("org", "owner", true);
+    assert!(matches!(
+        ask(AccessAction::ReadTurns, &deleted, false),
+        AccessDecision::Deny(_)
+    ));
+}
+
+/// Any turn of the owner's agents asks the owner a question, one another
+/// agent started included (a coordinator woken by a thread's report), and
+/// only in the owner's own conversation that is not deleted.
+#[test]
+fn any_turn_of_the_owners_asks_the_owner() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action: AccessAction::AskOwner,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    for owner_initiated in [true, false] {
+        assert_eq!(
+            allowed_by(&ask(&live, owner_initiated)),
+            Some(&["owner.ask_owner".to_owned()][..])
+        );
+    }
+    assert!(!allowed(&ask(
+        &conversation("org", "someone-else", false),
+        false
+    )));
+    assert!(!allowed(&ask(
+        &conversation("elsewhere", "owner", false),
+        true
+    )));
+    assert!(!allowed(&ask(&conversation("org", "owner", true), true)));
+}
+
+/// Only a turn the owner started asks to raise the owner's access, and only
+/// in the owner's own conversation that is not deleted: a turn another agent
+/// started may ask a question, never put the red card in front of the owner.
+#[test]
+fn only_a_turn_the_owner_started_asks_to_raise_access() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let ask = |conversation: &Conversation, owner_initiated| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "source",
+            },
+            action: AccessAction::RequestAccess,
+            resource: on(conversation),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&ask(&live, true)),
+        Some(&["owner.request_access".to_owned()][..])
+    );
+    assert!(!allowed(&ask(&live, false)));
+    assert!(!allowed(&ask(
+        &conversation("org", "someone-else", false),
+        true
+    )));
+    assert!(!allowed(&ask(
+        &conversation("elsewhere", "owner", false),
+        true
+    )));
+    assert!(!allowed(&ask(&conversation("org", "owner", true), true)));
+}
+
+/// A turn the owner started closes only a thread its own thread created, as
+/// the spawn's record says: not one another thread created, not one no agent
+/// created, and not from a turn another agent started.
+#[test]
+fn a_turn_closes_only_a_thread_its_own_thread_created() {
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let child = conversation("org", "owner", false);
+    let ask = |conversation: &Conversation, created_by, owner_initiated| {
+        allowed(&policy.evaluate(&AccessAsk {
+            subject: AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated,
+                conversation: "parent",
+            },
+            action: AccessAction::CloseCreated,
+            resource: AccessResource::created(conversation, created_by),
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        }))
+    };
+    assert!(ask(&child, Some("parent"), true));
+    assert!(
+        !ask(&child, Some("another"), true),
+        "another thread's child"
+    );
+    assert!(!ask(&child, None, true), "a thread no agent created");
+    assert!(
+        !ask(&child, Some("parent"), false),
+        "a turn an agent started"
+    );
+    let others = conversation("org", "someone-else", false);
+    assert!(
+        !ask(&others, Some("parent"), true),
+        "another owner's thread"
+    );
+    let deleted = conversation("org", "owner", true);
+    assert!(!ask(&deleted, Some("parent"), true), "a deleted thread");
 }

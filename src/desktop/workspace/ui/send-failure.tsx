@@ -6,9 +6,35 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/ho
 import { useRememberedValue } from "../adapters/store/remembered-session"
 import { selectFailedMessage } from "../adapters/store/selectors"
 import { failureCopy } from "./failure-copy"
+import { agentName, agentOf } from "../model/workspace-index"
 import { BoatTokenForm, useBoatConnection } from "../../settings/ui/boat-row"
 
-/** Both conversation and overview composers act on the same refused message. */
+/**
+ * What a chat's dock offers for its refused message: only a way to fix
+ * where it was refused (the agent's setup, Boat's connection). The message
+ * itself says it did not go, and offers Send again and Dismiss, right under
+ * it in the transcript (`UnsentRow`).
+ */
+export function WorkspaceSendRecovery({ sessionId }: { sessionId: string }) {
+  const live = useWorkspaceSelector((state) => selectFailedMessage(state, sessionId))
+  const message = useRememberedValue(sessionId, live)
+  if (!message || message.delivery?.state !== "failed") return null
+  const { diagnostic, reason, model } = message.delivery
+  const agent = model ? agentForProvider(model.provider) : undefined
+  return (
+    <>
+      {reason === "agent-not-configured" && agent ? (
+        <SelectedAgentSetup agent={agent} recovery />
+      ) : null}
+      {diagnostic?.code === "environment_not_configured" ? <BoatRecovery /> : null}
+    </>
+  )
+}
+
+/**
+ * The overview's reply pill, which shows no transcript, acts on the refused
+ * message from a card above it.
+ */
 export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
   const dispatch = useWorkspaceDispatch()
   const live = useWorkspaceSelector((state) => selectFailedMessage(state, sessionId))
@@ -21,6 +47,11 @@ export function WorkspaceSendFailure({ sessionId }: { sessionId: string }) {
       <SendFailure
         details={diagnostic?.message ?? failureCopy(reason)}
         code={diagnostic?.code}
+        summary={
+          diagnostic?.code === "agent_sign_in_required" && model
+            ? `${agentName(agentOf(model))} isn’t signed in where this chat runs.`
+            : failureCopy(reason)
+        }
         onRetry={() =>
           void dispatch(
             resendMessage({ sessionId, messageId: message.id, initiator: "person" }),

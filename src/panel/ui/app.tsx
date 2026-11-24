@@ -1,3 +1,4 @@
+import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
 import type { BoatClaudeSignIn } from "../../provider-authentication/model/boat-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
@@ -33,12 +34,15 @@ import {
   ConversationNotification,
   Transcript,
   useConversation,
+  useOwnerAsks,
+  textContent,
   toEditor,
   linksFilesHere,
   chosenEnvironment,
   HERE,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
+import { PanelOwnerAsk } from "./owner-ask"
 import { useSession } from "../../session"
 import { useColorScheme } from "../adapters/color-scheme"
 import { useFlushOnTurn } from "../adapters/compositor-flush"
@@ -119,6 +123,7 @@ export function App({
   onProviderSignIn,
   canSignInToProvider,
   boatSignIn,
+  chatgptSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -142,6 +147,8 @@ export function App({
   canSignInToProvider?: () => Promise<boolean>
   /** A Claude sign-in minted for Boat VMs, for a refusal from one (ADR 501). */
   boatSignIn?: BoatClaudeSignIn
+  /** A ChatGPT account for Codex on another computer. */
+  chatgptSignIn?: CodexChatgptSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -149,6 +156,9 @@ export function App({
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
+  // Decisions agents asked: each opens its tab without being shown, and the
+  // tab carries a dot until the person answers.
+  const asks = useOwnerAsks()
   const choices = useConversationChoices(chat.gatewayAvailable, followConversationChoices)
   const selectedAgent =
     choices?.catalog.agents.find(
@@ -411,6 +421,9 @@ export function App({
     id: item.id,
     title: item.title,
     closeable: true,
+    ...(item.serverConversationId && asks.has(item.serverConversationId)
+      ? { badgeCount: 1 }
+      : {}),
     icon: (
       <RandomAvatar
         seed={item.id}
@@ -604,6 +617,7 @@ export function App({
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
                   boatSignIn={boatSignIn}
+                  chatgptSignIn={chatgptSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }
@@ -750,13 +764,38 @@ export function App({
                 ) : null
               }
               conversation={
-                startupNotice(startup.status, startup.retry) ?? (
-                  <ConversationNotification
-                    conversation={chat.active}
-                    connection={session}
-                    gatewayAvailable={chat.gatewayAvailable}
+                <>
+                  {startupNotice(startup.status, startup.retry) ?? (
+                    <ConversationNotification
+                      conversation={chat.active}
+                      connection={session}
+                      gatewayAvailable={chat.gatewayAvailable}
+                    />
+                  )}
+                  {/* A decision an agent asked in this conversation: said
+                      after the conversation's own notice. */}
+                  <PanelOwnerAsk
+                    key={`ask:${chat.active.id}`}
+                    chat={chat.active.id}
+                    ask={
+                      chat.active.serverConversationId
+                        ? asks.get(chat.active.serverConversationId)?.ask
+                        : undefined
+                    }
+                    submit={(text) => chat.answer(textContent(text))}
+                    raiseAccess={chat.raiseAccess}
+                    access={
+                      chat.active.remote && !chat.active.remote.approvalModeChange
+                        ? chat.active.remote.approvalMode
+                        : undefined
+                    }
+                    underway={chat.active.remote?.approvalModeChange?.requestedMode}
+                    revision={chat.active.revision}
+                    working={
+                      chat.active.phase !== "idle" || !!chat.active.remote?.running
+                    }
                   />
-                )
+                </>
               }
             />
             {/* Keyed per conversation so the queue is rebuilt rather than

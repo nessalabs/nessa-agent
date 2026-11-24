@@ -1,4 +1,7 @@
 mod agent_tools;
+mod auto_picks;
+mod decision_traces;
+pub use decision_traces::DECISION_TARGET;
 mod background_tasks;
 mod channels;
 mod creation;
@@ -10,9 +13,12 @@ use opening_resources::OpeningResources;
 mod parent_stop;
 mod pool_preferences;
 mod records;
+mod reply_styles;
 mod scheduled_messages;
+mod terminals;
 mod thread_report_admission;
 mod thread_reports;
+mod turn_origins;
 mod workspace_windows;
 use self::mutation::SubmissionPermit;
 use super::background_tasks::BackgroundTarget;
@@ -49,8 +55,10 @@ use crate::domain::{
     Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
     RestCause, ToolSource,
 };
+pub use agent_tools::{AccessRequestOutcome, ASK_OWNER_TOOL, READ_TURN_TOOL, REQUEST_ACCESS_TOOL};
 pub use channels::{
-    AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore, FolderRefusal,
+    AgentBrief, AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
+    FolderRefusal,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -74,7 +82,7 @@ use nessa_protocol::conversation::view::{
     ConversationQuestionEntry, ConversationReorderOutcome, ConversationReviewEntry,
     ConversationReviewKind, ConversationRuntime, ConversationSelectionView,
     ConversationStartupFailure, ConversationStartupFailureCode, ConversationView,
-    SubmissionReceipt,
+    SubmissionReceipt, AUTO_PICK_SURFACE,
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
@@ -121,6 +129,7 @@ use nessa_sdk::domain::agent_execution::{
     sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+pub use reply_styles::{PinnedStart, ReplyStyleStore};
 pub use scheduled_messages::FENCE_LEASE_MS;
 pub use scheduled_messages::{
     HistoryGeneration, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
@@ -140,10 +149,15 @@ use std::{
     },
     time::Duration,
 };
+pub use terminals::{TerminalOrigin, TerminalPlace};
 #[cfg(test)]
 pub use thread_reports::{report_outcomes_for_test, report_text_for_test};
 pub use thread_reports::{
     AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
+};
+pub use turn_origins::{
+    ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS,
+    MAX_TURN_HOPS,
 };
 pub use workspace_windows::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
@@ -424,6 +438,21 @@ pub trait ConversationAgentSource: Send + Sync {
     ) -> ConversationAgentFuture<'a> {
         Box::pin(async { Err(ConversationError::Unavailable) })
     }
+    /// As [`Self::resolve_for`] or [`Self::resolve_in`], by `brief.place`,
+    /// with `brief.style` added to what the agent is told. A source whose
+    /// agents take no instructions of Nessa's ignores the style.
+    fn resolve_briefed<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+        brief: &'a AgentBrief,
+    ) -> ConversationAgentFuture<'a> {
+        match &brief.place {
+            None => self.resolve_for(agent, model, mode),
+            Some(place) => self.resolve_in(agent, model, mode, place),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -535,28 +564,28 @@ impl ConversationAgents {
         &self,
         agent: AgentId,
         model: &str,
-        place: Option<&AgentPlace>,
+        brief: &AgentBrief,
     ) -> Result<ConversationAgent, ConversationError> {
-        self.resolve_for(agent, model, ConversationApprovalMode::Ask, place)
+        self.resolve_for(agent, model, ConversationApprovalMode::Ask, brief)
             .await
     }
     /// The provider generation for `agent` on `model` under `mode`, started
-    /// where the conversation's channel says (`place`), or in the gateway's
-    /// workspace for the default channel.
+    /// where the conversation's channel says (`brief.place`), or in the
+    /// gateway's workspace for the default channel, and told `brief.style`.
     async fn resolve_for(
         &self,
         agent: AgentId,
         model: &str,
         mode: ConversationApprovalMode,
-        place: Option<&AgentPlace>,
+        brief: &AgentBrief,
     ) -> Result<ConversationAgent, ConversationError> {
         if !self.configured.contains(&agent) {
             return Err(ConversationError::AgentNotConfigured);
         }
-        let resolved = match place {
-            None => self.source.resolve_for(agent, model, mode).await?,
-            Some(place) => self.source.resolve_in(agent, model, mode, place).await?,
-        };
+        let resolved = self
+            .source
+            .resolve_briefed(agent, model, mode, brief)
+            .await?;
         let configured = resolved.ok_or(ConversationError::AgentNotConfigured)?;
         if configured.reserved_output_tokens == 0 {
             return Err(ConversationError::InvalidInput);
@@ -786,6 +815,9 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<AttachmentOwner>,
+    /// Why its attachment failed to open, once it has: what a caller that
+    /// waited for the opening (a switch to another agent) answers with.
+    opening_failure: Arc<std::sync::Mutex<Option<AgentError>>>,
     /// Its MCP Apps' state — the conversation's, kept by the service — and
     /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
@@ -803,10 +835,26 @@ struct LiveConversation {
     tool_source: Option<ToolSource>,
     /// The tool policies of the Drive turns admitted here.
     admitted_policies: Arc<AdmittedPolicies>,
+    /// The reviews its last raise to Full could not answer
+    /// (`raised_access.rs`), for a replay of that raise.
+    unsettled_raise: raised_access::UnsettledRaise,
 }
 struct ModelBudget {
     identity: ProviderIdentity,
     reserved_output_tokens: u32,
+}
+/// Ends an opening of a conversation's machine as `end` when dropped, so a
+/// task that stops early still ends it (`SetupSteps::end`).
+struct SetupEnding {
+    steps: Arc<super::SetupSteps>,
+    id: ConversationId,
+    opening: super::SetupOpening,
+    end: super::SetupEnd,
+}
+impl Drop for SetupEnding {
+    fn drop(&mut self) {
+        self.steps.end(&self.id, self.opening, self.end);
+    }
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -867,16 +915,19 @@ struct Slot {
     /// agents, the one with the oldest is parked first
     /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
-    /// Its agent closed its thread (`close_thread`): it is parked as soon
-    /// as it is idle, watched or not. The close is the conversation's, kept
-    /// by the metadata store (`ConversationRepository::thread_closed`); this
-    /// is that fact as the opening read it, written with it by
-    /// `close_after_turn` and by a message that opens the thread again.
+    /// Its thread is closed (`close_thread`): it is parked as soon as it is
+    /// idle, watched or not.
+    ///
+    /// Contract: the metadata store (`ConversationRepository::thread_closed`)
+    /// is the close's one authority, and this is only its copy for the
+    /// parking sweep. Every change writes the store first, then copies the
+    /// store's mark as it then stands, under `closing_changes`
+    /// (`ConversationService::refresh_closing`). Nothing sets this from a
+    /// value it worked out itself, so a close, an opening and a new message
+    /// that reopens the thread can interleave in any order and the last copy
+    /// still matches the store.
     closing: AtomicBool,
-    /// Held across each change of the thread's close, its store write and
-    /// `closing` together: a close from a running turn and a new message
-    /// that opens the thread would otherwise interleave, leaving the store
-    /// closed and this open, or the other way round.
+    /// Held while `closing` is copied from the store: one copy at a time.
     closing_changes: tokio::sync::Mutex<()>,
 }
 impl Slot {
@@ -953,6 +1004,8 @@ struct Inner {
     agent_tool_admissions: Arc<SourcePermits>,
     /// What each person's open desktop windows show, for their agents.
     workspace_windows: Arc<super::WorkspaceWindows>,
+    /// Where each open conversation's agent works, for a Run in it.
+    workplaces: terminals::AgentWorkplaces,
     /// Where each window change is recorded; unbound, every change is refused.
     window_control_audit: OnceLock<Arc<dyn super::WindowControlAudit>>,
     /// Agent sends waiting to report their thread's finished turn.
@@ -964,13 +1017,37 @@ struct Inner {
     background_tasks: OnceLock<Arc<background_tasks::BackgroundTasks>>,
     /// Where channels, and which conversation is in which, are kept.
     channels: channels::ChannelBinding,
+    /// How agents talk; unbound, no agent is told a style.
+    reply_styles: reply_styles::ReplyStyleBinding,
+    /// Held across a channel coordinator switch's read, audit and write.
+    channel_switches: tokio::sync::Mutex<()>,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// What each credential was issued to, for telling which device sent a
+    /// turn. Unbound reads every device as unknown.
+    credential_devices: OnceLock<Arc<dyn nessa_auth::application::pairing::CredentialDeviceSource>>,
     /// Cedar for the gateway usage-limit preference. Unbound refuses the change.
     preference_policy:
         OnceLock<Arc<dyn super::usage_limit_policy::UsageLimitPreferencePolicyEvaluator>>,
     /// Wakes the continuation loop when a row is accepted or the preference changes.
     schedule_wakeup: Arc<Notify>,
+    /// Wakes auto-pick when an ask is kept, paused or resumed, or an owner's
+    /// decision settings change (`auto_picks.rs`).
+    auto_pick_wakeup: Notify,
+    /// Asks auto-pick could not send, with when to try again and how many
+    /// tries failed: kept here only, so a restart tries each at once.
+    auto_pick_failures: std::sync::Mutex<HashMap<String, (u64, u32)>>,
+    /// Conversations with an auto-pick recorded and not yet sent, and
+    /// whether a person wrote there since (`auto_picks.rs`).
+    picks_in_flight: std::sync::Mutex<HashMap<ConversationId, bool>>,
+    /// Person messages on their way in, by conversation: one already on its
+    /// way when a pick is recorded counts as written after it.
+    persons_writing: std::sync::Mutex<HashMap<ConversationId, usize>>,
+    /// Picks that never reached the agent and could not be taken back yet,
+    /// by ask: tried again on auto-pick's next look.
+    auto_pick_takebacks: std::sync::Mutex<HashMap<String, auto_picks::RecordedPick>>,
+    /// One open `decision` span per waiting ask (`decision_traces.rs`).
+    decision_traces: decision_traces::DecisionTraces,
     /// Settlement plans that did not commit. The schedule database holds the
     /// same debt when it accepted the write. This map is the copy written
     /// when that write failed, so this process still retries it. A crash
@@ -1045,6 +1122,9 @@ struct Inner {
     drive: Arc<OnceLock<DriveTools>>,
     /// Directory grants. Unbound, a turn is not checked against one.
     directory: Arc<OnceLock<Arc<crate::application::DirectoryAccess>>>,
+    /// What getting each conversation's cloud machine ready is doing
+    /// (`bind_setup_steps`); unbound, no view lists any.
+    setup: OnceLock<Arc<super::SetupSteps>>,
     /// Remembered permission rules. Unbound, no turn is offered a remember
     /// choice and no review is answered by a rule.
     permission_rules: Arc<OnceLock<Arc<dyn PermissionRules>>>,
@@ -1505,6 +1585,7 @@ impl ConversationService {
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
+                workplaces: Default::default(),
                 window_control_audit: OnceLock::new(),
                 thread_reports: Default::default(),
                 ownership: OnceLock::new(),
@@ -1512,9 +1593,18 @@ impl ConversationService {
                 ownership_preparations: Mutex::new(HashMap::new()),
                 background_tasks: OnceLock::new(),
                 channels: Default::default(),
+                reply_styles: Default::default(),
+                channel_switches: tokio::sync::Mutex::new(()),
                 scheduled_messages: OnceLock::new(),
+                credential_devices: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
+                auto_pick_wakeup: Notify::new(),
+                auto_pick_failures: std::sync::Mutex::default(),
+                picks_in_flight: std::sync::Mutex::default(),
+                persons_writing: std::sync::Mutex::default(),
+                auto_pick_takebacks: std::sync::Mutex::default(),
+                decision_traces: decision_traces::DecisionTraces::default(),
                 reconcile_retry_owed: std::sync::Mutex::default(),
                 submit_retry_owed: std::sync::Mutex::default(),
                 access_policy,
@@ -1539,6 +1629,7 @@ impl ConversationService {
                 retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
                 directory: Arc::new(OnceLock::new()),
+                setup: OnceLock::new(),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
             }),
@@ -1689,20 +1780,26 @@ impl ConversationService {
                 .filter(|defaults| defaults.agent == agent)
                 .map(|defaults| defaults.model.as_str().to_owned())
         });
-        let place = channel
-            .as_ref()
-            .map(|channel| AgentPlace::of(channel, place_asked.is_remote()));
+        // Only the model it would start on is asked here: the prompt it is
+        // told is built when it opens.
+        let place = AgentBrief {
+            place: channel
+                .as_ref()
+                .map(|channel| AgentPlace::of(channel, place_asked.is_remote())),
+            job: None,
+            style: None,
+        };
         let configured = match model.as_deref() {
             Some(model) => {
                 service
                     .inner
                     .agents
-                    .resolve_for(agent, model, approval_mode, place.as_ref())
+                    .resolve_for(agent, model, approval_mode, &place)
                     .await?
             }
             None => {
                 let default = service.inner.agents.resolve(agent).await?;
-                if approval_mode == ConversationApprovalMode::Ask && place.is_none() {
+                if approval_mode == ConversationApprovalMode::Ask && place.place.is_none() {
                     default
                 } else {
                     service
@@ -1712,7 +1809,7 @@ impl ConversationService {
                             agent,
                             default.provider.identity().model_id(),
                             approval_mode,
-                            place.as_ref(),
+                            &place,
                         )
                         .await?
                 }
@@ -1770,6 +1867,10 @@ impl ConversationService {
             )
             .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
+        // How its agent talks is fixed now, before it exists, as where it runs is.
+        service
+            .pin_reply_style(&id, &caller, channel.as_ref())
+            .await?;
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
@@ -1856,7 +1957,13 @@ impl ConversationService {
                         None
                     };
                     entry.insert(slot.clone());
-                    service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
+                    service.start_slot(
+                        id.clone(),
+                        slot.clone(),
+                        actor.clone(),
+                        owned_preparation,
+                        true,
+                    );
                     slot
                 }
             };
@@ -1994,7 +2101,7 @@ impl ConversationService {
                 }
                 let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor.clone(), None);
+                self.start_slot(id.clone(), slot.clone(), actor.clone(), None, false);
                 slot
             };
             slot.touch(self.inner.clock.unix_milliseconds());
@@ -2049,11 +2156,21 @@ impl ConversationService {
         slot: Arc<Slot>,
         actor: ActionContext,
         owned_preparation: Option<Arc<dyn OwnedLifetime>>,
+        // Opened by a chat's creation, for no message yet.
+        for_creation: bool,
     ) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
             tokio::spawn(async move {
+                // Getting its machine ready, if it has one, is this
+                // opening's; ended with it, below and in the attachment
+                // owner.
+                let setup_opening = service
+                    .inner
+                    .setup
+                    .get()
+                    .map(|steps| (steps.clone(), steps.begin(&id, for_creation)));
                 // The pending switch this opening carries on, if it does:
                 // settled once the opening has ended (`handoffs`).
                 let carried = std::sync::Mutex::new(None);
@@ -2092,16 +2209,12 @@ impl ConversationService {
                             // opens it, a read or a restart's resumption, until
                             // a new message opens it again: this agent is
                             // parked once idle, as the one that closed it was.
-                            let closed = service
-                                .inner
-                                .metadata
-                                .thread_closed(&id)
-                                .await
-                                .map_err(|cause| OpeningFailure {
+                            service.refresh_closing(&id, &owner).await.map_err(|cause| {
+                                OpeningFailure {
                                     cause,
                                     holds: false,
-                                })?;
-                            owner.closing.store(closed, Ordering::SeqCst);
+                                }
+                            })?;
                             // A record naming an agent this build has no
                             // adapter for is read, listed, and deletable,
                             // and never opened on some other agent. A
@@ -2114,7 +2227,7 @@ impl ConversationService {
                             })?;
                             let agent = plan.agent;
                             *carried.lock().expect("carried switch") = plan.switch.clone();
-                            let place = service.agent_place(&id).await.map_err(|cause| {
+                            let place = service.agent_brief(&id).await.map_err(|cause| {
                                 OpeningFailure {
                                     cause,
                                     holds: false,
@@ -2126,7 +2239,7 @@ impl ConversationService {
                                     agent,
                                     plan.model.as_str(),
                                     record.approval_mode(),
-                                    place.as_ref(),
+                                    &place,
                                 ) => {
                                     resolved.map_err(|cause| OpeningFailure {
                                         cause,
@@ -2308,13 +2421,21 @@ impl ConversationService {
                                 }
                             };
                             let (environment, opening) = selection?;
+                            // Its machine reached, the agent is started there
+                            // next: a setup step where a machine was made ready.
+                            if opening.refusal.is_none() {
+                                if let Some(steps) = service.inner.setup.get() {
+                                    steps.starting(&id);
+                                }
+                            }
                             let lease = Arc::new(LiveLease::new(&opening));
                             owner.acquisition.acquired(lease.clone());
                             if let Some(handoff) = plan.handoff.clone() {
                                 manager.expect_handoff(handoff);
                             }
                             let tool_source = checked_source(agent);
-                            let workspace = channels::working_folder(opening.workspace.as_ref(), configured.workspace.as_ref(), place.as_ref(), service.inner.workspace.as_ref());
+                            let workspace = channels::working_folder(opening.workspace.as_ref(), configured.workspace.as_ref(), place.place.as_ref(), service.inner.workspace.as_ref());
+                            service.note_workplace(&id, &opening.terms.environment, workspace.as_ref());
                             let background_target = match &opening.terms.environment {
                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
                                 EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
@@ -2489,7 +2610,7 @@ impl ConversationService {
                             if let Some(workspace) = channels::working_folder(
                                 opening.workspace.as_ref(),
                                 configured.workspace.as_ref(),
-                                place.as_ref(),
+                                place.place.as_ref(),
                                 service.inner.workspace.as_ref(),
                             ) {
                                 let identity = configured.provider.identity();
@@ -2512,7 +2633,20 @@ impl ConversationService {
                             let attachment_id = id.clone();
                             let attachment_service = service.clone();
                             let readiness = configured.readiness.clone();
+                            let opening_failure: Arc<std::sync::Mutex<Option<AgentError>>> =
+                                Arc::default();
+                            let failed_opening = opening_failure.clone();
+                            let setup_ending = setup_opening.clone().map(|(steps, opening)| SetupEnding {
+                                steps,
+                                id: id.clone(),
+                                opening,
+                                end: super::SetupEnd::Failed,
+                            });
                             let owner = tokio::spawn(async move {
+                                // However this task ends, an opening of the
+                                // machine under way ends with it: ready only
+                                // once the agent attached.
+                                let mut setup_ending = setup_ending;
                                 if let Some(readiness) = readiness {
                                     let cancellation = authorization.cancellation();
                                     tokio::select! {
@@ -2524,15 +2658,20 @@ impl ConversationService {
                                 if attachment_service.inner.retirement.get().is_some() {
                                     return;
                                 }
-                                match attachment.start_attachment(authorization) {
-                                    Ok(wait) => {
-                                        if let Err(error) = wait.wait().await {
-                                            report_opening_failure(&attachment_id, &error);
-                                        }
+                                let failed = match attachment.start_attachment(authorization) {
+                                    Ok(wait) => wait.wait().await.err(),
+                                    Err(AgentError::Closed) => None,
+                                    Err(error) => Some(error),
+                                };
+                                if let Some(error) = failed {
+                                    report_opening_failure(&attachment_id, &error);
+                                    *failed_opening.lock().expect("opening failure") = Some(error);
+                                } else if attachment.attachment_status().phase() == AttachmentPhase::Attached {
+                                    if let Some(ending) = setup_ending.as_mut() {
+                                        ending.end = super::SetupEnd::Ready;
                                     }
-                                    Err(AgentError::Closed) => {}
-                                    Err(error) => report_opening_failure(&attachment_id, &error),
                                 }
+                                drop(setup_ending);
                                 // Attached or failed: the view's lifecycle
                                 // and capabilities follow the agent's.
                                 attachment_service
@@ -2551,6 +2690,7 @@ impl ConversationService {
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
+                                opening_failure,
                                 app_reviews,
                                 app_epoch,
                                 publishes: Arc::default(),
@@ -2558,6 +2698,7 @@ impl ConversationService {
                                 organization_id: record.organization().clone(),
                                 tool_source,
                                 admitted_policies,
+                                unsettled_raise: raised_access::UnsettledRaise::default(),
                             });
                             // What the host publishes under the lease is
                             // kept for as long as the lease is held.
@@ -2589,7 +2730,14 @@ impl ConversationService {
                         };
                         match &result {
                             Ok(_) => { owner.acquisition.transferred(); owner.acquisition.complete(true, service.inner.deletion_budgets.stop).await; }
-                            Err(failure) => owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await,
+                            Err(failure) => {
+                                // Nothing was started: an opening of its
+                                // machine under way ends with it.
+                                if let Some((steps, opening)) = &setup_opening {
+                                    steps.end(&id, *opening, super::SetupEnd::Failed);
+                                }
+                                owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await
+                            }
                         }
                         result
                     })
@@ -3052,7 +3200,31 @@ impl ConversationService {
                 if !matches_call(&existing) {
                     return Err(ConversationError::RequestConflict);
                 }
-                return saved_result(&existing);
+                let saved = saved_result(&existing);
+                // A replayed raise to Full reports its answers as the first
+                // call did: what it could not answer is tried again, and a
+                // failure still fails it (`raised_access.rs`). Only while
+                // the chat still runs at Full, and its agent is live.
+                if matches!(saved, Ok(ConversationApprovalMode::Full))
+                    && existing.prior != ConversationApprovalMode::Full
+                    && record.approval_mode() == ConversationApprovalMode::Full
+                {
+                    let slot = service.inner.conversations.lock().await.get(&id).cloned();
+                    if let Some(slot) = slot {
+                        if let Ok(live) = service.wait_for_slot(&id, slot).await {
+                            let allowed = raised_access::replay_unsettled(
+                                &id,
+                                &live,
+                                &actor,
+                                &existing.request_id,
+                            )
+                            .await;
+                            service.inner.live_changes.publish(&id);
+                            allowed?;
+                        }
+                    }
+                }
+                return saved;
             }
             // A model change a restart or failed cleanup left pending is
             // settled first, as a send settles it, rather than refusing every
@@ -3069,11 +3241,11 @@ impl ConversationService {
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
-            let place = service.agent_place(&id).await?;
+            let place = service.agent_brief(&id).await?;
             service
                 .inner
                 .agents
-                .resolve_for(agent, record.model().as_str(), mode, place.as_ref())
+                .resolve_for(agent, record.model().as_str(), mode, &place)
                 .await?;
             let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
             let live = if let Some(slot) = live_slot {
@@ -3145,7 +3317,7 @@ impl ConversationService {
                 Some(_) if mode == intent.prior => ConversationModeApplication::Applied,
                 Some(live) => match live
                     .agent
-                    .set_approval_mode(provider_approval_mode(mode), actor)
+                    .set_approval_mode(provider_approval_mode(mode), actor.clone())
                     .await
                 {
                     Ok(()) => ConversationModeApplication::Applied,
@@ -3227,6 +3399,25 @@ impl ConversationService {
             }
             if let Some(live) = live {
                 live.projection.lock().await.approval_mode(terminal.requested);
+                // A raise to Full is the person's answer to what the running
+                // turn waits on: each agent review is allowed once
+                // (`raised_access.rs`). An answer that could not be audited
+                // fails the raise, though the mode stays taken.
+                if terminal.requested == ConversationApprovalMode::Full
+                    && terminal.prior != ConversationApprovalMode::Full
+                {
+                    let allowed = raised_access::allow_waiting_reviews(
+                        &id,
+                        &live,
+                        &actor,
+                        &terminal.request_id,
+                    )
+                    .await;
+                    // Answers change live authority without an execution
+                    // event: wake readers, failed or not.
+                    service.inner.live_changes.publish(&id);
+                    allowed?;
+                }
             }
             Ok(terminal.requested)
             }
@@ -3283,6 +3474,24 @@ impl ConversationService {
         caller: ConversationCaller,
         opening: ReadOpening,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
+        let setup = self.inner.setup.get().cloned();
+        let (mut view, cursor) = self
+            .read_at_without_setup(id.clone(), caller, opening)
+            .await?;
+        // Read after the rest: a step that began during the read is shown,
+        // and its change wakes the reader for the next one anyway.
+        if let Some(steps) = setup {
+            view.setup = steps.view(&id);
+        }
+        Ok((view, cursor))
+    }
+
+    async fn read_at_without_setup(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        opening: ReadOpening,
+    ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         let _admission = self.admit().await?;
         // An explicit Open can recover a stopped owner; a follower may only
         // publish a readable owner. The same ordering applies to both controls.
@@ -3297,7 +3506,38 @@ impl ConversationService {
             if let Some(read) = self.pending_change_view(&id, &caller).await? {
                 return Ok(read);
             }
-            self.inner.records.mode_changes().lock(&id).await
+            // While its cloud machine is made ready, which can take a minute
+            // or more, a follower is not held until the agent opens, nor
+            // behind the send waiting on it (which holds this lock): it reads
+            // the history and how far the setup got, and the agent's own
+            // view once the opening ends (`SetupSteps` wakes it each step).
+            // Asked again on each change while it waits, since the first
+            // step can come after the send took the lock.
+            let steps = self
+                .inner
+                .setup
+                .get()
+                .filter(|_| matches!(opening, ReadOpening::LiveOnly));
+            let mut changes = self.inner.live_changes.subscribe(&id);
+            let mode_changes = self.inner.records.mode_changes();
+            let locked = mode_changes.lock(&id);
+            tokio::pin!(locked);
+            loop {
+                let Some(steps) = steps else {
+                    break (&mut locked).await;
+                };
+                if steps.running(&id) && !self.opened(&id).await {
+                    return self.read_unopened(&id, &caller).await;
+                }
+                tokio::select! {
+                    guard = &mut locked => break guard,
+                    changed = changes.changed() => {
+                        if changed.is_err() {
+                            break (&mut locked).await;
+                        }
+                    }
+                }
+            }
         };
         match opening {
             ReadOpening::Open => {
@@ -3306,6 +3546,7 @@ impl ConversationService {
                     Err(error) => Err(error),
                 };
                 if let Err(error) = recovered {
+                    tracing::warn!(conversation_id = %id, %error, "a pending selection change could not be settled on opening; the view shows it pending");
                     // Read again after recovery: cleanup may have ended or
                     // replaced the owner a preceding view would have captured.
                     if let Some(read) = self.pending_change_view(&id, &caller).await? {
@@ -3404,6 +3645,22 @@ impl ConversationService {
         let view = self.with_background_tasks(&id, view).await?;
         self.check_view_access(&id, &caller).await?;
         Ok((view, cursor))
+    }
+    /// Whether `id` has an opening that has ended, opened or failed: one a
+    /// read would not wait for.
+    /// Whether a send or change holds `id`'s selection lock now.
+    #[cfg(test)]
+    pub(crate) fn selection_held(&self, id: &ConversationId) -> bool {
+        self.inner.records.mode_changes().try_lock(id).is_none()
+    }
+
+    async fn opened(&self, id: &ConversationId) -> bool {
+        self.inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .is_none_or(|slot| slot.value.get().is_some())
     }
     /// The agent of `id` if one is live or opening (waited for), after the
     /// caller's access is checked; `None` when nothing has it open, or its
@@ -3956,6 +4213,14 @@ impl ConversationService {
         let _ = self.inner.directory.set(access);
     }
 
+    /// Bind what tells each conversation's view how its cloud machine is
+    /// being made ready; the same steps its machine's connector is given.
+    /// A second bind is ignored.
+    pub fn bind_setup_steps(&self, steps: Arc<super::SetupSteps>) {
+        steps.publish_to(self.inner.live_changes.clone());
+        let _ = self.inner.setup.set(steps);
+    }
+
     /// Bind the remembered permission rules. A second bind is ignored.
     /// Unbound, reviews are asked and no remember choice is offered.
     pub fn bind_permission_rules(&self, rules: Arc<dyn PermissionRules>) {
@@ -4158,6 +4423,13 @@ impl ConversationService {
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.
+            // An opening this message waits on is its own: the view says
+            // so, and a reply says how long the machine took.
+            let _sending = service
+                .inner
+                .setup
+                .get()
+                .map(|steps| steps.sending(&id, &execution_id));
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
@@ -4225,11 +4497,8 @@ impl ConversationService {
                 // retry of a message the agent already has is not new work:
                 // the turn that closed the thread may be that very message.
                 if !known && owner.closing.load(Ordering::SeqCst) {
-                    let _change = owner.closing_changes.lock().await;
-                    if owner.closing.load(Ordering::SeqCst) {
-                        service.inner.metadata.open_thread(&id).await?;
-                        owner.closing.store(false, Ordering::SeqCst);
-                    }
+                    service.inner.metadata.open_thread(&id).await?;
+                    service.refresh_closing(&id, &owner).await?;
                 }
                 // Asked under the submission lock, which a desktop stop takes
                 // to mark the owner: an owner being stopped is handed no new
@@ -4589,6 +4858,30 @@ impl ConversationService {
                     }));
                 }
             }
+            // The owner's new message is their answer to whatever the agent
+            // asked them (`ask_owner`), a tapped choice or not. Someone it is
+            // shared with, a continuation, or an external event sent for the
+            // owner does not answer it. Read before the agent has the
+            // message, so a question it asks after it is not taken for the
+            // one answered; taken down with the message's summary below.
+            // Auto-pick answers nothing here: it recorded its answer before
+            // it sent it (`auto_picks.rs`), so whatever is waiting now is
+            // newer, and the owner's.
+            let auto = caller.surface_id == AUTO_PICK_SURFACE;
+            // Held until the message's summary is written, below.
+            let _writing = (!auto && writer.is_person()).then(|| service.person_writing(&id));
+            let answered = if !known && !auto && writer.is_person() {
+                service
+                    .waiting_ask_answered(
+                        &id,
+                        &execution_id,
+                        &caller,
+                        writer.initiation().initiator(),
+                    )
+                    .await
+            } else {
+                None
+            };
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
                     .agent
@@ -4667,8 +4960,12 @@ impl ConversationService {
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
+            // The same write takes down the question the message answered:
+            // the list never shows the message and the question still up.
             if !known && !matches!(writer, Writer::Internal) {
-                service.summarize_message(&id, &message).await;
+                service
+                    .summarize_message(&id, &message, answered.as_deref())
+                    .await;
             }
             match delivery {
                 SubmissionDelivery::Queued(receipt) => {
@@ -4864,7 +5161,7 @@ impl ConversationService {
         let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok((
             ConversationList {
-                conversations: list_entries(&owned, &running, &channels),
+                conversations: list_entries(&owned, &running, &channels, reader),
                 complete,
             },
             head,
@@ -4927,7 +5224,7 @@ impl ConversationService {
         let running = self.running_ids(&owned).await;
         let channels = self.listed_channels(listed_ids(&owned)).await?;
         Ok(ConversationObservation {
-            conversations: list_entries(&owned, &running, &channels),
+            conversations: list_entries(&owned, &running, &channels, reader),
             complete,
             cursor: cursor.map(|cursor| ConversationObservationCursor {
                 incarnation: cursor.incarnation,
@@ -5022,7 +5319,12 @@ impl ConversationService {
         running
     }
     /// Record in the conversation's summary that `message` was accepted.
-    async fn summarize_message(&self, id: &ConversationId, message: &UserMessage) {
+    async fn summarize_message(
+        &self,
+        id: &ConversationId,
+        message: &UserMessage,
+        answered: Option<&str>,
+    ) {
         let at_ms = self.inner.clock.unix_milliseconds();
         let first_file = message
             .files()
@@ -5030,12 +5332,10 @@ impl ConversationService {
             .map(LinkedFile::name)
             .or_else(|| message.uploads().first().map(|file| file.name()));
         self.change_summary(id, |previous| {
-            Some(ConversationSummary::after_message(
-                previous,
-                message.text_str(),
-                first_file,
-                at_ms,
-            ))
+            Some(
+                ConversationSummary::after_message(previous, message.text_str(), first_file, at_ms)
+                    .answering(answered, message.text_str(), false),
+            )
         })
         .await;
     }
@@ -5092,6 +5392,7 @@ impl ConversationService {
         let Some(next) = change(previous.as_ref()) else {
             return;
         };
+        let settled = next.settled().cloned();
         if let Err(error) = self.inner.summaries.record(id, next).await {
             tracing::warn!(
                 conversation_id = %id,
@@ -5099,6 +5400,9 @@ impl ConversationService {
                 "conversation summary could not be written; the list shows the last one"
             );
             return;
+        }
+        if let Some(settled) = settled {
+            self.inner.decision_traces.settled(id, &settled);
         }
         // A view shows the summary's title.
         self.inner.live_changes.publish(id);
@@ -5168,12 +5472,31 @@ impl ConversationService {
         key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_question_as(id, caller, actor, execution, question, key, choices)
+            .await
+    }
+
+    /// [`Self::answer_question`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer is not the owner. The answer is the
+    /// peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_question_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        question: String,
+        key: String,
+        choices: Option<Vec<QuestionChoiceInput>>,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
         supervised(async move {
             let _admission = service.admit().await?;
             // Kept, not merely checked: who answered is the one fact an audit of
             // an explicit answer exists to record.
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let question_id =
@@ -5222,10 +5545,39 @@ impl ConversationService {
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.answer_as(
+            id,
+            caller,
+            actor,
+            execution,
+            permission,
+            review,
+            option,
+            permission_caller,
+        )
+        .await
+    }
+
+    /// [`Self::answer`] opening the conversation as `access` and recording
+    /// `actor`. A granted peer's approval stays that peer's decision.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn answer_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        option: String,
+        permission_caller: PermissionCaller,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
-            let actor = caller.actor()?;
             let execution_id =
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
@@ -5246,13 +5598,10 @@ impl ConversationService {
             }
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live.app_reviews.answer(
-                &execution,
-                &permission,
-                &review,
-                &option,
-                answerer(&caller),
-            ) {
+            match live
+                .app_reviews
+                .answer(&execution, &permission, &review, &option, answered_by)
+            {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
@@ -5372,13 +5721,32 @@ impl ConversationService {
         review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
+        let actor = caller.actor()?;
+        self.cancel_permission_as(id, caller, actor, execution, permission, review, reason)
+            .await
+    }
+
+    /// [`Self::cancel_permission`] opening the conversation as `access` and
+    /// recording `actor`. A granted peer's cancellation stays that peer's.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn cancel_permission_as(
+        &self,
+        id: ConversationId,
+        access: ConversationCaller,
+        actor: nessa_sdk::application::agent_execution::permissions::ActionContext,
+        execution: String,
+        permission: String,
+        review: String,
+        reason: String,
+    ) -> Result<(), ConversationError> {
         let service = self.clone();
+        let caller = access;
+        let answered_by = answerer_of(&actor)?;
         supervised(async move {
             let _admission = service.admit().await?;
             if reason.len() > 1024 {
                 return Err(ConversationError::InvalidInput);
             }
-            let actor = caller.actor()?;
             let reason = CustomPermissionCancellationReason::new("gateway_request", reason)
                 .map_err(|_| ConversationError::InvalidInput)?;
             let execution_id =
@@ -5388,7 +5756,7 @@ impl ConversationService {
             let live = service.resolve_holding_reviews(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, &review, answerer(&caller))
+                .cancel(&execution, &permission, &review, answered_by)
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
@@ -6238,6 +6606,7 @@ impl ConversationService {
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
+            self.inner.decision_traces.erased(&id);
             // Where it ran goes with its history; failing to forget it is
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {
@@ -7418,6 +7787,15 @@ fn initiator_of(actor: &ActionContext) -> McpAppInitiator {
 }
 
 /// Who answered an app's review: the caller of `conversation.answer`.
+fn answerer_of(actor: &ActionContext) -> Result<ReviewAnswerer, ConversationError> {
+    Ok(ReviewAnswerer {
+        principal_id: PrincipalId::new(actor.principal_id())
+            .map_err(|_| ConversationError::InvalidInput)?,
+        surface_id: actor.surface_id().to_owned(),
+        request_id: actor.request_id().to_owned(),
+    })
+}
+
 fn answerer(caller: &ConversationCaller) -> ReviewAnswerer {
     ReviewAnswerer {
         principal_id: caller.principal_id.clone(),
@@ -7733,7 +8111,12 @@ fn list_entries(
     owned: &[ListedConversation],
     running: &HashSet<ConversationId>,
     channels: &HashMap<ConversationId, crate::domain::ChannelId>,
+    reader: &Reader,
 ) -> Vec<ConversationListEntry> {
+    // An agent asks its owner: a device a conversation is shared with sees
+    // the conversation, not the question
+    // (`a_shared_reader_neither_sees_nor_answers_the_owners_ask`).
+    let owners = !matches!(reader, Reader::PairedDevice { .. });
     owned
         .iter()
         .map(|listed| ConversationListEntry {
@@ -7753,6 +8136,7 @@ fn list_entries(
             channel_id: channels
                 .get(listed.conversation.id())
                 .map(|channel| channel.as_str().to_owned()),
+            ask: owners.then(|| listed.summary.ask().cloned()).flatten(),
         })
         .collect()
 }
@@ -7903,6 +8287,7 @@ mod event_read;
 mod handoffs;
 mod notes;
 mod parking;
+mod raised_access;
 use parking::ParkWhen;
 mod resumption;
 pub use environment_tools::{

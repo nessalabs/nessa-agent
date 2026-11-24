@@ -1,86 +1,52 @@
-import { Fragment, Suspense, useEffect, useRef, useState } from "react"
-import { MathBlock } from "@nessa-ui/react/math-block"
+import { Fragment, useCallback, useEffect, useRef, useState } from "react"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useMessageStreamText } from "@nessa-ui/react/message"
-import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
+import { ReplyMarkdown, type ReplyFence } from "@nessa-ui/react/reply-markdown"
 import { inlineRuns } from "../../model/transcript"
+import { runnableFence, runRequestBase } from "../../model/run-block"
 import { ChatPill, useKnownChat } from "./chat-pill"
+import { RunBlock } from "./run-block"
+import { useTerminalSource } from "../terminals/terminal-source"
 
 /**
  * Inline code an agent wrote. The id of a chat this window has is that chat,
  * as a pill (`ChatPill`); anything else is code, as the renderer draws it.
+ * Fenced code never reaches here: `ReplyMarkdown` draws it as a code block.
  */
-function ProseCode({
-  node: _node,
-  className,
-  children,
-  ...rest
-}: React.ComponentProps<"code"> & { node?: unknown; "data-chat-id"?: string }) {
+function ProseCode({ children, ...rest }: React.ComponentProps<"code">) {
   const text = typeof children === "string" ? children.trim() : ""
   const known = useKnownChat(text)
-  // An id that was plain text (`chatIds`): a pill if it is a chat, else the text it was.
-  if (rest["data-chat-id"] !== undefined)
-    return known ? <ChatPill sessionId={text} /> : <>{children}</>
-  if (!className && known) return <ChatPill sessionId={text} />
-  // Inline maths, as the renderer draws it.
-  if ((className ?? "").includes("math-inline") && typeof children === "string")
-    return (
-      <Suspense fallback={<code>{children}</code>}>
-        <MathBlock inline tex={children} />
-      </Suspense>
-    )
-  return (
-    <code className={className} {...rest}>
-      {children}
-    </code>
-  )
+  if (known) return <ChatPill sessionId={text} />
+  return <code {...rest}>{children}</code>
+}
+
+/** A chat id written as plain text: that chat's pill when the window has it, else the id. */
+function ProseChatId({ id }: { id: string }) {
+  return useKnownChat(id) ? <ChatPill sessionId={id} /> : <>{id}</>
 }
 
 const proseComponents = { code: ProseCode }
 
-type MdNode = {
-  type: string
-  value?: string
-  children?: MdNode[]
-  data?: { hProperties?: Record<string, string> }
-}
-
 const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
 /**
- * A remark plugin: each whole id in the reply's plain text — never in code or
- * a link — is set apart as a marked inline node, which `ProseCode` draws as
- * that chat's pill when the window has it, and as the same text when not.
+ * Each whole id in a run of the reply's prose — `ReplyMarkdown` never hands
+ * over text inside code or a link — set apart as `ProseChatId`, which draws
+ * that chat's pill when the window has it, and the same text when not.
  */
-function chatIds() {
-  const split = (node: MdNode): MdNode[] => {
-    const text = node.value ?? ""
-    const out: MdNode[] = []
-    let at = 0
-    for (const match of text.matchAll(uuid)) {
-      const index = match.index ?? 0
-      if (index > at) out.push({ type: "text", value: text.slice(at, index) })
-      out.push({
-        type: "inlineCode",
-        value: match[0],
-        data: { hProperties: { "data-chat-id": "" } },
-      })
-      at = index + match[0].length
-    }
-    if (out.length === 0) return [node]
-    if (at < text.length) out.push({ type: "text", value: text.slice(at) })
-    return out
+function chatIds(text: string): React.ReactNode {
+  const out: React.ReactNode[] = []
+  let at = 0
+  for (const match of text.matchAll(uuid)) {
+    const index = match.index ?? 0
+    if (index > at) out.push(text.slice(at, index))
+    out.push(<ProseChatId key={index} id={match[0]} />)
+    at = index + match[0].length
   }
-  const visit = (node: MdNode) => {
-    if (!node.children || node.type === "link" || node.type === "linkReference") return
-    node.children = node.children.flatMap((child) =>
-      child.type === "text" ? split(child) : (visit(child), [child]),
-    )
-  }
-  return (tree: MdNode) => visit(tree)
+  if (out.length === 0) return text
+  if (at < text.length) out.push(text.slice(at))
+  return out
 }
-
-const prosePlugins = [chatIds]
 
 /**
  * A line the window wrote itself — the person's words in their bubble, an
@@ -106,27 +72,36 @@ export function RichText({ text }: { text: string }) {
 /**
  * What an agent wrote, as Markdown: paragraphs, line breaks, headings, lists,
  * links, inline code and fenced code — drawn by the design system's
- * `MessageMarkdown`, the same renderer the panel draws a reply with
- * (`src/conversation/ui/transcript.tsx`). Its text keeps the transcript's own
- * size, leading and colour; only its block structure comes from the
- * component. A link is a plain `<a href>`, which the host hands to the
- * person's browser rather than navigating the window (`src-tauri/src/links.rs`);
- * react-markdown renders no raw HTML, so the agent cannot author a `target`,
- * a `download` or a script.
+ * `ReplyMarkdown`, the same renderer the panel draws a reply with
+ * (`src/conversation/ui/transcript.tsx`). It parses with Words, which keeps
+ * the blocks it has finished, so each streamed chunk parses only the reply's
+ * tail. Its text keeps the transcript's own size, leading and colour; only
+ * its block structure comes from the component. A link is a plain
+ * `<a href>`, which the host hands to the person's browser rather than
+ * navigating the window (`src-tauri/src/links.rs`); `ReplyMarkdown` draws no
+ * raw HTML and no unsafe address, so the agent cannot author a `target`, a
+ * `download` or a script.
  */
 export function AgentProse({
   text,
   streaming = false,
   fresh = false,
+  runs,
 }: {
   text: string
   /** Its turn is still writing it (`TurnMessage.working`). */
   streaming?: boolean
   /** It has only now appeared in this view (`Message`'s `isNew`). */
   fresh?: boolean
+  /**
+   * Where it was said, so its shell fences can be run (`RunBlock`): the
+   * conversation, the message and which of its parts. None draws them as
+   * plain code.
+   */
+  runs?: { conversationId: string; messageId: string; part: number }
 }) {
   // While it is written, the kit's pacing releases bursty chunks as one
-  // steady reveal and `MessageMarkdown` fades each new word in, so words
+  // steady reveal and `ReplyMarkdown` fades each new word in, so words
   // arrive in place rather than in jumps — the same reveal the panel's
   // replies have. Text already there when it mounts (a saved reply) shows at
   // once, and so does a reply already under way when it is opened (another
@@ -146,14 +121,33 @@ export function AgentProse({
   const revealing =
     !reducedMotion() &&
     (streaming || (streamed.current && paced.staticLength < text.length))
+  const source = useTerminalSource()
+  const conversationId = runs?.conversationId
+  const messageId = runs?.messageId
+  const part = runs?.part
+  const renderFence = useCallback(
+    (fence: ReplyFence) =>
+      conversationId === undefined ||
+      messageId === undefined ||
+      part === undefined ||
+      !runnableFence(fence.language) ? undefined : (
+        <RunBlock
+          fence={fence}
+          conversationId={conversationId}
+          base={runRequestBase(messageId, part, fence.at)}
+        />
+      ),
+    [conversationId, messageId, part],
+  )
   return (
-    <MessageMarkdown
+    <ReplyMarkdown
       className="workspace-prose text-inherit text-[length:inherit] leading-[inherit] tracking-[inherit]"
       streaming={revealing}
       components={proseComponents}
-      remarkPlugins={prosePlugins}
+      renderText={chatIds}
+      renderFence={source && runs ? renderFence : undefined}
     >
       {revealing ? paced.text : text}
-    </MessageMarkdown>
+    </ReplyMarkdown>
   )
 }

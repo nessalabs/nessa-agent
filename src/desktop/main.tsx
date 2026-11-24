@@ -1,4 +1,7 @@
+import { Agent37Provider } from "./settings/ui/agent37-row"
+import { TerminalSourceProvider } from "./workspace/ui/terminals/terminal-source"
 import { BoatProvider } from "./settings/ui/boat-row"
+import { ReplyStyleProvider } from "./settings/ui/reply-style-control"
 import { DevicesProvider } from "./devices"
 import { VaultProvider, nativeVault } from "../vault"
 import { hasNativeHost } from "../host"
@@ -10,6 +13,7 @@ import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { CodeBlockProvider } from "@nessa-ui/react/code-block"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import {
   askReviewNoticeAccess,
   chooseChannelFolder,
@@ -44,11 +48,13 @@ import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
 import {
+  GatewayRegistryProvider,
   GithubProvider,
   githubAvatar,
   LinkedDevicesProvider,
   McpServersProvider,
   NativeHooksProvider,
+  DecisionSettingsProvider,
   PermissionRulesProvider,
   SavedLoginsProvider,
   VoiceKeyProvider,
@@ -74,6 +80,7 @@ import {
   showWaitingReviews,
 } from "./workspace/adapters/gateway/review-notices"
 import {
+  DecisionsProvider,
   followWorkspace,
   holdSession,
   loadWorkspace,
@@ -184,6 +191,9 @@ const dependencies = createDesktopDependencies({
   paths: channelPaths,
   providerLoginAvailable,
   mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
+  // The window's navigation policy hands an http(s) address to the person's
+  // browser and keeps the window where it is (src-tauri/src/links.rs).
+  openInBrowser: hasNativeHost() ? (url) => window.location.assign(url) : undefined,
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
@@ -275,6 +285,10 @@ void store.dispatch(loadWorkspace())
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
+// Agent replies are drawn by Words, which compiles its WebAssembly as it
+// loads; loading it now means the first reply never shows as plain text.
+void preloadReplyMarkdown()
+
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
@@ -300,65 +314,95 @@ createRoot(container).render(
                         : undefined
                     }
                   >
-                    <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                      <DevicesProvider gateway={dependencies.devices}>
-                        <ClipboardProvider write={writeClipboardText}>
-                          <SiteIconProvider render={faviconSiteIcon}>
-                            <HeldFilesProvider
-                              read={dependencies.heldFiles}
-                              save={saveFile}
-                            >
-                              <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                                <PermissionRulesProvider
-                                  gateway={dependencies.permissionRules}
-                                >
-                                  <BoatProvider gateway={dependencies.boat}>
-                                    <GithubProvider
-                                      gateway={dependencies.github}
-                                      avatar={githubAvatar}
+                    <GatewayRegistryProvider registry={dependencies.gatewayRegistry}>
+                      <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                        <DevicesProvider gateway={dependencies.devices}>
+                          <ClipboardProvider write={writeClipboardText}>
+                            <SiteIconProvider render={faviconSiteIcon}>
+                              <HeldFilesProvider
+                                read={dependencies.heldFiles}
+                                save={saveFile}
+                              >
+                                <TerminalSourceProvider source={dependencies.terminals}>
+                                  <DecisionsProvider source={dependencies.decisions}>
+                                    <NativeHooksProvider
+                                      gateway={dependencies.nativeHooks}
                                     >
-                                      <VoiceKeyProvider gateway={dependencies.voiceKey}>
-                                        <SavedLoginsProvider
-                                          gateway={dependencies.savedLogins}
+                                      <DecisionSettingsProvider
+                                        gateway={dependencies.decisionSettings}
+                                      >
+                                        <PermissionRulesProvider
+                                          gateway={dependencies.permissionRules}
                                         >
-                                          <VoiceProvider
-                                            controller={voice}
-                                            title={(sessionId) => {
-                                              const sessions =
-                                                store.getState().workspace.sessions
-                                              return Object.hasOwn(sessions, sessionId)
-                                                ? sessions[sessionId].title
-                                                : null
-                                            }}
-                                            showChat={(sessionId) =>
-                                              void store.dispatch(
-                                                openSession({ sessionId }),
-                                              )
-                                            }
-                                          >
-                                            {/* The window is dark only (desktop.html's
+                                          <BoatProvider gateway={dependencies.boat}>
+                                            <ReplyStyleProvider
+                                              gateway={dependencies.replyStyle}
+                                            >
+                                              <Agent37Provider
+                                                gateway={dependencies.agent37}
+                                              >
+                                                <GithubProvider
+                                                  gateway={dependencies.github}
+                                                  avatar={githubAvatar}
+                                                >
+                                                  <VoiceKeyProvider
+                                                    gateway={dependencies.voiceKey}
+                                                  >
+                                                    <SavedLoginsProvider
+                                                      gateway={dependencies.savedLogins}
+                                                    >
+                                                      <VoiceProvider
+                                                        controller={voice}
+                                                        title={(sessionId) => {
+                                                          const sessions =
+                                                            store.getState().workspace
+                                                              .sessions
+                                                          return Object.hasOwn(
+                                                            sessions,
+                                                            sessionId,
+                                                          )
+                                                            ? sessions[sessionId].title
+                                                            : null
+                                                        }}
+                                                        showChat={(sessionId) =>
+                                                          void store.dispatch(
+                                                            openSession({ sessionId }),
+                                                          )
+                                                        }
+                                                      >
+                                                        {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                            <CodeBlockProvider mode="dark">
-                                              <DesktopWindow
-                                                hostKind={host.kind}
-                                                browserSurface={host.kind === "browser"}
-                                                inspectable={import.meta.env.DEV}
-                                              />
-                                            </CodeBlockProvider>
-                                          </VoiceProvider>
-                                        </SavedLoginsProvider>
-                                      </VoiceKeyProvider>
-                                    </GithubProvider>
-                                  </BoatProvider>
-                                </PermissionRulesProvider>
-                              </NativeHooksProvider>
-                            </HeldFilesProvider>
-                          </SiteIconProvider>
-                        </ClipboardProvider>
-                      </DevicesProvider>
-                    </LinkedDevicesProvider>
+                                                        <CodeBlockProvider mode="dark">
+                                                          <DesktopWindow
+                                                            hostKind={host.kind}
+                                                            browserSurface={
+                                                              host.kind === "browser"
+                                                            }
+                                                            inspectable={
+                                                              import.meta.env.DEV
+                                                            }
+                                                          />
+                                                        </CodeBlockProvider>
+                                                      </VoiceProvider>
+                                                    </SavedLoginsProvider>
+                                                  </VoiceKeyProvider>
+                                                </GithubProvider>
+                                              </Agent37Provider>
+                                            </ReplyStyleProvider>
+                                          </BoatProvider>
+                                        </PermissionRulesProvider>
+                                      </DecisionSettingsProvider>
+                                    </NativeHooksProvider>
+                                  </DecisionsProvider>
+                                </TerminalSourceProvider>
+                              </HeldFilesProvider>
+                            </SiteIconProvider>
+                          </ClipboardProvider>
+                        </DevicesProvider>
+                      </LinkedDevicesProvider>
+                    </GatewayRegistryProvider>
                   </McpServersProvider>
                 </DesktopIconFamilyProvider>
               </SubagentsProvider>

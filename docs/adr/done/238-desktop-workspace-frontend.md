@@ -864,73 +864,46 @@ check of its own.
 | no new flight or reduced motion interrupts a flight | release the old flight immediately |
 | root replaced or scope unmounts | cancel owned flights; clear that owner's root and markers; reject late completions |
 
-### The thinking control
+### The model and thinking picker
 
-The composer's thinking effort ([#287](https://github.com/nessalabs/nessa-agent/issues/287))
-is the window's own control, `ui/thinking-control.tsx`, not nessa_ui's
-`ModelThinkingControl`. That component's popover is fixed — a label with a
-chevron over its own gradient slider and large knob — and exposes no place
-for a level's description, swaps its label rather than cross-fading it, and
-offers nothing to restyle its slider by; nessa_ui is out of scope here. What
-it offered that still fits is kept: its `ModelFastMode` is the Fast toggle.
+The composer's model and its thinking effort
+([#287](https://github.com/nessalabs/nessa-agent/issues/287)) are chosen in
+one place, nessa_ui's `ModelLevelPicker`, composed for the SDK catalogue in
+`ui/catalogue-model-picker.tsx`. It replaced the window's own slider
+(`ui/thinking-control.tsx`) beside a separate model menu.
 
 - **One owner of the levels.** The SDK catalogue: each model's effort levels
   in its provider's names and order, and whether it has Fast mode
-  ([ADR 302](../todo/302-catalogue-reasoning-options.md), which replaced the
-  Ultra and Fast tables this record first kept here). `thinkingLevelsFor` in
-  `model/composer-options.ts` offers exactly the levels a model's entry lists,
-  worded for the slider, and marks a level listed past `max` as Ultra,
-  `utmost`. No catalogue model lists one today, so Ultra is offered nowhere yet.
-  A choice carried to a model without it shows as the highest level it offers
-  below it (`offeredLevelIndex`), and a level chosen there is recorded as
-  chosen. Every rule
-  of the slider — which level a key picks, where the pointer is and which level
-  that snaps to — is `model/thinking-effort.ts`'s, by position, naming no
-  level; where the popover sits is the tooltip's rule (`placeTooltip`, aligned
-  to the chip's trailing edge), kept on the chip every frame while it is open,
-  so a column folding or a pane opening beside carries it along.
-- **Effort reads as rising.** A slider: a thin track whose fill is the theme's
-  own light (`--desktop-light-*`, which a header picture tints), faint at its
-  start and full at Max, and a small knob whose halo grows with it. Above it,
-  the level's name and one line about it cross-fade, rising as the level rises
-  and falling as it falls — only for a change made while it is open; it opens
-  at rest. A model with Ultra ends its track with Ultra's own
-  segment after a hairline gap, holding a trace of the theme's two lights;
-  reaching it is the one moment — the segment glows, the lights bloom in the
-  popover's corner, and a light runs once along the fill. A model without it
-  ends at Max.
-- **Fast is speed, not effort**: a pill of its own beside the heading, a fill
-  while on, its bolt filled and leaning forward, two short streaks running
-  back past it once as it turns on; never on the track.
-- **Nothing moves the composer.** The chip is the same size whatever the level;
-  wherever Fast is offered its bolt is laid out, on or off, so turning Fast on
-  moves nothing either. The words hold one line in one cell and the slider its
-  size, so the popover does not change size.
-- **Keyboard, pointer and assistive technology.** The chip opens a non-modal
-  dialog with the keyboard on the knob, a `slider` whose value is the level's
-  name and whose description is its line; the arrows and Page Up and Down
-  step, Home and End go to the ends. Pressed anywhere along the track, the
-  knob comes to the pointer and follows it, the level following the nearest;
-  let go, it settles on that level. Escape, Tab past either end, or a press
-  elsewhere closes it, the first two onto its chip.
-- **Motion** is transform and opacity on the window's tokens — the popover
-  rises with `desktop-pop`; the fill is revealed by a clip sliding in while the
-  light inside it slides back by as much, so the light stays fixed to the
-  track; knob and fill glide together and settle — and while dragged the knob
-  follows the pointer with no easing. With less motion nothing in it animates.
-  The popover is drawn inside the surface its chip sits in, as the window's
-  tooltip is, so it takes that surface's tokens, theme and reduced motion.
+  ([ADR 302](../todo/302-catalogue-reasoning-options.md)).
+  `thinkingLevelsFor` in `model/composer-options.ts` offers exactly the levels
+  a model's entry lists. A row draws one bar per level, rising, lit up to the
+  level it would run at; None draws no bar, so a model on None lights none.
+- **The person's level is theirs.** A model chosen by name keeps the level
+  already chosen, shown as the highest it offers at or below it
+  (`offeredLevelIndex`); the stored level does not change, so it is back when
+  a model offering it is chosen again. A bar chooses the model and that level
+  in one press.
+- **A chip and a modal.** The chip names the model's short name and its
+  level. It opens a centred dialog: search and Fast across the top, a rail of
+  Starred, All models and each provider on the left (it scrolls as providers
+  are added), the models on the right. A model's selection is its mark's
+  tile filled with its provider's colour. Stars are the window's
+  (`adapters/starred-models-preference.ts`), shared by every pane, at most 24;
+  with any star it opens on Starred, otherwise on the provider in use.
+- **Fast is speed, not effort**: a bolt beside search and another beside the
+  chip, offered only for a model that has it, remembered while switching.
+- **Keyboard.** Return opens it with the keys in search; ↓ goes to the model
+  in use; ← → on a row change its level without closing; Return chooses;
+  `s` stars; `/` goes back to search; Escape clears the search, then closes it
+  onto its chip.
+- **Motion.** The dialog enters once; hovering a row is CSS alone, so nothing
+  re-renders; with less motion nothing animates.
 
-`responsive.mjs --only thinking-control` holds it in Chromium and WebKit: every
-frame of every change and of a drag, the composer, its controls and the
-popover in place; the held knob on the pointer and, let go, on its level; the
-popover on its chip as ⌘B and ⌥⌘S move it; only Ultra marked apart; each
-model it names offering exactly its catalogue levels and Fast, and a level
-carried to a model without it shown as that model's nearest and chosen there; only
-transform and opacity animated; and with the system's reduced motion, nothing
+`responsive.mjs --only model-picker` holds it in Chromium and WebKit, and the
+stress `picker` step chooses a model with a bar and sends on it
 (`verification/desktop/CHECKLIST.md` › _Composer and approval card_).
-`perf-budget.mjs` holds its walk from least to most and its drag to the frame budget
-(`thinking-walk`, `thinking-drag`).
+`perf-budget.mjs` holds hovering every row and choosing with a bar to the
+frame budget (`model-picker`).
 
 ### Interaction and visual rules
 
@@ -1115,7 +1088,7 @@ the source holds, at a glance — and is used nowhere else; the port method is
   model picker and access mode are. Its slider could be quietened, but its
   popover has no room for a level's description and no way to cross-fade its
   label, so the control that reads as effort rising could not be reached
-  without changing nessa_ui (_The thinking control_).
+  without changing nessa_ui. (Since replaced by nessa_ui's `ModelLevelPicker`: _The model and thinking picker_.)
 - **Separate stops rather than a slider.** Tried first (four bars filling one
   after another); a continuous track with a knob to drag reads as one scale of
   effort and was preferred, so the slider was kept and given the window's look.

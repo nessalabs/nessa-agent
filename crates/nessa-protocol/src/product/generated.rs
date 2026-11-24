@@ -791,6 +791,22 @@ pub struct ConversationMcpTool {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetup {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    pub steps: Vec<ConversationSetupStep>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetupStep {
+    pub step: String,
+    pub started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationView {
     pub conversation_id: String,
     pub revision: String,
@@ -809,6 +825,8 @@ pub struct ConversationView {
     pub transcript_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Vec<ConversationSetup>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLease>,
     pub artifacts: Vec<ConversationArtifact>,
@@ -914,6 +932,82 @@ pub struct ConversationListParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAsk {
+    pub ask_id: String,
+    pub question: String,
+    pub choices: Vec<OwnerAskChoice>,
+    pub recommended: u64,
+    pub reason: String,
+    pub asked_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<OwnerAskAccess>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskAccess {
+    pub mode: String,
+    pub grants: Vec<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskChoice {
+    pub label: String,
+    pub consequence: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pros: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cons: Option<Vec<String>>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecision {
+    pub ask: OwnerAsk,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<OwnerDecisionOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_paused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_due_at_ms: Option<u64>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum OwnerDecisionState {
+    #[serde(rename = "decided")]
+    Decided,
+    #[serde(rename = "replaced")]
+    Replaced,
+}
+impl OwnerDecisionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decided => "decided",
+            Self::Replaced => "replaced",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecisionOutcome {
+    pub state: OwnerDecisionState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    pub at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationSummary {
     pub conversation_id: String,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -926,6 +1020,8 @@ pub struct ConversationSummary {
     pub archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<OwnerAsk>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1191,6 +1287,37 @@ pub struct ConversationRenameParams {
     pub conversation_id: String,
     pub request_id: String,
     pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionsParams {
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPauseAutoPickParams {
+    pub conversation_id: String,
+    pub ask_id: String,
+    pub paused: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPauseAutoPickResult {
+    pub applied: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionSettingsParams {}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionSettings {
+    pub auto_pick: bool,
+    pub auto_pick_after_seconds: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationDecisionsResult {
+    pub decisions: Vec<OwnerDecision>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3212,6 +3339,52 @@ pub struct ConversationSubscriptionEnded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_delivered: Option<ConversationViewCursor>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantStreamCursor {
+    pub incarnation: String,
+    pub position: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsSubscribeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<GrantStreamCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsPageParams {
+    pub subscription_id: ConversationSubscriptionId,
+    pub snapshot_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<GrantStreamCursor>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsUnsubscribeParams {
+    pub subscription_id: ConversationSubscriptionId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantFrameEntry {
+    pub conversation_id: String,
+    pub absent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_revision: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantsChanged {
+    pub subscription_id: ConversationSubscriptionId,
+    pub cursor: GrantStreamCursor,
+    pub complete: bool,
+    pub replaces: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    pub grants: Vec<GrantFrameEntry>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ConversationSubscriptionErrorCode {
     #[serde(rename = "subscription_capacity")]
@@ -3222,6 +3395,10 @@ pub enum ConversationSubscriptionErrorCode {
     UnknownSubscription,
     #[serde(rename = "cursor_ahead")]
     CursorAhead,
+    #[serde(rename = "incarnation_changed")]
+    IncarnationChanged,
+    #[serde(rename = "grant_log_floor")]
+    GrantLogFloor,
 }
 impl ConversationSubscriptionErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -3230,6 +3407,8 @@ impl ConversationSubscriptionErrorCode {
             Self::SubscriptionDuplicate => "subscription_duplicate",
             Self::UnknownSubscription => "unknown_subscription",
             Self::CursorAhead => "cursor_ahead",
+            Self::IncarnationChanged => "incarnation_changed",
+            Self::GrantLogFloor => "grant_log_floor",
         }
     }
 }
@@ -3631,6 +3810,8 @@ pub enum WorkspacePaneKind {
     Draft,
     #[serde(rename = "widget")]
     Widget,
+    #[serde(rename = "terminal")]
+    Terminal,
 }
 impl WorkspacePaneKind {
     pub fn as_str(self) -> &'static str {
@@ -3638,6 +3819,7 @@ impl WorkspacePaneKind {
             Self::Conversation => "conversation",
             Self::Draft => "draft",
             Self::Widget => "widget",
+            Self::Terminal => "terminal",
         }
     }
 }
@@ -3745,6 +3927,7 @@ pub struct Channel {
     pub thread_placement: String,
     #[serde(deserialize_with = "Option::deserialize")]
     pub coordinator_conversation_id: Option<String>,
+    pub coordinator_on: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3765,6 +3948,8 @@ pub struct ChannelCreateParams {
     pub coordinator_placement: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_placement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3778,6 +3963,18 @@ pub struct ChannelSetPlacementParams {
     pub channel_id: String,
     pub coordinator_placement: String,
     pub thread_placement: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetCoordinatorParams {
+    pub request_id: String,
+    pub channel_id: String,
+    pub on: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChannelSetCoordinatorResult {
+    pub channel: Channel,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4203,6 +4400,100 @@ pub struct BoatStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent37SaveParams {
+    pub key: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Agent37ErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "agent37_not_configured")]
+    Agent37NotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "agent37_storage_unavailable")]
+    Agent37StorageUnavailable,
+    #[serde(rename = "agent37_resource_missing")]
+    Agent37ResourceMissing,
+    #[serde(rename = "agent37_unreachable")]
+    Agent37Unreachable,
+    #[serde(rename = "agent37_unavailable")]
+    Agent37Unavailable,
+    #[serde(rename = "agent37_provisioning_uncertain")]
+    Agent37ProvisioningUncertain,
+    #[serde(rename = "agent37_cleanup_uncertain")]
+    Agent37CleanupUncertain,
+}
+impl Agent37ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::Agent37NotConfigured => "agent37_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::Agent37StorageUnavailable => "agent37_storage_unavailable",
+            Self::Agent37ResourceMissing => "agent37_resource_missing",
+            Self::Agent37Unreachable => "agent37_unreachable",
+            Self::Agent37Unavailable => "agent37_unavailable",
+            Self::Agent37ProvisioningUncertain => "agent37_provisioning_uncertain",
+            Self::Agent37CleanupUncertain => "agent37_cleanup_uncertain",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent37Status {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum Cloud {
+    #[serde(rename = "boat")]
+    Boat,
+    #[serde(rename = "agent37")]
+    Agent37,
+}
+impl Cloud {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Boat => "boat",
+            Self::Agent37 => "agent37",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudChooseParams {
+    pub cloud: Cloud,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CloudErrorCode {
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "cloud_not_configured")]
+    CloudNotConfigured,
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "cloud_storage_unavailable")]
+    CloudStorageUnavailable,
+}
+impl CloudErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultLocked => "vault_locked",
+            Self::CloudNotConfigured => "cloud_not_configured",
+            Self::InvalidRequest => "invalid_request",
+            Self::CloudStorageUnavailable => "cloud_storage_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudChoice {
+    pub cloud: Cloud,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum VmLifetimeMode {
     #[serde(rename = "never")]
@@ -4332,6 +4623,8 @@ pub struct SavedLogin {
 pub struct LoginsStatus {
     pub logins: Vec<SavedLogin>,
     pub devices_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt: Option<ChatgptLogins>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4350,6 +4643,100 @@ pub struct LoginsSetDeviceParams {
     pub environment: String,
     pub on: bool,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptAccount {
+    pub id: String,
+    pub email: String,
+    pub in_use: bool,
+    pub needs_sign_in: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ChatgptSignInEnd {
+    #[serde(rename = "signed_in")]
+    SignedIn,
+    #[serde(rename = "declined")]
+    Declined,
+    #[serde(rename = "incomplete")]
+    Incomplete,
+    #[serde(rename = "wrong_account")]
+    WrongAccount,
+    #[serde(rename = "exchange_failed")]
+    ExchangeFailed,
+    #[serde(rename = "invalid_identity")]
+    InvalidIdentity,
+    #[serde(rename = "plan_not_enabled")]
+    PlanNotEnabled,
+    #[serde(rename = "too_many_accounts")]
+    TooManyAccounts,
+    #[serde(rename = "not_saved")]
+    NotSaved,
+    #[serde(rename = "timed_out")]
+    TimedOut,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "replaced")]
+    Replaced,
+    #[serde(rename = "listen_failed")]
+    ListenFailed,
+}
+impl ChatgptSignInEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedIn => "signed_in",
+            Self::Declined => "declined",
+            Self::Incomplete => "incomplete",
+            Self::WrongAccount => "wrong_account",
+            Self::ExchangeFailed => "exchange_failed",
+            Self::InvalidIdentity => "invalid_identity",
+            Self::PlanNotEnabled => "plan_not_enabled",
+            Self::TooManyAccounts => "too_many_accounts",
+            Self::NotSaved => "not_saved",
+            Self::TimedOut => "timed_out",
+            Self::Cancelled => "cancelled",
+            Self::Replaced => "replaced",
+            Self::ListenFailed => "listen_failed",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptSignIn {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorize_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<ChatgptSignInEnd>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatgptLogins {
+    pub accounts: Vec<ChatgptAccount>,
+    pub sign_in: ChatgptSignIn,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptSignInParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptUseParams {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub account_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginsChatgptRemoveParams {
+    pub account_id: String,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum LoginsErrorCode {
     #[serde(rename = "logins_not_configured")]
@@ -4362,6 +4749,10 @@ pub enum LoginsErrorCode {
     LoginsChangeUnrecorded,
     #[serde(rename = "logins_too_many_devices")]
     LoginsTooManyDevices,
+    #[serde(rename = "logins_unknown_account")]
+    LoginsUnknownAccount,
+    #[serde(rename = "logins_chatgpt_not_configured")]
+    LoginsChatgptNotConfigured,
     #[serde(rename = "vault_locked")]
     VaultLocked,
 }
@@ -4373,6 +4764,8 @@ impl LoginsErrorCode {
             Self::LoginsAuditUnavailable => "logins_audit_unavailable",
             Self::LoginsChangeUnrecorded => "logins_change_unrecorded",
             Self::LoginsTooManyDevices => "logins_too_many_devices",
+            Self::LoginsUnknownAccount => "logins_unknown_account",
+            Self::LoginsChatgptNotConfigured => "logins_chatgpt_not_configured",
             Self::VaultLocked => "vault_locked",
         }
     }
@@ -4462,9 +4855,226 @@ impl VoiceErrorCode {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleRole {
+    #[serde(rename = "coordinator")]
+    Coordinator,
+    #[serde(rename = "thread")]
+    Thread,
+}
+impl ReplyStyleRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Coordinator => "coordinator",
+            Self::Thread => "thread",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleMode {
+    #[serde(rename = "plain")]
+    Plain,
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl ReplyStyleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleChoice {
+    pub mode: ReplyStyleMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleRoles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<ReplyStyleChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ReplyStyleChoice>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleReadParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ReplyStyleSelection {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "plain")]
+    Plain,
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "custom")]
+    Custom,
+}
+impl ReplyStyleSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Plain => "plain",
+            Self::Off => "off",
+            Self::Custom => "custom",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleSetParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub role: ReplyStyleRole,
+    pub mode: ReplyStyleSelection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    pub nessa: ReplyStyleRoles,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ReplyStyleRoles>,
+    pub effective: ReplyStyleEffective,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReplyStyleEffective {
+    pub coordinator: ReplyStyleChoice,
+    pub thread: ReplyStyleChoice,
+}
+pub type TerminalId = String;
+pub type TerminalViewId = String;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOpenParams {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub cols: u64,
+    pub rows: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSummary {
+    pub terminal_id: TerminalId,
+    pub title: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    pub request_id: String,
+    pub folder: String,
+    pub shell: String,
+    pub runs_on: String,
+    pub started_at_ms: u64,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<TerminalProgramStatus>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalProgramStatus {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg: Option<String>,
+    pub updated_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOpenResult {
+    pub terminal: TerminalSummary,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalListResult {
+    pub terminals: Vec<TerminalSummary>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalListed {
+    pub terminals: Vec<TerminalSummary>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalViewParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub cols: u64,
+    pub rows: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalDetachParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalInputParams {
+    pub terminal_id: TerminalId,
+    pub data: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalHistoryParams {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub start: u64,
+    pub count: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalCloseParams {
+    pub terminal_id: TerminalId,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalRenameParams {
+    pub terminal_id: TerminalId,
+    pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalOutput {
+    pub terminal_id: TerminalId,
+    pub view_id: TerminalViewId,
+    pub message: String,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
+pub const MAX_CONNECTION_GRANT_SUBSCRIPTIONS: usize = 1;
 pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = 10000;
 pub const CONVERSATION_SUBSCRIPTION_ID_PATTERN: &str = "^[1-9][0-9]{0,19}$";
 pub const MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS: usize = 1;
@@ -4568,6 +5178,10 @@ pub mod product_method {
     pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
     pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
     pub const CONVERSATION_RENAME: &str = "conversation.rename";
+    pub const CONVERSATION_DECISIONS: &str = "conversation.decisions";
+    pub const CONVERSATION_DECISION_SETTINGS: &str = "conversation.decisionSettings";
+    pub const CONVERSATION_PAUSE_AUTO_PICK: &str = "conversation.pauseAutoPick";
+    pub const CONVERSATION_SET_DECISION_SETTINGS: &str = "conversation.setDecisionSettings";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
@@ -4624,6 +5238,9 @@ pub mod product_method {
     pub const PEER_FORGET: &str = "peer.forget";
     pub const PEER_RELAY: &str = "peer.relay";
     pub const PEER_FOLLOW: &str = "peer.follow";
+    pub const GRANTS_SUBSCRIBE: &str = "grants.subscribe";
+    pub const GRANTS_PAGE: &str = "grants.page";
+    pub const GRANTS_UNSUBSCRIBE: &str = "grants.unsubscribe";
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
@@ -4639,6 +5256,9 @@ pub mod product_method {
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
     pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
+    pub const CHANNEL_SET_COORDINATOR: &str = "channel.setCoordinator";
+    pub const REPLY_STYLE_READ: &str = "replyStyle.read";
+    pub const REPLY_STYLE_SET: &str = "replyStyle.set";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_READ_EARLIER: &str = "conversation.readEarlier";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
@@ -4654,6 +5274,11 @@ pub mod product_method {
     pub const BOAT_SAVE: &str = "boat.save";
     pub const BOAT_SAVE_CLAUDE_SIGN_IN: &str = "boat.saveClaudeSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
+    pub const AGENT37_STATUS: &str = "agent37.status";
+    pub const AGENT37_SAVE: &str = "agent37.save";
+    pub const AGENT37_DISCONNECT: &str = "agent37.disconnect";
+    pub const CLOUD_READ: &str = "cloud.read";
+    pub const CLOUD_CHOOSE: &str = "cloud.choose";
     pub const DEVICES_POOL: &str = "devices.pool";
     pub const DEVICES_SET_POOL: &str = "devices.setPool";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
@@ -4664,10 +5289,24 @@ pub mod product_method {
     pub const LOGINS_SAVE: &str = "logins.save";
     pub const LOGINS_REMOVE: &str = "logins.remove";
     pub const LOGINS_SET_DEVICE: &str = "logins.setDevice";
+    pub const LOGINS_CHATGPT_SIGN_IN: &str = "logins.chatgptSignIn";
+    pub const LOGINS_CHATGPT_CANCEL: &str = "logins.chatgptCancel";
+    pub const LOGINS_CHATGPT_USE: &str = "logins.chatgptUse";
+    pub const LOGINS_CHATGPT_REMOVE: &str = "logins.chatgptRemove";
     pub const VOICE_STATUS: &str = "voice.status";
     pub const VOICE_SAVE_KEY: &str = "voice.saveKey";
     pub const VOICE_FORGET_KEY: &str = "voice.forgetKey";
     pub const VOICE_START_CALL: &str = "voice.startCall";
+    pub const TERMINAL_OPEN: &str = "terminal.open";
+    pub const TERMINAL_LIST: &str = "terminal.list";
+    pub const TERMINAL_ATTACH: &str = "terminal.attach";
+    pub const TERMINAL_FOCUS: &str = "terminal.focus";
+    pub const TERMINAL_FIT: &str = "terminal.fit";
+    pub const TERMINAL_DETACH: &str = "terminal.detach";
+    pub const TERMINAL_INPUT: &str = "terminal.input";
+    pub const TERMINAL_HISTORY: &str = "terminal.history";
+    pub const TERMINAL_CLOSE: &str = "terminal.close";
+    pub const TERMINAL_RENAME: &str = "terminal.rename";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -4676,9 +5315,13 @@ pub mod product_event {
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
     pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
+    pub const GRANTS_CHANGED: &str = "grants.changed";
+    pub const GRANTS_SUBSCRIPTION_ENDED: &str = "grants.subscriptionEnded";
     pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
     pub const WORKSPACE_COMMAND: &str = "workspace.command";
     pub const CONVERSATION_EVENTS: &str = "conversation.events";
+    pub const TERMINAL_OUTPUT: &str = "terminal.output";
+    pub const TERMINAL_LISTED: &str = "terminal.listed";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
@@ -4859,7 +5502,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 127
+                items.len() <= 156
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -4912,6 +5555,10 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.archive",
     "conversation.unarchive",
     "conversation.rename",
+    "conversation.decisions",
+    "conversation.decisionSettings",
+    "conversation.pauseAutoPick",
+    "conversation.setDecisionSettings",
     "conversation.delete",
     "conversation.reorder",
     "artifact.read",
@@ -4967,6 +5614,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.forget",
     "peer.relay",
     "peer.follow",
+    "grants.subscribe",
+    "grants.page",
+    "grants.unsubscribe",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -4982,6 +5632,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "channel.create",
     "channel.list",
     "channel.setPlacement",
+    "channel.setCoordinator",
+    "replyStyle.read",
+    "replyStyle.set",
     "conversation.subscribeEvents",
     "conversation.readEarlier",
     "conversation.peek",
@@ -4997,6 +5650,11 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "boat.save",
     "boat.saveClaudeSignIn",
     "boat.disconnect",
+    "agent37.status",
+    "agent37.save",
+    "agent37.disconnect",
+    "cloud.read",
+    "cloud.choose",
     "devices.pool",
     "devices.setPool",
     "boat.runtimeSettings",
@@ -5007,10 +5665,24 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "logins.save",
     "logins.remove",
     "logins.setDevice",
+    "logins.chatgptSignIn",
+    "logins.chatgptCancel",
+    "logins.chatgptUse",
+    "logins.chatgptRemove",
     "voice.status",
     "voice.saveKey",
     "voice.forgetKey",
     "voice.startCall",
+    "terminal.open",
+    "terminal.list",
+    "terminal.attach",
+    "terminal.focus",
+    "terminal.fit",
+    "terminal.detach",
+    "terminal.input",
+    "terminal.history",
+    "terminal.close",
+    "terminal.rename",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -5133,6 +5805,14 @@ pub enum ProductMethod {
     ConversationUnarchive,
     /// `conversation.rename`
     ConversationRename,
+    /// `conversation.decisions`
+    ConversationDecisions,
+    /// `conversation.decisionSettings`
+    ConversationDecisionSettings,
+    /// `conversation.pauseAutoPick`
+    ConversationPauseAutoPick,
+    /// `conversation.setDecisionSettings`
+    ConversationSetDecisionSettings,
     /// `conversation.delete`
     ConversationDelete,
     /// `conversation.reorder`
@@ -5243,6 +5923,12 @@ pub enum ProductMethod {
     PeerRelay,
     /// `peer.follow`
     PeerFollow,
+    /// `grants.subscribe`
+    GrantsSubscribe,
+    /// `grants.page`
+    GrantsPage,
+    /// `grants.unsubscribe`
+    GrantsUnsubscribe,
     /// `conversation.subscribe`
     ConversationSubscribe,
     /// `conversation.subscribeList`
@@ -5273,6 +5959,12 @@ pub enum ProductMethod {
     ChannelList,
     /// `channel.setPlacement`
     ChannelSetPlacement,
+    /// `channel.setCoordinator`
+    ChannelSetCoordinator,
+    /// `replyStyle.read`
+    ReplyStyleRead,
+    /// `replyStyle.set`
+    ReplyStyleSet,
     /// `conversation.subscribeEvents`
     ConversationSubscribeEvents,
     /// `conversation.readEarlier`
@@ -5303,6 +5995,16 @@ pub enum ProductMethod {
     BoatSaveClaudeSignIn,
     /// `boat.disconnect`
     BoatDisconnect,
+    /// `agent37.status`
+    Agent37Status,
+    /// `agent37.save`
+    Agent37Save,
+    /// `agent37.disconnect`
+    Agent37Disconnect,
+    /// `cloud.read`
+    CloudRead,
+    /// `cloud.choose`
+    CloudChoose,
     /// `devices.pool`
     DevicesPool,
     /// `devices.setPool`
@@ -5323,6 +6025,14 @@ pub enum ProductMethod {
     LoginsRemove,
     /// `logins.setDevice`
     LoginsSetDevice,
+    /// `logins.chatgptSignIn`
+    LoginsChatgptSignIn,
+    /// `logins.chatgptCancel`
+    LoginsChatgptCancel,
+    /// `logins.chatgptUse`
+    LoginsChatgptUse,
+    /// `logins.chatgptRemove`
+    LoginsChatgptRemove,
     /// `voice.status`
     VoiceStatus,
     /// `voice.saveKey`
@@ -5331,6 +6041,26 @@ pub enum ProductMethod {
     VoiceForgetKey,
     /// `voice.startCall`
     VoiceStartCall,
+    /// `terminal.open`
+    TerminalOpen,
+    /// `terminal.list`
+    TerminalList,
+    /// `terminal.attach`
+    TerminalAttach,
+    /// `terminal.focus`
+    TerminalFocus,
+    /// `terminal.fit`
+    TerminalFit,
+    /// `terminal.detach`
+    TerminalDetach,
+    /// `terminal.input`
+    TerminalInput,
+    /// `terminal.history`
+    TerminalHistory,
+    /// `terminal.close`
+    TerminalClose,
+    /// `terminal.rename`
+    TerminalRename,
 }
 
 impl ProductMethod {
@@ -5365,6 +6095,10 @@ impl ProductMethod {
         ProductMethod::ConversationArchive,
         ProductMethod::ConversationUnarchive,
         ProductMethod::ConversationRename,
+        ProductMethod::ConversationDecisions,
+        ProductMethod::ConversationDecisionSettings,
+        ProductMethod::ConversationPauseAutoPick,
+        ProductMethod::ConversationSetDecisionSettings,
         ProductMethod::ConversationDelete,
         ProductMethod::ConversationReorder,
         ProductMethod::ArtifactRead,
@@ -5420,6 +6154,9 @@ impl ProductMethod {
         ProductMethod::PeerForget,
         ProductMethod::PeerRelay,
         ProductMethod::PeerFollow,
+        ProductMethod::GrantsSubscribe,
+        ProductMethod::GrantsPage,
+        ProductMethod::GrantsUnsubscribe,
         ProductMethod::ConversationSubscribe,
         ProductMethod::ConversationSubscribeList,
         ProductMethod::ConversationUnsubscribe,
@@ -5435,6 +6172,9 @@ impl ProductMethod {
         ProductMethod::ChannelCreate,
         ProductMethod::ChannelList,
         ProductMethod::ChannelSetPlacement,
+        ProductMethod::ChannelSetCoordinator,
+        ProductMethod::ReplyStyleRead,
+        ProductMethod::ReplyStyleSet,
         ProductMethod::ConversationSubscribeEvents,
         ProductMethod::ConversationReadEarlier,
         ProductMethod::ConversationPeek,
@@ -5450,6 +6190,11 @@ impl ProductMethod {
         ProductMethod::BoatSave,
         ProductMethod::BoatSaveClaudeSignIn,
         ProductMethod::BoatDisconnect,
+        ProductMethod::Agent37Status,
+        ProductMethod::Agent37Save,
+        ProductMethod::Agent37Disconnect,
+        ProductMethod::CloudRead,
+        ProductMethod::CloudChoose,
         ProductMethod::DevicesPool,
         ProductMethod::DevicesSetPool,
         ProductMethod::BoatRuntimeSettings,
@@ -5460,10 +6205,24 @@ impl ProductMethod {
         ProductMethod::LoginsSave,
         ProductMethod::LoginsRemove,
         ProductMethod::LoginsSetDevice,
+        ProductMethod::LoginsChatgptSignIn,
+        ProductMethod::LoginsChatgptCancel,
+        ProductMethod::LoginsChatgptUse,
+        ProductMethod::LoginsChatgptRemove,
         ProductMethod::VoiceStatus,
         ProductMethod::VoiceSaveKey,
         ProductMethod::VoiceForgetKey,
         ProductMethod::VoiceStartCall,
+        ProductMethod::TerminalOpen,
+        ProductMethod::TerminalList,
+        ProductMethod::TerminalAttach,
+        ProductMethod::TerminalFocus,
+        ProductMethod::TerminalFit,
+        ProductMethod::TerminalDetach,
+        ProductMethod::TerminalInput,
+        ProductMethod::TerminalHistory,
+        ProductMethod::TerminalClose,
+        ProductMethod::TerminalRename,
     ];
 
     /// The method a frame names, or `None` when the manifest has none by
@@ -5499,6 +6258,12 @@ impl ProductMethod {
             "conversation.archive" => Some(ProductMethod::ConversationArchive),
             "conversation.unarchive" => Some(ProductMethod::ConversationUnarchive),
             "conversation.rename" => Some(ProductMethod::ConversationRename),
+            "conversation.decisions" => Some(ProductMethod::ConversationDecisions),
+            "conversation.decisionSettings" => Some(ProductMethod::ConversationDecisionSettings),
+            "conversation.pauseAutoPick" => Some(ProductMethod::ConversationPauseAutoPick),
+            "conversation.setDecisionSettings" => {
+                Some(ProductMethod::ConversationSetDecisionSettings)
+            }
             "conversation.delete" => Some(ProductMethod::ConversationDelete),
             "conversation.reorder" => Some(ProductMethod::ConversationReorder),
             "artifact.read" => Some(ProductMethod::ArtifactRead),
@@ -5556,6 +6321,9 @@ impl ProductMethod {
             "peer.forget" => Some(ProductMethod::PeerForget),
             "peer.relay" => Some(ProductMethod::PeerRelay),
             "peer.follow" => Some(ProductMethod::PeerFollow),
+            "grants.subscribe" => Some(ProductMethod::GrantsSubscribe),
+            "grants.page" => Some(ProductMethod::GrantsPage),
+            "grants.unsubscribe" => Some(ProductMethod::GrantsUnsubscribe),
             "conversation.subscribe" => Some(ProductMethod::ConversationSubscribe),
             "conversation.subscribeList" => Some(ProductMethod::ConversationSubscribeList),
             "conversation.unsubscribe" => Some(ProductMethod::ConversationUnsubscribe),
@@ -5573,6 +6341,9 @@ impl ProductMethod {
             "channel.create" => Some(ProductMethod::ChannelCreate),
             "channel.list" => Some(ProductMethod::ChannelList),
             "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
+            "channel.setCoordinator" => Some(ProductMethod::ChannelSetCoordinator),
+            "replyStyle.read" => Some(ProductMethod::ReplyStyleRead),
+            "replyStyle.set" => Some(ProductMethod::ReplyStyleSet),
             "conversation.subscribeEvents" => Some(ProductMethod::ConversationSubscribeEvents),
             "conversation.readEarlier" => Some(ProductMethod::ConversationReadEarlier),
             "conversation.peek" => Some(ProductMethod::ConversationPeek),
@@ -5588,6 +6359,11 @@ impl ProductMethod {
             "boat.save" => Some(ProductMethod::BoatSave),
             "boat.saveClaudeSignIn" => Some(ProductMethod::BoatSaveClaudeSignIn),
             "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
+            "agent37.status" => Some(ProductMethod::Agent37Status),
+            "agent37.save" => Some(ProductMethod::Agent37Save),
+            "agent37.disconnect" => Some(ProductMethod::Agent37Disconnect),
+            "cloud.read" => Some(ProductMethod::CloudRead),
+            "cloud.choose" => Some(ProductMethod::CloudChoose),
             "devices.pool" => Some(ProductMethod::DevicesPool),
             "devices.setPool" => Some(ProductMethod::DevicesSetPool),
             "boat.runtimeSettings" => Some(ProductMethod::BoatRuntimeSettings),
@@ -5598,10 +6374,24 @@ impl ProductMethod {
             "logins.save" => Some(ProductMethod::LoginsSave),
             "logins.remove" => Some(ProductMethod::LoginsRemove),
             "logins.setDevice" => Some(ProductMethod::LoginsSetDevice),
+            "logins.chatgptSignIn" => Some(ProductMethod::LoginsChatgptSignIn),
+            "logins.chatgptCancel" => Some(ProductMethod::LoginsChatgptCancel),
+            "logins.chatgptUse" => Some(ProductMethod::LoginsChatgptUse),
+            "logins.chatgptRemove" => Some(ProductMethod::LoginsChatgptRemove),
             "voice.status" => Some(ProductMethod::VoiceStatus),
             "voice.saveKey" => Some(ProductMethod::VoiceSaveKey),
             "voice.forgetKey" => Some(ProductMethod::VoiceForgetKey),
             "voice.startCall" => Some(ProductMethod::VoiceStartCall),
+            "terminal.open" => Some(ProductMethod::TerminalOpen),
+            "terminal.list" => Some(ProductMethod::TerminalList),
+            "terminal.attach" => Some(ProductMethod::TerminalAttach),
+            "terminal.focus" => Some(ProductMethod::TerminalFocus),
+            "terminal.fit" => Some(ProductMethod::TerminalFit),
+            "terminal.detach" => Some(ProductMethod::TerminalDetach),
+            "terminal.input" => Some(ProductMethod::TerminalInput),
+            "terminal.history" => Some(ProductMethod::TerminalHistory),
+            "terminal.close" => Some(ProductMethod::TerminalClose),
+            "terminal.rename" => Some(ProductMethod::TerminalRename),
             _ => None,
         }
     }
@@ -5638,6 +6428,10 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => "conversation.archive",
             ProductMethod::ConversationUnarchive => "conversation.unarchive",
             ProductMethod::ConversationRename => "conversation.rename",
+            ProductMethod::ConversationDecisions => "conversation.decisions",
+            ProductMethod::ConversationDecisionSettings => "conversation.decisionSettings",
+            ProductMethod::ConversationPauseAutoPick => "conversation.pauseAutoPick",
+            ProductMethod::ConversationSetDecisionSettings => "conversation.setDecisionSettings",
             ProductMethod::ConversationDelete => "conversation.delete",
             ProductMethod::ConversationReorder => "conversation.reorder",
             ProductMethod::ArtifactRead => "artifact.read",
@@ -5695,6 +6489,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => "peer.forget",
             ProductMethod::PeerRelay => "peer.relay",
             ProductMethod::PeerFollow => "peer.follow",
+            ProductMethod::GrantsSubscribe => "grants.subscribe",
+            ProductMethod::GrantsPage => "grants.page",
+            ProductMethod::GrantsUnsubscribe => "grants.unsubscribe",
             ProductMethod::ConversationSubscribe => "conversation.subscribe",
             ProductMethod::ConversationSubscribeList => "conversation.subscribeList",
             ProductMethod::ConversationUnsubscribe => "conversation.unsubscribe",
@@ -5710,6 +6507,9 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => "channel.create",
             ProductMethod::ChannelList => "channel.list",
             ProductMethod::ChannelSetPlacement => "channel.setPlacement",
+            ProductMethod::ChannelSetCoordinator => "channel.setCoordinator",
+            ProductMethod::ReplyStyleRead => "replyStyle.read",
+            ProductMethod::ReplyStyleSet => "replyStyle.set",
             ProductMethod::ConversationSubscribeEvents => "conversation.subscribeEvents",
             ProductMethod::ConversationReadEarlier => "conversation.readEarlier",
             ProductMethod::ConversationPeek => "conversation.peek",
@@ -5725,6 +6525,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => "boat.save",
             ProductMethod::BoatSaveClaudeSignIn => "boat.saveClaudeSignIn",
             ProductMethod::BoatDisconnect => "boat.disconnect",
+            ProductMethod::Agent37Status => "agent37.status",
+            ProductMethod::Agent37Save => "agent37.save",
+            ProductMethod::Agent37Disconnect => "agent37.disconnect",
+            ProductMethod::CloudRead => "cloud.read",
+            ProductMethod::CloudChoose => "cloud.choose",
             ProductMethod::DevicesPool => "devices.pool",
             ProductMethod::DevicesSetPool => "devices.setPool",
             ProductMethod::BoatRuntimeSettings => "boat.runtimeSettings",
@@ -5735,10 +6540,24 @@ impl ProductMethod {
             ProductMethod::LoginsSave => "logins.save",
             ProductMethod::LoginsRemove => "logins.remove",
             ProductMethod::LoginsSetDevice => "logins.setDevice",
+            ProductMethod::LoginsChatgptSignIn => "logins.chatgptSignIn",
+            ProductMethod::LoginsChatgptCancel => "logins.chatgptCancel",
+            ProductMethod::LoginsChatgptUse => "logins.chatgptUse",
+            ProductMethod::LoginsChatgptRemove => "logins.chatgptRemove",
             ProductMethod::VoiceStatus => "voice.status",
             ProductMethod::VoiceSaveKey => "voice.saveKey",
             ProductMethod::VoiceForgetKey => "voice.forgetKey",
             ProductMethod::VoiceStartCall => "voice.startCall",
+            ProductMethod::TerminalOpen => "terminal.open",
+            ProductMethod::TerminalList => "terminal.list",
+            ProductMethod::TerminalAttach => "terminal.attach",
+            ProductMethod::TerminalFocus => "terminal.focus",
+            ProductMethod::TerminalFit => "terminal.fit",
+            ProductMethod::TerminalDetach => "terminal.detach",
+            ProductMethod::TerminalInput => "terminal.input",
+            ProductMethod::TerminalHistory => "terminal.history",
+            ProductMethod::TerminalClose => "terminal.close",
+            ProductMethod::TerminalRename => "terminal.rename",
         }
     }
 
@@ -5775,6 +6594,10 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => Some("conversation.write"),
             ProductMethod::ConversationUnarchive => Some("conversation.write"),
             ProductMethod::ConversationRename => Some("conversation.write"),
+            ProductMethod::ConversationDecisions => Some("conversation.write"),
+            ProductMethod::ConversationDecisionSettings => Some("conversation.write"),
+            ProductMethod::ConversationPauseAutoPick => Some("conversation.write"),
+            ProductMethod::ConversationSetDecisionSettings => Some("conversation.write"),
             ProductMethod::ConversationDelete => Some("conversation.write"),
             ProductMethod::ConversationReorder => Some("conversation.write"),
             ProductMethod::ArtifactRead => Some("conversation.read"),
@@ -5830,6 +6653,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => Some("credential.manage"),
             ProductMethod::PeerRelay => Some("credential.manage"),
             ProductMethod::PeerFollow => Some("credential.manage"),
+            ProductMethod::GrantsSubscribe => Some("conversation.write"),
+            ProductMethod::GrantsPage => Some("conversation.write"),
+            ProductMethod::GrantsUnsubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribe => Some("conversation.write"),
             ProductMethod::ConversationSubscribeList => Some("conversation.write"),
             ProductMethod::ConversationUnsubscribe => Some("conversation.write"),
@@ -5845,6 +6671,9 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => Some("conversation.write"),
             ProductMethod::ChannelList => Some("conversation.write"),
             ProductMethod::ChannelSetPlacement => Some("conversation.write"),
+            ProductMethod::ChannelSetCoordinator => Some("conversation.write"),
+            ProductMethod::ReplyStyleRead => Some("conversation.write"),
+            ProductMethod::ReplyStyleSet => Some("conversation.write"),
             ProductMethod::ConversationSubscribeEvents => Some("conversation.write"),
             ProductMethod::ConversationReadEarlier => Some("conversation.write"),
             ProductMethod::ConversationPeek => Some("conversation.write"),
@@ -5860,6 +6689,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => Some("credential.manage"),
             ProductMethod::BoatSaveClaudeSignIn => Some("credential.manage"),
             ProductMethod::BoatDisconnect => Some("credential.manage"),
+            ProductMethod::Agent37Status => Some("credential.manage"),
+            ProductMethod::Agent37Save => Some("credential.manage"),
+            ProductMethod::Agent37Disconnect => Some("credential.manage"),
+            ProductMethod::CloudRead => Some("credential.manage"),
+            ProductMethod::CloudChoose => Some("credential.manage"),
             ProductMethod::DevicesPool => Some("credential.manage"),
             ProductMethod::DevicesSetPool => Some("credential.manage"),
             ProductMethod::BoatRuntimeSettings => Some("credential.manage"),
@@ -5870,10 +6704,24 @@ impl ProductMethod {
             ProductMethod::LoginsSave => Some("credential.manage"),
             ProductMethod::LoginsRemove => Some("credential.manage"),
             ProductMethod::LoginsSetDevice => Some("credential.manage"),
+            ProductMethod::LoginsChatgptSignIn => Some("credential.manage"),
+            ProductMethod::LoginsChatgptCancel => Some("credential.manage"),
+            ProductMethod::LoginsChatgptUse => Some("credential.manage"),
+            ProductMethod::LoginsChatgptRemove => Some("credential.manage"),
             ProductMethod::VoiceStatus => Some("credential.manage"),
             ProductMethod::VoiceSaveKey => Some("credential.manage"),
             ProductMethod::VoiceForgetKey => Some("credential.manage"),
             ProductMethod::VoiceStartCall => Some("conversation.write"),
+            ProductMethod::TerminalOpen => Some("credential.manage"),
+            ProductMethod::TerminalList => Some("credential.manage"),
+            ProductMethod::TerminalAttach => Some("credential.manage"),
+            ProductMethod::TerminalFocus => Some("credential.manage"),
+            ProductMethod::TerminalFit => Some("credential.manage"),
+            ProductMethod::TerminalDetach => Some("credential.manage"),
+            ProductMethod::TerminalInput => Some("credential.manage"),
+            ProductMethod::TerminalHistory => Some("credential.manage"),
+            ProductMethod::TerminalClose => Some("credential.manage"),
+            ProductMethod::TerminalRename => Some("credential.manage"),
         }
     }
 
@@ -5909,6 +6757,10 @@ impl ProductMethod {
             ProductMethod::ConversationArchive => ProductLane::Controls,
             ProductMethod::ConversationUnarchive => ProductLane::Controls,
             ProductMethod::ConversationRename => ProductLane::Controls,
+            ProductMethod::ConversationDecisions => ProductLane::Requests,
+            ProductMethod::ConversationDecisionSettings => ProductLane::Requests,
+            ProductMethod::ConversationPauseAutoPick => ProductLane::Requests,
+            ProductMethod::ConversationSetDecisionSettings => ProductLane::Requests,
             ProductMethod::ConversationDelete => ProductLane::Deletions,
             ProductMethod::ConversationReorder => ProductLane::Controls,
             ProductMethod::ArtifactRead => ProductLane::ArtifactReads,
@@ -5964,6 +6816,9 @@ impl ProductMethod {
             ProductMethod::PeerForget => ProductLane::Requests,
             ProductMethod::PeerRelay => ProductLane::Requests,
             ProductMethod::PeerFollow => ProductLane::Requests,
+            ProductMethod::GrantsSubscribe => ProductLane::Requests,
+            ProductMethod::GrantsPage => ProductLane::Requests,
+            ProductMethod::GrantsUnsubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribe => ProductLane::Requests,
             ProductMethod::ConversationSubscribeList => ProductLane::Requests,
             ProductMethod::ConversationUnsubscribe => ProductLane::Requests,
@@ -5979,6 +6834,9 @@ impl ProductMethod {
             ProductMethod::ChannelCreate => ProductLane::Requests,
             ProductMethod::ChannelList => ProductLane::Requests,
             ProductMethod::ChannelSetPlacement => ProductLane::Requests,
+            ProductMethod::ChannelSetCoordinator => ProductLane::Requests,
+            ProductMethod::ReplyStyleRead => ProductLane::Requests,
+            ProductMethod::ReplyStyleSet => ProductLane::Requests,
             ProductMethod::ConversationSubscribeEvents => ProductLane::Requests,
             ProductMethod::ConversationReadEarlier => ProductLane::Requests,
             ProductMethod::ConversationPeek => ProductLane::Requests,
@@ -5994,6 +6852,11 @@ impl ProductMethod {
             ProductMethod::BoatSave => ProductLane::Requests,
             ProductMethod::BoatSaveClaudeSignIn => ProductLane::Requests,
             ProductMethod::BoatDisconnect => ProductLane::Requests,
+            ProductMethod::Agent37Status => ProductLane::Requests,
+            ProductMethod::Agent37Save => ProductLane::Requests,
+            ProductMethod::Agent37Disconnect => ProductLane::Requests,
+            ProductMethod::CloudRead => ProductLane::Requests,
+            ProductMethod::CloudChoose => ProductLane::Requests,
             ProductMethod::DevicesPool => ProductLane::Requests,
             ProductMethod::DevicesSetPool => ProductLane::Requests,
             ProductMethod::BoatRuntimeSettings => ProductLane::Requests,
@@ -6004,10 +6867,24 @@ impl ProductMethod {
             ProductMethod::LoginsSave => ProductLane::Requests,
             ProductMethod::LoginsRemove => ProductLane::Requests,
             ProductMethod::LoginsSetDevice => ProductLane::Requests,
+            ProductMethod::LoginsChatgptSignIn => ProductLane::Requests,
+            ProductMethod::LoginsChatgptCancel => ProductLane::Requests,
+            ProductMethod::LoginsChatgptUse => ProductLane::Requests,
+            ProductMethod::LoginsChatgptRemove => ProductLane::Requests,
             ProductMethod::VoiceStatus => ProductLane::Requests,
             ProductMethod::VoiceSaveKey => ProductLane::Requests,
             ProductMethod::VoiceForgetKey => ProductLane::Requests,
             ProductMethod::VoiceStartCall => ProductLane::Requests,
+            ProductMethod::TerminalOpen => ProductLane::Requests,
+            ProductMethod::TerminalList => ProductLane::Requests,
+            ProductMethod::TerminalAttach => ProductLane::Requests,
+            ProductMethod::TerminalFocus => ProductLane::Requests,
+            ProductMethod::TerminalFit => ProductLane::Requests,
+            ProductMethod::TerminalDetach => ProductLane::Requests,
+            ProductMethod::TerminalInput => ProductLane::Requests,
+            ProductMethod::TerminalHistory => ProductLane::Requests,
+            ProductMethod::TerminalClose => ProductLane::Requests,
+            ProductMethod::TerminalRename => ProductLane::Requests,
         }
     }
 
@@ -6108,6 +6985,22 @@ impl ProductMethod {
             ProductMethod::ConversationRename => ProductParams::ConversationRename(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::ConversationDecisions => ProductParams::ConversationDecisions(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationDecisionSettings => {
+                ProductParams::ConversationDecisionSettings(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
+            ProductMethod::ConversationPauseAutoPick => ProductParams::ConversationPauseAutoPick(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ConversationSetDecisionSettings => {
+                ProductParams::ConversationSetDecisionSettings(
+                    serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+                )
+            }
             ProductMethod::ConversationDelete => ProductParams::ConversationDelete(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6294,6 +7187,15 @@ impl ProductMethod {
             ProductMethod::PeerFollow => ProductParams::PeerFollow(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::GrantsSubscribe => ProductParams::GrantsSubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GrantsPage => ProductParams::GrantsPage(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::GrantsUnsubscribe => ProductParams::GrantsUnsubscribe(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::ConversationSubscribe => ProductParams::ConversationSubscribe(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6341,6 +7243,15 @@ impl ProductMethod {
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::ChannelSetPlacement => ProductParams::ChannelSetPlacement(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ChannelSetCoordinator => ProductParams::ChannelSetCoordinator(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ReplyStyleRead => ProductParams::ReplyStyleRead(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::ReplyStyleSet => ProductParams::ReplyStyleSet(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::ConversationSubscribeEvents => {
@@ -6394,6 +7305,24 @@ impl ProductMethod {
                 Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
                 _ => return Err(ParamsRefused),
             },
+            ProductMethod::Agent37Status => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::Agent37Status,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::Agent37Save => ProductParams::Agent37Save(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::Agent37Disconnect => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::Agent37Disconnect,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CloudRead => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::CloudRead,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CloudChoose => ProductParams::CloudChoose(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::DevicesPool => ProductParams::DevicesPool(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -6425,6 +7354,19 @@ impl ProductMethod {
             ProductMethod::LoginsSetDevice => ProductParams::LoginsSetDevice(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::LoginsChatgptSignIn => ProductParams::LoginsChatgptSignIn(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsChatgptCancel => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::LoginsChatgptCancel,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::LoginsChatgptUse => ProductParams::LoginsChatgptUse(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::LoginsChatgptRemove => ProductParams::LoginsChatgptRemove(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::VoiceStatus => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::VoiceStatus,
                 _ => return Err(ParamsRefused),
@@ -6437,6 +7379,37 @@ impl ProductMethod {
                 _ => return Err(ParamsRefused),
             },
             ProductMethod::VoiceStartCall => ProductParams::VoiceStartCall(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalOpen => ProductParams::TerminalOpen(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::TerminalList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::TerminalAttach => ProductParams::TerminalAttach(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalFocus => ProductParams::TerminalFocus(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalFit => ProductParams::TerminalFit(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalDetach => ProductParams::TerminalDetach(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalInput => ProductParams::TerminalInput(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalHistory => ProductParams::TerminalHistory(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalClose => ProductParams::TerminalClose(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalRename => ProductParams::TerminalRename(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
         })
@@ -6478,6 +7451,10 @@ pub enum ProductParams {
     ConversationArchive(ConversationArchiveParams),
     ConversationUnarchive(ConversationArchiveParams),
     ConversationRename(ConversationRenameParams),
+    ConversationDecisions(ConversationDecisionsParams),
+    ConversationDecisionSettings(ConversationDecisionSettingsParams),
+    ConversationPauseAutoPick(ConversationPauseAutoPickParams),
+    ConversationSetDecisionSettings(DecisionSettings),
     ConversationDelete(ConversationDeleteParams),
     ConversationReorder(ConversationReorderParams),
     ArtifactRead(ArtifactReadParams),
@@ -6533,6 +7510,9 @@ pub enum ProductParams {
     PeerForget(PeerForgetParams),
     PeerRelay(PeerRelayParams),
     PeerFollow(PeerFollowParams),
+    GrantsSubscribe(GrantsSubscribeParams),
+    GrantsPage(GrantsPageParams),
+    GrantsUnsubscribe(GrantsUnsubscribeParams),
     ConversationSubscribe(ConversationSubscribeParams),
     ConversationSubscribeList(ConversationSubscribeListParams),
     ConversationUnsubscribe(ConversationUnsubscribeParams),
@@ -6548,6 +7528,9 @@ pub enum ProductParams {
     ChannelCreate(ChannelCreateParams),
     ChannelList(ChannelListParams),
     ChannelSetPlacement(ChannelSetPlacementParams),
+    ChannelSetCoordinator(ChannelSetCoordinatorParams),
+    ReplyStyleRead(ReplyStyleReadParams),
+    ReplyStyleSet(ReplyStyleSetParams),
     ConversationSubscribeEvents(ConversationSubscribeEventsParams),
     ConversationReadEarlier(ConversationReadEarlierParams),
     ConversationPeek(ConversationReadParams),
@@ -6563,6 +7546,11 @@ pub enum ProductParams {
     BoatSave(BoatSaveParams),
     BoatSaveClaudeSignIn(BoatClaudeSignInParams),
     BoatDisconnect,
+    Agent37Status,
+    Agent37Save(Agent37SaveParams),
+    Agent37Disconnect,
+    CloudRead,
+    CloudChoose(CloudChooseParams),
     DevicesPool(DevicesPoolParams),
     DevicesSetPool(DevicesSetPoolParams),
     BoatRuntimeSettings(BoatRuntimeReadParams),
@@ -6573,10 +7561,24 @@ pub enum ProductParams {
     LoginsSave(LoginsSaveParams),
     LoginsRemove(LoginsRemoveParams),
     LoginsSetDevice(LoginsSetDeviceParams),
+    LoginsChatgptSignIn(LoginsChatgptSignInParams),
+    LoginsChatgptCancel,
+    LoginsChatgptUse(LoginsChatgptUseParams),
+    LoginsChatgptRemove(LoginsChatgptRemoveParams),
     VoiceStatus,
     VoiceSaveKey(VoiceSaveKeyParams),
     VoiceForgetKey,
     VoiceStartCall(VoiceStartCallParams),
+    TerminalOpen(TerminalOpenParams),
+    TerminalList,
+    TerminalAttach(TerminalViewParams),
+    TerminalFocus(TerminalViewParams),
+    TerminalFit(TerminalViewParams),
+    TerminalDetach(TerminalDetachParams),
+    TerminalInput(TerminalInputParams),
+    TerminalHistory(TerminalHistoryParams),
+    TerminalClose(TerminalCloseParams),
+    TerminalRename(TerminalRenameParams),
 }
 
 impl ProductParams {
@@ -6618,6 +7620,14 @@ impl ProductParams {
             ProductParams::ConversationArchive(_) => ProductMethod::ConversationArchive,
             ProductParams::ConversationUnarchive(_) => ProductMethod::ConversationUnarchive,
             ProductParams::ConversationRename(_) => ProductMethod::ConversationRename,
+            ProductParams::ConversationDecisions(_) => ProductMethod::ConversationDecisions,
+            ProductParams::ConversationDecisionSettings(_) => {
+                ProductMethod::ConversationDecisionSettings
+            }
+            ProductParams::ConversationPauseAutoPick(_) => ProductMethod::ConversationPauseAutoPick,
+            ProductParams::ConversationSetDecisionSettings(_) => {
+                ProductMethod::ConversationSetDecisionSettings
+            }
             ProductParams::ConversationDelete(_) => ProductMethod::ConversationDelete,
             ProductParams::ConversationReorder(_) => ProductMethod::ConversationReorder,
             ProductParams::ArtifactRead(_) => ProductMethod::ArtifactRead,
@@ -6681,6 +7691,9 @@ impl ProductParams {
             ProductParams::PeerForget(_) => ProductMethod::PeerForget,
             ProductParams::PeerRelay(_) => ProductMethod::PeerRelay,
             ProductParams::PeerFollow(_) => ProductMethod::PeerFollow,
+            ProductParams::GrantsSubscribe(_) => ProductMethod::GrantsSubscribe,
+            ProductParams::GrantsPage(_) => ProductMethod::GrantsPage,
+            ProductParams::GrantsUnsubscribe(_) => ProductMethod::GrantsUnsubscribe,
             ProductParams::ConversationSubscribe(_) => ProductMethod::ConversationSubscribe,
             ProductParams::ConversationSubscribeList(_) => ProductMethod::ConversationSubscribeList,
             ProductParams::ConversationUnsubscribe(_) => ProductMethod::ConversationUnsubscribe,
@@ -6700,6 +7713,9 @@ impl ProductParams {
             ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
             ProductParams::ChannelList(_) => ProductMethod::ChannelList,
             ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,
+            ProductParams::ChannelSetCoordinator(_) => ProductMethod::ChannelSetCoordinator,
+            ProductParams::ReplyStyleRead(_) => ProductMethod::ReplyStyleRead,
+            ProductParams::ReplyStyleSet(_) => ProductMethod::ReplyStyleSet,
             ProductParams::ConversationSubscribeEvents(_) => {
                 ProductMethod::ConversationSubscribeEvents
             }
@@ -6717,6 +7733,11 @@ impl ProductParams {
             ProductParams::BoatSave(_) => ProductMethod::BoatSave,
             ProductParams::BoatSaveClaudeSignIn(_) => ProductMethod::BoatSaveClaudeSignIn,
             ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
+            ProductParams::Agent37Status => ProductMethod::Agent37Status,
+            ProductParams::Agent37Save(_) => ProductMethod::Agent37Save,
+            ProductParams::Agent37Disconnect => ProductMethod::Agent37Disconnect,
+            ProductParams::CloudRead => ProductMethod::CloudRead,
+            ProductParams::CloudChoose(_) => ProductMethod::CloudChoose,
             ProductParams::DevicesPool(_) => ProductMethod::DevicesPool,
             ProductParams::DevicesSetPool(_) => ProductMethod::DevicesSetPool,
             ProductParams::BoatRuntimeSettings(_) => ProductMethod::BoatRuntimeSettings,
@@ -6727,10 +7748,24 @@ impl ProductParams {
             ProductParams::LoginsSave(_) => ProductMethod::LoginsSave,
             ProductParams::LoginsRemove(_) => ProductMethod::LoginsRemove,
             ProductParams::LoginsSetDevice(_) => ProductMethod::LoginsSetDevice,
+            ProductParams::LoginsChatgptSignIn(_) => ProductMethod::LoginsChatgptSignIn,
+            ProductParams::LoginsChatgptCancel => ProductMethod::LoginsChatgptCancel,
+            ProductParams::LoginsChatgptUse(_) => ProductMethod::LoginsChatgptUse,
+            ProductParams::LoginsChatgptRemove(_) => ProductMethod::LoginsChatgptRemove,
             ProductParams::VoiceStatus => ProductMethod::VoiceStatus,
             ProductParams::VoiceSaveKey(_) => ProductMethod::VoiceSaveKey,
             ProductParams::VoiceForgetKey => ProductMethod::VoiceForgetKey,
             ProductParams::VoiceStartCall(_) => ProductMethod::VoiceStartCall,
+            ProductParams::TerminalOpen(_) => ProductMethod::TerminalOpen,
+            ProductParams::TerminalList => ProductMethod::TerminalList,
+            ProductParams::TerminalAttach(_) => ProductMethod::TerminalAttach,
+            ProductParams::TerminalFocus(_) => ProductMethod::TerminalFocus,
+            ProductParams::TerminalFit(_) => ProductMethod::TerminalFit,
+            ProductParams::TerminalDetach(_) => ProductMethod::TerminalDetach,
+            ProductParams::TerminalInput(_) => ProductMethod::TerminalInput,
+            ProductParams::TerminalHistory(_) => ProductMethod::TerminalHistory,
+            ProductParams::TerminalClose(_) => ProductMethod::TerminalClose,
+            ProductParams::TerminalRename(_) => ProductMethod::TerminalRename,
         }
     }
 }

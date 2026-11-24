@@ -29,6 +29,7 @@ import { linkedOn } from "../../model/linked-device"
 import type { LinkedDevicesGateway } from "../adapters/linked-devices-gateway"
 import {
   approvable,
+  busy,
   canAct,
   canPair,
   canPoll,
@@ -264,7 +265,7 @@ function ManagedDevices({
       data-linked={phase}
       data-linking={state.linking}
       data-connection={state.connection}
-      aria-busy={state.pending !== null || undefined}
+      aria-busy={busy(state) || undefined}
     >
       <LinkingGroup state={state} dispatch={dispatch} />
       {state.linking === "on" ? (
@@ -288,10 +289,13 @@ function ManagedDevices({
             inDialog={shown?.invitationId ?? null}
           />
           <DevicesGroup state={state} dispatch={dispatch} />
+          {/* Said under the devices it is about, not after the tunnel's group. */}
+          {shown === null ? notice : null}
           {state.switching === null ? <TunnelGroup gateway={gateway} /> : null}
         </>
-      ) : null}
-      {shown === null ? notice : null}
+      ) : (
+        notice
+      )}
     </div>
   )
 }
@@ -351,7 +355,6 @@ function PairingGroup({
   dispatch: Dispatch
   onShow: () => void
 }) {
-  const busy = state.pending !== null
   const open = state.code?.invitationId ?? state.hiddenInvitation
   return (
     <SettingsGroup surface="flat">
@@ -376,7 +379,7 @@ function PairingGroup({
               type="button"
               className="settings-button settings-button-primary"
               data-linked-action="pair"
-              disabled={!canPair(state) || busy}
+              disabled={!canPair(state)}
               onClick={() => dispatch({ type: "pair" })}
             >
               {sentences.pair}
@@ -673,7 +676,7 @@ function DeviceRow({
               type="button"
               className="settings-button"
               data-linked-action="cancel-revoke"
-              disabled={state.pending !== null}
+              disabled={busy(state)}
               onClick={() => dispatch({ type: "cancelRevoke" })}
             >
               {sentences.keep}

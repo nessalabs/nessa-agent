@@ -182,6 +182,7 @@ mod error_code;
 mod live_changes;
 mod mcp_apps;
 mod metadata_target;
+mod setup_steps;
 pub use metadata_target::load_conversation;
 mod agent_switches;
 mod model_changes;
@@ -237,9 +238,9 @@ pub use window_control_audit::{
 mod workspace_windows;
 pub use crate::domain::ReceiverBinding;
 pub use access_policy::{
-    AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
-    RequestShape, ShareTarget,
+    setting_change, AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource,
+    AccessSubject, ConversationAccessPolicyEvaluator, OwnerAccess, PairedAccess, PairedParty,
+    PairedRefusal, RequestShape, ShareTarget,
 };
 pub use catalogue::{
     CatalogueDescriptor, CatalogueEntryAccess, CatalogueEntryAdmission, CatalogueEntryAnswer,
@@ -295,6 +296,7 @@ pub use mcp_apps::{
 };
 pub use passive_read::access_refusal;
 pub use passive_read::{AdmitPassiveRead, PassiveRead, PassiveReadGrants, ReceiverAuthority};
+pub use setup_steps::{Sending as SetupSending, SetupEnd, SetupOpening, SetupStep, SetupSteps};
 // Composed only by the Unix gateway (`composition/local_auth.rs`).
 pub use app_call_policy::{
     admit_app_question, message_skips_review, AppCallPolicyEvaluator, AppQuestion,
@@ -337,7 +339,7 @@ pub use ports::{
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
     RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
-    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns, WaitingAutoPick,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -352,18 +354,23 @@ pub use service::{
     ThreadEvent,
 };
 pub use service::{
-    AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
-    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
-    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal, HistoryGeneration,
-    McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
-    PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt, PreferenceReading,
-    PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry, RecordedPreference,
-    ReportRegistration, RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft,
-    ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage, ScheduledMessageStore,
-    SelectionChange, SelectionRequest, SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn,
-    UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
-    MAX_RESOURCE_META_BYTES,
+    AccessRequestOutcome, ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL,
+    DECISION_TARGET, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL,
+    REQUEST_ACCESS_TOOL,
+};
+pub use service::{
+    AgentBrief, AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing,
+    ChannelStore, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
+    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal,
+    HistoryGeneration, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource,
+    PendingReport, PinnedStart, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
+    PreferenceReading, PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry,
+    RecordedPreference, ReplyStyleStore, ReportRegistration, RequestedAgent, RequestedConversation,
+    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
+    ScheduledMessageStore, SelectionChange, SelectionRequest, SubmissionMode, ThreadReport,
+    ThreadReportStore, ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS,
+    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use service::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
@@ -377,11 +384,13 @@ pub use service::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
     WINDOW_ANSWER_TIMEOUT,
 };
+pub use service::{TerminalOrigin, TerminalPlace};
 pub use session_key::conversation_session;
 pub use share_grants::{
-    binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ResourceKind,
-    RevisionHold, ShareConversation, ShareGrant, ShareGrantChange, ShareGrantList,
-    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    binding_of, note_candidates, paired_facts, GrantLogEntry, GrantSnapshotEntry, GrantStream,
+    GrantUse, GrantedShare, HeldGrant, Reader, ResourceKind, RevisionHold, ShareConversation,
+    ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition,
+    ShareGrants, EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 #[cfg_attr(

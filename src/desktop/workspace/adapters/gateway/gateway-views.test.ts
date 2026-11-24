@@ -13,6 +13,7 @@ import { messageText, shownWhole } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
   approvalId,
+  askFrom,
   handoffId,
   inputId,
   modelFor,
@@ -24,6 +25,7 @@ import {
   replyId,
   reviewOf,
   runningModel,
+  sameSummary,
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
@@ -170,6 +172,52 @@ describe("what a bounded view says about history it did not draw", () => {
 })
 
 describe("a conversation view as a transcript", () => {
+  it("names the step its cloud machine is on instead of Thinking, and puts a finished one on the reply it waited for", () => {
+    const S = GATEWAY_NOW_MS
+    const running = transcriptFrom(
+      view("c", {
+        setup: [
+          {
+            state: "running",
+            executionId: "e2",
+            steps: [
+              { step: "waking", startedAtMs: S - 9_000, endedAtMs: S - 4_000 },
+              { step: "connecting", startedAtMs: S - 4_000 },
+            ],
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    expect(running.activity).toEqual({
+      label: "Connecting",
+      since: S - 9_000,
+      setup: true,
+    })
+    const ready = transcriptFrom(
+      view("c", {
+        messages: [turn({ parts: [textPart("done", 0)] })],
+        setup: [
+          {
+            state: "ready",
+            executionId: "e1",
+            steps: [{ step: "creating", startedAtMs: S - 30_000, endedAtMs: S - 1_000 }],
+          },
+        ],
+      }),
+      1,
+      at,
+      GATEWAY_NOW_MS,
+    )
+    const reply = ready.messages.find((message) => message.id === replyId("e1"))
+    expect(
+      reply && "setup" in reply ? reply.setup?.steps.map((step) => step.step) : [],
+    ).toEqual(["creating"])
+    expect(ready.activity ?? null).toBeNull()
+  })
+
   it("keeps an MCP App's widget part after its tool's step, and none for a tool without a UI", () => {
     const transcript = transcriptFrom(
       view("c", {
@@ -1072,6 +1120,44 @@ describe("a list row as a summary", () => {
     ).toBe("needs-you")
     expect(summaryFrom(row("a"), { model, waitingOnPerson: false }).status).toBe("idle")
   })
+
+  it("waits on the person while an agent's ask is on its row, followed or not", () => {
+    const model = { provider: "anthropic", modelId: "claude-opus-5" }
+    const ask = {
+      askId: "0123456789abcdef0123456789abcdef",
+      question: "Ship it?",
+      choices: [
+        { label: "Ship", consequence: "It goes out." },
+        { label: "Wait", consequence: "It waits." },
+      ],
+      recommended: 0,
+      reason: "Checks passed.",
+      askedAtMs: 5,
+    }
+    const said = summaryFrom(row("a", { running: true, ask }), {
+      model,
+      waitingOnPerson: false,
+    })
+    expect(said.status).toBe("needs-you")
+    expect(said.ask).toEqual({
+      askId: ask.askId,
+      question: "Ship it?",
+      choices: ask.choices,
+      recommended: 0,
+      reason: "Checks passed.",
+    })
+    // The same ask says nothing new; a new one does.
+    const again = summaryFrom(row("a", { running: true, ask }), {
+      model,
+      waitingOnPerson: false,
+    })
+    expect(sameSummary(said, again)).toBe(true)
+    const next = summaryFrom(
+      row("a", { running: true, ask: { ...ask, askId: "f".repeat(32) } }),
+      { model, waitingOnPerson: false },
+    )
+    expect(sameSummary(said, next)).toBe(false)
+  })
 })
 
 describe("the model a session runs on", () => {
@@ -1796,4 +1882,53 @@ it("omits an internal turn's empty input while retaining its assistant reply", (
         ),
     ),
   ).toBe(true)
+})
+
+describe("an agent's ask", () => {
+  const plain = {
+    askId: "0123456789abcdef0123456789abcdef",
+    question: "Ship it today?",
+    choices: [
+      { label: "Ship", consequence: "It goes out today." },
+      { label: "Wait", consequence: "It waits for Monday." },
+    ],
+    recommended: 0,
+    reason: "Every check passed.",
+    askedAtMs: 7,
+  }
+
+  it("reads as the workspace keeps it, with no part the agent left out", () => {
+    const { askedAtMs: _, ...kept } = plain
+    expect(askFrom(plain)).toStrictEqual(kept)
+  })
+
+  it("keeps the summary, the auto-pick and each choice's details the agent gave", () => {
+    const detailed = {
+      ...plain,
+      summary: "The Safari export fix.",
+      autoPick: "allowed" as const,
+      choices: [
+        {
+          ...plain.choices[0]!,
+          undo: "easy" as const,
+          effort: "small" as const,
+          pros: ["Fixed today"],
+          cons: [],
+        },
+        { ...plain.choices[1]!, undo: "no" as const, cons: ["Broken all weekend"] },
+      ],
+    }
+    expect(askFrom(detailed)).toStrictEqual({
+      askId: plain.askId,
+      question: plain.question,
+      choices: [
+        { ...plain.choices[0], undo: "easy", effort: "small", pros: ["Fixed today"] },
+        { ...plain.choices[1], undo: "no", cons: ["Broken all weekend"] },
+      ],
+      recommended: 0,
+      reason: plain.reason,
+      summary: "The Safari export fix.",
+      autoPick: "allowed",
+    })
+  })
 })

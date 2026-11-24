@@ -29,10 +29,14 @@ export interface SessionAccess {
 
 /**
  * The person's choice of access for a session. `chosen`: held for a session
- * the source has not begun, sent with its first message. `pending`: chosen
- * while the session's agent is at work, held here and asked of the source
- * once a conversation arrives with no turn at work — the gateway changes
- * access only between turns. `changing`: asked of the source. `taken`: the
+ * the source has not begun, sent with its first message. `pending`: due to
+ * be asked of the source — a pick made after a new session's first message,
+ * asked as soon as its conversation arrives, or one a running turn could not
+ * take (one queued behind it, say), asked again once a conversation arrives
+ * with no turn at work. `changing`: asked of the source — at once,
+ * mid-turn too, since the gateway changes a running turn's access; a pick
+ * made while it is on its way is held beside it as `next`, and asked once it
+ * settles, so the latest pick is the one that stands. `taken`: the
  * source committed it, and no conversation has said so yet. `refused`: the
  * source did not take it; the source's mode shows, and the refusal is said
  * until the next conversation with no turn at work, or the next pick.
@@ -50,14 +54,20 @@ export type AccessChoice =
     }
   | {
       readonly mode: AccessMode
-      readonly state: "changing" | "taken"
+      readonly state: "changing"
+      /** Picked while this one was on its way: asked once it settles. */
+      readonly next?: AccessMode
+    }
+  | {
+      readonly mode: AccessMode
+      readonly state: "taken"
     }
   | {
       readonly mode: AccessMode
       readonly state: "pending"
       /**
        * Sent only on a conversation newer than this revision: set when the
-       * source refused it because a turn had begun first, so it waits for that
+       * source refused it because of the turn at work, so it waits for that
        * turn to end rather than being sent again on the conversation held.
        */
       readonly after?: number
@@ -78,6 +88,7 @@ export function shownAccess(
   source: SessionAccess | undefined,
   choice: AccessChoice | undefined,
 ): AccessMode {
+  if (choice?.state === "changing") return choice.next ?? choice.mode
   if (choice && choice.state !== "refused") return choice.mode
   return source?.mode ?? defaultAccess
 }
@@ -88,7 +99,7 @@ export function shownAccess(
  * captured by its first message, is let go once the conversation says any
  * access at all, since a create the gateway reopened keeps its own preset.
  * One made after that capture is the person's newer word: it becomes
- * pending, and is asked of the source once no turn is at work — or is let go
+ * pending, and is asked of the source at once — or is let go
  * when the source already runs it. A refusal is let go by a conversation
  * with no turn at work: what it refused is history. One pending or on its
  * way is kept: the pending one is sent (`effects.ts`), and the call settles

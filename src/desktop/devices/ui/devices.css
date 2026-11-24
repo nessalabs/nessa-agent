@@ -15,6 +15,10 @@
   overflow-y: auto;
   color: var(--foreground);
   font-size: var(--desktop-text-body);
+  /* "nessa Studio" stands in the window's bottom-left corner over this page
+     (`side-rail.css`). The cards fade out before the window's foot as they
+     scroll under it, and the page's last 64px of room ends clear of it. */
+  mask-image: linear-gradient(to bottom, black calc(100% - 56px), transparent);
 }
 
 .devices-muted {
@@ -592,4 +596,12 @@ button.devices-tile:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* A cloud's mark is square: smaller than the wide device drawings. */
+.devices-tile-figure.cloud-mark {
+  width: 72px;
+}
+.devices-detail-figure.cloud-mark {
+  width: 96px;
 }

@@ -229,7 +229,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 1,
-                expected: 10
+                expected: 12
             }
         ))
     ));
@@ -258,7 +258,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 2,
-                expected: 10
+                expected: 12
             }
         ))
     ));
@@ -1187,7 +1187,7 @@ fn many(path: &Path, owner: &str, count: usize) {
             .unwrap();
         transaction
             .execute(
-                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0)",
+                "INSERT INTO summaries VALUES (?1, 'Hello', 'hello', ?2, 0, NULL)",
                 params![id, 10 + n as i64],
             )
             .unwrap();
@@ -2088,7 +2088,7 @@ async fn catalogue_acquisition_refuses_corruption_atomically_and_preserves_unkno
     }
     connection
         .execute(
-            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0)",
+            "INSERT INTO summaries VALUES (?1, ?2, ?3, 1, 0, NULL)",
             params![
                 second.to_string(),
                 "😀".repeat(ConversationTitle::MAX_CHARS),
@@ -2791,7 +2791,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 4,
-                expected: 10
+                expected: 12
             }
         ))
     ));
@@ -2830,7 +2830,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
             nessa_local_database::OpenError::Version {
                 found: 5,
-                expected: 10
+                expected: 12
             }
         ))
     ));
@@ -2841,11 +2841,10 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
 }
 
 /// A comment grant written through the store, past `conversation.share`, is
-/// a legal capability set. Cedar lets the device that is signed in as the
-/// binding owner comment, and denies the gateway comment because it is not.
+/// a legal capability set. Cedar lets the device and the gateway comment.
 /// Neither may drive: the set does not contain `drive`.
 #[tokio::test]
-async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
+async fn a_hand_built_comment_grant_lets_a_gateway_comment_and_not_drive() {
     use crate::application::{
         AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
         ConversationAccessPolicyEvaluator, RequestShape, ShareGrants,
@@ -2887,10 +2886,10 @@ async fn a_hand_built_comment_grant_for_a_gateway_is_denied_by_cedar() {
         ask(&owner, AccessAction::Comment),
         AccessDecision::Allow { .. }
     ));
-    assert_eq!(
+    assert!(matches!(
         ask(&gateway, AccessAction::Comment),
-        AccessDecision::Deny(AccessDenial::NotPermitted)
-    );
+        AccessDecision::Allow { .. }
+    ));
     assert_eq!(
         ask(&owner, AccessAction::Drive),
         AccessDecision::Deny(AccessDenial::NotPermitted)

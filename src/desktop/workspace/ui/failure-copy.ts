@@ -19,6 +19,7 @@ const copy: Record<WorkspaceFailureReason, string> = {
   "signed-out": "This window isn’t signed in to the local server.",
   "not-started": startupRefusalSentence("not-provisioned"),
   "not-ready": startupRefusalSentence("not-ready"),
+  "still-starting": startupRefusalSentence("still-starting"),
   "not-listening": startupRefusalSentence("not-listening"),
   "wrong-stage": wrongStageSentence(null),
   "source-gone":
@@ -66,4 +67,38 @@ export function readFailureCopy(
 ): string {
   if (reason === "wrong-stage") return wrongStageSentence(stages)
   return readCopy[read][reason]
+}
+
+/**
+ * Two or three words for why a message did not go, said right under it
+ * (`UnsentRow`). The whole reason is behind its copy button, never here:
+ * `setupFailed` when its cloud machine did not start, else the gateway's
+ * code where it names one a person can act on, else the reason.
+ */
+export function unsentLabel(
+  reason: WorkspaceFailureReason,
+  code: string | undefined,
+  setupFailed: boolean,
+): string {
+  // A cause the person can fix themselves is named first.
+  switch (code) {
+    case "agent_sign_in_required":
+      return "Not signed in"
+    case "environment_not_configured":
+      return "Boat not connected"
+  }
+  if (setupFailed) return "Container didn’t start"
+  switch (code) {
+    case "environment_unavailable":
+    case "environment_unreachable":
+      return "Machine unreachable"
+  }
+  switch (reason) {
+    case "agent-not-configured":
+      return "Agent needs setup"
+    case "signed-out":
+      return "Not signed in"
+    default:
+      return "Couldn’t send"
+  }
 }

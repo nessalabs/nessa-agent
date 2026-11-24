@@ -57,12 +57,12 @@ fn required_types_and_nullable_summary_use_one_projection() {
     let connection = Connection::open_in_memory().unwrap();
     connection
         .execute(
-            "CREATE TABLE saved (title, preview, updated_at_ms, archived)",
+            "CREATE TABLE saved (title, preview, updated_at_ms, archived, ask)",
             [],
         )
         .unwrap();
     connection
-        .execute("INSERT INTO saved VALUES (NULL, NULL, 1, 0)", [])
+        .execute("INSERT INTO saved VALUES (NULL, NULL, 1, 0, NULL)", [])
         .unwrap();
     let selected: (Option<String>, Option<String>) = connection
         .query_row(&format!("SELECT {} FROM saved", summary("")), [], |row| {

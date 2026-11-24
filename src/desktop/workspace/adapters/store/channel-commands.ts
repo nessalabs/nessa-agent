@@ -45,11 +45,11 @@ const openingOf = (state: {
  * no model to start on. Where the window has pickers, the person's home
  * folder is asked for once, so the paths they pick read from `~`.
  */
-export function openChannelCreation(): WorkspaceCommand {
+export function openChannelCreation(gatewayId?: string): WorkspaceCommand {
   return (dispatch, getState, { newId, paths }) => {
     const model = defaultModel()
     if (!model) return
-    dispatch(channelCreationOpened({ opening: newId(), model }))
+    dispatch(channelCreationOpened({ opening: newId(), model, gatewayId }))
     if (!paths || getState().workspace.channelMaking.home !== null) return
     void paths.home().then(
       (home) => {
@@ -186,6 +186,27 @@ export function setChannelPlacement({
   return async (dispatch, _getState, { channels, newId }) => {
     if (!channels?.setPlacement) return false
     const channel = await channels.setPlacement(channelId, placement, newId())
+    dispatch(channelPlaced({ channel }))
+    void dispatch(loadWorkspace())
+    return true
+  }
+}
+
+/**
+ * Turns a made channel's coordinator on or off, from its settings. The index
+ * takes the answer at once and is read again so every list agrees. Answers
+ * whether it was changed; a refusal throws its `ChannelCreationError`.
+ */
+export function setChannelCoordinator({
+  channelId,
+  on,
+}: {
+  channelId: string
+  on: boolean
+}): WorkspaceCommand<Promise<boolean>> {
+  return async (dispatch, _getState, { channels, newId }) => {
+    if (!channels?.setCoordinator) return false
+    const channel = await channels.setCoordinator(channelId, on, newId())
     dispatch(channelPlaced({ channel }))
     void dispatch(loadWorkspace())
     return true

@@ -29,8 +29,14 @@ permissions:
 # runners, and only the last of them gates anything. Pushes to `main` are left
 # to finish — they are what populates the build caches every later run reads,
 # and a cancelled one leaves the next pull request paying for a cold compile.
+#
+# Each push to `main` has a group of its own, named by its commit. Under one
+# group for the branch they ran one at a time: a push waited for the run
+# before it (runs 43655622363 and 43659129964 each took about 80 minutes, half
+# of it waiting), and a push that arrived while another was already waiting
+# replaced it, so that commit never ran (run 43643818697).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -223,6 +229,7 @@ jobs:
               'crates/nessa-conversation/src/domain/value_objects/channel.rs',
               'crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs',
               'crates/nessa-gateway/src/logins/domain.rs',
+              'crates/nessa-gateway/src/logins/chatgpt/domain.rs',
               'crates/nessa-protocol/src/lease.rs',
               'crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs',
               'crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs',
@@ -259,57 +266,6 @@ jobs:
         working-directory: .ci-gateway
       - run: node scripts/check-product-protocol.mjs
         working-directory: .ci-gateway
-  # The desktop app compiled the way a release compiles it, and nothing more.
-  #
-  # `cfg(debug_assertions)` is off in the release profile, so code gated on it
-  # disappears and anything still naming it stops compiling. Every other job
-  # here builds in debug, so that break is invisible until a tag is pushed —
-  # which is exactly how v0.1.0 failed, twenty minutes into a signed macOS
-  # build, on `SIMULATED_UPDATE` being gated while its one release-profile
-  # reader was not.
-  #
-  # macOS is the one release-profile answer here. Linux compiles and exercises
-  # its systemd adapter in `local-auth` through `check-desktop.mjs`; this job
-  # catches code that disappears only when `cfg(debug_assertions)` is off.
-  # `cargo check`, not a build: this is about what compiles, and the release
-  # workflow remains the only thing that produces a bundle. The frontend is
-  # built first because `generate_context!` embeds `dist/`, which has to exist
-  # before the crate can be checked at all.
-  #
-  # `scripts/desktop/prepare.mjs` used to run here too, and was two thirds of
-  # this job: on macOS it builds `nessa-server` and `nessa-mcp` under the
-  # shipping profile — `lto = "fat"`, `codegen-units = 1` — downloads Node, and
-  # assembles `src-tauri/runtime`. Six to ten minutes of link-time optimisation
-  # whose output nothing here reads. It is gone because the tree it produces is
-  # not a compile-time input: `tauri.conf.json` declares no `bundle.resources`,
-  # and `runtime/` becomes a resource only through the `--config` override
-  # `scripts/desktop/build-command.mjs` passes to `tauri build`. `dist/` is the
-  # input `generate_context!` wants, and `pnpm build` is what produces it.
-  desktop-release-profile:
-    name: Desktop app compiles in release profile
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: macos-latest
-    # Warm release-profile checks finished in at most 3 minutes in that sample,
-    # about half a minute of that in the compile. Forty-five minutes covers a
-    # cold macOS check.
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - uses: ./.github/actions/pnpm-install
-        with:
-          save: ${{ github.ref == 'refs/heads/main' }}
-      - run: pnpm build
-      - run: cargo check -p nessa-app --release --all-targets
   frontend:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
@@ -338,8 +294,14 @@ jobs:
   # conversations run beside it. Every feature a person reaches through a
   # conversation is flexed here (CODING_STANDARDS.md, "Conversation stress").
   # The pull request runs its default numbers; the nightly load run in
-  # conversation-stress-load.yml raises them. The chaos check runs after it
-  # in the same job, on the same gateway build.
+  # conversation-stress-load.yml raises them.
+  #
+  # The scripted, browser, focused WebKit and chaos checks run beside it in
+  # `conversation-checks`, on a runner of their own. In one job they ran
+  # after the stress check, one after the other: 26 to 35 minutes per pull
+  # request, longer than any test leg once those got faster. Each job builds
+  # the same gateway and installs the same browsers, so what is checked does
+  # not change, only how many of the checks wait for each other.
   conversation-stress:
     name: Conversation stress check
     needs: changes
@@ -387,18 +349,22 @@ jobs:
         run: NESSA_HOVER_BROWSER=bundled node --test verification/desktop/scripts/lib/hover-state.test.mjs
       # nessa-mcp: the stress check's `github` step runs commands through
       # Nessa's own shell tool.
+      # Terminals need the pinned libghostty-vt (scripts/terminal/ghostty.sh),
+      # kept between runs by the pty-runtime rev it is built for.
+      - uses: actions/cache@v4
+        with:
+          path: .vendor/pty-runtime
+          key: ghostty-${{ runner.os }}-${{ hashFiles('crates/nessa-gateway/Cargo.toml', 'scripts/terminal/ghostty.sh') }}
       - id: gateway-build
-        run: cargo build -p nessa-server -p nessa-mcp
-      # Reuse this job's gateway build and browser install. The reset-boundary
-      # regression needs both engines, including WebKit's ticking-clock path.
-      - name: Run the scripted gateway checks in both browsers
-        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
-      - name: Verify GitHub live-event opt-in in both browsers
-        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
-      - name: Verify usage-limit cards in both browsers
-        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
-      - name: Verify pane dragging after deferred fitting in both browsers
-        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+        run: |
+          eval "$(scripts/terminal/ghostty.sh)"
+          cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
+      # The peer step enrolls through this example. It is not the gateway
+      # build chaos waits on.
+      - name: Build the peer example
+        run: cargo build -p nessa-client-core --example read_only_sync
       # The private Swift phone product is exercised by nessa-ios's macOS
       # phone-files-stress workflow against this exact gateway source.
       # This Ubuntu job cannot build that product; it retains core window load.
@@ -408,9 +374,93 @@ jobs:
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --inputFiles 0 --channel bundled --evidence "$STRESS_EVIDENCE" --out "$STRESS_EVIDENCE/result.json" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
-        timeout-minutes: 20
-      # Focused webhook coverage supplements the complete default run above.
-      # Reuse installed browsers and gateway; other knobs are zero so the
+        # The run builds its VM fixture gateway first (about 4 minutes, with
+        # terminals), then 87 steps in about 16; 20 cut a run that held them all.
+        timeout-minutes: 30
+      - name: Keep the evidence of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STRESS_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The checks that used to run after the stress check in its job: the
+  # scripted gateway checks, the browser checks, the focused WebKit stress
+  # steps and the conversation chaos check. Same gateway build, same browsers.
+  conversation-checks:
+    name: Conversation scripted, WebKit and chaos checks
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    # The browser install may use 45 minutes (run 42079903038 was still
+    # fetching at 30); everything after it took at most 16 minutes in the
+    # combined job, plus a cold gateway build. 90, as the stress job.
+    timeout-minutes: 90
+    env:
+      STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          # The same gateway build as `conversation-stress`, which stays the
+          # one writer of this cache: two writers would double what it keeps
+          # against the repository's ten-gigabyte ceiling.
+          shared-key: conversation-stress
+          save-if: false
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned browsers and their runtime dependencies
+        run: |
+          set -euo pipefail
+          # A dropped Azure mirror connection used to hold apt until this
+          # step's own bound (run 42079903038). The retries and the socket
+          # timeout are the ones install-linux-build-deps.sh already uses.
+          sudo tee /etc/apt/apt.conf.d/99-nessa-ci-retries >/dev/null <<'EOF'
+          Acquire::Retries "3";
+          Acquire::http::Timeout "30";
+          Acquire::https::Timeout "30";
+          EOF
+          pnpm exec playwright install --with-deps chromium webkit
+        # 45 minutes is that script's ceiling for an install that is still
+        # moving. Run 42079903038 had not finished fetching at 30.
+        timeout-minutes: 45
+      # nessa-mcp: the stress check's `github` step runs commands through
+      # Nessa's own shell tool.
+      # Terminals need the pinned libghostty-vt (scripts/terminal/ghostty.sh),
+      # kept between runs by the pty-runtime rev it is built for.
+      - uses: actions/cache@v4
+        with:
+          path: .vendor/pty-runtime
+          key: ghostty-${{ runner.os }}-${{ hashFiles('crates/nessa-gateway/Cargo.toml', 'scripts/terminal/ghostty.sh') }}
+      - id: gateway-build
+        run: |
+          eval "$(scripts/terminal/ghostty.sh)"
+          cargo build -p nessa-server --features nessa-server/terminals -p nessa-mcp
+          # Later steps build gateways too (the stress check's VM fixture).
+          echo "PTY_RUNTIME_GHOSTTY_SOURCE=$PTY_RUNTIME_GHOSTTY_SOURCE" >> "$GITHUB_ENV"
+      # The peer step enrolls through this example. It is not the gateway
+      # build chaos waits on.
+      - name: Build the peer example
+        run: cargo build -p nessa-client-core --example read_only_sync
+      # The reset-boundary regression needs both engines, including WebKit's
+      # ticking-clock path.
+      - name: Run the scripted gateway checks in both browsers
+        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$STRESS_EVIDENCE/scripted"
+      - name: Verify GitHub live-event opt-in in both browsers
+        run: node verification/desktop/scripts/github-live-events.mjs --channel bundled --out "$STRESS_EVIDENCE/github-live-events.json" --shots "$STRESS_EVIDENCE/github-live-events"
+      - name: Verify usage-limit cards in both browsers
+        run: node verification/desktop/scripts/usage-limit.mjs --channel bundled --out "$STRESS_EVIDENCE/usage-limit.json" --shots "$STRESS_EVIDENCE/usage-limit"
+      - name: Verify pane dragging after deferred fitting in both browsers
+        run: node verification/desktop/scripts/drag.mjs --engine chromium,webkit --layout columns --channel bundled --only resize-mid-drag,return-interrupted --out "$STRESS_EVIDENCE/drag.json"
+      # Focused webhook coverage supplements the complete default run in
+      # `conversation-stress`. Other knobs are zero so the
       # fixture never enables native discovery. These are not full-cohort runs.
       - name: Run focused webhook default and raised browser cases
         shell: bash
@@ -447,6 +497,25 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menus') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menus 1 --evidence "$STRESS_EVIDENCE/menu-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-webkit.log"
         timeout-minutes: 10
+      # The side rail ships in WKWebView too: the chat's title in the pane's
+      # bar stays between where it stood and where it lands, every frame, as
+      # the rail toggles, and stands still with the panes alone.
+      - name: Run the rail stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'rails') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --rails 1 --evidence "$STRESS_EVIDENCE/rail-webkit" 2>&1 | tee "$STRESS_EVIDENCE/rail-webkit.log"
+        timeout-minutes: 10
+      # The model picker ships in WKWebView too: a star, a sideways swipe
+      # over a row that steps its thinking level, and a press of a bar.
+      - name: Run the model picker stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'pickers') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --pickers 1 --evidence "$STRESS_EVIDENCE/picker-webkit" 2>&1 | tee "$STRESS_EVIDENCE/picker-webkit.log"
+        timeout-minutes: 10
       # The composer's row and a call's rim ship in WKWebView too: the short
       # model name, the row's order, and the rim on the composer's edge (the
       # drawn glow where the engine has WebGL, a still ring where it has not),
@@ -466,6 +535,15 @@ jobs:
           set -o pipefail
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'githubs') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --githubs 1 --evidence "$STRESS_EVIDENCE/github-webkit" 2>&1 | tee "$STRESS_EVIDENCE/github-webkit.log"
+        timeout-minutes: 10
+      # Channel settings in WebKit too: Auto-stop's amount field saves on ↩ and
+      # as it loses focus to its unit's menu, then the unit applies to it.
+      - name: Run the channel stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'channels') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --channels 1 --evidence "$STRESS_EVIDENCE/channel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/channel-webkit.log"
         timeout-minutes: 10
       # First-run setup ships in WKWebView too: the welcome is whole as it
       # opens, and a summon sends nothing through the light behind it.
@@ -491,7 +569,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          name: conversation-checks-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.STRESS_EVIDENCE }}
           if-no-files-found: ignore
           retention-days: 7
@@ -517,6 +595,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
         if: runner.os == 'Windows'
+      # Windows runs these tests many times slower than Linux (run 43811777001:
+      # the conversation library took 1,296 s here and 131 s on Ubuntu), and
+      # the slowest cases are the ones that save files. The default temp
+      # directory is on the system drive; the workspace drive is the runner's
+      # faster disk. This is a measurement first: the comparison is in the
+      # pull request that added it.
+      - name: Keep Windows test files on the workspace drive
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/nessa-tests"
+          directory="$(cygpath -w "$RUNNER_TEMP/nessa-tests")"
+          echo "TEMP=$directory" >> "$GITHUB_ENV"
+          echo "TMP=$directory" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -548,24 +640,119 @@ jobs:
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup
         timeout-minutes: 90
 
+  # The Linux desktop host, on a runner of its own: its build packages, its
+  # tests, the systemd and linger proofs, the shipping-profile runtime assembly
+  # and the native window smoke. These ran at the end of the Ubuntu leg of
+  # `local-auth`, after its Rust tests: 12 to 17 minutes in a row behind 15
+  # (run 43811777001), on every pull request, including one that changed no
+  # Rust (run 43881521635, where they were 16 of that leg's 21 minutes).
+  # Nothing here reads what the Rust test step builds, so it starts at once.
+  #
+  # It runs on the shipping Linux baseline. A newer ubuntu-latest image can
+  # change WebKitGTK/WebDriver packages and ABI underneath the release
+  # contract (ci-harness.test.mjs, issue #1167).
+  linux-desktop:
+    name: Linux desktop host and native window
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-22.04
+    # The apt step can run 65 minutes. Every other step together took at most
+    # 17 minutes warm (run 43811777001), and the runtime assembly compiles the
+    # gateway under the shipping profile when the cache is cold. 120 lets the
+    # apt bound fire before the job does, as the release build's 120 does.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          # Rust's host triple does not distinguish Ubuntu's glibc baseline.
+          key: ubuntu-22.04
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The desktop host's tests are not macOS-only, and one of them asserted
+      # the opposite of what it said on Linux for want of ever running there:
+      # `Path` treats a backslash as an ordinary character, so a Windows-shaped
+      # fixture had no `target` component in it at all. check-desktop.mjs skips
+      # when WebKitGTK is absent, so without this the skip stays permanent.
+      - name: Install the desktop host's Linux build dependencies
+        # The WebDriver and virtual display are this job's own, for the native
+        # window smoke below.
+        #
+        # A silent stall on `apt-get update` held this step for 315 minutes and
+        # for 79 minutes (runs 37668027204 and 37670890766, #653). The script's
+        # worst case is 62.75 minutes: three updates of five minutes, a 30s
+        # kill-after on each of those and on install, the 15s and 30s backoff
+        # sleeps, and a 45 minute install. Sixty-five minutes is that budget
+        # plus a small margin, so a mirror that never answers fails here with
+        # the script's own message. Installs that were still moving, including
+        # the 30.6 and 41.5 minute green ones, finish inside the 45 minute
+        # install ceiling.
+        run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
+        timeout-minutes: 65
+      - run: node scripts/check-desktop.mjs
+      - name: Exercise the disposable systemd user-manager lifecycle
+        run: bash scripts/desktop/check-systemd-user-service.sh
+      # Same runner as the step above, which already built the nessa-app tests.
+      # A throwaway user, never the runner account. Stock set-self-linger does
+      # not prompt; the test failing to return would be that prompt.
+      - name: Prove linger for a throwaway Linux user
+        timeout-minutes: 15
+        run: bash scripts/desktop/check-linux-linger.sh
+      # This repeats a release build of nessa-server after the matrix's debug
+      # build in `local-auth`, and a release build of nessa-mcp after
+      # gateway-contract.
+      # It is intentionally unique: this is the shipping-profile evidence that
+      # the Linux assembler produces the complete fingerprinted resource tree.
+      # No other job assembles Linux or consumes this generated directory.
+      - name: Assemble the Linux desktop runtime
+        run: node scripts/desktop/prepare.mjs
+      # This is the one platform where Tauri has a native WebDriver for the
+      # WebKit host. It drives the real embedded executable through a message
+      # and attachment, then proves the app, provider, gateway, and drivers are
+      # gone. macOS still gets the release-profile compile in `local-auth`;
+      # WKWebView has no corresponding WebDriver endpoint.
+      - name: Install native desktop WebDriver
+        run: cargo install tauri-driver --version 2.0.6 --locked
+      # The frontend job is the Ubuntu writer for this store key. A second save
+      # from this step races it on the same run.
+      - name: Install native desktop smoke dependencies
+        uses: ./.github/actions/pnpm-install
+      - name: Exercise the native desktop window
+        env:
+          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
+        run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Upload native desktop smoke failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+
   local-auth:
-    needs: [changes, desktop-release-profile]
+    needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     strategy:
       fail-fast: false
-      # Native verification uses the shipping Linux baseline. A newer
-      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
-      # underneath the release contract (ci-harness.test.mjs, issue #1167).
-      # Native verification uses the shipping Linux baseline. A newer
-      # ubuntu-latest image can change WebKitGTK/WebDriver packages and ABI
-      # underneath the release contract (ci-harness.test.mjs, issue #1167).
+      # The Linux leg uses the shipping Linux baseline, the same image as
+      # `linux-desktop` above, which owns the native verification
+      # (ci-harness.test.mjs, issue #1167).
       # The macOS leg stays on macos-latest (Apple Silicon). Runs 42072698358
       # and 42079903038 cancelled it with no steps: "The job was not acquired
-      # by Runner of type hosted even after multiple attempts", while
-      # desktop-release-profile on the same label did get a runner. This job
-      # waits for that compile so the two do not ask for the arm64 pool at
-      # once. macos-15-intel was tried on c4563c958 and is not a substitute:
-      # 55 tests failed there, backup promotion with Retained and Rename.
+      # by Runner of type hosted even after multiple attempts", while a
+      # separate release-profile job on the same label did get a runner. That
+      # job's steps now run at the end of this leg, so one run asks the arm64
+      # pool for one runner. macos-15-intel was tried on c4563c958 and is not
+      # a substitute: 55 tests failed there, backup promotion with Retained
+      # and Rename.
       matrix:
         os: [windows-latest, ubuntu-22.04, macos-latest]
         include:
@@ -588,6 +775,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-crypto
         if: runner.os == 'Windows'
+      # Windows runs these tests many times slower than Linux (run 43811777001:
+      # the conversation library took 1,296 s here and 131 s on Ubuntu), and
+      # the slowest cases are the ones that save files. The default temp
+      # directory is on the system drive; the workspace drive is the runner's
+      # faster disk. This is a measurement first: the comparison is in the
+      # pull request that added it.
+      - name: Keep Windows test files on the workspace drive
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/nessa-tests"
+          directory="$(cygpath -w "$RUNNER_TEMP/nessa-tests")"
+          echo "TEMP=$directory" >> "$GITHUB_ENV"
+          echo "TMP=$directory" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
@@ -754,28 +955,9 @@ jobs:
       # itself declines to run on Windows.
       - run: node scripts/check-mcp.mjs
         if: runner.os == 'macOS'
-      # The desktop host's tests are not macOS-only, and one of them asserted
-      # the opposite of what it said on Linux for want of ever running there:
-      # `Path` treats a backslash as an ordinary character, so a Windows-shaped
-      # fixture had no `target` component in it at all. check-desktop.mjs skips
-      # when WebKitGTK is absent, so without this the skip stays permanent.
-      - name: Install the desktop host's Linux build dependencies
-        if: runner.os == 'Linux'
-        # The WebDriver and virtual display are this job's own, for the native
-        # window smoke below.
-        #
-        # A silent stall on `apt-get update` held this step for 315 minutes and
-        # for 79 minutes (runs 37668027204 and 37670890766, #653). The script's
-        # worst case is 62.75 minutes: three updates of five minutes, a 30s
-        # kill-after on each of those and on install, the 15s and 30s backoff
-        # sleeps, and a 45 minute install. Sixty-five minutes is that budget
-        # plus a small margin, so a mirror that never answers fails here with
-        # the script's own message. Installs that were still moving, including
-        # the 30.6 and 41.5 minute green ones, finish inside the 45 minute
-        # install ceiling.
-        run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
-        timeout-minutes: 65
+      # Linux runs this in `linux-desktop`, beside the packages it needs.
       - run: node scripts/check-desktop.mjs
+        if: runner.os != 'Linux'
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an
       # elevated caller, and declares that. The product's standard-user model
@@ -785,51 +967,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: ./scripts/desktop/check-windows-task-scheduler.ps1 -CallerContext Administrator
-      - name: Exercise the disposable systemd user-manager lifecycle
-        if: runner.os == 'Linux'
-        run: bash scripts/desktop/check-systemd-user-service.sh
-      # Same runner as the step above, which already built the nessa-app tests.
-      # A throwaway user, never the runner account. Stock set-self-linger does
-      # not prompt; the test failing to return would be that prompt.
-      - name: Prove linger for a throwaway Linux user
-        if: runner.os == 'Linux'
-        timeout-minutes: 15
-        run: bash scripts/desktop/check-linux-linger.sh
-      # This repeats a release build of nessa-server after the matrix's debug
-      # build below, and a release build of nessa-mcp after gateway-contract.
-      # It is intentionally unique: this is the shipping-profile evidence that
-      # the Linux assembler produces the complete fingerprinted resource tree.
-      # No other job assembles Linux or consumes this generated directory.
-      - name: Assemble the Linux desktop runtime
-        if: runner.os == 'Linux'
-        run: node scripts/desktop/prepare.mjs
+      # The gateway binary the SDK integration harness below copies.
       - run: cargo build -p nessa-server
-      # This is the one platform where Tauri has a native WebDriver for the
-      # WebKit host. It drives the real embedded executable through a message
-      # and attachment, then proves the app, provider, gateway, and drivers are
-      # gone. macOS still gets the release-profile compile above; WKWebView has
-      # no corresponding WebDriver endpoint.
-      - name: Install native desktop WebDriver
-        if: runner.os == 'Linux'
-        run: cargo install tauri-driver --version 2.0.6 --locked
-      # The frontend job is the Ubuntu writer for this store key. A second save
-      # from this step races it on the same run.
-      - name: Install native desktop smoke dependencies
-        if: runner.os == 'Linux'
-        uses: ./.github/actions/pnpm-install
-      - name: Exercise the native desktop window
-        if: runner.os == 'Linux'
-        env:
-          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
-        run: xvfb-run --auto-servernum pnpm desktop:smoke
-      - name: Upload native desktop smoke failure evidence
-        if: failure() && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
-          if-no-files-found: ignore
-          retention-days: 7
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.
       - name: Prepare SDK integration harness
@@ -871,6 +1010,42 @@ jobs:
       # against the registry rather than trusted.
       - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth
+      # The desktop app compiled the way a release compiles it, and nothing more.
+      #
+      # `cfg(debug_assertions)` is off in the release profile, so code gated on it
+      # disappears and anything still naming it stops compiling. Every other step
+      # here builds in debug, so that break is invisible until a tag is pushed —
+      # which is exactly how v0.1.0 failed, twenty minutes into a signed macOS
+      # build, on `SIMULATED_UPDATE` being gated while its one release-profile
+      # reader was not.
+      #
+      # macOS is the one release-profile answer here. Linux compiles and exercises
+      # its systemd adapter in `linux-desktop` through `check-desktop.mjs`; these
+      # steps catch code that disappears only when `cfg(debug_assertions)` is off.
+      # `cargo check`, not a build: this is about what compiles, and the release
+      # workflow remains the only thing that produces a bundle. The frontend is
+      # built first because `generate_context!` embeds `dist/`, which has to exist
+      # before the crate can be checked at all. `scripts/desktop/prepare.mjs` is
+      # not run for it: the tree it assembles is not a compile-time input
+      # (`tauri.conf.json` declares no `bundle.resources`).
+      #
+      # These steps were a macOS job of their own, `desktop-release-profile`,
+      # and this job waited for it so the two did not ask for the arm64 pool at
+      # once. That wait was three to four minutes in front of all three legs,
+      # the Windows one included, which is the longest job in the run. Here
+      # they use the Mac this leg already has, after its tests, and take about
+      # two and a half minutes of it.
+      - name: Install the frontend's dependencies for the release-profile check
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/pnpm-install
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the frontend the desktop app embeds
+        if: runner.os == 'macOS'
+        run: pnpm build
+      - name: Check the desktop app compiles in release profile
+        if: runner.os == 'macOS'
+        run: cargo check -p nessa-app --release --all-targets
 
   # Linux used to run this after runtime assembly on the matrix leg: about nine
   # minutes of instrumented tests, serial, on a fresh target directory. The
@@ -927,9 +1102,10 @@ jobs:
       - workflows
       - changes
       - gateway-contract
-      - desktop-release-profile
       - frontend
+      - conversation-checks
       - conversation-stress
+      - linux-desktop
       - local-auth
       - windows-server-tests
       - sdk-domain-coverage

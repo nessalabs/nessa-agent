@@ -463,7 +463,7 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
-**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release [stage]` / `just release [stage] fast`. The desktop launch tooling resolves one stage for Vite and the host, and packaged frontend assets record that stage for the Rust build to verify before embedding them. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
+**Launch** ([justfile](../justfile)) — `just server` / `just dev` (= `just start`: gateway, then the app) / `just app` (window alone) / `just web` / `just release [stage]` / `just release [stage] fast`. The desktop launch tooling resolves one stage for Vite and the host, and packaged frontend assets record that stage for the Rust build to verify before embedding them. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
 
 **React shell** (`src/`) — everything that is on screen.
 
@@ -1075,7 +1075,19 @@ relay. Conversation application admission derives the actor from the live source
 turn, Cedar decides owner delegation, and target commands retain their existing
 durable receipts and permission handling. Observation polls an independent
 committed reader and never opens an Agent. The ownership and ordering table is
-[agent thread tools](design/agent-thread-tools.md). `read_window` tells an
+[agent thread tools](design/agent-thread-tools.md). `ask_owner` asks the
+person one decision (a short question, two to four choices with what each
+does, a recommendation and why): it is kept on the conversation's summary
+until the owner's next message there, whose summary write takes it down, and
+every list row the owner reads carries it,
+so each window posts a notice and draws a card, and the floating panel adds a
+tab with a dot without bringing it forward. `request_access` is an ask Nessa writes
+for an agent that needs more access: each window and the panel draw it as a
+red card whose Approve is the owner's own access change, then their answer
+once the chat runs at it; only a turn the owner started may ask
+(`conversation.request_access`). Every setting has a level
+(`domain::Setting`) that Cedar's `setting.change` reads to decide what an
+agent may change; settings shown in the chat will be its first caller. `read_window` tells an
 agent what the person's desktop window shows, which pane is its own, and
 whether the focused chat's right panel is open and which widget tab is in
 front, from what the window last published over `workspace.publish`.

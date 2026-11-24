@@ -80,6 +80,14 @@ pub enum NativePairingRequest {
     /// it carries no credential, and whether the proved key may serve is the
     /// gateway's decision.
     OpenEnvironment,
+    /// Select discovery-key agreement on this connection. Only a first
+    /// envelope selects it. Identifiers correlate an existing enrollment, never enroll.
+    OpenDiscovery {
+        /// Exact retained enrollment intent.
+        public: PublicIntent,
+        /// Issued identifier, not a bearer secret.
+        credential: CredentialId,
+    },
 }
 /// Client-side decoded enrollment state; no variant grants product access.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -214,6 +222,13 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
         }
         WireRequest::OpenProduct {} => Ok(NativePairingRequest::OpenProduct),
         WireRequest::OpenEnvironment {} => Ok(NativePairingRequest::OpenEnvironment),
+        WireRequest::OpenDiscovery { public, credential } => {
+            Ok(NativePairingRequest::OpenDiscovery {
+                public: public.into_domain()?,
+                credential: CredentialId::new(credential.into_owned())
+                    .map_err(|_| NativeWireError::Invalid)?,
+            })
+        }
     }
 }
 /// Encode a client request without retaining an unbounded serde output buffer.
@@ -241,6 +256,10 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
         }
         NativePairingRequest::OpenProduct => WireRequest::OpenProduct {},
         NativePairingRequest::OpenEnvironment => WireRequest::OpenEnvironment {},
+        NativePairingRequest::OpenDiscovery { public, credential } => WireRequest::OpenDiscovery {
+            public: WirePublic::from_domain(*public),
+            credential: Cow::Borrowed(credential.as_str()),
+        },
     };
     encode(&request)
 }

@@ -97,12 +97,18 @@ export function openChannel(
   const channel = channelOf(state, channelId)
   if (!channel) return state
   const disclosed = setChannelOpen({ ...state, view: { channelId } }, channelId, true)
-  const latest = channel.coordinatorConversationId
-    ? listedSessions(state).find(
-        (session) => session.id === channel.coordinatorConversationId,
-      )
+  // Off, its coordinator's chat stays in the channel, but the channel never
+  // opens at it: its newest other chat, or a new one.
+  const off = channel.coordinatorOn === false
+  const main = off ? undefined : channel.coordinatorConversationId
+  const latest = main
+    ? listedSessions(state).find((session) => session.id === main)
     : listedSessions(state)
-        .filter((session) => session.channelId === channelId)
+        .filter(
+          (session) =>
+            session.channelId === channelId &&
+            !(off && session.id === channel.coordinatorConversationId),
+        )
         .sort(byRecency)[0]
   if (latest)
     return beside
@@ -110,7 +116,7 @@ export function openChannel(
       : openSession(disclosed, { sessionId: latest.id })
   if (!draftId) return disclosed
   return createDraft(disclosed, {
-    draftId: channel.coordinatorConversationId ?? draftId,
+    draftId: main ?? draftId,
     channelId,
     beside: beside ? "right" : undefined,
     room,
@@ -153,6 +159,21 @@ export function toggleSection(
     tree: {
       ...state.tree,
       collapsedSections: toggled(state.tree.collapsedSections, sectionId, !collapsed),
+    },
+  }
+}
+
+/** Folds Chat context's section `sectionId`, or unfolds it, in every chat. */
+export function toggleChatContextSection(
+  state: WorkspaceState,
+  { sectionId }: { sectionId: string },
+): WorkspaceState {
+  const folded = state.tree.chatContextFolded.includes(sectionId)
+  return {
+    ...state,
+    tree: {
+      ...state.tree,
+      chatContextFolded: toggled(state.tree.chatContextFolded, sectionId, !folded),
     },
   }
 }

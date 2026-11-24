@@ -1634,6 +1634,808 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     retire(service, storage, metadata).await;
 }
 
+/// Send `text` to `target` as the person and wait until its turn settles.
+#[cfg(unix)]
+async fn settled_send(
+    service: &ConversationService,
+    target: &ConversationId,
+    execution: &str,
+    text: &str,
+) {
+    send(service, target, execution, text).await;
+    let turn = nessa_sdk::domain::agent_execution::executions::ExecutionId::new(execution).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let live = service.resolve(target, &caller("create")).await.unwrap();
+            let settled = live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .is_some_and(|snapshot| {
+                    snapshot.invocations.into_iter().any(|record| {
+                        record.request.execution_id == turn
+                            && matches!(
+                                record.scheduling.last().map(|event| event.stage),
+                                Some(InvocationStage::Settled | InvocationStage::Cancelled)
+                            )
+                    })
+                });
+            if settled {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the earlier turn did not settle");
+}
+
+/// A thread a person's turn asked an agent to message can follow that
+/// message back to the person's own words, and the thread that created it can
+/// close it. A thread it did not create it cannot.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_relayed_message_reads_back_to_the_person_and_its_creator_closes_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    // Only an agent that can resume its session is ever closed.
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let source = id();
+    opened(&service, &provider, &source).await;
+    let stranger = id();
+    opened(&service, &provider, &stranger).await;
+    // What the person said before the turn that asks for the relay.
+    for (execution, text) in [("first-turn", "first ask"), ("second-turn", "second ask")] {
+        settled_send(&service, &source, execution, text).await;
+    }
+    // Those turns' starts left the provider's start signal set; take it, so
+    // the held turn below is waited for, not one of theirs.
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let created = client
+        .call("create_thread", json!({"requestId":"origin-create"}))
+        .await;
+    assert_eq!(created["isError"], false, "{created}");
+    let worker = created["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sent = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"close yourself","requestId":"origin-send"}),
+        )
+        .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    let execution = sent["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let waited = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":execution}),
+        )
+        .await;
+    assert_eq!(
+        waited["structuredContent"]["turn"]["finished"], true,
+        "{waited}"
+    );
+
+    // The worker's turn came from the source's turn, which the person typed.
+    let read = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution}),
+        )
+        .await;
+    assert_eq!(read["isError"], false, "{read}");
+    let chain = &read["structuredContent"];
+    assert_eq!(chain["ended"], "start", "{read}");
+    assert_eq!(chain["startedBy"], "person", "{read}");
+    let turns = chain["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2, "{read}");
+    assert_eq!(turns[0]["origin"], "agent");
+    assert_eq!(turns[0]["said"], "close yourself");
+    assert_eq!(turns[0]["from"]["threadId"], source.to_string());
+    assert_eq!(turns[0]["from"]["executionId"], "source-turn");
+    assert_eq!(turns[1]["origin"], "person");
+    assert_eq!(turns[1]["threadId"], source.to_string());
+    assert_eq!(turns[1]["said"], "active");
+    // No credential registry is bound here, so the device is not known.
+    assert_eq!(turns[1]["device"], "unknown");
+
+    // Asked for, the person's earlier messages in the source thread come
+    // too, oldest first; without asking, none do.
+    assert!(chain.get("earlier").is_none(), "{read}");
+    let wider = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution,"earlier":3}),
+        )
+        .await;
+    let earlier = wider["structuredContent"]["earlier"].as_array().unwrap();
+    assert_eq!(
+        earlier
+            .iter()
+            .map(|turn| turn["said"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["first ask", "second ask"],
+        "{wider}"
+    );
+    assert!(
+        earlier.iter().all(|turn| turn["origin"] == "person"),
+        "{wider}"
+    );
+    let too_many = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":execution,"earlier":4}),
+        )
+        .await;
+    assert_eq!(too_many["isError"], true, "{too_many}");
+
+    // A turn that is not saved is not found, and says nothing else.
+    let missing = client
+        .call(
+            "read_turn",
+            json!({"threadId":worker,"executionId":"no-such-turn"}),
+        )
+        .await;
+    assert_eq!(missing["isError"], true, "{missing}");
+
+    // Only the thread this one created can be closed by it.
+    let refused = client
+        .call("close_thread", json!({"threadId":stranger.to_string()}))
+        .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(
+        refused["structuredContent"]["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("not_your_thread")),
+        "{refused}"
+    );
+    let closed = client
+        .call("close_thread", json!({"threadId":worker}))
+        .await;
+    assert_eq!(closed["isError"], false, "{closed}");
+    assert_eq!(closed["structuredContent"]["threadId"], worker.as_str());
+    assert_eq!(closed["structuredContent"]["closing"], true);
+    let worker = ConversationId::new(worker.as_str()).unwrap();
+    assert!(
+        metadata.thread_closed(&worker).await.unwrap(),
+        "the mark was not saved"
+    );
+    assert!(!metadata.thread_closed(&stranger).await.unwrap());
+    assert!(!metadata.thread_closed(&source).await.unwrap());
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    retire(service, storage, metadata).await;
+}
+
+/// An agent asks its owner a question: it is admitted and audited under its
+/// own action, the list row carries it until the person writes in the
+/// conversation, and a later ask replaces it, out of the archive. A device
+/// the chat is shared with does not see it. A message refused on its way,
+/// or an external event sent for the person, answers nothing. An ask past its bounds is
+/// refused with what to fix, before it is admitted or audited.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_ask_waits_on_the_list_until_the_person_writes() {
+    use crate::application::EVENT_SURFACE_PREFIX;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    let audit = Arc::new(Audit::default());
+    service.bind_agent_tool_audit(audit.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "first ask").await;
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let asking = |question: &str| {
+        json!({
+            "question": question,
+            "choices": [
+                {"label": "Ship", "consequence": "The fix goes out today."},
+                {"label": "Wait", "consequence": "It waits for Monday's tests."},
+            ],
+            "recommended": 0,
+            "reason": "Every check passed.",
+        })
+    };
+    let listed_id = source.to_string();
+    let row = |service: ConversationService| {
+        let listed_id = listed_id.clone();
+        async move {
+            let listed = service.list(caller("list"), false).await.unwrap();
+            listed
+                .conversations
+                .into_iter()
+                .find(|row| row.conversation_id == listed_id)
+                .unwrap()
+                .ask
+        }
+    };
+
+    // Too long is refused with what to fix, and nothing is admitted.
+    let too_long = client.call("ask_owner", asking(&"word ".repeat(30))).await;
+    assert_eq!(too_long["isError"], true, "{too_long}");
+    assert_eq!(
+        too_long["structuredContent"]["error"],
+        "ask_question_too_long"
+    );
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(row(service.clone()).await, None);
+
+    let asked = client
+        .call("ask_owner", asking("Ship the Safari fix today?"))
+        .await;
+    assert_eq!(asked["isError"], false, "{asked}");
+    let first = asked["structuredContent"]["askId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "ask_owner");
+        assert!(records[0].allowed);
+        assert_eq!(records[0].policies, ["owner.ask_owner"]);
+    }
+    let kept = row(service.clone()).await.expect("the row carries the ask");
+    assert_eq!(kept.ask_id, first);
+    assert_eq!(kept.question, "Ship the Safari fix today?");
+    assert_eq!(kept.choices.len(), 2);
+    assert_eq!(kept.recommended, 0);
+    assert!(kept.asked_at_ms > 0);
+
+    // A later ask replaces it, and brings an archived chat back to the list
+    // the owner reads, dated when it was asked, so it is never out of sight.
+    assert!(service
+        .archive(source.clone(), caller("archive"), true)
+        .await
+        .unwrap());
+    let again = client
+        .call("ask_owner", asking("Ship it after lunch?"))
+        .await;
+    assert_eq!(again["isError"], false, "{again}");
+    let replaced = row(service.clone()).await.unwrap();
+    assert_ne!(replaced.ask_id, first);
+    assert_eq!(replaced.question, "Ship it after lunch?");
+    let listed = service.list(caller("list"), false).await.unwrap();
+    let lifted = listed
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .unwrap();
+    assert!(!lifted.archived);
+    assert!(lifted.updated_at_ms >= replaced.asked_at_ms);
+
+    // A device the chat is shared with lists the chat, not the question:
+    // an agent asks its owner.
+    crate::conversation_test_support::grant_as(
+        metadata.as_ref(),
+        &source,
+        "receiver",
+        crate::domain::ShareAccess::new(crate::domain::Capabilities::read(), None).unwrap(),
+    )
+    .await;
+    let (shared, _) = service
+        .list_for(
+            caller("shared-list"),
+            false,
+            &crate::application::Reader::PairedDevice {
+                receiver_id: "receiver".into(),
+            },
+            &caller("shared-list").principal_id,
+            Some(crate::conversation_test_support::access_policy_ref()),
+        )
+        .await
+        .unwrap();
+    let seen = shared
+        .conversations
+        .iter()
+        .find(|row| row.conversation_id == listed_id)
+        .expect("the shared chat is listed");
+    assert_eq!(seen.ask, None);
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    // A message refused on its way never reached the agent, so it answered
+    // nothing: the question still waits.
+    assert!(service
+        .submit(
+            source.clone(),
+            caller("refused-turn"),
+            "refused-turn".into(),
+            image_message("image/png", 16),
+            SubmissionMode::Queue,
+        )
+        .await
+        .is_err());
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
+    // An external event the gateway sends for the person is not their
+    // answer either.
+    service
+        .submit(
+            source.clone(),
+            caller_on("event-turn", &format!("{EVENT_SURFACE_PREFIX}hook")),
+            "event-turn".into(),
+            message("A push landed."),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert_eq!(row(service.clone()).await.unwrap().ask_id, replaced.ask_id);
+    // The person's next message is the answer: the ask is gone.
+    settled_send(&service, &source, "answer-turn", "Ship").await;
+    assert_eq!(row(service.clone()).await, None);
+    // Both asks are the chat's decisions, newest first: the second answered
+    // by that message, naming its choice, and the first replaced by it.
+    {
+        use nessa_protocol::conversation::view::OwnerDecisionOutcome;
+        let decisions = service
+            .decisions(source.clone(), caller("decisions"))
+            .await
+            .unwrap();
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions[0].ask.ask_id, replaced.ask_id);
+        assert!(matches!(
+            &decisions[0].outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(0), .. }) if text == "Ship"
+        ));
+        assert_eq!(decisions[1].ask.ask_id, first);
+        assert!(matches!(
+            &decisions[1].outcome,
+            Some(OwnerDecisionOutcome::Replaced { by, .. }) if *by == replaced.ask_id
+        ));
+        // They are the owner's alone.
+        assert!(service
+            .decisions(
+                source.clone(),
+                ConversationCaller {
+                    principal_id: PrincipalId::new("someone-else").unwrap(),
+                    ..caller("decisions")
+                },
+            )
+            .await
+            .is_err());
+    }
+    retire(service, storage, metadata).await;
+}
+
+/// Write `ask` as the one waiting in `source`, under the summary lock every
+/// other summary write takes: a reply from an earlier turn settling late
+/// then writes after it, keeping the ask, rather than over it.
+#[cfg(unix)]
+async fn record_ask<S: crate::application::ConversationSummaries + ?Sized>(
+    service: &ConversationService,
+    metadata: &S,
+    source: &ConversationId,
+    ask: &nessa_protocol::conversation::view::OwnerAsk,
+) {
+    use crate::application::ConversationSummaries;
+    let _writes = service.inner.records.summary_writes().lock(source).await;
+    let kept = ConversationSummaries::load(metadata, source).await.unwrap();
+    ConversationSummaries::record(
+        metadata,
+        source,
+        nessa_protocol::conversation::domain::ConversationSummary::after_asking(
+            kept.as_ref(),
+            ask.clone(),
+        ),
+    )
+    .await
+    .unwrap();
+}
+
+/// Wait until the agent has run turn `execution`.
+#[cfg(unix)]
+async fn ran(provider: &ProviderFactory, execution: &str) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|turn| turn == execution)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the agent never ran {execution}"));
+}
+
+/// An ask the agent allowed auto-pick on is answered with its recommended
+/// choice once its owner's wait has passed: the answer is the owner's own
+/// message, says it was picked for them, and settles that ask only. A pause
+/// holds it, and a pick sent for another ask settles nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_due_ask_is_answered_with_its_recommended_choice_unless_paused() {
+    use crate::application::ConversationSummaries;
+    use nessa_protocol::conversation::view::{
+        AskUndo, AutoPick, OwnerAsk, OwnerAskChoice, OwnerDecisionOutcome,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "first ask").await;
+    let choice = |label: &str, undo: AskUndo| OwnerAskChoice {
+        label: label.into(),
+        consequence: format!("{label} it."),
+        undo: Some(undo),
+        effort: None,
+        pros: Vec::new(),
+        cons: Vec::new(),
+    };
+    // Asked long ago, so the default five minutes have passed.
+    let ask = OwnerAsk {
+        ask_id: "0123456789abcdef0123456789abcdef".into(),
+        question: "Rename the branch?".into(),
+        choices: vec![
+            choice("Rename", AskUndo::Easy),
+            choice("Keep", AskUndo::Easy),
+        ],
+        recommended: 0,
+        reason: "It matches the issue.".into(),
+        asked_at_ms: 1_000,
+        access: None,
+        summary: None,
+        auto_pick: Some(AutoPick::Allowed),
+    };
+    record_ask(&service, metadata.as_ref(), &source, &ask).await;
+    let decision = |service: ConversationService| {
+        let source = source.clone();
+        async move {
+            service
+                .decisions(source, caller("decisions"))
+                .await
+                .unwrap()
+                .remove(0)
+        }
+    };
+    assert_eq!(
+        decision(service.clone()).await.auto_pick_due_at_ms,
+        Some(301_000)
+    );
+
+    // Paused, it is neither due nor picked.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("pause"), &ask.ask_id, true)
+        .await
+        .unwrap());
+    let paused = decision(service.clone()).await;
+    assert!(paused.auto_pick_paused);
+    assert_eq!(paused.auto_pick_due_at_ms, None);
+    service.pick_due().await;
+    assert_eq!(decision(service.clone()).await.outcome, None);
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume"), &ask.ask_id, false)
+        .await
+        .unwrap());
+
+    service.pick_due().await;
+    let picked = decision(service.clone()).await;
+    assert_eq!(picked.ask.ask_id, ask.ask_id);
+    assert!(
+        matches!(
+            &picked.outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(0), auto: true, .. })
+                if text == "Rename. Picked for you on “Rename the branch?”: no answer in 5 minutes."
+        ),
+        "{:?}",
+        picked.outcome
+    );
+    assert_eq!(picked.auto_pick_due_at_ms, None);
+    // And the agent was sent it, under the ask's own action.
+    ran(&provider, "auto-pick-0123456789abcdef0123456789abcdef").await;
+    // Settled, it is not paused or picked again.
+    assert!(!service
+        .pause_auto_pick(source.clone(), caller("late-pause"), &ask.ask_id, true)
+        .await
+        .unwrap());
+
+    // A pick read as due, whose ask the owner answered before it was sent,
+    // sends nothing: the owner's answer stands and the agent gets only it.
+    let later = OwnerAsk {
+        ask_id: "fedcba9876543210fedcba9876543210".into(),
+        asked_at_ms: 2_000,
+        ..ask.clone()
+    };
+    record_ask(&service, metadata.as_ref(), &source, &later).await;
+    let stale = ConversationSummaries::auto_picks_waiting(metadata.as_ref())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|waiting| waiting.ask.ask_id == later.ask_id)
+        .expect("the later ask is due");
+    settled_send(&service, &source, "owner-answer", "Keep").await;
+    let sent = provider.executions.lock().unwrap().len();
+    service.auto_pick(&stale).await.unwrap();
+    assert_eq!(provider.executions.lock().unwrap().len(), sent);
+    let answered = decision(service.clone()).await;
+    assert_eq!(answered.ask.ask_id, later.ask_id);
+    assert!(
+        matches!(
+            &answered.outcome,
+            Some(OwnerDecisionOutcome::Decided { text, choice: Some(1), auto: false, .. })
+                if text == "Keep"
+        ),
+        "{:?}",
+        answered.outcome
+    );
+
+    // A pick is recorded before it is sent; one that never reached the agent
+    // is taken back, and its ask waits again.
+    let fifth = OwnerAsk {
+        ask_id: "abababababababababababababababab".into(),
+        asked_at_ms: 5_000,
+        ..ask.clone()
+    };
+    record_ask(&service, metadata.as_ref(), &source, &fifth).await;
+    let due = ConversationSummaries::auto_picks_waiting(metadata.as_ref())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|waiting| waiting.ask.ask_id == fifth.ask_id)
+        .expect("the fifth ask is due");
+    let before = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap()
+        .unwrap();
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
+    assert!(matches!(
+        decision(service.clone()).await.outcome,
+        Some(OwnerDecisionOutcome::Decided {
+            choice: Some(0),
+            auto: true,
+            ..
+        })
+    ));
+    // Recorded, a pause no longer applies.
+    assert!(!service
+        .pause_auto_pick(source.clone(), caller("pause-picked"), &fifth.ask_id, true)
+        .await
+        .unwrap());
+    assert!(service.take_back_pick(&pick).await);
+    let back = decision(service.clone()).await;
+    assert_eq!(back.ask.ask_id, fifth.ask_id);
+    assert_eq!(back.outcome, None);
+    assert!(!back.auto_pick_paused);
+    assert_eq!(back.auto_pick_due_at_ms, Some(305_000));
+    // Nothing else changed it, so the list is as it was before the pick.
+    let listed = ConversationSummaries::load(metadata.as_ref(), &source)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(listed.preview(), before.preview());
+    assert_eq!(listed.updated_at_ms(), before.updated_at_ms());
+
+    // A person who wrote between a pick and its take-back is not overridden
+    // by the next pick: the ask waits for them, its auto-pick paused.
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
+    settled_send(&service, &source, "between", "Keep, actually").await;
+    assert!(service.take_back_pick(&pick).await);
+    let held = decision(service.clone()).await;
+    assert_eq!(held.ask.ask_id, fifth.ask_id);
+    assert_eq!(held.outcome, None);
+    assert!(held.auto_pick_paused);
+    assert!(service.record_pick(&due).await.unwrap().is_none());
+    // So is one whose message was already on its way as the pick was made.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume-held"), &fifth.ask_id, false)
+        .await
+        .unwrap());
+    let writing = service.person_writing(&source);
+    let pick = service.record_pick(&due).await.unwrap().expect("recorded");
+    drop(writing);
+    assert!(service.take_back_pick(&pick).await);
+    assert!(decision(service.clone()).await.auto_pick_paused);
+
+    // Picked and sent, the owner's next message is a message after it, not
+    // a second answer.
+    assert!(service
+        .pause_auto_pick(source.clone(), caller("resume-fifth"), &fifth.ask_id, false)
+        .await
+        .unwrap());
+    service.pick_due().await;
+    ran(&provider, "auto-pick-abababababababababababababababab").await;
+    settled_send(&service, &source, "after-the-pick", "Keep").await;
+    let after = decision(service.clone()).await;
+    assert!(
+        matches!(
+            &after.outcome,
+            Some(OwnerDecisionOutcome::Decided {
+                choice: Some(0),
+                auto: true,
+                ..
+            })
+        ),
+        "{:?}",
+        after.outcome
+    );
+    retire(service, storage, metadata).await;
+}
+
+/// An agent asks its owner to raise the chat's access: the ask is admitted
+/// under `owner.request_access` and audited, and Nessa writes it, the agent
+/// giving only the access and why. A reason that is not one line is refused
+/// before admission. (A chat already at that access or more is not asked;
+/// this fixture's agent runs only at Ask, so that rule is
+/// `RaisedAccess::held_at`'s test, in nessa-protocol.)
+#[cfg(unix)]
+#[tokio::test]
+async fn an_access_request_is_nessas_card_with_the_agents_reason() {
+    use nessa_protocol::conversation::view::{RaisedAccess, ACCESS_APPROVE, ACCESS_DECLINE};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
+    let audit = Arc::new(Audit::default());
+    service.bind_agent_tool_audit(audit.clone());
+    let source = id();
+    opened(&service, &provider, &source).await;
+    settled_send(&service, &source, "first-turn", "set up the toolchain").await;
+    let _ = tokio::time::timeout(Duration::ZERO, provider.execution_started.notified()).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let listed_id = source.to_string();
+    let row = |service: ConversationService| {
+        let listed_id = listed_id.clone();
+        async move {
+            let listed = service.list(caller("list"), false).await.unwrap();
+            listed
+                .conversations
+                .into_iter()
+                .find(|row| row.conversation_id == listed_id)
+                .unwrap()
+                .ask
+        }
+    };
+
+    // The agent words only the reason; a question of its own is off-schema.
+    let worded = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"Installs tools.","question":"Please?"}),
+        )
+        .await;
+    assert_eq!(worded["isError"], true, "{worded}");
+    let two_lines = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"Installs tools.\nAnd more."}),
+        )
+        .await;
+    assert_eq!(two_lines["isError"], true, "{two_lines}");
+    assert_eq!(two_lines["structuredContent"]["error"], "ask_not_one_line");
+    let asking_less = client
+        .call(
+            "request_access",
+            json!({"access":"ask","reason":"Nothing."}),
+        )
+        .await;
+    assert_eq!(asking_less["isError"], true, "{asking_less}");
+    assert!(audit.records.lock().unwrap().is_empty());
+    assert_eq!(row(service.clone()).await, None);
+
+    let asked = client
+        .call(
+            "request_access",
+            json!({"access":"full","reason":"The toolchain installs outside the project."}),
+        )
+        .await;
+    assert_eq!(asked["isError"], false, "{asked}");
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].tool, "request_access");
+        assert!(records[0].allowed);
+        assert_eq!(records[0].policies, ["owner.request_access"]);
+    }
+    let kept = row(service.clone()).await.expect("the row carries the ask");
+    assert_eq!(
+        kept.ask_id,
+        asked["structuredContent"]["askId"].as_str().unwrap()
+    );
+    assert_eq!(kept.access, Some(RaisedAccess::Full));
+    assert_eq!(kept.question, "Allow full access in this chat?");
+    assert_eq!(
+        kept.choices
+            .iter()
+            .map(|choice| choice.label.as_str())
+            .collect::<Vec<_>>(),
+        [ACCESS_APPROVE, ACCESS_DECLINE]
+    );
+    // Not now is recommended, and nothing may pick for the person.
+    assert_eq!(kept.recommended, 1);
+    assert!(!kept.auto_pickable());
+    assert_eq!(kept.reason, "The toolchain installs outside the project.");
+    assert!(kept.check().is_ok());
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    // The person's next message answers it, whatever it says.
+    settled_send(&service, &source, "answer-turn", ACCESS_DECLINE).await;
+    assert_eq!(row(service.clone()).await, None);
+
+    // Another chat at ask is asked for auto too. (Which access holds which
+    // is RaisedAccess::held_at's, tested with the ask's words; this fixture's
+    // agent runs only at ask.)
+    let asking = id();
+    service
+        .create(
+            asking.clone(),
+            caller("create-asking"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .request_access(
+                &asking,
+                RaisedAccess::Auto,
+                "b".repeat(32),
+                "Needs it.".into()
+            )
+            .await
+            .unwrap(),
+        crate::application::AccessRequestOutcome::Asked
+    );
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store

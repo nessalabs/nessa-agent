@@ -1,6 +1,8 @@
+import { Agent37Row } from "./agent37-row"
 import { BoatRow } from "./boat-row"
-import { VaultPassphraseControl } from "../../../vault"
-import { useState, type ComponentType } from "react"
+import { DefaultCloudRow } from "../../clouds/ui/default-cloud-row"
+import { VaultPassphraseControl, useVaultTouchId } from "../../../vault"
+import { useCallback, useState, type ComponentType } from "react"
 import { hasNativeHost, replayOnboarding } from "../../../host"
 import { useIconFamilyPreference } from "../../adapters/icon-family-preference"
 import { useTintFromPicture } from "../../adapters/header-image"
@@ -53,6 +55,8 @@ import { VoiceKeyRow } from "./voice-key-row"
 import { SavedLoginsGroup } from "./saved-logins"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
+import { GatewaysTab } from "./gateways-tab"
+import { DecisionSettingsRows } from "./decision-settings-rows"
 import { NativeHooksRows } from "./native-hooks-rows"
 import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
@@ -77,9 +81,11 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   layout: LayoutTab,
   sessions: SessionsTab,
   keyboard: KeyboardTab,
+  decisions: DecisionSettingsRows,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,
+  gateways: GatewaysTab,
   access: AccessTab,
   "native-hooks": NativeHooksRows,
   experimental: ExperimentalTab,
@@ -295,18 +301,43 @@ function KeyboardTab() {
 /* ——— Connections ——— */
 
 function AccountsTab() {
+  // Each cloud's row says when its connection changes, so the default cloud
+  // shows once two are connected and goes once only one is.
+  const [clouds, setClouds] = useState(0)
+  const changed = useCallback(() => setClouds((n) => n + 1), [])
   return (
     <>
       <Group>
         <GithubRow />
         <VoiceKeyRow />
-        <BoatRow />
+        <BoatRow onChange={changed} />
+        <Agent37Row onChange={changed} />
+        <DefaultCloudRow seen={clouds} />
         <Row id="vault-passphrase">
           <VaultPassphraseControl />
         </Row>
+        <TouchIdRow />
       </Group>
       <SavedLoginsGroup />
     </>
+  )
+}
+
+/** Shown only where this Mac can check a fingerprint. It turns on from the
+ * unlock dialog, which has the passphrase; here it only turns off. */
+function TouchIdRow() {
+  const touchId = useVaultTouchId()
+  if (!touchId?.available) return null
+  return (
+    <Row id="vault-touch-id">
+      <Toggle
+        checked={touchId.saved}
+        disabled={!touchId.saved || touchId.busy}
+        onChange={(on) => {
+          if (!on) void touchId.forget()
+        }}
+      />
+    </Row>
   )
 }
 

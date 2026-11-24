@@ -19,10 +19,16 @@ import { workspaceActions } from "./slice"
 
 /**
  * Whether a model or access change is on its way, so a send waits: one this
- * window is asking, or one the source holds as pending, which no send could
- * settle (the source refuses a model request until it ends). A change this
- * window asked for that settled unconfirmed does not hold a send: the send
- * asks again first (`modelUnsettled`, `applyStagedModel`).
+ * window is asking, an access change the source holds, or a model control the
+ * source is making now (`changing`), which ends by itself. A model change the
+ * source left unconfirmed (`recovery_required`) does not hold a send: nothing
+ * settles it until something asks, and the source settles it before it takes
+ * the message (`recover_model_change` ahead of every submission), or refuses
+ * the message, which then says why and offers Retry. Holding the send for it
+ * waited on a settle nobody asked for, so the chat could never send again.
+ * A change this window asked for that settled unconfirmed does not hold a
+ * send either: the send asks again first (`modelUnsettled`,
+ * `applyStagedModel`).
  */
 export function modelChanging(state: WorkspaceState, sessionId: string): boolean {
   const choice = entry(state.modelChoices, sessionId)
@@ -33,7 +39,7 @@ export function modelChanging(state: WorkspaceState, sessionId: string): boolean
     !!entry(state.stagedModels, sessionId) || modelUnsettled(state, sessionId)
   return (
     choice?.state === "asking" ||
-    !!source?.modelControl?.pending ||
+    source?.modelControl?.pending?.status === "changing" ||
     !!source?.access?.changing ||
     (applying && entry(state.accessChoices, sessionId)?.state === "changing")
   )
@@ -50,7 +56,7 @@ export function modelUnsettled(state: WorkspaceState, sessionId: string): boolea
 }
 
 /** Only an active local call or access change holds another deliberate pick.
- * Recovery-required picks first reconcile in the source; Send stays fenced.
+ * Recovery-required picks first reconcile in the source, as the next send asks.
  */
 export function modelRequesting(state: WorkspaceState, sessionId: string): boolean {
   const choice = entry(state.modelChoices, sessionId)
@@ -125,6 +131,7 @@ export function applyStagedModel(
       entry(state.accessChoices, sessionId)?.state === "changing"
     )
       return { applied: false, reason: "unavailable" }
+    const prior = entry(state.transcripts, sessionId)?.access?.mode
     const requestId = newId()
     const choice = { requestId, model: target }
     dispatch(
@@ -146,6 +153,11 @@ export function applyStagedModel(
         if (!running || !sameModel(running, target))
           return { applied: false, reason: "unavailable" }
         dispatch(workspaceActions.stagedModelSettled({ sessionId, model: target }))
+        // The new model is not offered at the chat's access here, so the
+        // agent stepped it down to Ask in the same change: the shield
+        // says so (`steppedAccess`).
+        if (prior && prior !== "ask" && receipt.approvalMode === "ask")
+          dispatch(workspaceActions.accessStepped({ sessionId, from: prior }))
         return { applied: true, model: target }
       }
       dispatch(

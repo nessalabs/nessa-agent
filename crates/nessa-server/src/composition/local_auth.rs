@@ -16,9 +16,11 @@ use crate::{
     },
     workspaces::{
         application::{RecoveryAudit, RecoveryEvent, Workspaces},
-        domain::Failure as WorkspaceFailure,
+        domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
-            worker_image, BoatProvider, FileAssignments, RuntimeSettingsAudit, VaultSettings,
+            agent37_template, worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
+            FileAssignments, FileCloudChoice, RuntimeSettingsAudit, SdkAgent37Enrollment,
+            VaultSettings,
         },
     },
 };
@@ -332,7 +334,24 @@ pub(super) async fn product_state(
             Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
             runtime_settings,
         )
-        .with_image(worker_image()),
+        .with_image(worker_image())
+        .with_cloud(
+            Cloud::Agent37,
+            Arc::new(Agent37VaultSettings(vault.vault.clone())),
+            Arc::new(Agent37Provider {
+                // SAFETY: geteuid has no preconditions.
+                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
+                    libc::geteuid()
+                }),
+                relay_program: std::env::current_exe().map_err(setup_error)?,
+                endpoints: None,
+            }),
+            Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
+            Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
+        )
+        .with_agent37_enrollment(Arc::new(SdkAgent37Enrollment {
+            template: agent37_template(),
+        })),
     );
     #[cfg(all(test, unix))]
     let workspace_service = super::vm_background_gateway::service(workspace_service);
@@ -524,6 +543,7 @@ pub(super) async fn product_state(
                 built
                     .service
                     .bind_fence_capture(inventory.clone() as Arc<dyn FenceCapture>);
+                built.service.bind_credential_devices(store.clone());
                 (
                     Some((
                         built.service,
@@ -636,6 +656,21 @@ pub(super) async fn product_state(
         product = product.with_voice(voice);
     }
     product = product.with_logins(saved_logins);
+    // Terminals (docs/design/terminals.md): the engine bootstrap prepared
+    // before the async runtime, when this build and process have one. With
+    // none, every `terminal.*` answers terminal_unavailable, list included,
+    // so no window offers a terminal it cannot open.
+    if let Some(engine) = crate::terminal::prepared_engine() {
+        product = product.with_terminals(
+            crate::terminal::TerminalHub::new(
+                Some(engine),
+                Arc::new(crate::terminal::SystemTerminalClock),
+            ),
+            Arc::new(crate::terminal::SystemTerminalHost),
+        );
+    } else if let Some(reason) = crate::terminal::unprepared_reason() {
+        tracing::warn!(reason, "terminals unavailable: pty runtime not built");
+    }
     #[cfg(unix)]
     let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
     // Composed whether or not native pairing runs: turning it on is how it
@@ -1425,11 +1460,15 @@ async fn conversations(
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let channels_path = root.join("channels.sqlite3");
-    let channel_store: Arc<dyn ChannelStore> =
-        Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
-            RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
-        })?);
+    // One file keeps channels and how agents talk (issue #1382).
+    let channel_file = Arc::new(LocalChannelStore::open(&channels_path).map_err(|cause| {
+        RunError::opening(crate::core::Dataset::Channels, &channels_path, cause)
+    })?);
+    let channel_store: Arc<dyn ChannelStore> = channel_file.clone();
+    // How far each thread's VM got toward running its agent, for its view.
+    let setup_steps = crate::conversation::application::SetupSteps::new(Arc::new(SystemClock));
     let thread_workspaces = Arc::new(ThreadWorkspaces {
+        setup: Some(setup_steps.clone()),
         service: workspace_service,
         channels: channel_store.clone(),
         audit: workspace_audit,
@@ -1449,6 +1488,8 @@ async fn conversations(
     let workspace_environments = super::vm_background_gateway::environments(
         workspace_environments,
         thread_workspaces.service.clone(),
+        channel_store.clone(),
+        thread_workspaces.setup.clone(),
     );
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let host = nessa_agent_install::infrastructure::host_platform();
@@ -1815,6 +1856,7 @@ async fn conversations(
                 )
             })?,
     ));
+    service.bind_reply_styles(channel_file);
     // Channels and which conversation is in which; a channel with no chosen
     // folder works in `<data>/channels/<id>`.
     service.bind_channels(
@@ -1955,6 +1997,7 @@ async fn conversations(
         service.bind_directory_access(Arc::new(directory_access));
     }
     service.bind_permission_rules(permission_memory.clone());
+    service.bind_setup_steps(setup_steps);
     if let Some(tools) = &environment_tools {
         tools.attach(service.clone());
     }
@@ -2283,13 +2326,41 @@ mod tests;
 #[cfg(unix)]
 struct WorkspaceRecoveryAudit(Arc<dyn EnvironmentAudit>);
 #[cfg(unix)]
+use nessa_conversation::workspaces::domain::Admitted;
+#[cfg(unix)]
 impl RecoveryAudit for WorkspaceRecoveryAudit {
     fn record(&self, event: &RecoveryEvent) -> Result<(), WorkspaceFailure> {
         let record = match event {
+            RecoveryEvent::CloudChosen {
+                before,
+                after,
+                cause,
+                by,
+            } => EnvironmentEvent::WorkspaceCloudChosen {
+                before: before.as_str().into(),
+                after: after.as_str().into(),
+                cause: cause.as_str().into(),
+                principal: by.clone(),
+            },
             RecoveryEvent::AdmissionRefused {
                 thread,
                 vm,
-                admission,
+                admission: Admitted::Agent37(release),
+                rejection,
+                disposition,
+            } => EnvironmentEvent::Agent37AdmissionRefused {
+                thread: thread.clone(),
+                vm: vm.clone(),
+                template: release.template().into(),
+                template_revision: release.revision(),
+                image_digest: release.digest().map(str::to_owned),
+                cause: rejection.cause().as_str().into(),
+                disposition: disposition.as_str().into(),
+            },
+            RecoveryEvent::AdmissionRefused {
+                thread,
+                vm,
+                admission: Admitted::Boat(admission),
                 rejection,
                 disposition,
             } => EnvironmentEvent::WorkspaceAdmissionRefused {

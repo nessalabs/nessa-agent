@@ -46,6 +46,8 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        reply_style: None,
+        role_job: None,
         review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),

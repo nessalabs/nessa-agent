@@ -51,3 +51,30 @@ fn offer_policy_compacts_spare_slots_and_preserves_clone_equality() {
         assert_eq!(slots.capacity(), slots.len());
     }
 }
+
+#[test]
+fn a_choice_the_harness_keeps_is_marked_and_still_equals_the_same_choice() {
+    let option = |id: &str, label: &str| {
+        PermissionOption::new(
+            PermissionOptionId::new(id).unwrap(),
+            label,
+            PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+        )
+        .unwrap()
+    };
+    let once = option("allow", "Allow");
+    let kept = option("allow", "Allow").kept_by_the_harness();
+    assert!(!once.kept_by_harness());
+    assert!(kept.kept_by_harness());
+    // Recorded history carries no mark, so the mark never splits equality.
+    assert_eq!(once, kept);
+    assert_ne!(once, option("other", "Allow"));
+    assert_ne!(once, option("allow", "Allow always"));
+    let deny = PermissionOption::new(
+        PermissionOptionId::new("allow").unwrap(),
+        "Allow",
+        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+    )
+    .unwrap();
+    assert_ne!(once, deny);
+}

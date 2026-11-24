@@ -690,8 +690,7 @@ const body = {
         failures.push(...studioUnderToggleFailure(label, studio, at))
         if (await squareShown(page))
           failures.push(`${label}: Studio's square is drawn beside the toggle`)
-        // Agents keeps the words. Devices turns the corner off (`studio: false`):
-        // its cards run under it, so the words there would cover the cards.
+        // Agents keeps the words, and Devices keeps them in the same place.
         if (!now.sidebar) continue
         failures.push(...agentsStudioMissingFailure(label, studio))
         const roomy =
@@ -705,7 +704,7 @@ const body = {
         const inView = await boxOf(page, css.studio)
         const viewToggle = await boxOf(page, css.sideRailToggle)
         seen.push({ label: `${label}, Devices`, toggle: viewToggle, studio: inView })
-        failures.push(...devicesCornerFailures(label, inView, viewToggle, toggle))
+        failures.push(...devicesCornerFailures(label, inView, studio, viewToggle, toggle))
         if (!now.rail) await setRail(page, true)
         await page.locator(selectorFor.railItem("agents")).click()
         if (!now.rail) await setRail(page, false)
@@ -725,10 +724,7 @@ const body = {
             key: pane.dataset.paneKey,
             focused: pane.hasAttribute("data-focused"),
             running: form?.hasAttribute("data-running") ?? false,
-            // A notice keeps the line: there is something to read.
-            empty:
-              (form?.hasAttribute("data-empty") ?? false) &&
-              !form.querySelector(":scope > .desktop-composer-notice"),
+            empty: form?.hasAttribute("data-empty") ?? false,
             width: form?.getBoundingClientRect().width ?? 0,
             height: form?.getBoundingClientRect().height ?? 0,
             wake: (() => {

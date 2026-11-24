@@ -20,6 +20,24 @@ const identity = {
 }
 
 describe("local submission evidence", () => {
+  it("sends an answer beside the draft, which keeps what was being written", () => {
+    const writing = setDraft(emptyLocalTabs(), {
+      id: "c0",
+      draft: textContent("half a thought"),
+    })
+    const answered = beginSend(writing, {
+      ...identity,
+      content: textContent("Ship"),
+      besideDraft: true,
+    })
+    expect(answered.conversations[0]!.turns.at(-1)).toMatchObject({
+      from: "user",
+      content: textContent("Ship"),
+    })
+    expect(answered.conversations[0]!.draft).toEqual(textContent("half a thought"))
+    const sent = beginSend(writing, { ...identity, content: textContent("Ship") })
+    expect(sent.conversations[0]!.draft).toEqual([])
+  })
   it("preserves exact content and permits a second queued draft", () => {
     const content = textContent("  code\n ")
     const pending = beginSend(emptyLocalTabs(), { ...identity, content })
@@ -191,5 +209,17 @@ describe("openListed", () => {
   it("names a conversation the gateway has no title for as its list row does", () => {
     const opened = openListed(emptyLocalTabs(), { ...listed, title: null })
     expect(opened.conversations.at(-1)!.title).toBe(UNTITLED)
+  })
+
+  it("opened without showing it, adds the tab and leaves the one in front", () => {
+    const start = emptyLocalTabs()
+    const asked = openListed(start, listed, { activate: false })
+    expect(asked.activeId).toBe(start.activeId)
+    expect(asked.conversations.at(-1)).toMatchObject({
+      serverConversationId: listed.serverConversationId,
+      serverReady: true,
+    })
+    // Already open somewhere: nothing changes, not even which tab is in front.
+    expect(openListed(asked, listed, { activate: false })).toBe(asked)
   })
 })

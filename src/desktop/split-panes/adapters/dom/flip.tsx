@@ -15,7 +15,11 @@
  * - `data-flip="pane"` with `data-flip-id`: travels and resizes, its contents
  *   counter-scaled so text keeps its size (see `flyPane`);
  * - `data-flip="slide"` with `data-flip-id`: slides sideways. A slide inside
- *   another slide moves only by its own difference.
+ *   another slide, or inside a flown pane, moves only by its own difference:
+ *   sideways it goes straight from where it was to where it landed, whatever
+ *   carries it (up or down it rides its pane). A pane's title pinned past the
+ *   window's controls therefore stays put while its pane moves under it
+ *   (`pane-header-frame.tsx`).
  *
  * The scope marks an active flight and each pane it moves. Styles pause the
  * moving panes' blur and shadows; stationary panes stay live.
@@ -68,6 +72,20 @@ interface Landed {
   readonly children: readonly { element: HTMLElement; top: number }[]
 }
 
+/** How many steps a pane's flight, and what rides in it, is sampled in. */
+const flightSteps = 14
+
+/**
+ * A sideways shift from `shift` to none, sampled on `ease` in the steps a
+ * pane flies in (`flyPane`), so played linearly beside it the two agree at
+ * every frame.
+ */
+function sampled(shift: number, ease: (t: number) => number): Keyframe[] {
+  return Array.from({ length: flightSteps + 1 }, (_, i) => ({
+    transform: `translateX(${shift * (1 - ease(i / flightSteps))}px)`,
+  }))
+}
+
 /**
  * FLIP with scale correction: the pane's box travels and resizes from `from`
  * to `to` by transform, while its children counter-scale on the same curve,
@@ -83,7 +101,7 @@ export function flyPane(
   duration: number,
   ease: (t: number) => number = (t) => 1 - Math.pow(1 - t, 3.2),
 ): Animation[] {
-  const steps = 14
+  const steps = flightSteps
   const dx = from.left + from.width / 2 - (to.left + to.width / 2)
   const dy = from.top + from.height / 2 - (to.top + to.height / 2)
   const sx = from.width / to.width
@@ -183,20 +201,31 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
       },
     })
   }
-  const slides: { element: HTMLElement; own: number }[] = []
+  // A flown pane carries everything in it sideways by its centre's shift:
+  // its contents counter-scale, so they only travel (`flyPane`).
+  panes.forEach(({ landed, before }) => {
+    const { to } = landed
+    shifted.set(landed.pane, before.left + before.width / 2 - (to.left + to.width / 2))
+  })
+  const slides: { element: HTMLElement; own: number; inPane: boolean }[] = []
   landed.forEach(({ element, after }) => {
     const before = from.slides.get(element.dataset.flipId ?? "")
+    if (!before) return
+    const outer = element.parentElement?.closest<HTMLElement>(
+      '[data-flip="slide"], [data-flip="pane"]',
+    )
+    const inPane = outer?.dataset.flip === "pane"
     // Only what is on screen slides; a column folding away has its own
     // transition. A host marks it hidden from assistive tech as it folds,
-    // and may make it inert only once it has slid away.
-    if (!before || element.closest('[inert], [aria-hidden="true"]')) return
-    const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
+    // and may make it inert only once it has slid away. What a pane holds
+    // is on screen with its pane, said aloud or not (a pane's unshown name).
+    if (!inPane && element.closest('[inert], [aria-hidden="true"]')) return
     const carried = (outer && shifted.get(outer)) ?? 0
     const dx = before.left - after.left
     shifted.set(element, dx)
     const own = dx - carried
     if (Math.abs(own) < 0.5) return
-    slides.push({ element, own })
+    slides.push({ element, own, inPane })
   })
   // A settled preview can leave nothing to animate. Resolving root styles
   // then does work for no flight (flip.test.tsx holds this no-flight path).
@@ -214,17 +243,27 @@ function play(root: HTMLElement, from: Rects, motion: Motion) {
       ? durationOf(root, "drawer")
       : durationToken(root, "--desktop-slow")
   const flight = durationOf(root, motion)
-  slides.forEach(({ element, own }) => {
-    flying.push(
-      element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
-        duration,
-        easing: ease,
-        id: slideAnimation,
-      }),
-    )
-  })
   // Every pane keeps the columns' curve, frame for frame.
   const curve = curveOf(ease)
+  slides.forEach(({ element, own, inPane }) => {
+    flying.push(
+      inPane
+        ? // In a pane, on the pane's clock and its sampled curve, so the two
+          // cancel frame for frame. Over whatever transform it keeps of its
+          // own (a pane's hidden name sits lower). No `slideAnimation` id:
+          // `holdStill` answers columns' slides, and undoing this one alone
+          // would leave what is in it riding the pane.
+          element.animate(sampled(own, curve), {
+            duration: flight,
+            easing: "linear",
+            composite: "add",
+          })
+        : element.animate(
+            [{ transform: `translateX(${own}px)` }, { transform: "none" }],
+            { duration, easing: ease, id: slideAnimation },
+          ),
+    )
+  })
   panes.forEach(({ landed, before }) => {
     flying.push(...flyPane(landed, before, flight, curve))
   })

@@ -17,6 +17,13 @@ pub fn login_entry(agent: AgentId) -> EntryName {
     .expect("static vault entry")
 }
 
+/// The vault entry Codex's ChatGPT accounts are kept in, beside its API
+/// key's (`docs/design/chatgpt-sign-in.md`).
+#[must_use]
+pub fn chatgpt_entry() -> EntryName {
+    EntryName::new("login.codex.chatgpt").expect("static vault entry")
+}
+
 /// The vault entry the owner's per-device switches are kept in. Kept beside
 /// the logins, so a locked vault hands no login and changes no switch.
 #[must_use]

@@ -9,6 +9,18 @@
       "reason": "One piece of an upload's bytes for a surface that cannot reach PUT /attachments. The action is attachment.begin; the bytes are not a JSON call."
     },
     {
+      "method": "grants.subscribe",
+      "reason": "Follows this receiver's grants by a stream of events after the acknowledgement. One call would drop the stream."
+    },
+    {
+      "method": "grants.page",
+      "reason": "Continues one grant snapshot on the subscription that opened it. One call would drop the stream."
+    },
+    {
+      "method": "grants.unsubscribe",
+      "reason": "Stops the grant subscription on this connection. It names a subscription the stream minted."
+    },
+    {
       "method": "conversation.subscribe",
       "reason": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream."
     },
@@ -27,6 +39,46 @@
     {
       "method": "workspace.answer",
       "reason": "A window's answer to a workspace.command the gateway sent it on that same connection. Only the window that was asked can give it."
+    },
+    {
+      "method": "terminal.open",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.list",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.attach",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.focus",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.fit",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.detach",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.input",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.history",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.close",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.rename",
+      "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
     }
   ],
   "methods": [
@@ -222,6 +274,34 @@
     {
       "name": "conversation.rename",
       "params": "ConversationRenameParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.decisions",
+      "params": "ConversationDecisionsParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.decisionSettings",
+      "params": "ConversationDecisionSettingsParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "conversation.pauseAutoPick",
+      "params": "ConversationPauseAutoPickParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "conversation.setDecisionSettings",
+      "params": "DecisionSettings",
       "grant": "conversation.write",
       "readOnly": false,
       "destructive": false
@@ -682,6 +762,27 @@
       "destructive": false
     },
     {
+      "name": "channel.setCoordinator",
+      "params": "ChannelSetCoordinatorParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "replyStyle.read",
+      "params": "ReplyStyleReadParams",
+      "grant": "conversation.write",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "replyStyle.set",
+      "params": "ReplyStyleSetParams",
+      "grant": "conversation.write",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "conversation.readEarlier",
       "params": "ConversationReadEarlierParams",
       "grant": "conversation.write",
@@ -780,6 +881,41 @@
       "destructive": true
     },
     {
+      "name": "agent37.status",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "agent37.save",
+      "params": "Agent37SaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "agent37.disconnect",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
+    },
+    {
+      "name": "cloud.read",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "cloud.choose",
+      "params": "CloudChooseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "devices.pool",
       "params": "DevicesPoolParams",
       "grant": "credential.manage",
@@ -848,6 +984,34 @@
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": false
+    },
+    {
+      "name": "logins.chatgptSignIn",
+      "params": "LoginsChatgptSignInParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptCancel",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptUse",
+      "params": "LoginsChatgptUseParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "logins.chatgptRemove",
+      "params": "LoginsChatgptRemoveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": true
     },
     {
       "name": "voice.status",

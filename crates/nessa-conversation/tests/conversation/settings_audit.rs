@@ -35,8 +35,8 @@ async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
     let fresh = ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap();
     let change = SettingsChange::ChannelPlacement {
         channel: ChannelId::from_random([1; 10]),
-        before: ChannelExecution::default(),
-        after: ChannelExecution::new(Place::CloudVm, Place::Here),
+        before: Box::new(ChannelExecution::default()),
+        after: Box::new(ChannelExecution::new(Place::CloudVm, Place::Here)),
         coordinator: old.clone(),
     };
     for outcome in [

@@ -14,6 +14,7 @@ import {
 import {
   HEARING_CHECK_MS,
   hearingHint,
+  RESUMED,
   TRANSCRIPT_WAIT_MS,
   VoiceController,
 } from "./voice-controller"
@@ -885,5 +886,234 @@ describe("VoiceController", () => {
         microphoneSound: null,
       }),
     ).toBeNull()
+  })
+  describe("pause and resume", () => {
+    /** A setup whose every connect opens a new connection, kept in order. */
+    function reconnecting() {
+      const opened: FakeConnection[] = []
+      const made = setup({
+        connect: async () => {
+          const next = new FakeConnection()
+          opened.push(next)
+          return next
+        },
+      })
+      return { ...made, opened }
+    }
+
+    it("V19: pausing hangs up with the provider, keeps the call, and lets go of nothing else", async () => {
+      const { controller, opened, startCall, clock } = reconnecting()
+      await controller.start("s-1")
+      const first = opened[0]
+      controller.pause()
+      expect(first.closed).toBe(true)
+      expect(controller.snapshot()).toMatchObject({ phase: "paused", sessionId: "s-1" })
+      expect(controller.levels()).toEqual({ input: 0, output: 0 })
+      // No hearing check runs against a call that is not there.
+      clock.fire()
+      await settle()
+      expect(first.checks).toBe(0)
+      // The old connection's late events change nothing.
+      first.emit({ type: "input_audio_buffer.speech_started" })
+      first.emit({ type: "response.created" })
+      expect(controller.snapshot().phase).toBe("paused")
+      // Pausing twice is pausing once.
+      controller.pause()
+      expect(startCall).toHaveBeenCalledTimes(1)
+    })
+
+    it("V20: resuming opens a new connection, handed the chat and what was said before", async () => {
+      const { controller, opened, startCall } = reconnecting()
+      await controller.start("s-1")
+      const first = opened[0]
+      says(first, "i1", "Look at the failing build.")
+      first.emit({ type: "response.created" })
+      first.emit({ type: "response.output_audio_transcript.delta", delta: "Sure, " })
+      first.emit({ type: "response.output_audio_transcript.delta", delta: "sending it." })
+      first.emit({ type: "response.done", response: { status: "completed" } })
+      controller.pause()
+      await controller.resume()
+      expect(startCall).toHaveBeenCalledTimes(2)
+      expect(startCall).toHaveBeenLastCalledWith("s-1")
+      const second = opened[1]
+      expect(second.closed).toBe(false)
+      expect(controller.snapshot()).toMatchObject({
+        phase: "listening",
+        sessionId: "s-1",
+      })
+      expect(second.told()).toEqual([
+        "Chat so far:\nPerson: hi\nAgent: hello",
+        `${RESUMED}\nPerson: Look at the failing build.\nVoice: Sure, sending it.`,
+      ])
+      // The new connection is the call's: what it hears counts.
+      second.emit({ type: "input_audio_buffer.speech_started" })
+      second.emit({ type: "response.created" })
+      expect(controller.snapshot().phase).toBe("speaking")
+    })
+
+    it("V21: a reply that ends while paused is kept and handed over on resume", async () => {
+      const { controller, opened, conversation } = reconnecting()
+      await controller.start("s-1")
+      await sends(opened[0], "Run the tests")
+      expect(controller.snapshot().phase).toBe("working")
+      controller.pause()
+      conversation.end({ text: "All green.", ended: "finished" })
+      expect(controller.snapshot().phase).toBe("paused")
+      await controller.resume()
+      const second = opened[1]
+      expect(second.told().at(-1)).toBe("Agent reply:\nAll green.")
+      expect(second.responses()).toBe(1)
+    })
+
+    it("V21: a send under way when the call pauses still reaches the agent", async () => {
+      const { controller, opened, conversation } = reconnecting()
+      await controller.start("s-1")
+      says(opened[0], "i1", "Fix the lint.")
+      calls(opened[0], "send_to_agent", "c1")
+      controller.pause()
+      await settle()
+      expect(conversation.sent).toEqual(["Fix the lint."])
+      expect(controller.snapshot().phase).toBe("paused")
+      // Nothing is asked of a connection that is gone.
+      expect(opened[0].responses()).toBe(0)
+    })
+
+    it("V21: a reply that ends while a resume still connects is handed over once it opens", async () => {
+      const opened: FakeConnection[] = []
+      let open: ((connection: FakeConnection) => void) | null = null
+      const { controller, conversation } = setup({
+        connect: () =>
+          new Promise((resolve) => {
+            const next = new FakeConnection()
+            opened.push(next)
+            if (opened.length === 1) resolve(next)
+            else open = () => resolve(next)
+          }),
+      })
+      await controller.start("s-1")
+      await sends(opened[0], "Run the tests")
+      controller.pause()
+      const resuming = controller.resume()
+      await settle()
+      expect(controller.snapshot().phase).toBe("connecting")
+      conversation.end({ text: "All green.", ended: "finished" })
+      open!(opened[1])
+      await resuming
+      expect(opened[1].told().at(-1)).toBe("Agent reply:\nAll green.")
+    })
+
+    it("V21: a turn seen open while paused, then gone from the window, has ended", async () => {
+      const { controller, opened, conversation } = reconnecting()
+      await controller.start("s-1")
+      says(opened[0], "i1", "Run the tests.")
+      calls(opened[0], "send_to_agent", "c1")
+      // Paused before the send is answered: the turn starts while paused.
+      controller.pause()
+      await settle()
+      expect(conversation.sent).toEqual(["Run the tests."])
+      // Seen open while paused, then it leaves the window.
+      conversation.changed()
+      conversation.gone.add("turn-1")
+      conversation.changed()
+      await controller.resume()
+      expect(opened[1].told().at(-1)).toBe(
+        "Agent reply:\n(The agent finished without saying anything.)",
+      )
+      expect(controller.snapshot().phase).not.toBe("working")
+    })
+
+    it("V19: speech not yet written down when the call pauses is nothing heard", async () => {
+      const { controller, opened, conversation, clock } = reconnecting()
+      await controller.start("s-1")
+      // Heard and committed, its transcript still on its way, and sent.
+      opened[0].emit({ type: "input_audio_buffer.committed", item_id: "i1" })
+      calls(opened[0], "send_to_agent", "c1")
+      controller.pause()
+      await settle()
+      // Not waited out: the send went on at once with nothing to say.
+      expect(clock.pending.size).toBe(0)
+      expect(conversation.sent).toEqual([])
+      // After resume a send does not wait for it either.
+      await controller.resume()
+      says(opened[1], "i2", "Fix the lint.")
+      calls(opened[1], "send_to_agent", "c2")
+      await settle()
+      expect(conversation.sent).toEqual(["Fix the lint."])
+    })
+
+    it("V19: a tool answer from before the pause never reaches the resumed connection", async () => {
+      let release!: () => void
+      const { controller, opened, conversation } = reconnecting()
+      conversation.send = async (text: string) => {
+        await new Promise<void>((done) => (release = done))
+        conversation.sent.push(text)
+        conversation.turnsSent.push("turn-1")
+        return { result: "sent" as const, turn: "turn-1" }
+      }
+      await controller.start("s-1")
+      says(opened[0], "i1", "Fix the lint.")
+      calls(opened[0], "send_to_agent", "c1")
+      await settle()
+      controller.pause()
+      await controller.resume()
+      release()
+      await settle()
+      expect(conversation.sent).toEqual(["Fix the lint."])
+      expect(opened[1].outputs()).toEqual([])
+      expect(opened[0].outputs()).toEqual([])
+    })
+
+    it("V22: paused while it connects, the late connection is closed and the call stays paused", async () => {
+      let open!: (connection: RealtimeConnection) => void
+      const late = new FakeConnection()
+      const { controller } = setup({
+        connect: () => new Promise((resolve) => (open = resolve)),
+      })
+      const starting = controller.start("s-1")
+      await settle()
+      controller.pause()
+      open(late)
+      await starting
+      expect(late.closed).toBe(true)
+      expect(controller.snapshot().phase).toBe("paused")
+    })
+
+    it("V22: a resume that cannot connect fails the call and says so", async () => {
+      let refuse = false
+      const { controller } = setup({
+        start: async () => {
+          if (refuse) throw new Error("offline")
+          return grant
+        },
+      })
+      await controller.start("s-1")
+      controller.pause()
+      refuse = true
+      await controller.resume()
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        notice: "Couldn’t resume the call.",
+      })
+    })
+
+    it("V22: ending a paused call ends it", async () => {
+      const { controller } = reconnecting()
+      await controller.start("s-1")
+      controller.pause()
+      controller.end()
+      expect(controller.snapshot().phase).toBe("idle")
+      await controller.resume()
+      expect(controller.snapshot().phase).toBe("idle")
+    })
+
+    it("V22: the microphone switch set while paused is the one the resumed call uses", async () => {
+      const { controller, opened } = reconnecting()
+      await controller.start("s-1")
+      controller.pause()
+      controller.setMicrophone(false)
+      await controller.resume()
+      expect(opened[1].microphone).toBe(false)
+      expect(controller.snapshot().microphoneOn).toBe(false)
+    })
   })
 })

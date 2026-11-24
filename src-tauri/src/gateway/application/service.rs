@@ -2189,7 +2189,17 @@ fn execute_attempt(
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let agent_path = executor
             .agent_path
-            .get_or_init(|| resolve_agent_path(executor.login_shell.as_ref()));
+            .get_or_init(|| {
+                let started = executor.clock.now();
+                let path = resolve_agent_path(executor.login_shell.as_ref());
+                tracing::info!(
+                    target: "nessa.launch",
+                    step = "login_shell",
+                    step_ms = executor.clock.now().saturating_duration_since(started).as_millis() as u64,
+                    "gateway registration step"
+                );
+                path
+            });
         executor.host.register(
             &executor.runtime,
             &executor.stage,

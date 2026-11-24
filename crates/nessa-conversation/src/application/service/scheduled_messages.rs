@@ -554,6 +554,15 @@ pub trait ScheduledMessageStore: Send + Sync {
     /// changing its status or its lease. This process can enter again. Another
     /// process waits until the lease expires.
     fn release_submit(&self, execution_id: &str) -> ConversationFuture<'_, ()>;
+    /// The turn that `execution` of `conversation` continues, when this store
+    /// minted `execution` for a continuation. A row is never removed and its
+    /// ids never change, so the answer holds for a delivered turn as long as
+    /// its conversation is kept.
+    fn continued_from(
+        &self,
+        conversation: &str,
+        execution: &str,
+    ) -> ConversationFuture<'_, Option<String>>;
     /// The fence generation stored for `conversation`, or 0 when none is sealed.
     /// Read this before the session, then put it on [`HistoryGeneration`].
     /// The default is an empty fence.
@@ -766,7 +775,21 @@ impl ConversationService {
         let _ = self.inner.preference_policy.set(policy);
     }
 
-    fn scheduled_messages(&self) -> Option<Arc<dyn ScheduledMessageStore>> {
+    /// Bind what each credential was issued to. A second bind is ignored.
+    pub fn bind_credential_devices(
+        &self,
+        devices: Arc<dyn nessa_auth::application::pairing::CredentialDeviceSource>,
+    ) {
+        let _ = self.inner.credential_devices.set(devices);
+    }
+
+    pub(super) fn credential_devices(
+        &self,
+    ) -> Option<Arc<dyn nessa_auth::application::pairing::CredentialDeviceSource>> {
+        self.inner.credential_devices.get().cloned()
+    }
+
+    pub(super) fn scheduled_messages(&self) -> Option<Arc<dyn ScheduledMessageStore>> {
         self.inner.scheduled_messages.get().cloned()
     }
 
@@ -2147,6 +2170,7 @@ impl ConversationService {
             .submit_command_permitted(
                 commands,
                 id,
+                caller.clone(),
                 caller,
                 initiation,
                 false,

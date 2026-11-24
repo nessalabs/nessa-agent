@@ -130,6 +130,7 @@ async fn owner_phone_creation_in_a_channel_is_judged_by_the_channels_preset() {
         },
         notes: ChannelNotes::new("").unwrap(),
         resources: ChannelResources::new(vec![]).unwrap(),
+        coordinator_on: true,
     };
     use nessa_protocol::conversation::domain::ConversationApprovalMode::{Ask, Auto};
     let auto = service

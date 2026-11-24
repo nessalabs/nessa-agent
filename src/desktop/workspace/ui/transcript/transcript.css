@@ -194,6 +194,76 @@
   font-size: var(--desktop-text-footnote);
 }
 
+/* A message that did not go: the bubble rests dimmer, and right under it,
+   at its edge, two or three words why and the ways on. */
+.workspace-message[data-unsent] .workspace-bubble {
+  opacity: 0.55;
+}
+
+.workspace-unsent {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 6px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+}
+
+.workspace-unsent-why {
+  margin-inline-end: 6px;
+  color: var(--desktop-faint);
+}
+
+.workspace-unsent-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  background: transparent;
+  color: var(--desktop-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--desktop-fast) var(--desktop-out),
+    color var(--desktop-fast) var(--desktop-out);
+}
+
+.workspace-unsent-action[data-unsent-retry] {
+  color: var(--foreground);
+}
+
+.workspace-unsent-action:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+}
+
+.workspace-unsent-action:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 2px;
+}
+
+.workspace-unsent-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.workspace-unsent-action svg {
+  width: 13px;
+  height: 13px;
+}
+
+.workspace-unsent-rule {
+  width: 1px;
+  height: 12px;
+  margin: 0 4px;
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
 /* How the gateway said a turn ended. The diagnostic is its own words. */
 .workspace-turn-terminal {
   display: flex;

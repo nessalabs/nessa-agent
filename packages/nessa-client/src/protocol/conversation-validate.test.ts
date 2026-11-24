@@ -1954,3 +1954,44 @@ it("keeps a non-whitespace Unicode filename accepted by phone and SDK", () => {
     "\uFEFF",
   )
 })
+
+describe("the view's machine setup", () => {
+  const withSetup = (setup: unknown) => ({ ...view(), setup })
+  const running = {
+    state: "running",
+    executionId: "turn-1",
+    steps: [
+      { step: "waking", startedAtMs: 1, endedAtMs: 2 },
+      { step: "connecting", startedAtMs: 2 },
+    ],
+  }
+
+  it("keeps each step of getting the conversation's cloud machine ready", () => {
+    const ready = {
+      state: "ready",
+      steps: [{ step: "creating", startedAtMs: 1, endedAtMs: 9 }],
+    }
+    expect(conversationView(withSetup([ready, running]), "conversation").setup).toEqual([
+      ready,
+      running,
+    ])
+    expect(conversationView(view(), "conversation").setup).toBeUndefined()
+  })
+
+  it("refuses a setup that is not one the gateway can say", () => {
+    const refused: [unknown, RegExp][] = [
+      [[], /setup/],
+      [[running, running, running], /setup/],
+      [[{ ...running, state: "paused" }], /conversation state/],
+      [[{ ...running, steps: [] }], /setup steps/],
+      [
+        [{ ...running, steps: [{ step: "booting", startedAtMs: 1 }] }],
+        /conversation step/,
+      ],
+      [[{ ...running, steps: [{ step: "waking", startedAtMs: -1 }] }], /startedAtMs/],
+      [[{ ...running, extra: 1 }], /unknown fields/],
+    ]
+    for (const [setup, error] of refused)
+      expect(() => conversationView(withSetup(setup), "conversation")).toThrow(error)
+  })
+})

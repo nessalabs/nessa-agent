@@ -6,7 +6,7 @@ use super::{
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    binding_of, error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError,
     RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
@@ -27,9 +27,11 @@ use nessa_protocol::product::generated::{
     ConversationArchiveParams, ConversationCancelParams, ConversationCloseParams,
     ConversationCommandOperation, ConversationCommandOutcome, ConversationCommandReceipt,
     ConversationCommandStage, ConversationCreateParams, ConversationCreateResult,
+    ConversationDecisionSettingsParams, ConversationDecisionsParams, ConversationDecisionsResult,
     ConversationDeleteParams, ConversationForkParams, ConversationListParams,
     ConversationListResult, ConversationMutationResult, ConversationObserveCursor,
-    ConversationObserveParams, ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationObserveParams, ConversationObserveResult, ConversationPauseAutoPickParams,
+    ConversationPauseAutoPickResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
@@ -41,8 +43,9 @@ use nessa_protocol::product::generated::{
     ConversationSetModelParams, ConversationSetModelResult,
     ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
     ConversationStopParams, ConversationSummary, ConversationSwitchAgentParams,
-    ConversationView as WireConversationView, ModelChangeEffect, PermissionRule,
-    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationView as WireConversationView, DecisionSettings, ModelChangeEffect, OwnerAsk,
+    OwnerAskAccess, OwnerAskChoice, OwnerDecision, OwnerDecisionOutcome, OwnerDecisionState,
+    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -68,7 +71,7 @@ use nessa_sdk::application::agent_execution::{
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
     sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
-use nessa_sdk::domain::agent_execution::executions::Initiation;
+use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -159,7 +162,35 @@ async fn answer(
             value
         }};
     }
-    let caller = |request_id: String| caller(session, request_id);
+    // A device signs in as the binding owner, so its session already names
+    // the conversation's owner. A peer signs in as itself. The grant admitted
+    // the command; the conversation is still the grantor's, so opening it
+    // asks `owner.act` of that owner. A note records the session principal.
+    // A send or a stop is stored under that same principal and request. The
+    // session store and the command history each key by principal and
+    // request, so two peers that reuse one request id each keep their own. The
+    // saved initiation stays the grant. The admission audit names the gateway
+    // principal.
+    let grantor = if matches!(initiation.initiator(), Initiator::Grant(_)) {
+        match state.reads.passive_read.as_ref() {
+            Some((receivers, _, _)) => binding_of(receivers.as_ref(), session.context())
+                .await
+                .ok()
+                .flatten()
+                .map(|binding| binding.owner_id),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let session_caller = |request_id: String| caller(session, request_id);
+    let caller = |request_id: String| {
+        let mut acting = session_caller(request_id);
+        if let Some(owner) = &grantor {
+            acting.principal_id = owner.clone();
+        }
+        acting
+    };
     let result: Result<OutgoingMessage, ConversationError> = async {
         match frame.method.as_str() {
             "conversation.create" => {
@@ -434,7 +465,8 @@ async fn answer(
                     SubmissionMode::Queue
                 };
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let execution_id = params.execution_id.clone();
                 // The clock is this moment, before the agent is asked, so the
                 // wait includes getting the turn under way. It is registered
@@ -464,10 +496,11 @@ async fn answer(
                         .await
                         .is_ok();
                 let submitted = service
-                    .submit_command_notifying(
+                    .submit_command_for(
                         store,
                         id.clone(),
-                        caller.clone(),
+                        access.clone(),
+                        command,
                         initiation,
                         offers_remember,
                         execution_id.clone(),
@@ -484,7 +517,7 @@ async fn answer(
                     Some(receipt) => receipt,
                     None => {
                         service
-                            .current_submission(id.clone(), caller, execution_id)
+                            .current_submission(id.clone(), access, execution_id)
                             .await?
                     }
                 };
@@ -494,10 +527,11 @@ async fn answer(
                 let params = target_params!(ConversationStopParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let receipt = service
-                    .stop_command(
+                    .stop_command_as(
                         store,
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()),
                         params.execution_id,
                     )
                     .await
@@ -511,13 +545,14 @@ async fn answer(
                 let params = target_params!(ConversationReceiptParams);
                 let store = service.commands().ok_or(ConversationError::Unavailable)?;
                 let id = conversation_id(&params.conversation_id)?;
-                let caller = caller(params.request_id.clone());
+                let access = caller(params.request_id.clone());
+                let command = session_caller(params.request_id.clone());
                 let result = match params.operation {
                     ConversationCommandOperation::Create => service
                         .lookup_creation(
                             store,
                             id,
-                            caller,
+                            access,
                             requested_conversation_from_receipt(&params)?,
                         )
                         .await
@@ -537,13 +572,13 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::submit_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                                 &message,
                                 mode,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access, binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
@@ -564,11 +599,11 @@ async fn answer(
                         let binding =
                             crate::conversation::application::ConversationService::stop_lookup(
                                 &id,
-                                &caller,
+                                &command,
                                 &execution_id,
                             )?;
                         service
-                            .lookup_command(store, id, caller, binding)
+                            .lookup_command(store, id, access.clone(), binding)
                             .await
                             .map_err(mutation_failure)?
                             .map(|receipt| command_receipt(&params.request_id, &receipt))
@@ -586,10 +621,13 @@ async fn answer(
             }
             "conversation.message" => {
                 let params = target_params!(ConversationMessageParams);
+                let sender = session_caller(params.request_id.clone());
+                let actor = sender.actor()?;
                 let (note, state) = service
-                    .leave_note(
+                    .leave_attributed_note(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        actor,
                         initiation.initiator().clone(),
                         params.text,
                         match params.delivery {
@@ -612,10 +650,12 @@ async fn answer(
             }
             "conversation.messageStatus" => {
                 let params = target_params!(ConversationMessageStatusParams);
+                let sender = session_caller(params.request_id.clone());
                 let found = service
-                    .note_status(
+                    .note_status_of(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        &sender.principal_id,
                     )
                     .await?;
                 Ok(success(
@@ -666,9 +706,10 @@ async fn answer(
                 let params = target_params!(ConversationAnswerQuestionParams);
                 interaction_key(&params.question)?;
                 service
-                    .answer_question(
+                    .answer_question_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.question_id,
                         params.question,
@@ -728,9 +769,10 @@ async fn answer(
                     }
                 }
                 service
-                    .answer(
+                    .answer_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,
@@ -800,9 +842,10 @@ async fn answer(
                 let params = target_params!(ConversationCancelParams);
                 interaction_key(&params.review)?;
                 service
-                    .cancel_permission(
+                    .cancel_permission_as(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
+                        session_caller(params.request_id.clone()).actor()?,
                         params.execution_id,
                         params.permission_id,
                         params.review,
@@ -869,6 +912,60 @@ async fn answer(
                         applied,
                     },
                 ))
+            }
+            "conversation.decisions" => {
+                let params = target_params!(ConversationDecisionsParams);
+                let decisions = service
+                    .decisions(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationDecisionsResult {
+                        decisions: decisions.into_iter().map(wire_decision).collect(),
+                    },
+                ))
+            }
+            "conversation.pauseAutoPick" => {
+                let params = target_params!(ConversationPauseAutoPickParams);
+                let applied = service
+                    .pause_auto_pick(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                        &params.ask_id,
+                        params.paused,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationPauseAutoPickResult { applied },
+                ))
+            }
+            "conversation.decisionSettings" => {
+                let ConversationDecisionSettingsParams {} =
+                    params!(ConversationDecisionSettingsParams);
+                let settings = service.decision_settings(caller(frame.id.clone())).await?;
+                Ok(success(&frame.id, &wire_decision_settings(settings)))
+            }
+            "conversation.setDecisionSettings" => {
+                let DecisionSettings {
+                    auto_pick,
+                    auto_pick_after_seconds,
+                } = params!(DecisionSettings);
+                let auto_pick_after_seconds = u32::try_from(auto_pick_after_seconds)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let settings = service
+                    .set_decision_settings(
+                        caller(frame.id.clone()),
+                        nessa_protocol::conversation::view::DecisionSettings {
+                            auto_pick,
+                            auto_pick_after_seconds,
+                        },
+                    )
+                    .await?;
+                Ok(success(&frame.id, &wire_decision_settings(settings)))
             }
             "conversation.delete" => {
                 let params = target_params!(
@@ -1642,9 +1739,82 @@ fn list_result(listed: ConversationList) -> ConversationListResult {
                 running: entry.running,
                 archived: entry.archived,
                 channel_id: entry.channel_id,
+                ask: entry.ask.map(wire_ask),
             })
             .collect(),
         complete: listed.complete,
+    }
+}
+
+/// An agent's question to the owner as a list row carries it.
+fn wire_ask(ask: nessa_protocol::conversation::view::OwnerAsk) -> OwnerAsk {
+    OwnerAsk {
+        ask_id: ask.ask_id,
+        question: ask.question,
+        choices: ask
+            .choices
+            .into_iter()
+            .map(|choice| OwnerAskChoice {
+                label: choice.label,
+                consequence: choice.consequence,
+                undo: choice.undo.map(|word| word.as_str().to_owned()),
+                effort: choice.effort.map(|word| word.as_str().to_owned()),
+                pros: (!choice.pros.is_empty()).then_some(choice.pros),
+                cons: (!choice.cons.is_empty()).then_some(choice.cons),
+            })
+            .collect(),
+        recommended: u64::from(ask.recommended),
+        reason: ask.reason,
+        asked_at_ms: ask.asked_at_ms,
+        access: ask.access.map(|access| OwnerAskAccess {
+            mode: access.mode().as_str().to_owned(),
+            grants: access.grants().map(str::to_owned).to_vec(),
+        }),
+        summary: ask.summary,
+        auto_pick: ask.auto_pick.map(|word| word.as_str().to_owned()),
+    }
+}
+
+/// An owner's decision settings as the wire carries them.
+fn wire_decision_settings(
+    settings: nessa_protocol::conversation::view::DecisionSettings,
+) -> DecisionSettings {
+    DecisionSettings {
+        auto_pick: settings.auto_pick,
+        auto_pick_after_seconds: u64::from(settings.auto_pick_after_seconds),
+    }
+}
+
+/// A decision as `conversation.decisions` lists it.
+fn wire_decision(decision: nessa_protocol::conversation::view::OwnerDecision) -> OwnerDecision {
+    use nessa_protocol::conversation::view::OwnerDecisionOutcome as Outcome;
+    OwnerDecision {
+        ask: wire_ask(decision.ask),
+        outcome: decision.outcome.map(|outcome| match outcome {
+            Outcome::Decided {
+                text,
+                choice,
+                at_ms,
+                auto,
+            } => OwnerDecisionOutcome {
+                state: OwnerDecisionState::Decided,
+                text: Some(text),
+                choice: choice.map(u64::from),
+                by: None,
+                auto: auto.then_some(true),
+                at_ms,
+            },
+            Outcome::Replaced { by, at_ms } => OwnerDecisionOutcome {
+                state: OwnerDecisionState::Replaced,
+                text: None,
+                choice: None,
+                by: Some(by),
+                auto: None,
+                at_ms,
+            },
+        }),
+        auto_pick_paused: decision.auto_pick_paused.then_some(true),
+        auto_pick_due_at_ms: decision.auto_pick_due_at_ms,
     }
 }
 
@@ -1673,6 +1843,7 @@ fn observe_result(observed: ConversationObservation) -> ConversationObserveResul
                 running: entry.running,
                 archived: entry.archived,
                 channel_id: entry.channel_id,
+                ask: entry.ask.map(wire_ask),
             })
             .collect(),
         complete: observed.complete,

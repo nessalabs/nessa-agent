@@ -66,6 +66,12 @@ pub struct ConversationView {
     /// limits, or why it could not. Absent before any lease was recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lease: Option<ConversationLeaseView>,
+    /// Getting a cloud machine ready for its agent, oldest first: the
+    /// opening under way, if any, and the last one that finished, as this
+    /// gateway saw them since it started (`SetupSteps`). Empty, and not
+    /// sent, for a conversation that runs on no cloud machine.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<ConversationSetup>,
     /// Artifacts the conversation recorded, each held when it was recorded,
     /// the newest `nessa_projection::MAX_VIEW_ARTIFACTS`
     /// in the order they were recorded. Empty before any was recorded. A
@@ -794,7 +800,587 @@ pub struct ConversationListEntry {
     pub archived: bool,
     /// The stored channel it was created in; `None` is the default channel.
     pub channel_id: Option<String>,
+    /// The question an agent in it asked its owner with `ask_owner`, while
+    /// no person has written in it since.
+    pub ask: Option<OwnerAsk>,
 }
+
+/// Most words an [`OwnerAsk`] question holds: it is read at a glance, in a
+/// notice title and on a card.
+pub const MAX_ASK_QUESTION_WORDS: usize = 20;
+/// Most bytes of an [`OwnerAsk`] question. A notice title shows 120
+/// characters; this keeps one whole.
+pub const MAX_ASK_QUESTION_BYTES: usize = 160;
+/// Most bytes of a choice's label.
+pub const MAX_ASK_LABEL_BYTES: usize = 40;
+/// Most bytes of a choice's consequence, and of the reason for the
+/// recommendation.
+pub const MAX_ASK_LINE_BYTES: usize = 200;
+/// Fewest and most choices an ask offers.
+pub const MIN_ASK_CHOICES: usize = 2;
+pub const MAX_ASK_CHOICES: usize = 4;
+/// Most pros, and most cons, a choice lists.
+pub const MAX_ASK_DETAILS: usize = 2;
+/// Most bytes of one pro or con.
+pub const MAX_ASK_DETAIL_BYTES: usize = 120;
+
+/// A question an agent asked the person who owns its conversation, with
+/// `ask_owner`: one short question, two to four choices that each say what
+/// happens if chosen, and the one the agent recommends, with why.
+///
+/// It waits with the conversation until a person writes in it: that message
+/// is the answer, whether it is a tapped choice or anything else they typed.
+/// A later ask in the same conversation replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAsk {
+    /// New for every ask, 32 lowercase hex digits: a notice and a tab are
+    /// for one ask, and a second ask in the same conversation is a new one.
+    pub ask_id: String,
+    pub question: String,
+    pub choices: Vec<OwnerAskChoice>,
+    /// Index into `choices` of the one the agent recommends.
+    pub recommended: u8,
+    /// Why the agent recommends it, in one line.
+    pub reason: String,
+    /// When it was asked, in Unix milliseconds.
+    pub asked_at_ms: u64,
+    /// Set when the ask is an agent's request to raise the chat's access
+    /// (`request_access`): the gateway wrote the question and the choices,
+    /// and a client draws it as the red access card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<RaisedAccess>,
+    /// One line under the question with what the card is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Whether the recommended choice may be picked for the person when
+    /// they do not answer in time. Absent is [`AutoPick::Never`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick: Option<AutoPick>,
+}
+
+/// Whether an ask may be answered with its recommended choice when nobody
+/// answers in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoPick {
+    /// It may, when the recommended choice is easy to undo.
+    Allowed,
+    /// It waits for the person.
+    Never,
+}
+
+impl AutoPick {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Never => "never",
+        }
+    }
+}
+
+/// How hard a choice is to take back once made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AskUndo {
+    Easy,
+    Costly,
+    No,
+}
+
+impl AskUndo {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Costly => "costly",
+            Self::No => "no",
+        }
+    }
+}
+
+/// How much work a choice is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AskEffort {
+    Small,
+    Medium,
+    Large,
+}
+
+impl AskEffort {
+    /// Its word on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+        }
+    }
+}
+
+/// The access an agent asked its owner to raise a chat to: one of the
+/// approval modes above Ask. Approving is the person's own access command;
+/// the ask itself changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RaisedAccess {
+    Auto,
+    Full,
+}
+
+impl RaisedAccess {
+    /// The approval mode approving sets.
+    pub fn mode(self) -> ConversationApprovalMode {
+        match self {
+            Self::Auto => ConversationApprovalMode::Auto,
+            Self::Full => ConversationApprovalMode::Full,
+        }
+    }
+
+    /// The access asked for, when `mode` is above Ask.
+    pub fn of(mode: ConversationApprovalMode) -> Option<Self> {
+        match mode {
+            ConversationApprovalMode::Ask => None,
+            ConversationApprovalMode::Auto => Some(Self::Auto),
+            ConversationApprovalMode::Full => Some(Self::Full),
+        }
+    }
+
+    /// Whether a chat at `mode` already holds this access or more.
+    pub fn held_at(self, mode: ConversationApprovalMode) -> bool {
+        let rank = |mode| match mode {
+            ConversationApprovalMode::Ask => 0,
+            ConversationApprovalMode::Auto => 1,
+            ConversationApprovalMode::Full => 2,
+        };
+        rank(mode) >= rank(self.mode())
+    }
+
+    /// The question the card asks, in Nessa's words, never the agent's.
+    pub fn question(self) -> &'static str {
+        match self {
+            Self::Auto => "Allow auto approval in this chat?",
+            Self::Full => "Allow full access in this chat?",
+        }
+    }
+
+    /// What approving allows, one plain line each, shown once it is approved.
+    pub fn grants(self) -> [&'static str; 3] {
+        match self {
+            Self::Auto => [
+                "Agents in this chat can run most commands without asking",
+                "They still ask you before risky steps",
+                "You can undo this from Access, under the message box",
+            ],
+            Self::Full => [
+                "Agents in this chat can run any command",
+                "They won't ask you before they act",
+                "You can undo this from Access, under the message box",
+            ],
+        }
+    }
+
+    /// The ask a `request_access` call leaves for the owner: Nessa's
+    /// question, Approve and Not now, and the agent's reason. Not now is the
+    /// recommended choice, so anything that picks for the person picks the
+    /// one that changes nothing.
+    pub fn ask(self, ask_id: String, reason: String) -> OwnerAsk {
+        let raised = match self {
+            Self::Auto => "Raises this chat to Auto approval.",
+            Self::Full => "Raises this chat to Full access.",
+        };
+        OwnerAsk {
+            ask_id,
+            question: self.question().to_owned(),
+            choices: vec![
+                OwnerAskChoice {
+                    label: ACCESS_APPROVE.to_owned(),
+                    consequence: raised.to_owned(),
+                    undo: None,
+                    effort: None,
+                    pros: Vec::new(),
+                    cons: Vec::new(),
+                },
+                OwnerAskChoice {
+                    label: ACCESS_DECLINE.to_owned(),
+                    consequence: "Keeps this chat's access as it is.".to_owned(),
+                    undo: None,
+                    effort: None,
+                    pros: Vec::new(),
+                    cons: Vec::new(),
+                },
+            ],
+            recommended: 1,
+            reason,
+            asked_at_ms: 0,
+            access: Some(self),
+            summary: None,
+            auto_pick: None,
+        }
+    }
+}
+
+/// The choice that raises the access on an access ask.
+pub const ACCESS_APPROVE: &str = "Approve";
+/// The choice that leaves it as it is.
+pub const ACCESS_DECLINE: &str = "Not now";
+
+/// One choice an [`OwnerAsk`] offers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerAskChoice {
+    pub label: String,
+    /// What happens if the person picks it, in one line.
+    pub consequence: String,
+    /// How hard it is to take back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<AskUndo>,
+    /// How much work it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<AskEffort>,
+    /// At most [`MAX_ASK_DETAILS`] lines for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pros: Vec<String>,
+    /// At most [`MAX_ASK_DETAILS`] lines against it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cons: Vec<String>,
+}
+
+/// Why an ask was refused: every part has to fit on a card and in a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerAskRefusal {
+    /// The question is empty, past [`MAX_ASK_QUESTION_WORDS`] words or
+    /// [`MAX_ASK_QUESTION_BYTES`] bytes.
+    QuestionTooLong,
+    /// Fewer than [`MIN_ASK_CHOICES`] or more than [`MAX_ASK_CHOICES`]
+    /// choices, or two with the same label.
+    Choices,
+    /// A label, consequence or reason is empty or past its bound.
+    LineTooLong,
+    /// `recommended` names no choice.
+    Recommended,
+    /// A part holds a line break or another control character: each is one
+    /// line.
+    NotOneLine,
+    /// Its key is not 32 lowercase hex digits: a damaged row, never an
+    /// agent's mistake.
+    Key,
+    /// It names an access to raise, but its question or choices are not the
+    /// ones Nessa writes for it: a damaged row, never an agent's mistake.
+    Access,
+    /// The summary, or a choice's pros or cons, is empty, too long, or
+    /// more than [`MAX_ASK_DETAILS`] of them.
+    Details,
+    /// It allows an auto-pick, but the recommended choice is not marked easy
+    /// to undo.
+    AutoPick,
+}
+
+impl OwnerAskRefusal {
+    /// The code the agent is answered with.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::QuestionTooLong => "ask_question_too_long",
+            Self::Choices => "ask_choices",
+            Self::LineTooLong => "ask_line_too_long",
+            Self::Recommended => "ask_recommended",
+            Self::NotOneLine => "ask_not_one_line",
+            Self::Key | Self::Access => "invalid_request",
+            Self::Details => "ask_details",
+            Self::AutoPick => "ask_auto_pick",
+        }
+    }
+}
+
+impl OwnerAsk {
+    /// Whether something other than the person may answer it for them, as a
+    /// deadline does: never an access ask, whose Approve only the person
+    /// gives.
+    pub fn auto_pickable(&self) -> bool {
+        self.access.is_none()
+    }
+
+    /// Whether every part fits. Checked when it is asked and again when it
+    /// is read back, so a damaged row is never shown.
+    ///
+    /// # Errors
+    /// The first part that does not fit.
+    pub fn check(&self) -> Result<(), OwnerAskRefusal> {
+        let one_line = |text: &str| !text.chars().any(char::is_control);
+        let line = |text: &str, bytes: usize| {
+            let text = text.trim();
+            !text.is_empty() && text.len() <= bytes
+        };
+        let mut parts = vec![self.question.as_str(), self.reason.as_str()];
+        parts.extend(self.summary.as_deref());
+        for choice in &self.choices {
+            parts.push(&choice.label);
+            parts.push(&choice.consequence);
+            parts.extend(choice.pros.iter().chain(&choice.cons).map(String::as_str));
+        }
+        if !parts.into_iter().all(one_line) {
+            return Err(OwnerAskRefusal::NotOneLine);
+        }
+        if !line(&self.question, MAX_ASK_QUESTION_BYTES)
+            || self.question.split_whitespace().count() > MAX_ASK_QUESTION_WORDS
+        {
+            return Err(OwnerAskRefusal::QuestionTooLong);
+        }
+        if !(MIN_ASK_CHOICES..=MAX_ASK_CHOICES).contains(&self.choices.len()) {
+            return Err(OwnerAskRefusal::Choices);
+        }
+        let mut labels = std::collections::HashSet::new();
+        for choice in &self.choices {
+            if !line(&choice.label, MAX_ASK_LABEL_BYTES)
+                || !line(&choice.consequence, MAX_ASK_LINE_BYTES)
+            {
+                return Err(OwnerAskRefusal::LineTooLong);
+            }
+            if !labels.insert(choice.label.trim().to_lowercase()) {
+                return Err(OwnerAskRefusal::Choices);
+            }
+        }
+        if !line(&self.reason, MAX_ASK_LINE_BYTES) {
+            return Err(OwnerAskRefusal::LineTooLong);
+        }
+        if usize::from(self.recommended) >= self.choices.len() {
+            return Err(OwnerAskRefusal::Recommended);
+        }
+        let details = |lines: &[String]| {
+            lines.len() <= MAX_ASK_DETAILS
+                && lines.iter().all(|text| line(text, MAX_ASK_DETAIL_BYTES))
+        };
+        let summary = self
+            .summary
+            .as_deref()
+            .is_none_or(|text| line(text, MAX_ASK_LINE_BYTES));
+        if !summary
+            || !self
+                .choices
+                .iter()
+                .all(|choice| details(&choice.pros) && details(&choice.cons))
+        {
+            return Err(OwnerAskRefusal::Details);
+        }
+        if self.auto_pick == Some(AutoPick::Allowed) && !self.recommended_is_easy_to_undo() {
+            return Err(OwnerAskRefusal::AutoPick);
+        }
+        let key = self.ask_id.len() == 32
+            && self
+                .ask_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if !key {
+            return Err(OwnerAskRefusal::Key);
+        }
+        // An access ask is Nessa's own words and choices: a row that says
+        // otherwise was not written by `request_access`.
+        if let Some(access) = self.access {
+            let mut written = access.ask(self.ask_id.clone(), self.reason.clone());
+            written.asked_at_ms = self.asked_at_ms;
+            if written != *self {
+                return Err(OwnerAskRefusal::Access);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether its recommended choice may be picked for the person when
+    /// nobody answers in time: it is not an access ask, the agent allowed
+    /// it, and that choice is easy to undo.
+    pub fn auto_pick_allowed(&self) -> bool {
+        self.auto_pickable()
+            && self.auto_pick == Some(AutoPick::Allowed)
+            && self.recommended_is_easy_to_undo()
+    }
+
+    fn recommended_is_easy_to_undo(&self) -> bool {
+        self.choices
+            .get(usize::from(self.recommended))
+            .is_some_and(|choice| choice.undo == Some(AskUndo::Easy))
+    }
+}
+/// Shortest wait before an ask's recommended choice is picked for its owner.
+pub const MIN_AUTO_PICK_SECONDS: u32 = 60;
+/// Longest wait: a day.
+pub const MAX_AUTO_PICK_SECONDS: u32 = 24 * 60 * 60;
+/// The wait until the owner sets one: five minutes.
+pub const DEFAULT_AUTO_PICK_SECONDS: u32 = 5 * 60;
+
+/// How an owner's decisions behave, kept for them on the gateway: whether an
+/// ask the agent allowed it on is answered with its recommended choice after
+/// `auto_pick_after_seconds` with no answer
+/// ([`OwnerAsk::auto_pick_allowed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecisionSettings {
+    pub auto_pick: bool,
+    pub auto_pick_after_seconds: u32,
+}
+
+impl Default for DecisionSettings {
+    /// On, after five minutes.
+    fn default() -> Self {
+        Self {
+            auto_pick: true,
+            auto_pick_after_seconds: DEFAULT_AUTO_PICK_SECONDS,
+        }
+    }
+}
+
+impl DecisionSettings {
+    /// These settings, when the wait is one they allow.
+    pub fn checked(self) -> Option<Self> {
+        (MIN_AUTO_PICK_SECONDS..=MAX_AUTO_PICK_SECONDS)
+            .contains(&self.auto_pick_after_seconds)
+            .then_some(self)
+    }
+}
+
+/// Most bytes of an answer a decision keeps: the person's message, cut on a
+/// character boundary. The whole message is in the conversation.
+pub const MAX_DECISION_ANSWER_BYTES: usize = 1024;
+/// The most a decision's outcome takes as JSON, the bound the metadata store
+/// holds its `owner_decisions.outcome` column to. An answer of
+/// [`MAX_DECISION_ANSWER_BYTES`] can take six times that once escaped (a
+/// control character is written `\u00XX`), and still fits.
+pub const MAX_DECISION_OUTCOME_JSON_BYTES: usize = 8192;
+/// Most decisions a conversation keeps, newest first; an older one goes when
+/// a newer one is asked.
+pub const MAX_DECISIONS_KEPT: usize = 100;
+
+/// One question an agent asked the owner, and what became of it: still
+/// waiting, answered by the owner's next message, or replaced by a newer ask
+/// before anyone answered. The history a conversation's decisions list
+/// shows (`conversation.decisions`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnerDecision {
+    pub ask: OwnerAsk,
+    /// `None` while it waits.
+    pub outcome: Option<OwnerDecisionOutcome>,
+    /// While it waits: the owner paused its auto-pick.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_pick_paused: bool,
+    /// While it waits: when auto-pick sends its recommended choice, in Unix
+    /// milliseconds. `None` when it will not: the agent did not allow it,
+    /// the owner turned auto-pick off, or paused it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_pick_due_at_ms: Option<u64>,
+}
+
+impl OwnerDecision {
+    /// When auto-pick answers this decision under `settings`: still waiting,
+    /// allowed by its agent, not paused, and auto-pick on.
+    pub fn auto_pick_due(&self, settings: DecisionSettings) -> Option<u64> {
+        (self.outcome.is_none()
+            && !self.auto_pick_paused
+            && settings.auto_pick
+            && self.ask.auto_pick_allowed())
+        .then(|| {
+            self.ask
+                .asked_at_ms
+                .saturating_add(u64::from(settings.auto_pick_after_seconds) * 1000)
+        })
+    }
+}
+
+/// How an ask stopped waiting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "state",
+    deny_unknown_fields
+)]
+pub enum OwnerDecisionOutcome {
+    /// The owner wrote in the conversation: that message is the answer.
+    Decided {
+        /// The message, cut to [`MAX_DECISION_ANSWER_BYTES`].
+        text: String,
+        /// The choice it names, when it is one: its label, or its label then
+        /// `". "` and a note.
+        choice: Option<u8>,
+        at_ms: u64,
+        /// Sent for the owner with the recommended choice when nobody
+        /// answered in time ([`AUTO_PICK_SURFACE`]), not typed or tapped.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto: bool,
+    },
+    /// A newer ask, `by`, took its place before anyone answered.
+    Replaced { by: String, at_ms: u64 },
+}
+
+impl OwnerDecisionOutcome {
+    /// `ask` answered by a message saying `text` at `at_ms`.
+    pub fn answered(ask: &OwnerAsk, text: &str, at_ms: u64) -> Self {
+        let said = text.trim();
+        // The label said in full, else the longest one the text opens with
+        // and goes on from: "Keep. Then delete" is not "Keep" said with a note.
+        let exact = ask
+            .choices
+            .iter()
+            .position(|choice| said.eq_ignore_ascii_case(choice.label.trim()));
+        let choice = exact.or_else(|| {
+            ask.choices
+                .iter()
+                .enumerate()
+                .filter(|(_, choice)| {
+                    let label = choice.label.trim();
+                    said.get(..label.len())
+                        .is_some_and(|start| start.eq_ignore_ascii_case(label))
+                        && said[label.len()..].starts_with(". ")
+                })
+                .max_by_key(|(_, choice)| choice.label.trim().len())
+                .map(|(index, _)| index)
+        });
+        let mut end = said.len().min(MAX_DECISION_ANSWER_BYTES);
+        while !said.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self::Decided {
+            text: said[..end].to_owned(),
+            choice: choice.and_then(|index| u8::try_from(index).ok()),
+            at_ms,
+            auto: false,
+        }
+    }
+}
+
+/// The surface a message sent for the owner by auto-pick is written from:
+/// what tells it apart from one they typed or tapped, in the turn's origin
+/// and in the decision it settles.
+pub const AUTO_PICK_SURFACE: &str = "auto-pick";
+
+impl OwnerAsk {
+    /// The message auto-pick sends for the owner after `after_seconds` with no
+    /// answer: the recommended choice's label, then a note the agent and the
+    /// person read, so it is answered as that choice
+    /// ([`OwnerDecisionOutcome::answered`]) and still says how it was made.
+    pub fn auto_pick_text(&self, after_seconds: u32) -> Option<String> {
+        let choice = self.choices.get(usize::from(self.recommended))?;
+        Some(format!(
+            "{}. Picked for you on “{}”: no answer in {}.",
+            choice.label.trim(),
+            self.question.trim(),
+            wait_words(after_seconds)
+        ))
+    }
+}
+
+/// A wait in words: "5 minutes", "1 hour", "90 seconds".
+pub fn wait_words(seconds: u32) -> String {
+    let (amount, one, many) = if seconds.is_multiple_of(3600) {
+        (seconds / 3600, "hour", "hours")
+    } else if seconds.is_multiple_of(60) {
+        (seconds / 60, "minute", "minutes")
+    } else {
+        (seconds, "second", "seconds")
+    };
+    format!("{amount} {}", if amount == 1 { one } else { many })
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmissionReceipt {
@@ -835,6 +1421,53 @@ pub enum ConversationReorderOutcome {
     Unchanged,
     QueueChanged,
     PriorityConflict,
+}
+
+/// One opening of a conversation's cloud machine: each step it took.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSetup {
+    pub state: ConversationSetupState,
+    /// The message whose send this opening served, when a send started it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// In the order they began; only the last can still be under way.
+    pub steps: Vec<ConversationSetupStep>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSetupState {
+    Running,
+    /// The agent started.
+    Ready,
+    /// The machine or the agent did not start.
+    Failed,
+}
+
+/// One step of getting a cloud machine ready, on the gateway's clock.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSetupStep {
+    pub step: ConversationSetupStepKind,
+    pub started_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationSetupStepKind {
+    /// A new machine is being made.
+    Creating,
+    /// A resting machine is being started.
+    Waking,
+    /// This build of Nessa is being put on it.
+    Installing,
+    /// The gateway is reaching it.
+    Connecting,
+    /// The agent is being started there.
+    Starting,
 }
 
 /// The conversation's latest lease as its records fold. A lease of a kind

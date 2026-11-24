@@ -157,6 +157,7 @@ fn main() {
             saving::save_file_finish,
             saving::save_file_abort,
             vault::infrastructure::vault_command,
+            vault::infrastructure::vault_biometrics,
             startup::host_startup,
             startup::restart_nessa,
             startup::quit_nessa,

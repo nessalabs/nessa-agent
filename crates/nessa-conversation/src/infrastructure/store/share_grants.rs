@@ -19,9 +19,10 @@ use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
 use crate::application::{
-    AccessAction, ConversationCaller, ConversationError, ConversationFuture, HeldGrant,
-    OwnerAccess, ResourceKind, RevisionHold, ShareGrant, ShareGrantChange, ShareGrantList,
-    ShareGrantReceipt, ShareGrantTransition, ShareGrants, MAX_DRIVE_GRANTS_PER_CONVERSATION,
+    AccessAction, ConversationCaller, ConversationError, ConversationFuture, GrantLogEntry,
+    GrantSnapshotEntry, GrantStream, GrantUse, HeldGrant, OwnerAccess, ResourceKind, RevisionHold,
+    ShareGrant, ShareGrantChange, ShareGrantList, ShareGrantReceipt, ShareGrantTransition,
+    ShareGrants, EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::domain::{
@@ -30,13 +31,19 @@ use crate::domain::{
 use nessa_auth::application::ports::AccessHold;
 use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::future::Future;
+use std::io::{ErrorKind, Read, Write};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
+use tokio::sync::Notify;
+use uuid::Uuid;
 
 /// One target selector for gate acquisition and the transaction. An ordinary
 /// omitted receiver keeps this credential's row; a credential-owned principal
@@ -673,6 +680,226 @@ impl ShareGrants for LocalConversationStore {
             }
         })
     }
+
+    fn grant_log_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.grant_log)
+    }
+
+    fn grant_stream<'a>(&'a self, receiver_id: &'a str) -> ConversationFuture<'a, GrantStream> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| read_grant_stream(connection, &receiver_id))
+    }
+
+    fn grant_log_after<'a>(
+        &'a self,
+        receiver_id: &'a str,
+        after: u64,
+    ) -> ConversationFuture<'a, Vec<GrantLogEntry>> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| {
+            let after = i64::try_from(after).unwrap_or(i64::MAX);
+            let mut statement = connection
+                .prepare(
+                    "SELECT position, conversation_id, capabilities, policy, policy_revision
+                     FROM grants.grant_log
+                     WHERE receiver_id = ?1 AND position > ?2
+                     ORDER BY position",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![receiver_id, after], |row| {
+                    Ok(GrantLogEntry {
+                        position: u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                        conversation_id: row.get(1)?,
+                        capabilities: row.get(2)?,
+                        policy: row.get(3)?,
+                        policy_revision: row
+                            .get::<_, Option<i64>>(4)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                    })
+                })
+                .map_err(failed)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(failed)
+        })
+    }
+
+    fn grant_snapshot<'a>(
+        &'a self,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Vec<GrantSnapshotEntry>> {
+        let receiver_id = receiver_id.to_owned();
+        self.run(move |connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT resource_id, capabilities, policy, policy_revision
+                     FROM grants.share_grants
+                     WHERE resource_kind = 'conversation' AND receiver_id = ?1
+                     ORDER BY resource_id",
+                )
+                .map_err(failed)?;
+            let rows = statement
+                .query_map(params![receiver_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(failed)?;
+            rows.map(|row| {
+                let (conversation_id, capabilities, policy, revision) = row.map_err(failed)?;
+                Ok(GrantSnapshotEntry {
+                    conversation_id,
+                    capabilities,
+                    policy,
+                    policy_revision: u64::try_from(revision).unwrap_or(0),
+                })
+            })
+            .collect()
+        })
+    }
+
+    fn record_use(&self, admitted: GrantUse) -> ConversationFuture<'_, ()> {
+        let directory = self.grant_path.with_file_name("grant-uses");
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || commit_grant_use(&directory, &admitted))
+                .await
+                .map_err(|_| ConversationError::Audit)?
+        })
+    }
+}
+
+fn read_grant_stream(
+    connection: &super::Connection,
+    receiver_id: &str,
+) -> Result<GrantStream, ConversationError> {
+    let found: Option<(String, i64)> = connection
+        .query_row(
+            "SELECT incarnation, head FROM grants.grant_streams WHERE receiver_id = ?1",
+            params![receiver_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(failed)?;
+    let Some((incarnation, head)) = found else {
+        return Ok(GrantStream {
+            incarnation: EMPTY_GRANT_INCARNATION.to_owned(),
+            head: 0,
+            oldest: None,
+        });
+    };
+    let oldest: Option<i64> = connection
+        .query_row(
+            "SELECT MIN(position) FROM grants.grant_log WHERE receiver_id = ?1",
+            params![receiver_id],
+            |row| row.get(0),
+        )
+        .map_err(failed)?;
+    Ok(GrantStream {
+        incarnation,
+        head: u64::try_from(head).unwrap_or(0),
+        oldest: oldest.and_then(|position| u64::try_from(position).ok()),
+    })
+}
+
+/// Append this commit to each receiver it changes, in the grant's transaction.
+fn append_grant_log(
+    transaction: &Transaction<'_>,
+    conversation: &str,
+    receiver: Option<&str>,
+    previous: Option<&str>,
+    after: &Held,
+    epoch: i64,
+) -> Result<(), ConversationError> {
+    if let Some(previous) = previous.filter(|previous| Some(*previous) != receiver) {
+        append_receiver_log(
+            transaction,
+            previous,
+            &LogRecord {
+                conversation,
+                capabilities: None,
+                policy: None,
+                epoch: None,
+            },
+        )?;
+    }
+    if let Some(receiver) = receiver {
+        let record = if after.0.as_str() == NONE {
+            LogRecord {
+                conversation,
+                capabilities: None,
+                policy: None,
+                epoch: None,
+            }
+        } else {
+            LogRecord {
+                conversation,
+                capabilities: Some(after.0.as_str()),
+                policy: after.1.as_deref(),
+                epoch: Some(epoch),
+            }
+        };
+        append_receiver_log(transaction, receiver, &record)?;
+    }
+    Ok(())
+}
+
+struct LogRecord<'a> {
+    conversation: &'a str,
+    capabilities: Option<&'a str>,
+    policy: Option<&'a str>,
+    epoch: Option<i64>,
+}
+
+fn append_receiver_log(
+    transaction: &Transaction<'_>,
+    receiver: &str,
+    record: &LogRecord<'_>,
+) -> Result<(), ConversationError> {
+    let found: Option<(String, i64)> = transaction
+        .query_row(
+            "SELECT incarnation, head FROM grants.grant_streams WHERE receiver_id = ?1",
+            params![receiver],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(failed)?;
+    let (incarnation, head) = found.unwrap_or_else(|| (Uuid::new_v4().to_string(), 0));
+    let position = head.checked_add(1).ok_or(ConversationError::Metadata)?;
+    transaction
+        .execute(
+            "INSERT INTO grants.grant_log
+             (receiver_id, position, conversation_id, capabilities, policy, policy_revision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                receiver,
+                position,
+                record.conversation,
+                record.capabilities,
+                record.policy,
+                record.epoch
+            ],
+        )
+        .map_err(failed)?;
+    transaction
+        .execute(
+            "INSERT INTO grants.grant_streams (receiver_id, incarnation, head)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(receiver_id) DO UPDATE SET head = excluded.head",
+            params![receiver, incarnation, position],
+        )
+        .map_err(failed)?;
+    let floor = position.saturating_sub(i64::try_from(GRANT_LOG_RETAINED).unwrap_or(1024));
+    if floor > 0 {
+        transaction
+            .execute(
+                "DELETE FROM grants.grant_log WHERE receiver_id = ?1 AND position <= ?2",
+                params![receiver, floor],
+            )
+            .map_err(failed)?;
+    }
+    Ok(())
 }
 
 impl LocalConversationStore {
@@ -795,6 +1022,7 @@ impl LocalConversationStore {
         let changes = self.changes.clone();
         let access = self.access.clone();
         let connection = self.connection.clone();
+        let grant_log = self.grant_log.clone();
         let links = self
             .person_links
             .read()
@@ -1239,6 +1467,16 @@ impl LocalConversationStore {
                     }
                     .map_err(failed)?;
                 }
+                if applied {
+                    append_grant_log(
+                        &transaction,
+                        &id,
+                        receiver.as_deref(),
+                        stored_receiver.as_deref(),
+                        &after,
+                        stamped_epoch,
+                    )?;
+                }
                 transaction.commit().map_err(failed)?;
                 let receipt = ShareGrantReceipt {
                     applied,
@@ -1268,10 +1506,14 @@ impl LocalConversationStore {
                 }
                 Ok(ChangeAttempt::Applied(receipt))
                 };
-                match links {
+                let wrote = match links {
                     Some(links) => links.with_current(write),
                     None => write(),
+                };
+                if matches!(wrote, Ok(ChangeAttempt::Applied(receipt)) if receipt.applied) {
+                    grant_log.notify_waiters();
                 }
+                wrote
             })
             .await
             .map_err(|_| ConversationError::Metadata)?
@@ -1341,9 +1583,151 @@ impl LocalConversationStore {
     }
 }
 
+/// The first admission of this receiver's command stands. A later call with
+/// the same conversation, receiver, command, and request keeps that file,
+/// including when the person link or the epoch has since changed. Another
+/// receiver, or another command, is a different record.
+fn commit_grant_use(directory: &Path, admitted: &GrantUse) -> Result<(), ConversationError> {
+    create_directory(directory).map_err(|_| ConversationError::Audit)?;
+    let correlation = format!(
+        "{}:{}:{}:{}",
+        admitted.conversation_id, admitted.receiver_id, admitted.command, admitted.request_id
+    );
+    let digest = Sha256::digest(correlation.as_bytes());
+    let id = format!("grant-use-{digest:x}");
+    let destination = directory.join(format!("{id}.json"));
+    if grant_use_stands(&destination, &id)? {
+        return Ok(());
+    }
+    let value = json!({
+        "recordId": id,
+        "kind": "grant_use",
+        "target": {
+            "conversationId": admitted.conversation_id.to_string(),
+            "action": admitted.action,
+            "command": admitted.command,
+        },
+        "grant": {
+            "principalId": admitted.principal_id.as_str(),
+            "receiverId": admitted.receiver_id,
+            "policyRevision": admitted.policy_revision,
+            "personId": admitted.person.as_ref().map(PrincipalId::as_str),
+        },
+        "requestId": admitted.request_id,
+        "observedAtMs": admitted.observed_at_ms,
+    });
+    let mut file = PrivateTempFile::new_in(directory).map_err(|_| ConversationError::Audit)?;
+    serde_json::to_writer(file.as_file_mut(), &value).map_err(|_| ConversationError::Audit)?;
+    file.as_file_mut()
+        .write_all(b"\n")
+        .and_then(|_| file.as_file().sync_all())
+        .map_err(|_| ConversationError::Audit)?;
+    if let Err(error) = file.publish(&destination) {
+        if error.kind() != ErrorKind::AlreadyExists || !grant_use_stands(&destination, &id)? {
+            return Err(ConversationError::Audit);
+        }
+    }
+    sync_directory(directory).map_err(|_| ConversationError::Audit)
+}
+
+fn grant_use_stands(destination: &Path, id: &str) -> Result<bool, ConversationError> {
+    let mut file = match open(destination, OpenMode::Read) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(ConversationError::Audit),
+    };
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(16_385)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ConversationError::Audit)?;
+    if bytes.len() > 16_384 {
+        return Err(ConversationError::Audit);
+    }
+    let stored: Value = serde_json::from_slice(&bytes).map_err(|_| ConversationError::Audit)?;
+    let stands = stored.get("kind").and_then(Value::as_str) == Some("grant_use")
+        && stored.get("recordId").and_then(Value::as_str) == Some(id);
+    if stands {
+        Ok(true)
+    } else {
+        Err(ConversationError::Audit)
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../tests/conversation/share_grant_policy_text.rs"]
 mod tests;
+
+#[cfg(test)]
+mod grant_use_audit {
+    use super::commit_grant_use;
+    use crate::application::GrantUse;
+    use nessa_auth::domain::PrincipalId;
+    use nessa_protocol::conversation::domain::ConversationId;
+
+    fn admitted(person: Option<&str>, revision: u64) -> GrantUse {
+        GrantUse {
+            conversation_id: ConversationId::new("00000000-0000-4000-8000-000000000891").unwrap(),
+            action: "conversation.comment",
+            command: "conversation.message".into(),
+            principal_id: PrincipalId::new("gateway:peer").unwrap(),
+            receiver_id: "receiver".into(),
+            policy_revision: revision,
+            person: person.map(|id| PrincipalId::new(id).unwrap()),
+            request_id: "note-1".into(),
+            observed_at_ms: 10,
+        }
+    }
+
+    #[test]
+    fn the_first_admission_stands_when_a_retry_names_someone_else() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("grant-uses");
+        commit_grant_use(&directory, &admitted(None, 3)).unwrap();
+        commit_grant_use(&directory, &admitted(Some("owner"), 9)).unwrap();
+        let files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&files[0]).unwrap()).unwrap();
+        assert_eq!(stored["kind"], "grant_use");
+        assert_eq!(stored["grant"]["principalId"], "gateway:peer");
+        assert_eq!(stored["grant"]["policyRevision"], 3);
+        assert!(stored["grant"]["personId"].is_null());
+        assert_eq!(stored["requestId"], "note-1");
+        assert_eq!(stored["target"]["command"], "conversation.message");
+    }
+
+    #[test]
+    fn another_receiver_or_command_is_its_own_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("grant-uses");
+        let mut other_receiver = admitted(None, 3);
+        other_receiver.receiver_id = "other-receiver".into();
+        other_receiver.principal_id = PrincipalId::new("gateway:other").unwrap();
+        let mut other_command = admitted(None, 3);
+        other_command.command = "conversation.steer".into();
+        other_command.action = "conversation.drive";
+        commit_grant_use(&directory, &admitted(None, 3)).unwrap();
+        commit_grant_use(&directory, &other_receiver).unwrap();
+        commit_grant_use(&directory, &other_command).unwrap();
+        let files: Vec<_> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn a_use_is_refused_when_its_directory_cannot_be_created() {
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("grant-uses");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        assert!(commit_grant_use(&blocked, &admitted(None, 1)).is_err());
+    }
+}
 
 #[cfg(test)]
 mod cancelled_wait {

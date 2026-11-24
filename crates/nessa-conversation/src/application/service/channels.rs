@@ -11,7 +11,7 @@
 //!   ──▶ ChannelStore::create
 //! conversation.create { channelId } ──▶ channel.use (Cedar) ──▶ ChannelStore::place
 //! opening ──▶ ChannelStore::channel_of ──▶ AgentPlace { folder, instructions }
-//!   ──▶ ConversationAgentSource::resolve_in
+//!   ──▶ AgentBrief { place, style } ──▶ ConversationAgentSource::resolve_briefed
 //! ```
 //!
 //! The folder is the one path a request may name, and only here: a
@@ -86,6 +86,13 @@ pub trait ChannelStore: Send + Sync {
         channel: &ChannelId,
         execution: ChannelExecution,
     ) -> ConversationFuture<'_, Option<Channel>>;
+    /// Turn `channel`'s coordinator on or off, keeping its main
+    /// conversation; `None` when there is no such channel.
+    fn set_coordinator_on(
+        &self,
+        channel: &ChannelId,
+        on: bool,
+    ) -> ConversationFuture<'_, Option<Channel>>;
 }
 
 /// Why a folder or a file is not one a channel takes.
@@ -145,6 +152,17 @@ impl From<ConversationError> for ChannelError {
 pub struct AgentPlace {
     pub folder: PathBuf,
     pub instructions: String,
+}
+
+/// Everything an opening tells the agent source beyond the agent, model and
+/// preset: where it works (`None`: the gateway's workspace) and how it writes
+/// to the person (`None`: Nessa adds nothing).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentBrief {
+    pub place: Option<AgentPlace>,
+    /// Its role's job (a coordinator's), fixed when it was made.
+    pub job: Option<String>,
+    pub style: Option<String>,
 }
 
 impl AgentPlace {
@@ -394,7 +412,8 @@ impl ConversationService {
             request_id,
             self.inner.clock.unix_milliseconds(),
         )
-        .map_err(|_| ChannelError::InvalidInput)?;
+        .map_err(|_| ChannelError::InvalidInput)?
+        .with_coordinator_on(resolved.coordinator_on);
         let kept = store.create(channel.clone()).await?;
         // A creation that raced this one under the same request id kept its
         // own; this one is the same request only if it asked for the same.
@@ -528,8 +547,8 @@ impl ConversationService {
                 caller: caller.clone(),
                 change: SettingsChange::ChannelPlacement {
                     channel: id.clone(),
-                    before: current.execution().clone(),
-                    after: execution.clone(),
+                    before: Box::new(current.execution().clone()),
+                    after: Box::new(execution.clone()),
                     coordinator: coordinator.clone(),
                 },
                 outcome,
@@ -567,6 +586,75 @@ impl ConversationService {
         Ok(changed)
     }
 
+    /// Turn `id`'s coordinator on or off. Off keeps its main conversation
+    /// and its threads: the channel just no longer opens it as its main
+    /// chat. On again, the same conversation is its coordinator.
+    ///
+    /// # Errors
+    /// As [`Self::set_channel_execution`].
+    pub async fn set_channel_coordinator(
+        &self,
+        caller: &ConversationCaller,
+        id: &ChannelId,
+        on: bool,
+    ) -> Result<Channel, ChannelError> {
+        let _admission = self.admit().await.map_err(|_| ChannelError::Unavailable)?;
+        if id.is_default() {
+            return Err(ChannelError::Forbidden);
+        }
+        let store = self.channel_store().ok_or(ChannelError::Forbidden)?;
+        // One switch at a time, so each records what it switched from.
+        let _switch = self.inner.channel_switches.lock().await;
+        let current = match self
+            .channel_for_action(caller, id, AccessAction::ChannelSettings)
+            .await
+        {
+            Ok(found) => found,
+            Err(ConversationError::Unavailable) => return Err(ChannelError::Unavailable),
+            Err(ConversationError::ChannelNotFound) => return Err(ChannelError::Forbidden),
+            Err(error) => return Err(error.into()),
+        };
+        if current.coordinator_on() == on {
+            return Ok(current);
+        }
+        let operation = uuid::Uuid::new_v4().to_string();
+        let record = |outcome| SettingsAuditRecord {
+            operation_id: operation.clone(),
+            caller: caller.clone(),
+            change: SettingsChange::ChannelCoordinator {
+                channel: id.clone(),
+                before: current.coordinator_on(),
+                after: on,
+                coordinator: current.coordinator_id(),
+            },
+            outcome,
+        };
+        self.record_setting(record(SettingsOutcome::Requested))
+            .await
+            .map_err(|_| ChannelError::Unavailable)?;
+        let changed = match store.set_coordinator_on(id, on).await {
+            Ok(Some(changed)) => changed,
+            failed => {
+                if self
+                    .record_setting(record(SettingsOutcome::Failed))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(channel_id = %id, "a failed coordinator switch was not recorded");
+                }
+                return Err(failed.map_or_else(ChannelError::from, |_| ChannelError::Forbidden));
+            }
+        };
+        self.record_setting(record(SettingsOutcome::Applied {
+            changed: true,
+            coordinator: Some(changed.coordinator_id()),
+        }))
+        .await
+        .map_err(|_| ChannelError::Unavailable)?;
+        tracing::info!(channel_id = %id, on, "channel coordinator switched");
+        Ok(changed)
+    }
+
     /// Whether every computer `asked` names that `kept` does not is one
     /// this gateway can run on now: an SSH host it serves, or a paired
     /// computer connected now. A place the channel already holds is not
@@ -591,7 +679,7 @@ impl ConversationService {
         }
     }
 
-    async fn channel_for_action(
+    pub(super) async fn channel_for_action(
         &self,
         caller: &ConversationCaller,
         id: &ChannelId,
@@ -690,6 +778,23 @@ impl ConversationService {
             place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and run where it places threads unless create_thread names an environment. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle. Do not claim that a sleeping VM is executing work.\n");
         }
         Ok(Some(place))
+    }
+
+    /// Where `id`'s agent works and how it writes, as an opening tells its
+    /// agent source.
+    ///
+    /// # Errors
+    /// As [`Self::agent_place`], and `Metadata` when its style cannot be read.
+    pub(super) async fn agent_brief(
+        &self,
+        id: &ConversationId,
+    ) -> Result<AgentBrief, ConversationError> {
+        let (job, style) = self.role_and_style(id).await?;
+        Ok(AgentBrief {
+            place: self.agent_place(id).await?,
+            job,
+            style,
+        })
     }
 
     /// The stored channel `id` is in; `None` is the default one.

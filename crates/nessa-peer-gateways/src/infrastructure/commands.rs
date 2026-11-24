@@ -54,7 +54,8 @@ use nessa_auth::{
 use nessa_client_core::pairing::{NativeClientError, NativeEnrollmentClient};
 use nessa_client_core::retained::{FollowRule, ReadStop, HANDSHAKE};
 use nessa_protocol::clock::Clock as MonotonicClock;
-use nessa_protocol::pairing::socket::WAKE_TICK;
+use nessa_protocol::pairing::socket::{DeadlineStream, WAKE_TICK};
+use nessa_protocol::pairing::EnrollmentChannel;
 use nessa_protocol::product::generated::PeerErrorCode;
 use nessa_protocol::relay::{RelayAddress, DIRECT_HEAD_START};
 use nessa_timer::clock;
@@ -687,6 +688,46 @@ impl PeerCommands {
             let refused = refused.into_inner().unwrap_or_else(PoisonError::into_inner);
             Err(refused.unwrap_or_else(|| io::ErrorKind::TimedOut.into()))
         })
+    }
+
+    /// Run discovery on the pinned session of an already paired peer. This
+    /// does not enroll: the only request is `openDiscovery`.
+    pub async fn open_peer_discovery<T: Send + 'static>(
+        &self,
+        key: DeviceKey,
+        exchange: impl FnOnce(
+                &PeerRecord,
+                &mut EnrollmentChannel<DeadlineStream>,
+            ) -> Result<T, NativeClientError>
+            + Send
+            + 'static,
+    ) -> Result<T, PeerError> {
+        let found = self
+            .blocking(move |records| records.get(&key))
+            .await?
+            .ok_or(PeerError::Unavailable)?;
+        let PeerEntry::Readable(record) = found else {
+            return Err(PeerError::Unavailable);
+        };
+        let PeerPhase::Active { credential, .. } = record.phase() else {
+            return Err(PeerError::Unavailable);
+        };
+        let credential = credential.clone();
+        let stream = self
+            .dial_peer(&record)
+            .await
+            .map_err(|_| PeerError::Unreachable)?;
+        let client = NativeEnrollmentClient::enrolling(
+            ConsentClass::PeerRead,
+            Arc::new(self.records.slot(key)),
+            self.clock.clone(),
+        );
+        client
+            .open_discovery(stream, record.intent(), credential, move |channel| {
+                exchange(&record, channel)
+            })
+            .await
+            .map_err(|_| PeerError::Unavailable)
     }
     /// Ends once the injected clock has moved `limit` past now, read every
     /// [`WAKE_TICK`] as [`Self::within`] reads it.
@@ -1355,11 +1396,16 @@ impl PeerCommands {
     /// completion. Polling it again panics
     /// (`an_audit_error_before_the_deadline_is_not_waited_on_again`). Only a
     /// record still pending at the deadline is waited on here.
-    pub(super) async fn poller_kept(
+    /// Records still unanswered when `cycle` is stopped. The caller gives
+    /// the turn back and waits on these; polling one that already finished
+    /// panics. An empty return is every record finished, or the poller
+    /// stopped and shutdown drains the writer.
+    pub(super) async fn poller_kept<'a>(
         &self,
-        mut records: Vec<PollerRecord<'_>>,
+        mut records: Vec<PollerRecord<'a>>,
         stopped: &mut watch::Receiver<bool>,
-    ) {
+        cycle: Option<&CycleStop>,
+    ) -> Vec<PollerRecord<'a>> {
         /// `Pending` was dropped still unanswered. `Kept` and `Refused`
         /// finished, and their futures must not be polled again.
         #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1391,16 +1437,34 @@ impl PeerCommands {
                     "peer gateway poller change not audited; the change stands");
             }
         }
-        for (record, answer) in records.iter_mut().zip(answer) {
+        let mut pending = Vec::new();
+        let mut hand_back = false;
+        for (mut record, answer) in records.into_iter().zip(answer) {
             if answer != Answer::Pending {
                 continue;
             }
+            if hand_back {
+                pending.push(record);
+                continue;
+            }
+            let mut peer_stopped = std::pin::pin!(async {
+                if let Some(cycle) = cycle {
+                    cycle.stopped().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            });
             tokio::select! {
                 biased;
-                _ = stopped.wait_for(|stop| *stop) => return,
+                _ = stopped.wait_for(|stop| *stop) => return Vec::new(),
+                _ = &mut peer_stopped => {
+                    hand_back = true;
+                    pending.push(record);
+                }
                 _ = &mut record.kept => {}
             }
         }
+        pending
     }
     async fn blocking<T: Send + 'static>(
         &self,

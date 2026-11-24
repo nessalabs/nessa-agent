@@ -147,6 +147,26 @@
       "grant": "conversation.write",
       "lane": "controls"
     },
+    "conversation.decisions": {
+      "params": "ConversationDecisionsParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.decisionSettings": {
+      "params": "ConversationDecisionSettingsParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.pauseAutoPick": {
+      "params": "ConversationPauseAutoPickParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "conversation.setDecisionSettings": {
+      "params": "DecisionSettings",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "conversation.delete": {
       "params": "ConversationDeleteParams",
       "grant": "conversation.write",
@@ -422,6 +442,21 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "grants.subscribe": {
+      "params": "GrantsSubscribeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "grants.page": {
+      "params": "GrantsPageParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "grants.unsubscribe": {
+      "params": "GrantsUnsubscribeParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
       "grant": "conversation.write",
@@ -494,6 +529,21 @@
     },
     "channel.setPlacement": {
       "params": "ChannelSetPlacementParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "channel.setCoordinator": {
+      "params": "ChannelSetCoordinatorParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "replyStyle.read": {
+      "params": "ReplyStyleReadParams",
+      "grant": "conversation.write",
+      "lane": "requests"
+    },
+    "replyStyle.set": {
+      "params": "ReplyStyleSetParams",
       "grant": "conversation.write",
       "lane": "requests"
     },
@@ -572,6 +622,31 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "agent37.status": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "agent37.save": {
+      "params": "Agent37SaveParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "agent37.disconnect": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.read": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "cloud.choose": {
+      "params": "CloudChooseParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "devices.pool": {
       "params": "DevicesPoolParams",
       "grant": "credential.manage",
@@ -622,6 +697,26 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "logins.chatgptSignIn": {
+      "params": "LoginsChatgptSignInParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "logins.chatgptCancel": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "logins.chatgptUse": {
+      "params": "LoginsChatgptUseParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "logins.chatgptRemove": {
+      "params": "LoginsChatgptRemoveParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "voice.status": {
       "params": null,
       "grant": "credential.manage",
@@ -641,6 +736,56 @@
       "params": "VoiceStartCallParams",
       "grant": "conversation.write",
       "lane": "requests"
+    },
+    "terminal.open": {
+      "params": "TerminalOpenParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.list": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.attach": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.focus": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.fit": {
+      "params": "TerminalViewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.detach": {
+      "params": "TerminalDetachParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.input": {
+      "params": "TerminalInputParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.history": {
+      "params": "TerminalHistoryParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.close": {
+      "params": "TerminalCloseParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.rename": {
+      "params": "TerminalRenameParams",
+      "grant": "credential.manage",
+      "lane": "requests"
     }
   },
   "events": {
@@ -650,9 +795,13 @@
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
+    "grants.changed": "GrantsChanged",
+    "grants.subscriptionEnded": "ConversationSubscriptionEnded",
     "permission.reviewWaiting": "PermissionReviewWaiting",
     "workspace.command": "WorkspaceCommand",
-    "conversation.events": "ConversationEvents"
+    "conversation.events": "ConversationEvents",
+    "terminal.output": "TerminalOutput",
+    "terminal.listed": "TerminalListed"
   },
   "handshakeMethod": "session.authenticate"
 }

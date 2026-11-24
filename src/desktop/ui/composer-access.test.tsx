@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * The composer's shield shows the access its owner gives it, says a refused
- * change, and is disabled where no owner keeps a choice.
+ * change as its own tooltip, and is disabled where no owner keeps a choice.
  */
 import { act } from "react"
 import { createRoot } from "react-dom/client"
@@ -36,38 +36,38 @@ async function shown(access: ComposerAccess | undefined) {
   return { root, shield }
 }
 
-it("shows the owner's access and the sentence for a refused change", async () => {
+it("shows the owner's access, and says a refused change as its tooltip, marked", async () => {
+  const words = "Access can’t change while the agent is working. Try again when it stops."
   const { root, shield } = await shown({
     value: "full-access",
     onChange: () => {},
-    notice: {
-      tone: "warning",
-      text: "Access can’t change while the agent is working. Try again when it stops.",
-    },
+    note: { tone: "warning", text: words },
   })
   expect(shield?.getAttribute("data-access-mode")).toBe("full-access")
   expect(shield?.disabled).toBe(false)
-  expect(host.querySelector('[role="status"]')?.textContent).toBe(
-    "Access can’t change while the agent is working. Try again when it stops.",
-  )
+  expect(shield?.getAttribute("data-tooltip")).toBe(words)
+  expect(shield?.getAttribute("aria-description")).toBe(words)
+  expect(shield?.getAttribute("data-attention")).toBe("warning")
+  // Said by the shield, not by a line in the composer, and read aloud beside it.
+  expect(host.querySelector('.desktop-composer [role="status"]')).toBeNull()
+  expect(host.querySelector(".desktop-composer-spoken")?.textContent).toBe(words)
   await act(async () => root.unmount())
 })
 
-it("hangs a refusal's mark before its words", async () => {
-  const refused = await shown({
+it("says a neutral note without marking the shield", async () => {
+  const { root, shield } = await shown({
     value: "ask-approval",
     onChange: () => {},
-    notice: { tone: "warning", text: "This model doesn’t offer that access." },
+    note: { tone: "neutral", text: "Access is now Ask for approval." },
   })
-  expect(
-    host.querySelector('[role="status"] [data-slot="status-label-mark"]'),
-  ).not.toBeNull()
-  await act(async () => refused.root.unmount())
+  expect(shield?.getAttribute("data-tooltip")).toBe("Access is now Ask for approval.")
+  expect(shield?.hasAttribute("data-attention")).toBe(false)
+  await act(async () => root.unmount())
 })
 
 it("disables the shield, and says nothing, when no owner keeps the choice", async () => {
   const { root, shield } = await shown(undefined)
   expect(shield?.disabled).toBe(true)
-  expect(host.querySelector('[role="status"]')).toBeNull()
+  expect(host.querySelector(".desktop-composer-spoken")?.textContent).toBe("")
   await act(async () => root.unmount())
 })

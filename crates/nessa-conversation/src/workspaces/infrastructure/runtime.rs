@@ -6,9 +6,11 @@ use crate::workspaces::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
+
 pub(super) struct BoatRuntime {
     pub(super) access: Arc<super::ssh::VmLink>,
 }
+
 #[async_trait]
 impl WorkspaceRuntime for BoatRuntime {
     async fn serve(&self, copy: ServedCopy) -> Result<WorkspaceStream, Failure> {

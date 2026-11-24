@@ -7,6 +7,10 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
     ConversationModelChangeEffect, ConversationModelChangeStatus,
 };
+use nessa_sdk::application::agent_execution::providers::{
+    ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+    ProviderOperationFailure, ProviderSessionState,
+};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::time::Duration;
 
@@ -712,3 +716,219 @@ mod stopped_recovery;
 
 #[path = "model_changes/retained_identity.rs"]
 mod retained_identity;
+
+/// A model control the provider fails while a turn runs (Claude's adapter
+/// answering `Internal error`) leaves the conversation readable, its pending
+/// request settled by the next opening read, and a person's next message
+/// taken: nothing waits on a change no caller will ask about again.
+#[tokio::test]
+async fn a_model_control_failed_during_a_turn_settles_and_the_chat_takes_messages() {
+    failed_model_control_during_a_turn(false).await;
+}
+
+/// The same, when the agent cannot be opened again at once (a VM still
+/// waking): the change stays pending past its own call, and the retry that
+/// resumes the turn it left owed settles it first, on nobody's request.
+#[tokio::test]
+async fn a_change_left_pending_is_settled_by_the_retry_of_the_turn_it_left_owed() {
+    failed_model_control_during_a_turn(true).await;
+}
+
+async fn failed_model_control_during_a_turn(reopen_fails_once: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(access_policy()),
+    );
+    let storage = Arc::new(InMemoryStorage::new());
+    let (mut service, provider, _, _, _) = mode_fixture();
+    let inner = Arc::get_mut(&mut service.inner).expect("composition precedes any live work");
+    inner.metadata = metadata.clone();
+    inner.storage = storage.clone();
+    // Turns a failure left owed are resumed, as on a gateway.
+    let marks = Arc::new(OwedTurns::default());
+    service.bind_unfinished_turns(
+        marks.clone(),
+        crate::application::FailureBackoff {
+            first: Duration::ZERO,
+            most: Duration::ZERO,
+            attempts: 8,
+        },
+    );
+    let retries = {
+        let service = service.clone();
+        tokio::spawn(async move { service.run_failure_retries().await })
+    };
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    let (finish, gate) = tokio::sync::oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "failing-ongoing".into(),
+            SubmittedMessage {
+                uploads: Vec::new(),
+                text: "keep running".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.execution_started.notified(),
+    )
+    .await
+    .expect("turn began");
+    *provider.model_failure.lock().unwrap() = Some(ProviderOperationFailure::new(
+        AgentError::Provider {
+            code: -32603,
+            diagnostic: None,
+        },
+        ProviderSessionState::CleanupRequired,
+    ));
+    // The harness's worker ends with the failed control, and the turn it was
+    // running ends failed with it.
+    let failure = AgentError::Provider {
+        code: -32603,
+        diagnostic: None,
+    };
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let asked = {
+        let service = service.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            service
+                .set_model(
+                    id,
+                    caller(),
+                    ConversationModelId::new("second-model").unwrap(),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), provider.model_started.notified())
+        .await
+        .expect("the model control reached the provider");
+    if reopen_fails_once {
+        *provider.open_failure.lock().unwrap() = Some(AgentError::Closed);
+    }
+    drop(finish);
+    let refused = tokio::time::timeout(Duration::from_secs(10), asked)
+        .await
+        .expect("the model control answers")
+        .unwrap();
+    assert!(refused.is_err(), "{refused:?}");
+    // Nothing is left owed, and nothing waits on the failed change: the
+    // retry loop settles it as it resumes the turn the failure left owed.
+    let settled = tokio::time::timeout(Duration::from_secs(10), async {
+        while marks.holds(&id) || metadata.pending_model_change(&id).await.unwrap().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(
+        settled.is_ok(),
+        "the failed change is settled and the owed turn resumed without anyone asking (owed: {}, pending: {})",
+        marks.holds(&id),
+        metadata.pending_model_change(&id).await.unwrap().is_some()
+    );
+    let view = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match service.read(id.clone(), caller()).await {
+                Ok(view) if view.model_change.is_none() => break view,
+                _ => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    })
+    .await
+    .expect("an opening read settles the failed change");
+    assert_eq!(view.selection.as_ref().unwrap().model, "test");
+    assert!(metadata.pending_model_change(&id).await.unwrap().is_none());
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        service.submit(
+            id.clone(),
+            caller(),
+            "after".into(),
+            SubmittedMessage {
+                uploads: Vec::new(),
+                text: "still here".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        ),
+    )
+    .await
+    .expect("the next message is answered")
+    .unwrap();
+    service.shutdown().await.unwrap();
+    retries.abort();
+}
+
+/// Turns marked unfinished, kept in memory: what a gateway's marks keep.
+#[derive(Default)]
+struct OwedTurns(std::sync::Mutex<HashMap<ConversationId, (u32, Option<u64>)>>);
+impl crate::application::UnfinishedTurns for OwedTurns {
+    fn mark(&self, id: &ConversationId) -> crate::application::ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().entry(id.clone()).or_default();
+        Box::pin(async { Ok(()) })
+    }
+    fn clear(&self, id: &ConversationId) -> crate::application::ConversationFuture<'_, ()> {
+        self.0.lock().unwrap().remove(id);
+        Box::pin(async { Ok(()) })
+    }
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> crate::application::ConversationFuture<'_, ()> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (failures, Some(retry_at_ms)));
+        Box::pin(async { Ok(()) })
+    }
+    fn marked(
+        &self,
+    ) -> crate::application::ConversationFuture<'_, Vec<crate::application::UnfinishedMark>> {
+        let marked = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(
+                |(id, (failures, retry_at_ms))| crate::application::UnfinishedMark {
+                    conversation_id: id.clone(),
+                    failures: *failures,
+                    retry_at_ms: *retry_at_ms,
+                },
+            )
+            .collect();
+        Box::pin(async move { Ok(marked) })
+    }
+}
+impl OwedTurns {
+    fn holds(&self, id: &ConversationId) -> bool {
+        self.0.lock().unwrap().contains_key(id)
+    }
+}

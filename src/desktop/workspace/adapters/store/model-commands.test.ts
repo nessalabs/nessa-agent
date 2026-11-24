@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest"
 import { fakeSource, settle, summary, testStore, opus, astra } from "../../testing"
 import { emptyTranscript } from "../../model/transcript"
 import {
+  chooseAccess,
   changeModel,
   archiveSession,
   approve,
@@ -21,7 +22,7 @@ import {
 } from "./commands"
 import { workspaceActions } from "./slice"
 import { modelChanging, modelRequesting, modelUnsettled } from "./model-commands"
-import { selectNextModel } from "./selectors"
+import { selectNextModel, selectSteppedAccess } from "./selectors"
 import type { ModelReceipt } from "../../model/model-choice"
 import type { ModelRef } from "../../model/workspace-index"
 
@@ -133,6 +134,55 @@ describe("model choices", () => {
     expect(await send(store, "second")).toBe("sent")
     expect(source.setModel).toHaveBeenCalledTimes(1)
     expect(asked(source, "send").at(-1)?.[1]).toMatchObject({ model: astra })
+  })
+
+  it("says the chat moved to Ask when the new model is not offered at its access", async () => {
+    const { source, store } = await ready()
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
+    )
+    expect(store.getState().workspace.transcripts.a?.access?.mode).toBe("auto")
+    const made = reconciles(source)
+    // The agent steps itself to Ask in the same change, and the conversation
+    // says so before the source answers.
+    source.setModel = vi.fn(async (sessionId: string, model: ModelRef, id: string) => {
+      const transcript = store.getState().workspace.transcripts.a!
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...transcript,
+          access: { mode: "ask", modes: ["ask"] },
+          revision: transcript.revision + 1,
+        },
+      })
+      return made(sessionId, model, id)
+    })
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "on the new model")).toBe("sent")
+    await settle()
+    expect(selectSteppedAccess(store.getState(), "a")).toBe("auto")
+    // Choosing access again settles it: the notice is about a change nobody chose.
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "ask", initiator: "person" }),
+    )
+    expect(selectSteppedAccess(store.getState(), "a")).toBeUndefined()
+  })
+
+  it("says nothing of access when the new model keeps it", async () => {
+    const { source, store } = await ready()
+    await store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
+    )
+    const made = reconciles(source)
+    source.setModel = vi.fn(async (sessionId: string, model: ModelRef, id: string) => ({
+      ...(await made(sessionId, model, id)),
+      approvalMode: "auto" as const,
+    }))
+    store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(await send(store, "kept")).toBe("sent")
+    await settle()
+    expect(selectSteppedAccess(store.getState(), "a")).toBeUndefined()
+    expect(store.getState().workspace.steppedAccess.a).toBeUndefined()
   })
 
   it("marks the message not sent when the source refuses the change, and drops the pick", async () => {
@@ -364,7 +414,7 @@ describe("model choices", () => {
     expect(source.setModel).toHaveBeenCalledWith("a", opus, expect.any(String), "person")
   })
 
-  it("holds a send while the source says a model change is pending", async () => {
+  it("holds a send while the source makes a model control now", async () => {
     const { source, store } = await ready()
     source.emit({
       kind: "transcript",
@@ -382,6 +432,32 @@ describe("model choices", () => {
     expect(await send(store, "waits")).toBe("not-asked")
     expect(asked(source, "setModel")).toHaveLength(0)
     expect(asked(source, "send")).toHaveLength(0)
+  })
+
+  // Nothing settles a change the source left unconfirmed until something
+  // asks, and the source settles it before it takes a message (or refuses
+  // the message): holding the send waited forever.
+  it("sends while the source has a model change left unconfirmed, for the source to settle first", async () => {
+    const { source, store } = await ready()
+    source.emit({
+      kind: "transcript",
+      transcript: {
+        ...emptyTranscript("a"),
+        revision: 2,
+        modelControl: {
+          pending: {
+            requestId: "x",
+            requestedModel: next.modelId,
+            status: "recovery_required",
+          },
+        },
+      },
+    })
+    await settle()
+    expect(modelChanging(store.getState().workspace, "a")).toBe(false)
+    expect(await send(store, "goes")).toBe("sent")
+    expect(asked(source, "setModel")).toHaveLength(0)
+    expect(asked(source, "send")).toHaveLength(1)
   })
 
   it("ignores a stale token or wrong target completion", async () => {
@@ -487,6 +563,25 @@ describe("model choices", () => {
     // The source is told which session to keep following, and when to stop.
     store.dispatch(workspaceActions.sessionHeld({ sessionId: null }))
     expect(asked(source, "keepFollowing").map((call) => call[1])).toEqual(["a", null])
+  })
+
+  it("follows a held new chat only once the source knows it", async () => {
+    const { source, store } = await ready()
+    const draft = store.dispatch(newSession())!
+    // A call on a new chat's home holds it before its first message.
+    store.dispatch(workspaceActions.sessionHeld({ sessionId: draft }))
+    await settle()
+    expect(asked(source, "keepFollowing")).toEqual([])
+    // Its first message is on its way: the source still holds no such chat.
+    void send(store, "start it", draft)
+    await settle()
+    expect(asked(source, "keepFollowing")).toEqual([])
+    source.emit({
+      kind: "session",
+      session: summary(draft, "start it", 2000, "running", { revision: 1 }),
+    })
+    await settle()
+    expect(asked(source, "keepFollowing").map((call) => call[1])).toEqual([draft])
   })
 
   it("clears an acknowledged choice once the source's frame confirms it", async () => {

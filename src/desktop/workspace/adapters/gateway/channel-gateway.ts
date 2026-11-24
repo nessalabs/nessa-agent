@@ -16,7 +16,7 @@ import { channelFrom, gatewayChannelId } from "./gateway-views"
 /** What making a channel asks of the window's gateway client. */
 export interface ChannelClient {
   readonly channels: Pick<ChannelApi, "create"> &
-    Partial<Pick<ChannelApi, "setPlacement">>
+    Partial<Pick<ChannelApi, "setPlacement" | "setCoordinator">>
 }
 
 /** Every channel code, as what it means to the flow. */
@@ -54,6 +54,7 @@ export function channelGateway(options: {
           model: draft.model.modelId,
           coordinatorPlacement: draft.coordinatorPlacement,
           threadPlacement: draft.threadPlacement,
+          ...(draft.coordinator ? {} : { coordinator: false }),
           approvalMode: draft.access,
           ...(draft.notes.trim() === "" ? {} : { notes: draft.notes }),
           ...(draft.resources.length === 0 ? {} : { resources: [...draft.resources] }),
@@ -81,6 +82,26 @@ export function channelGateway(options: {
         if (code !== undefined) throw new ChannelCreationError(failures[code])
         console.error(
           "Changing a channel's run location got no answer the window knows",
+          error,
+        )
+        throw new ChannelCreationError("unavailable")
+      }
+    },
+    async setCoordinator(channelId, on, requestId) {
+      const id = gatewayChannelId(channelId)
+      if (id === undefined) throw new ChannelCreationError("forbidden")
+      try {
+        const { channels } = await options.connected()
+        if (!channels.setCoordinator) throw new ChannelCreationError("unavailable")
+        return channelFrom(
+          await channels.setCoordinator({ requestId, channelId: id, on }),
+        )
+      } catch (error) {
+        if (error instanceof ChannelCreationError) throw error
+        const code = channelRefusal(error)
+        if (code !== undefined) throw new ChannelCreationError(failures[code])
+        console.error(
+          "Switching a channel's coordinator got no answer the window knows",
           error,
         )
         throw new ChannelCreationError("unavailable")

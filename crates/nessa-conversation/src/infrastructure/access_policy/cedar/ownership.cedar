@@ -126,6 +126,73 @@ when {
     !resource.deleted
 };
 
+// Where the owner's saved turns came from is read by any turn of the owner's
+// agents, one another agent started included: reading the chain that reached
+// a turn is how its agent tells what the owner asked. It changes nothing.
+@id("owner.read_turns")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.read_turns",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};
+
+// Any turn of the owner's agents may ask the owner a question (`ask_owner`),
+// one another agent started included: a coordinator woken by a thread's
+// report is who most needs to. It only asks; the owner's own next message is
+// the answer, and changes nothing else.
+@id("owner.ask_owner")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.ask_owner",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
+};
+
+// Only a turn the owner started asks the owner to raise the conversation's
+// access (`request_access`): the red card is in Nessa's own words, so an
+// agent nobody asked to work never puts "Allow full access" in front of the
+// owner. Asking changes nothing; the owner's own access command raises it.
+@id("owner.request_access")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.request_access",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    !resource.deleted
+};
+
+// A turn the owner started closes a thread its own thread's agent created
+// (`close_thread` with a `threadId`). The SDK's record of the spawn names
+// that creator; a thread no agent created, or another one created, is not
+// this turn's to close.
+@id("owner.close_created")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.close_created",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    resource has createdBy &&
+    resource.createdBy == principal.conversation &&
+    !resource.deleted
+};
+
 // The owner's agent reads what the owner's desktop windows show: which
 // panes are open, where, and what each holds. An agent tool acts as the
 // person whose turn admitted it (`conversation.agent_tools`), so the reader
@@ -205,4 +272,62 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
+};
+
+// The owner changes any of their own settings, whatever its level: on their
+// own surface the last step is always theirs.
+@id("owner.setting_change")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"setting.change",
+    resource is NessaConversation::Setting
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// A turn the owner started changes one of their settings only at the level
+// an agent may change: a reply style, a model. A setting the agent fills is
+// saved by the owner, one only the owner types is never the agent's, and
+// one that raises access waits for the owner's Approve on the red card.
+@id("agent.setting_change")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"setting.change",
+    resource is NessaConversation::Setting
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    resource.level == "agent_changes"
+};
+
+// The owner opens and types into terminals on their own machine, in their
+// own channels' folders (docs/design/terminals.md). A person only: an agent
+// turn never opens, reads or types into a terminal.
+@id("owner.terminal_use")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"terminal.use",
+    resource is NessaConversation::Catalogue
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
+
+// Run opens a terminal where one of the owner's conversations works, until
+// that conversation is deleted. A person only, as above.
+@id("owner.terminal_run")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"terminal.use",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    !resource.deleted
 };

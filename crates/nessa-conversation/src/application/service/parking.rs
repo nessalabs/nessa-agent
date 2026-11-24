@@ -13,6 +13,7 @@
 //!   untouched for its limit (workspace_idle, or park_after) ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
 //!     ──▶ in a cloud workspace: its connection let go, its VM stopped
+//!   a handed login past its renewal (a ChatGPT token) ──▶ parked once idle, watched or not
 //! the next message ──▶ opens the conversation (resuming its VM) ──▶ session/resume
 //! an opening past the bound on live agents ──▶ the parkable one touched
 //!   longest ago is parked now (`make_room`)
@@ -30,6 +31,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AttachmentPhase, permissions::ActionContext,
 };
 use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
+use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
@@ -71,15 +73,71 @@ impl ConversationService {
         if !live.agent.operation_capabilities().session_resume() {
             return Err(ConversationError::AgentUnsupported);
         }
-        // The conversation's, kept before this agent is marked: an opening
-        // after it is parked, or after a restart, reads it and is parked
-        // again until a new message opens the thread.
-        // With a new message's opening of the thread, one at a time: the
-        // store and the mark always say the same.
-        let _change = slot.closing_changes.lock().await;
-        self.inner.metadata.close_thread(id).await?;
-        slot.closing.store(true, Ordering::SeqCst);
+        self.mark_closed(id).await?;
         tracing::info!(conversation_id = %id, "the agent closed its thread; it stops once its turn ends");
+        Ok(())
+    }
+
+    /// Write `id`'s close to the store, then refresh any open slot's copy
+    /// of it. The store is the close's one authority; see [`Slot::closing`].
+    async fn mark_closed(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        self.inner.metadata.close_thread(id).await?;
+        let opened = self.inner.conversations.lock().await.get(id).cloned();
+        match opened {
+            Some(slot) => self.refresh_closing(id, &slot).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Copy `id`'s close mark, as the store now says, into `slot` (the
+    /// contract on [`Slot::closing`]).
+    pub(super) async fn refresh_closing(
+        &self,
+        id: &ConversationId,
+        slot: &Slot,
+    ) -> Result<(), ConversationError> {
+        let _change = slot.closing_changes.lock().await;
+        let closed = self.inner.metadata.thread_closed(id).await?;
+        slot.closing.store(closed, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The thread whose agent created `child` with `create_thread`, if one
+    /// did. The SDK's ownership record of the spawn is the one place that
+    /// says so; it keeps closed history, so a child that already ended still
+    /// names it. A fact for the access policy, which decides who may close
+    /// `child` (`conversation.close_created`).
+    pub fn thread_creator(&self, child: &ConversationId) -> Option<String> {
+        let ownership = self.inner.ownership.get()?;
+        let session = SessionId::new(child.to_string()).ok()?;
+        ownership
+            .coordinator
+            .child_lifetime_for_session(&session)
+            .and_then(|lifetime| ownership.coordinator.spawn_binding_for_lifetime(&lifetime))
+            .map(|binding| binding.parent_session.as_str().to_owned())
+    }
+
+    /// `parent` closes `child`, a thread the access policy admitted it to
+    /// close (`close_thread` with a `threadId`). The same close as the
+    /// child's own: open now, it stops once its turn ends; not open now, the
+    /// mark alone keeps whatever opens it before a new message parked.
+    ///
+    /// # Errors
+    /// [`ConversationError::AgentUnsupported`] when it is open on an agent
+    /// that cannot resume its session, so it is never parked.
+    pub async fn close_created_thread(
+        &self,
+        parent: &ConversationId,
+        child: &ConversationId,
+    ) -> Result<(), ConversationError> {
+        let opened = self.inner.conversations.lock().await.get(child).cloned();
+        if let Some(live) = opened.as_ref().and_then(|slot| settled(slot)) {
+            if !live.agent.operation_capabilities().session_resume() {
+                return Err(ConversationError::AgentUnsupported);
+            }
+        }
+        self.mark_closed(child).await?;
+        tracing::info!(conversation_id = %child, parent = %parent, "a thread was closed by the thread that created it");
         Ok(())
     }
 
@@ -153,7 +211,9 @@ impl ConversationService {
     /// `park_after`. An agent that is attached, able to resume its provider
     /// session, idle and with no app call waiting on a review may be parked;
     /// one that cannot resume would lose its session's context, and a
-    /// permission review or a question belongs to a running turn. In a cloud
+    /// permission review or a question belongs to a running turn. One whose
+    /// handed login is past renewal waits for nothing, watched or not
+    /// (`docs/design/chatgpt-sign-in.md`). In a cloud
     /// workspace of its own it waits `workspace_idle`, watched or not, while
     /// no background command of it runs; elsewhere it waits `park_after`
     /// while nobody follows it.
@@ -174,6 +234,20 @@ impl ConversationService {
             .background_tasks
             .get()
             .is_some_and(|tasks| tasks.running_for(id));
+        // A login handed to its lease that must be renewed by now (a
+        // ChatGPT access token): parked now that it is idle, watched or not,
+        // so the next message starts it with a fresh one.
+        let renew = live
+            .lease
+            .renew_by()
+            .is_some_and(|by| by <= self.inner.clock.unix_milliseconds());
+        if renew {
+            return if running {
+                Idle::InUse
+            } else {
+                Idle::After(Duration::ZERO)
+            };
+        }
         let closing = slot.closing.load(Ordering::SeqCst);
         if closing || self.inner.environment.in_workspace(id).await {
             return if running {

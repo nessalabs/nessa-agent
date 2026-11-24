@@ -6,12 +6,19 @@
  * the source for.
  */
 import { useCallback, useMemo } from "react"
-import type { ComposerAccessModeValue } from "@nessa-ui/react/composer-access-mode"
+import {
+  composerAccessModeLabels,
+  type ComposerAccessModeValue,
+} from "@nessa-ui/react/composer-access-mode"
 import type { AccessMode } from "../../model/access"
 import { chooseAccess } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { useRememberedValue } from "../../adapters/store/remembered-session"
-import { selectAccess, selectAccessNotice } from "../../adapters/store/selectors"
+import {
+  selectAccess,
+  selectAccessNotice,
+  selectSteppedAccess,
+} from "../../adapters/store/selectors"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { ComposerAccess } from "../../../ui/composer"
 import { failureCopy } from "../failure-copy"
@@ -37,9 +44,9 @@ export function accessFor(value: ComposerAccessModeValue): AccessMode {
 }
 
 /**
- * What the composer says when the source refused the shield's last choice:
- * a running turn in its own words, since the gateway changes access only
- * between turns, and any other refusal in the window's words for it.
+ * What the shield says when the source refused its last choice:
+ * a running turn in its own words, and any other refusal in the window's
+ * words for it.
  */
 export function accessRefusalCopy(refusal: {
   readonly reason: WorkspaceFailureReason
@@ -52,13 +59,25 @@ export function accessRefusalCopy(refusal: {
   return `Access didn’t change. ${failureCopy(refusal.reason)}`
 }
 
-/** The shield's value, its change handler, and what to say of its last choice, for a session's composer. */
+/**
+ * What the shield says when a model change moved the chat to Ask, because
+ * the new model is not offered at its access here.
+ */
+export function steppedAccessCopy(from: AccessMode): string {
+  return `Access is now ${composerAccessModeLabels[shieldFor("ask")]}. This model doesn’t offer ${composerAccessModeLabels[shieldFor(from)]} here.`
+}
+
+/** The shield's value, its change handler, and what it says of its last choice, for a session's composer. */
 export function useComposerAccess(sessionId: string): ComposerAccess {
   const dispatch = useWorkspaceDispatch()
   const modeLive = useWorkspaceSelector((state) => selectAccess(state, sessionId))
   const saidLive = useWorkspaceSelector((state) => selectAccessNotice(state, sessionId))
   const mode = useRememberedValue(sessionId, modeLive)
   const said = useRememberedValue(sessionId, saidLive)
+  const steppedLive = useWorkspaceSelector((state) =>
+    selectSteppedAccess(state, sessionId),
+  )
+  const stepped = useRememberedValue(sessionId, steppedLive)
   const onChange = useCallback(
     (value: ComposerAccessModeValue) =>
       void dispatch(
@@ -67,13 +86,17 @@ export function useComposerAccess(sessionId: string): ComposerAccess {
     [dispatch, sessionId],
   )
   return useMemo(() => {
-    // A choice the running turn holds back says nothing: the shield already
-    // shows it, and it takes effect when the agent stops. Only a refusal is
-    // said, because then the shield's choice did not happen.
-    const notice: ComposerAccess["notice"] =
+    // Only a refusal is said, by the shield, because then its choice did
+    // not happen. A choice held back (one the running turn could not take
+    // now, or one queued behind a change on its way) says nothing: the shield
+    // already shows it. A model change that moved the chat to Ask says so,
+    // since nobody picked Ask. Neither is a line in the composer.
+    const note: ComposerAccess["note"] =
       said?.state === "refused"
         ? { tone: "warning", text: accessRefusalCopy(said) }
-        : undefined
-    return { value: shieldFor(mode), onChange, ...(notice ? { notice } : {}) }
-  }, [mode, onChange, said])
+        : stepped
+          ? { tone: "warning", text: steppedAccessCopy(stepped) }
+          : undefined
+    return { value: shieldFor(mode), onChange, ...(note ? { note } : {}) }
+  }, [mode, onChange, said, stepped])
 }

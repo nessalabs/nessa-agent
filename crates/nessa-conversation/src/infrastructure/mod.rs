@@ -239,7 +239,7 @@ pub use ownership_audit::DurableOwnershipAudit;
 #[cfg(unix)]
 mod workspaces;
 #[cfg(unix)]
-pub use workspaces::ThreadWorkspaces;
+pub use workspaces::{channel_cloud, ThreadWorkspaces};
 
 mod workspace_runtime_config;
 pub use workspace_runtime_config::BoatRuntimeConfig;

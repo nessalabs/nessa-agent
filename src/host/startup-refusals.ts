@@ -7,10 +7,17 @@ import copies from "./startup-refusals.json"
  * it. The other strings are the log: the host, `pnpm app`, and the page's
  * own console. The desktop host reads this same file.
  */
-export type StartupRefusalReason = "not-provisioned" | "not-ready" | "wrong-stage"
+/**
+ * Why the host refused a window the local server. `still-starting` is no
+ * failure: the host's startup was still running when its hold on the read
+ * ended, so the window keeps trying instead of covering itself.
+ */
+export type StartupRefusalReason =
+  "not-provisioned" | "not-ready" | "still-starting" | "wrong-stage"
 
 /** Sentences read by name. A stage mismatch is filled, not looked up. */
-export type NamedStartupSentence = "not-provisioned" | "not-ready" | "not-listening"
+export type NamedStartupSentence =
+  "not-provisioned" | "not-ready" | "still-starting" | "not-listening"
 
 /** Keys of `code` in the shared file. Each one is a `STARTUP_` token. */
 export type StartupCodeKey =
@@ -119,7 +126,11 @@ function textField(value: object, key: string): string | undefined {
 export function hostRefusalFromInvoke(value: unknown): HostRefusalError | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const reason = textField(value, "reason")
-  if (reason === "not-provisioned" || reason === "not-ready")
+  if (
+    reason === "not-provisioned" ||
+    reason === "not-ready" ||
+    reason === "still-starting"
+  )
     return new HostRefusalError(reason)
   if (reason !== "wrong-stage") return undefined
   const bundle = textField(value, "bundle")

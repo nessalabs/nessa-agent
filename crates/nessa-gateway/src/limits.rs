@@ -19,6 +19,7 @@ use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_B
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_attachments::application::{AttachmentLimits, HeldReads};
+use nessa_peer_gateways::application::DISCOVERY_WINDOW;
 use nessa_peer_gateways::infrastructure::{
     AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
     WITHDRAWN_PER_READ,
@@ -28,9 +29,10 @@ use nessa_protocol::lease::{
     MAX_DATA_BYTES, MAX_FETCHES_IN_FLIGHT, MAX_OPEN_PUBLISHERS,
 };
 use nessa_protocol::product::generated::{
-    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_GRANT_SUBSCRIPTIONS,
+    MAX_CONNECTION_LIST_SUBSCRIPTIONS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE,
+    SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
@@ -224,6 +226,18 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "protocol/product/v1.json x-subscriptionLimits.listTargets",
             meaning: "a list subscription past this on one socket is refused",
+        },
+        Limit {
+            id: "socket.grant_subscriptions",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.grantTargets",
+            meaning: "a grant subscription past this on one socket is refused, and it does not take a conversation subscription slot",
+        },
+        Limit {
+            id: "grant.log_retained",
+            tier: "fixed",
+            owner: "GRANT_LOG_RETAINED in crates/nessa-conversation/src/application/share_grants.rs",
+            meaning: "grant-log records kept for one receiver; a resume older than the oldest of them takes a full snapshot",
         },
         Limit {
             id: "conversation.share_grants",
@@ -470,7 +484,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.poll_interval",
             tier: "fixed",
             owner: "POLL_INTERVAL in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "how often each up-to-date peer gateway is read, jittered 80 to 120 percent; what a peer shares or unshares reaches this gateway's cache within about one interval",
+            meaning: "how often each peer is read again, jittered 80 to 120 percent; an Active peer holds grants.subscribe and the conversation.subscribe sessions its follow rule names until that peer stops or the subscription ends, and that read does not call catalogueHead; a dropped subscription resumes after this interval",
         },
         Limit {
             id: "peer.poll_backoff_cap",
@@ -482,7 +496,7 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.read_budget",
             tier: "fixed",
             owner: "READ_BUDGET in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "the longest one read of one peer gateway runs, on the injected clock; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
+            meaning: "the longest the first pass of one peer read runs, on the injected clock, before an Active grant subscription is up; a read that reaches it having saved something ends incomplete and continues on the next cycle, and one that saved nothing is unreachable and backs off. Once that subscription is up the read stays until the peer stops or the subscription ends. Each peer has this timeout of its own, so a slow or failing peer is reported and the others are read without waiting it out",
         },
         Limit {
             id: "peer.preempt",
@@ -500,13 +514,19 @@ fn catalogue() -> &'static [Limit] {
             id: "peer.reads_at_once",
             tier: "fixed",
             owner: "READS_AT_ONCE in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
-            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. A slow peer holds only its own place, until that cycle ends, and its read is bounded by its own read budget",
+            meaning: "how many peer gateways are read at once; one more stays due until a read finishes and frees a place, and is not failed or skipped. An Active follow frees its place when the first grant snapshot is stored, and holds that peer's turn until the peer stops or the subscription ends",
         },
         Limit {
             id: "peer.withdrawn_per_read",
             tier: "fixed",
             owner: "WITHDRAWN_PER_READ in crates/nessa-peer-gateways/src/infrastructure/poller.rs",
             meaning: "the most conversations one read of a peer gateway withdraws, sixteen records of 64; a read that reaches it ends incomplete and the next cycle, soon, withdraws the rest",
+        },
+        Limit {
+            id: "peer.discovery_window",
+            tier: "fixed",
+            owner: "DISCOVERY_WINDOW in crates/nessa-peer-gateways/src/application/discovery.rs",
+            meaning: "how long one LAN announcement token is the token for its window; a paired peer also accepts the window on either side. The window index is Unix milliseconds divided by this, with integer division",
         },
         Limit {
             id: "command.default_timeout_ms",
@@ -677,6 +697,14 @@ pub fn effective_json(
         count(MAX_CONNECTION_LIST_SUBSCRIPTIONS),
     );
     put(
+        "socket.grant_subscriptions",
+        count(MAX_CONNECTION_GRANT_SUBSCRIPTIONS),
+    );
+    put(
+        "grant.log_retained",
+        crate::conversation::application::GRANT_LOG_RETAINED,
+    );
+    put(
         "conversation.share_grants",
         MAX_SHARE_GRANTS_PER_CONVERSATION.unsigned_abs(),
     );
@@ -786,6 +814,7 @@ pub fn effective_json(
     put("peer.preempt", millis(PREEMPT));
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
+    put("peer.discovery_window", millis(DISCOVERY_WINDOW));
     put(
         "command.default_timeout_ms",
         CommandWork::DEFAULT_TIMEOUT_MS,
@@ -868,7 +897,16 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
          how many times a preparing read is asked again |\n\
          | client.foreground_sends | client | the client's own | \
          `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | \
-         how many times one foreground phone send is asked |\n",
+         how many times one foreground phone send is asked |\n\
+         | client.grant_frames | client | the client's own | \
+         `QUEUED_GRANT_FRAMES` in `crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/session.rs` | \
+         grant frames kept while a record read shares the subscription connection; one more closes the connection so the follow retries from its cursor instead of dropping a page |\n\
+         | client.grant_frame_bytes | client | the client's own | \
+         `QUEUED_GRANT_BYTES` in `crates/nessa-client-core/src/read_only_sync/infrastructure/gateway/session.rs` | \
+         bytes of those queued frames; past this the connection closes the same way |\n\
+         | client.grant_snapshot_bytes | client | the client's own | \
+         `STAGED_GRANT_BYTES` in `crates/nessa-client-core/src/retained.rs` | \
+         grant entries held while an incomplete snapshot is assembled; past this the follow fails and its committed cursor stays where it was |\n",
     );
     document
 }

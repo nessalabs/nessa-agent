@@ -178,7 +178,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 "SELECT resource_id, principal_id, receiver_id, capabilities, policy
                  FROM share_grants
                  WHERE resource_kind = 'directory'
-                   AND (principal_id = ?1 OR receiver_id = ?1 OR resource_id = ?1)",
+                   AND subject_id = ?1",
             )
             .map_err(store)?;
         let rows = statement

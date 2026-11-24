@@ -14,6 +14,7 @@ import type {
   UsageLimitNotice,
 } from "../model"
 import type { AgentPart } from "../model/types"
+import type { OwnerAskView } from "../model/owner-ask"
 /** Authorized bounded gateway projection. It does not own execution scheduling. */
 export type ConversationView = {
   runtime?: ConversationRuntime
@@ -210,4 +211,9 @@ export type ConversationSummary = {
   updatedAtMs: number
   running: boolean
   archived: boolean
+  /**
+   * The decision an agent in it asked the person (`ask_owner`), while they
+   * have not written in it since.
+   */
+  ask?: OwnerAskView
 }

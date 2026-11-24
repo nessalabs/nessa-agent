@@ -133,4 +133,18 @@ CREATE TABLE retained_walks (
 ) STRICT, WITHOUT ROWID;
 -- Version 2 added retained_walks. A file at another version is refused as
 -- outdated, never migrated: the cache is derived from its gateway.
-PRAGMA user_version = 2;
+-- The grant replica is this receiver's followed grants, written when a
+-- complete grant frame is applied. It is not a catalogue.
+CREATE TABLE grant_cursors (
+    receiver TEXT PRIMARY KEY,
+    incarnation TEXT NOT NULL,
+    position INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+CREATE TABLE grant_rows (
+    receiver TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    capabilities TEXT NOT NULL,
+    policy_revision INTEGER NOT NULL,
+    PRIMARY KEY (receiver, conversation_id)
+) STRICT, WITHOUT ROWID;
+PRAGMA user_version = 3;

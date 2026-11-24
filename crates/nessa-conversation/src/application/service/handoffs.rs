@@ -19,9 +19,9 @@
 //! gateway that stopped mid-switch carries it on at the next opening, and
 //! settles it there.
 use super::{
-    load_conversation, supervised, ActionContext, AgentEnd, ConversationCaller, ConversationError,
-    ConversationId, ConversationService, McpAppInitiator, RequestedAgent, RequestedConversation,
-    Slot,
+    load_conversation, supervised, ActionContext, AgentEnd, AgentError, ConversationCaller,
+    ConversationError, ConversationId, ConversationService, McpAppInitiator, RequestedAgent,
+    RequestedConversation, Slot,
 };
 use crate::application::{
     ConversationAgentSwitch, ConversationAgentSwitchState, ScheduleActor, SelectionChange,
@@ -139,10 +139,10 @@ impl ConversationService {
         if record.agent() == Some(agent) {
             return Err(ConversationError::InvalidInput);
         }
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         self.inner
             .agents
-            .resolve_model(agent, request.requested_model.as_str(), place.as_ref())
+            .resolve_model(agent, request.requested_model.as_str(), &place)
             .await?;
         // A turn running or waiting stays with the agent it was given to,
         // and so does one a restart or a failure left owed: it was saved
@@ -200,7 +200,18 @@ impl ConversationService {
         }
         let settled = self.settle_switch(id, pending, actor, None).await?;
         if settled.state == ConversationAgentSwitchState::NotApplied {
-            opened?;
+            // The requested agent could not open because it is not signed in
+            // where the conversation runs: said so, rather than a bare "not
+            // made", since only signing it in there changes the answer.
+            let live = opened?;
+            let failure = live
+                .opening_failure
+                .lock()
+                .expect("opening failure")
+                .clone();
+            if let Some(error @ AgentError::AuthenticationRequired { .. }) = failure {
+                return Err(ConversationError::Agent(error));
+            }
         }
         Ok(settled)
     }

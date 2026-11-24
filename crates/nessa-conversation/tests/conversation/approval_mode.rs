@@ -2194,3 +2194,175 @@ async fn cold_preset_unchanged_with_saved_configuration_does_not_open() {
     assert_eq!(*provider.mode_updates.lock().unwrap(), updates);
     service.shutdown().await.unwrap();
 }
+
+/// A turn of two reviews, both waiting on the person; the view lists both.
+async fn two_waiting_reviews(
+    service: &ConversationService,
+    provider: &ProviderFactory,
+) -> (ConversationId, oneshot::Sender<()>) {
+    provider.request_permission.store(2, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    provider.offer_deny.store(true, Ordering::SeqCst);
+    provider
+        .offer_kept_allow_first
+        .store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "reviews".into(),
+            SubmittedMessage {
+                uploads: Vec::new(),
+                text: "change files".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while service
+            .read(id.clone(), caller())
+            .await
+            .unwrap()
+            .permissions
+            .len()
+            != 2
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    (id, finish)
+}
+
+#[tokio::test]
+async fn raising_to_full_mid_turn_allows_each_waiting_review_once_as_the_modes_answer() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    let raiser = caller();
+    service
+        .set_approval_mode(id.clone(), raiser.clone(), ConversationApprovalMode::Full)
+        .await
+        .unwrap();
+    let answers = provider.permission_answers.lock().unwrap().clone();
+    assert_eq!(answers.len(), 2, "each waiting review is answered once");
+    for answer in &answers {
+        // Allow once, never the harness's "Always allow" listed before it.
+        assert_eq!(answer.option_id.as_str(), "allow");
+        assert!(matches!(
+            answer.attribution.basis(),
+            ApprovalBasis::Mode(mode) if mode.name() == "full"
+        ));
+        assert_eq!(answer.attribution.actor().request_id(), raiser.action_id);
+        assert!(answer.key.is_some());
+    }
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert!(view.permissions.is_empty());
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_full_raise_whose_answer_cannot_be_audited_fails_after_trying_every_review() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    // The agent takes Full, then neither answer can be audited.
+    provider.answer_succeeds.store(false, Ordering::SeqCst);
+    *provider.answer_failure.lock().unwrap() = Some((
+        AgentError::AuditFailure,
+        nessa_sdk::application::agent_execution::permissions::PermissionSelectionState::Pending,
+    ));
+    let raiser = caller();
+    let raise =
+        || service.set_approval_mode(id.clone(), raiser.clone(), ConversationApprovalMode::Full);
+    let audit_failed = |raised: &Result<ConversationApprovalMode, ConversationError>| {
+        matches!(
+            raised,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::AuditFailure,
+                ..
+            })
+        )
+    };
+    let raised = raise().await;
+    assert!(audit_failed(&raised), "{raised:?}");
+    // Each review was tried, and the mode the agent took stays taken.
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 2);
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    assert_eq!(view.permissions.len(), 2);
+    // A replay of the same request (a lost reply, a retry) tries the
+    // unanswered reviews again and still reports their failure, never the
+    // saved mode alone.
+    let replayed = raise().await;
+    assert!(audit_failed(&replayed), "{replayed:?}");
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 4);
+    // Once they can be audited, the replay answers them and succeeds.
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
+    assert!(service
+        .read(id.clone(), caller())
+        .await
+        .unwrap()
+        .permissions
+        .is_empty());
+    // Nothing is left to replay.
+    assert_eq!(raise().await.unwrap(), ConversationApprovalMode::Full);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 6);
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn raising_to_auto_mid_turn_leaves_waiting_reviews_to_the_person() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+        .await
+        .unwrap();
+    assert!(provider.permission_answers.lock().unwrap().is_empty());
+    assert_eq!(
+        service
+            .read(id.clone(), caller())
+            .await
+            .unwrap()
+            .permissions
+            .len(),
+        2
+    );
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_view_lists_a_harness_kept_allow_after_allow_once() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let (id, finish) = two_waiting_reviews(&service, &provider).await;
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(view.permissions.len(), 2);
+    for entry in &view.permissions {
+        let shown = service
+            .waiting_review(id.clone(), caller(), &entry.review)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = shown.options.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["allow", "reject", "allow-always"]);
+    }
+    let _ = finish.send(());
+    service.shutdown().await.unwrap();
+}

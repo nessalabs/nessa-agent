@@ -21,6 +21,8 @@ import { workspaceActions } from "./slice"
 export const {
   focusPane,
   openSession,
+  openTerminal,
+  terminalsListed,
   resizePanes,
   equalizePanes,
   selectChannel,
@@ -30,6 +32,7 @@ export const {
   showOverviewGroup,
   revealSession,
   toggleSection,
+  toggleChatContextSection,
   toggleChannel,
   toggleShowAll,
   toggleSidebar,
@@ -65,6 +68,14 @@ export type WorkspaceCommand<Result = void> = ThunkAction<
 
 export { followWorkspace, loadWorkspace } from "./index-commands"
 export {
+  closeTerminal,
+  interruptTerminal,
+  newTerminal,
+  openTerminalBeside,
+  renameTerminal,
+  runInConversation,
+} from "./terminal-commands"
+export {
   canNudge,
   canOpenBeside,
   closeInFront,
@@ -92,6 +103,8 @@ export {
   providerLoginAvailable,
   signInForBoat,
   boatSignInAvailable,
+  signInWithChatgpt,
+  chatgptSignInAvailable,
   removeComposerImage,
   renameSession,
   forkSession,
@@ -129,6 +142,7 @@ export {
   draftChannel,
   openChannelCreation,
   removeChannelResource,
+  setChannelCoordinator,
   setChannelPlacement,
   watchChannelDrops,
 } from "./channel-commands"

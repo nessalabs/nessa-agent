@@ -36,6 +36,8 @@ type Asked = (AgentId, String, ConversationApprovalMode, Option<PathBuf>);
 struct RecordingSource {
     factory: Arc<ProviderFactory>,
     asked: Mutex<Vec<Asked>>,
+    /// The style each opening was told, in order.
+    styles: Mutex<Vec<Option<String>>>,
 }
 
 impl RecordingSource {
@@ -105,6 +107,19 @@ impl ConversationAgentSource for RecordingSource {
             place.instructions
         );
         self.record(agent, model, mode, Some(place))
+    }
+    fn resolve_briefed<'a>(
+        &'a self,
+        agent: AgentId,
+        model: &'a str,
+        mode: ConversationApprovalMode,
+        brief: &'a crate::application::AgentBrief,
+    ) -> ConversationAgentFuture<'a> {
+        self.styles.lock().unwrap().push(brief.style.clone());
+        match &brief.place {
+            None => self.resolve_for(agent, model, mode),
+            Some(place) => self.resolve_in(agent, model, mode, place),
+        }
     }
 }
 
@@ -191,6 +206,7 @@ fn request(folder: Option<&str>) -> ChannelRequest {
         },
         notes: ChannelNotes::new("Check every export.").unwrap(),
         resources: ChannelResources::new(vec![path(&absolute("/work/brand-kit"))]).unwrap(),
+        coordinator_on: true,
     }
 }
 
@@ -245,6 +261,7 @@ impl Fixture {
         let source = Arc::new(RecordingSource {
             factory: Arc::new(ProviderFactory::default()),
             asked: Mutex::new(Vec::new()),
+            styles: Mutex::new(Vec::new()),
         });
         let agents = ConversationAgents::from_source(
             HashSet::from([AgentId::Claude, AgentId::Codex]),
@@ -279,12 +296,9 @@ impl Fixture {
         .unwrap();
         service.bind_commands(storage);
         let folders = TableFolders::default();
-        service.bind_channels(
-            channel_store.unwrap_or_else(|| {
-                Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap())
-            }),
-            Arc::new(folders.clone()),
-        );
+        let kept = Arc::new(LocalChannelStore::open(&root.join("channels.sqlite3")).unwrap());
+        service.bind_reply_styles(kept.clone());
+        service.bind_channels(channel_store.unwrap_or(kept), Arc::new(folders.clone()));
         let settings =
             Arc::new(crate::conversation_test_support::RecordingSettingsAudit::default());
         service.bind_settings_audit(settings.clone());
@@ -1194,8 +1208,8 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
         records[0].change,
         crate::application::SettingsChange::ChannelPlacement {
             channel: made.id().clone(),
-            before: made.execution().clone(),
-            after: boat.clone(),
+            before: Box::new(made.execution().clone()),
+            after: Box::new(boat.clone()),
             coordinator: made.coordinator_id(),
         }
     );
@@ -1209,6 +1223,160 @@ async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
+    use crate::application::{ChannelError, SettingsChange, SettingsOutcome};
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    assert!(made.coordinator_on());
+    // The default channel has no coordinator to switch, and neither another
+    // person nor an unknown id learns whether a channel exists.
+    for (who, id) in [
+        ("person", ChannelId::default_channel()),
+        ("other", made.id().clone()),
+        ("person", ChannelId::from_random([9; 10])),
+    ] {
+        assert_eq!(
+            fixture
+                .service
+                .set_channel_coordinator(&caller(who, "switch"), &id, false)
+                .await,
+            Err(ChannelError::Forbidden),
+            "{who} switched {id:?}"
+        );
+    }
+    // Asking for what it already is changes nothing and records nothing.
+    let same = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert_eq!(same, made);
+    assert!(fixture.settings.records.lock().unwrap().is_empty());
+    let off = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), false)
+        .await
+        .unwrap();
+    assert!(!off.coordinator_on());
+    assert_eq!(off.coordinator_id(), made.coordinator_id());
+    assert_eq!(off.execution(), made.execution());
+    let on = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert!(on.coordinator_on());
+    // On again is the same chat: nothing about it was retired.
+    assert_eq!(on.coordinator_id(), made.coordinator_id());
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    assert!(listed
+        .channels
+        .iter()
+        .any(|each| each.id() == made.id() && each.coordinator_on()));
+    let records = fixture.settings.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0].caller, caller("person", "switch"));
+    assert_eq!(
+        records[0].change,
+        SettingsChange::ChannelCoordinator {
+            channel: made.id().clone(),
+            before: true,
+            after: false,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        records[2].change,
+        SettingsChange::ChannelCoordinator {
+            channel: made.id().clone(),
+            before: false,
+            after: true,
+            coordinator: made.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        fixture.settings.outcomes()[..2],
+        [
+            SettingsOutcome::Requested,
+            SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(made.coordinator_id()),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_channel_made_without_a_coordinator_keeps_one_ready_to_turn_on() {
+    let fixture = Fixture::new();
+    let made = fixture
+        .service
+        .create_channel(
+            caller("person", "quiet"),
+            "quiet".into(),
+            ChannelRequest {
+                coordinator_on: false,
+                ..request(None)
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!made.coordinator_on());
+    // A retry answers the same channel, still off.
+    let again = fixture
+        .service
+        .create_channel(
+            caller("person", "quiet"),
+            "quiet".into(),
+            ChannelRequest {
+                coordinator_on: false,
+                ..request(None)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(again, made);
+    let on = fixture
+        .service
+        .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
+        .await
+        .unwrap();
+    assert!(on.coordinator_on());
+    assert_eq!(on.coordinator_id(), made.coordinator_id());
+}
+
+#[tokio::test]
+async fn a_switch_that_cannot_be_recorded_is_refused_and_changes_nothing() {
+    use crate::application::ChannelError;
+    let fixture = Fixture::new();
+    let made = fixture.channel("request-1", None).await;
+    fixture
+        .settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .set_channel_coordinator(&caller("person", "switch"), made.id(), false)
+            .await,
+        Err(ChannelError::Unavailable)
+    );
+    let listed = fixture
+        .service
+        .list_channels(&caller("person", "list"))
+        .await
+        .unwrap();
+    assert!(listed
+        .channels
+        .iter()
+        .any(|each| each.id() == made.id() && each.coordinator_on()));
 }
 
 #[tokio::test]
@@ -1365,5 +1533,168 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
             .unwrap(),
         devbox
     );
+    fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_conversation_keeps_the_style_it_started_with_and_only_the_owner_sets_a_channels() {
+    use crate::domain::{ReplyStyle, StyleRole};
+    let fixture = Fixture::new();
+    let channel = fixture.channel("styles", None).await;
+    let person = caller("person", "style");
+    // Nothing chosen: a channel's new threads get Nessa's plain style.
+    let read = fixture
+        .service
+        .reply_styles(&person, Some(channel.id().clone()))
+        .await
+        .unwrap();
+    assert_eq!(read.effective(StyleRole::Thread), ReplyStyle::Plain);
+    // The Nessa level's thread style reaches the channel; the channel's own
+    // coordinator choice does not touch threads.
+    let one_line = ReplyStyle::custom("Answer in one line.").unwrap();
+    fixture
+        .service
+        .set_reply_style(&person, None, StyleRole::Thread, Some(one_line.clone()))
+        .await
+        .unwrap();
+    let read = fixture
+        .service
+        .set_reply_style(
+            &person,
+            Some(channel.id().clone()),
+            StyleRole::Coordinator,
+            Some(ReplyStyle::Off),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.effective(StyleRole::Thread), one_line);
+    assert_eq!(read.effective(StyleRole::Coordinator), ReplyStyle::Off);
+    // Each change is recorded before and after.
+    assert_eq!(
+        fixture.settings.outcomes(),
+        [
+            crate::application::SettingsOutcome::Requested,
+            crate::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: None
+            },
+            crate::application::SettingsOutcome::Requested,
+            crate::application::SettingsOutcome::Applied {
+                changed: true,
+                coordinator: None
+            },
+        ]
+    );
+    // A thread made now is told the Nessa level's text, at every opening.
+    fixture.source.styles.lock().unwrap().clear();
+    let id = new_id();
+    fixture
+        .service
+        .create(
+            id.clone(),
+            caller("person", "create"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    let told = std::mem::take(&mut *fixture.source.styles.lock().unwrap());
+    assert!(
+        told.contains(&Some("Answer in one line.".to_owned())),
+        "{told:?}"
+    );
+    // A later change reaches new conversations only.
+    fixture
+        .service
+        .set_reply_style(&person, None, StyleRole::Thread, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.role_and_style(&id).await.unwrap(),
+        (None, Some("Answer in one line.".to_owned()))
+    );
+    // The channel's coordinator was pinned off: it is told its job and no
+    // style.
+    let coordinator = channel.coordinator_id();
+    fixture
+        .service
+        .create(
+            coordinator.clone(),
+            caller("person", "create-main"),
+            RequestedConversation {
+                channel: Some(channel.id().clone()),
+                ..RequestedConversation::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.role_and_style(&coordinator).await.unwrap(),
+        (StyleRole::Coordinator.job().map(str::to_owned), None)
+    );
+    assert!(StyleRole::Coordinator.job().is_some());
+    // Somebody else may not read or change this channel's style.
+    let other = caller("someone-else", "style");
+    assert!(matches!(
+        fixture
+            .service
+            .set_reply_style(&other, Some(channel.id().clone()), StyleRole::Thread, None)
+            .await,
+        Err(ConversationError::ChannelNotFound)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn style_changes_at_once_each_record_what_they_replaced() {
+    use crate::application::{SettingsChange, SettingsOutcome};
+    use crate::domain::{ReplyStyle, StyleRole};
+    let fixture = Fixture::new();
+    let person = caller("person", "style");
+    for round in 0..8 {
+        fixture.settings.records.lock().unwrap().clear();
+        let (first, second) = if round % 2 == 0 {
+            (ReplyStyle::Off, ReplyStyle::Plain)
+        } else {
+            (ReplyStyle::Plain, ReplyStyle::Off)
+        };
+        let set = |choice: ReplyStyle| {
+            let service = fixture.service.clone();
+            let person = person.clone();
+            tokio::spawn(async move {
+                service
+                    .set_reply_style(&person, None, StyleRole::Thread, Some(choice))
+                    .await
+                    .unwrap()
+            })
+        };
+        let (a, b) = tokio::join!(set(first), set(second));
+        a.unwrap();
+        b.unwrap();
+        // Each change that was applied replaced what the one before it left:
+        // no two record the same `before`.
+        let befores: Vec<_> = fixture
+            .settings
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record.outcome == SettingsOutcome::Requested)
+            .map(|record| match &record.change {
+                SettingsChange::ReplyStyle { before, .. } => before.clone(),
+                other => panic!("not a style change: {other:?}"),
+            })
+            .collect();
+        let unique: std::collections::HashSet<_> =
+            befores.iter().map(|before| format!("{before:?}")).collect();
+        assert_eq!(unique.len(), befores.len(), "round {round}: {befores:?}");
+        // Clear it again for the next round.
+        fixture
+            .service
+            .set_reply_style(&person, None, StyleRole::Thread, None)
+            .await
+            .unwrap();
+    }
     fixture.service.shutdown().await.unwrap();
 }

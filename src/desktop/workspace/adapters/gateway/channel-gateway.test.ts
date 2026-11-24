@@ -20,6 +20,7 @@ const made: WireChannel = {
   model: "gpt-5.6-terra",
   approvalMode: "auto",
   coordinatorConversationId: null,
+  coordinatorOn: false,
   coordinatorPlacement: "local",
   threadPlacement: "local",
   createdAtMs: 1,
@@ -106,6 +107,7 @@ describe("the flow's bounds", () => {
       ...made,
       coordinatorPlacement: "boat",
       coordinatorConversationId: "fresh-main",
+      coordinatorOn: true,
     })
     const source = channelGateway({
       connected: async () => ({ channels: { create: vi.fn(), setPlacement } }),
@@ -123,6 +125,46 @@ describe("the flow's bounds", () => {
     })
     expect(channel?.coordinatorPlacement).toBe("boat")
     expect(channel?.coordinatorConversationId).toBe("fresh-main")
+  })
+
+  it("switches a made channel's coordinator and keeps its main chat while off", async () => {
+    const setCoordinator = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...made,
+        coordinatorConversationId: "main",
+        coordinatorOn: false,
+      })
+      .mockResolvedValueOnce({
+        ...made,
+        coordinatorConversationId: "main",
+        coordinatorOn: true,
+      })
+    const source = channelGateway({
+      connected: async () => ({ channels: { create: vi.fn(), setCoordinator } }),
+    })
+    const off = await source.setCoordinator?.(made.channelId, false, "req-off")
+    expect(setCoordinator).toHaveBeenCalledWith({
+      requestId: "req-off",
+      channelId: made.channelId,
+      on: false,
+    })
+    expect(off?.coordinatorOn).toBe(false)
+    expect(off?.coordinatorConversationId).toBe("main")
+    const on = await source.setCoordinator?.(made.channelId, true, "req-on")
+    expect(on?.coordinatorOn).toBe(true)
+    expect(on?.coordinatorConversationId).toBe("main")
+  })
+
+  it("refuses to switch the default channel's coordinator without asking", async () => {
+    const setCoordinator = vi.fn()
+    const source = channelGateway({
+      connected: async () => ({ channels: { create: vi.fn(), setCoordinator } }),
+    })
+    await expect(
+      source.setCoordinator?.(gatewayChannel.id, true, "r"),
+    ).rejects.toMatchObject({ reason: "forbidden" })
+    expect(setCoordinator).not.toHaveBeenCalled()
   })
 
   it("refuses to place the default channel without asking", async () => {

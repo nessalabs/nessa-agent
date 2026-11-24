@@ -13,6 +13,7 @@ const every: Record<WorkspaceFailureReason, true> = {
   "signed-out": true,
   "not-started": true,
   "not-ready": true,
+  "still-starting": true,
   "not-listening": true,
   "wrong-stage": true,
   "source-gone": true,

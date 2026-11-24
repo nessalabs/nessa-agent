@@ -507,16 +507,16 @@ html:not(.dark) .agents-request {
 }
 
 /*
- * Each row shows its answers while pointed at or visibly holding the
- * keyboard (`:focus-visible`, on the row or a button in it). The pointer
- * exploring another row does not hide the keyboard's controls.
- * Being chosen — clicked, or peeked at beside the list — is not enough: the
- * chosen row without visible keyboard focus keeps its time when not hovered.
+ * Each row shows its answers while pointed at or holding the keyboard (the
+ * row focused however it got there, since ↩ there answers with its default,
+ * or a button in it visibly focused). The pointer exploring another row does
+ * not hide the keyboard's controls. Peeked at beside the list without the
+ * keyboard is not enough: that row keeps its time when not hovered.
  * Expanded and answered rows below still win by order.
  */
 .agents-request:hover .agents-request-actions,
 .agents-request-actions:has(:focus-visible),
-.agents-request:is(:focus-visible, :has(:focus-visible)) .agents-request-actions {
+.agents-request:is(:focus, :has(:focus-visible)) .agents-request-actions {
   position: static;
   width: auto;
   height: auto;
@@ -528,7 +528,7 @@ html:not(.dark) .agents-request {
 
 .agents-request:hover .agents-row-time,
 .agents-request:has(.agents-request-actions :focus-visible) .agents-row-time,
-.agents-request:is(:focus-visible, :has(:focus-visible)) .agents-row-time {
+.agents-request:is(:focus, :has(:focus-visible)) .agents-row-time {
   opacity: 0;
 }
 
@@ -579,6 +579,17 @@ html:not(.dark) .agents-request {
     .agents-request-button,
     .workspace-approval-actions .workspace-button
   )[data-primary]:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 80%, var(--background));
+}
+
+/*
+ * The row holding the keyboard, however it got there (a click, ⌘0, the
+ * sidebar), shows its answers, and Allow once in the held fill: it is the
+ * row's default, which ↩ presses (`request-row.tsx`).
+ */
+.agents-overview
+  .agents-request:focus
+  .agents-request-button[data-default]:not(:disabled) {
   background: color-mix(in oklab, var(--foreground) 80%, var(--background));
 }
 
@@ -975,4 +986,39 @@ html:not(.dark) .agents-request {
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
 :root[data-motion="reduced"] :is(.agents-overview-surface, .agents-clear-mark) {
   animation: none;
+}
+
+/* ——— Terminal agent peek in the Agents overview ——— */
+
+.agents-terminal-peek {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.agents-terminal-peek-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.agents-terminal-peek-body {
+  display: flex;
+  flex: 1;
+  min-height: 220px;
+  padding: 6px 8px 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--background) 65%, var(--foreground) 5%);
+  box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
+  overflow: hidden;
+}
+
+.agents-terminal-peek-body > [data-slot="terminal"] {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
 }

@@ -533,6 +533,8 @@ pub struct ExecAsk<'a> {
     pub subject: &'a str,
     /// Program file name.
     pub program: &'a str,
+    /// Arguments after the program.
+    pub argv: &'a [String],
     /// Sandbox profile.
     pub profile: SandboxKind,
     /// Sandbox roots.
@@ -668,8 +670,8 @@ impl DirectoryAccess {
                     environment: resources.environment,
                     canonical_path: resources.canonical_path,
                     initiator: ask.subject.to_owned(),
-                    before: None,
-                    after: None,
+                    before: (!rules.is_empty()).then(|| rules.join(",")),
+                    after: Some(attempted_command(ask.program, ask.argv)),
                     profile: Some(ask.profile.as_str().to_owned()),
                     at_ms: now_ms(),
                 });
@@ -722,6 +724,7 @@ impl DirectoryAccess {
         self.exec(ExecAsk {
             subject,
             program,
+            argv,
             profile,
             roots,
             hooks_answer_first: false,
@@ -744,6 +747,7 @@ impl DirectoryAccess {
         self.exec(ExecAsk {
             subject,
             program: "",
+            argv: &[],
             profile,
             roots,
             hooks_answer_first: false,

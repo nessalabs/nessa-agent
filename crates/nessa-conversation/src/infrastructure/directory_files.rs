@@ -467,20 +467,25 @@ fn open_named(dir: RawFd, name: &str) -> Result<File, DirectoryRefusal> {
 }
 
 fn is_regular(file: &File) -> Result<bool, DirectoryRefusal> {
-    Ok(file_mode(file)? & libc::S_IFMT == libc::S_IFREG)
+    Ok(file_kind(file)? == mode_bits(libc::S_IFREG))
 }
 
 fn is_walk_target(file: &File) -> Result<bool, DirectoryRefusal> {
-    let kind = file_mode(file)? & libc::S_IFMT;
-    Ok(kind == libc::S_IFREG || kind == libc::S_IFDIR)
+    let kind = file_kind(file)?;
+    Ok(kind == mode_bits(libc::S_IFREG) || kind == mode_bits(libc::S_IFDIR))
 }
 
-fn file_mode(file: &File) -> Result<u32, DirectoryRefusal> {
+fn file_kind(file: &File) -> Result<u32, DirectoryRefusal> {
     let mut info = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(file.as_raw_fd(), &mut info) } != 0 {
         return Err(io(std::io::Error::last_os_error()));
     }
-    Ok(info.st_mode)
+    Ok(mode_bits(info.st_mode) & mode_bits(libc::S_IFMT))
+}
+
+/// `mode_t` is `u32` on Linux and `u16` on macOS. Both fit in `u32`.
+fn mode_bits(mode: impl Into<u32>) -> u32 {
+    mode.into()
 }
 
 /// Move `.nessa-binding` aside, then delete it only when that file is the one
@@ -522,11 +527,29 @@ fn aside_name() -> String {
 fn rename_at(dir: RawFd, from: &str, to: &str, noreplace: bool) -> Result<(), DirectoryRefusal> {
     let from = c_name(from)?;
     let to = c_name(to)?;
-    let flags = if noreplace { libc::RENAME_NOREPLACE } else { 0 };
-    if unsafe { libc::renameat2(dir, from.as_ptr(), dir, to.as_ptr(), flags) } == 0 {
+    let renamed = rename_exclusive(dir, &from, &to, noreplace);
+    if renamed == 0 {
         Ok(())
     } else {
         Err(io(std::io::Error::last_os_error()))
+    }
+}
+
+fn rename_exclusive(dir: RawFd, from: &std::ffi::CStr, to: &std::ffi::CStr, noreplace: bool) -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let flags = if noreplace { libc::RENAME_NOREPLACE } else { 0 };
+        unsafe { libc::renameat2(dir, from.as_ptr(), dir, to.as_ptr(), flags) }
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        let flags = if noreplace { libc::RENAME_EXCL } else { 0 };
+        unsafe { libc::renameatx_np(dir, from.as_ptr(), dir, to.as_ptr(), flags) }
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    {
+        let _ = noreplace;
+        unsafe { libc::renameat(dir, from.as_ptr(), dir, to.as_ptr()) }
     }
 }
 

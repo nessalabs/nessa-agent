@@ -1069,6 +1069,26 @@ impl HostLink {
         })
     }
 
+    /// Hand `lease`'s harnesses a renewed `login` ([`ToEnvironment::Renew`]):
+    /// whether it was queued for the host, which says nothing back. Not for a
+    /// lease already ending or a connection gone.
+    pub async fn renew(&self, lease: &str, login: Login) -> bool {
+        {
+            let routes = self.routes();
+            let routed = routes.leases.get(lease).is_some_and(|route| !route.ending);
+            if routes.closed || routes.revoked || !routed {
+                return false;
+            }
+        }
+        self.frames
+            .send(ToEnvironment::Renew {
+                lease: lease.into(),
+                login,
+            })
+            .await
+            .is_ok()
+    }
+
     /// Stop one harness and wait for the host's evidence: `None` when it
     /// cannot be had — the connection lost, or no answer in time. The Stop
     /// goes after the harness's input; a harness already asked to stop, or

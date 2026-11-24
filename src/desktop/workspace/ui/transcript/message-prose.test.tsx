@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { act } from "react"
 import { createRoot } from "react-dom/client"
-import { beforeEach, expect, it } from "vitest"
+import { beforeAll, beforeEach, expect, it } from "vitest"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { view } from "../../adapters/gateway/fake-gateway"
 import { Message } from "./message"
+
+// Agent replies are drawn by Words, which the kit loads on first draw.
+beforeAll(() => preloadReplyMarkdown())
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -127,7 +131,7 @@ it("renders no HTML the agent wrote, and no script link", async () => {
 it("draws nothing for a reply that is only whitespace so far", async () => {
   const { body, dispose } = await drawn(["\n\n"])
   try {
-    expect(body.querySelector("[data-slot=message-markdown]")).toBeNull()
+    expect(body.querySelector("[data-slot=reply-markdown]")).toBeNull()
   } finally {
     await dispose()
   }

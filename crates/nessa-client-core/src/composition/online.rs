@@ -30,22 +30,24 @@ use crate::read_only_sync::application::{
 };
 use crate::read_only_sync::domain::HeldFile;
 use crate::read_only_sync::entrypoint::follow::FollowLines;
-use crate::read_only_sync::entrypoint::{online, Command, CommandError};
+use crate::read_only_sync::entrypoint::{online, Command, CommandError, PairClass};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
-    CatalogueReader, DeviceEvidence, GatewayAuthorizer, GatewayConnection, LocalConnector,
-    RecordGatewaySource, Session,
+    CatalogueReader, CommandExchange, DeviceEvidence, GatewayAuthorizer, GatewayConnection,
+    LocalConnector, RecordGatewaySource, Session,
 };
 use nessa_auth::adapters::pairing::NativeIdentity;
 use nessa_auth::application::pairing::ClientPendingStore;
+use nessa_auth::domain::pairing::ConsentClass;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::product::generated::PASSIVE_MIN_REQUEST_TIMEOUT_MS;
+use nessa_protocol::product::generated::{product_method, PASSIVE_MIN_REQUEST_TIMEOUT_MS};
 use nessa_sync::replication::domain::Id;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use uuid::Uuid;
 
 struct CommandCancellation;
 impl Cancellation for CommandCancellation {
@@ -74,11 +76,12 @@ pub(super) fn execute_device(
     input: &mut dyn Read,
     output: &mut dyn Write,
 ) -> Result<(), CommandError> {
-    let (profile_path, pairing) = match command {
-        Command::Pair { profile } => (profile, true),
-        Command::Status { profile } => (profile, false),
+    let (profile_path, class) = match command {
+        Command::Pair { profile, class } => (profile, Some(*class)),
+        Command::Status { profile } => (profile, None),
         _ => return Err(CommandError::Arguments),
     };
+    let pairing = class.is_some();
     let operation = if pairing { "pair" } else { "status" };
     if !pairing {
         // A device with an issued credential reads status through the purge;
@@ -103,10 +106,15 @@ pub(super) fn execute_device(
             Err(error) => return configuration_failure(operation, error.code(), output),
         }
     }
+    let consent = match class {
+        Some(PairClass::Peer) => ConsentClass::PeerRead,
+        _ => ConsentClass::DeviceRead,
+    };
     let opened = (|| {
         let profile = Profile::load(profile_path)?;
         let state = Arc::new(profile.private_state()?);
-        let device = Device::new(&profile, state).map_err(|_| ProfileError::Unavailable)?;
+        let device =
+            Device::enrolling(&profile, state, consent).map_err(|_| ProfileError::Unavailable)?;
         Ok::<_, ProfileError>(device)
     })();
     let device = match opened {
@@ -145,7 +153,9 @@ pub(super) fn execute(
         Command::Records { profile, .. }
         | Command::Catalogue { profile, .. }
         | Command::Follow { profile, .. }
-        | Command::Fetch { profile, .. } => profile,
+        | Command::Fetch { profile, .. }
+        | Command::Comment { profile, .. }
+        | Command::Drive { profile, .. } => profile,
         _ => return Err(CommandError::Arguments),
     };
     // The output, when it is there already, answers before anything is opened
@@ -159,6 +169,8 @@ pub(super) fn execute(
         Command::Records { .. } => "records",
         Command::Follow { .. } => "follow",
         Command::Fetch { .. } => "fetch",
+        Command::Comment { .. } => "comment",
+        Command::Drive { .. } => "drive",
         _ => "catalogue",
     };
     let paired = match open_paired(profile_path, policy) {
@@ -256,6 +268,22 @@ pub(super) fn execute(
             ..
         } => run.follow(conversation.clone(), *pages, *max_passes, output),
         Command::Fetch { file, out, .. } => run.fetch(file, out, output),
+        Command::Comment {
+            conversation, text, ..
+        } => run.post(
+            product_method::CONVERSATION_MESSAGE,
+            conversation,
+            text,
+            output,
+        ),
+        Command::Drive {
+            conversation, text, ..
+        } => run.post(
+            product_method::CONVERSATION_SEND,
+            conversation,
+            text,
+            output,
+        ),
         _ => Err(CommandError::Arguments),
     }
 }
@@ -388,6 +416,53 @@ struct Run<'a> {
     enrollment: Value,
 }
 impl Run<'_> {
+    /// Leave a note (`conversation.message`, recorded only) or send one text
+    /// turn (`conversation.send`). The session is the enrolled principal; this
+    /// does not decide whether that principal may comment or drive.
+    fn post(
+        self,
+        method: &str,
+        conversation: &ConversationId,
+        text: &str,
+        output: &mut dyn Write,
+    ) -> Result<(), CommandError> {
+        let request_id = Uuid::new_v4().to_string();
+        let conversation_id = conversation.to_string();
+        let note = method == product_method::CONVERSATION_MESSAGE;
+        let params = if note {
+            json!({
+                "conversationId": conversation_id,
+                "requestId": request_id,
+                "text": text,
+                "delivery": "record_only",
+            })
+        } else {
+            json!({
+                "conversationId": conversation_id,
+                "requestId": request_id,
+                "executionId": Uuid::new_v4().to_string(),
+                "text": text,
+                "attachments": [],
+                "files": [],
+            })
+        };
+        let operation = if note { "comment" } else { "drive" };
+        match self.connection.command(method, &params) {
+            Ok(receipt) => online::write(
+                json!({"operation":operation,"successful":true,"receipt":receipt}),
+                output,
+            ),
+            Err(CommandExchange::Refused(code)) => {
+                online::write(
+                    json!({"operation":operation,"successful":false,"refusal":code}),
+                    output,
+                )?;
+                Err(CommandError::OnlineRefused)
+            }
+            Err(CommandExchange::Lost(error)) => Err(CommandError::Gateway(error)),
+        }
+    }
+
     fn records(
         self,
         conversation: ConversationId,

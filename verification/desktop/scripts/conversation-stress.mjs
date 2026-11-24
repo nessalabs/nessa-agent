@@ -38,6 +38,12 @@ import {
  *               stopped, the name is plain again
  *   parent-stop Stop cancels the parent, owned child and grandchild without a report restart
  *   fail        the turn fails; the next message is sent in the same conversation
+ *   cloud       Agent37 is picked as the default cloud in Settings ›
+ *               Accounts (offered once Boat and Agent37 are both connected): a thread's VM is made on Agent37 (the
+ *               fixture's fake one) and stays there after Boat is picked
+ *               again, while the next thread's goes to Boat; a thread in a
+ *               channel placed on Agent37 goes to Agent37 while Boat is
+ *               chosen
  *   restore     a restored conversation is opened and shows its saved record;
  *               another, whose source file is moved aside, refuses Send and
  *               keeps the draft
@@ -47,7 +53,11 @@ import {
  *               sign-in for where the run was (Authenticate for a Boat VM,
  *               this computer's otherwise), and the next message retires it
  *   switch      the access shield picks another mode, sometimes mid-turn,
- *               where the change waits for the turn to end
+ *               where the gateway takes it at once
+ *   raise       the shield raises the main chat from Ask to Full while its
+ *               turn waits on the first of three reviews: the gateway runs it
+ *               at Full while the turn still runs, the open review is allowed
+ *               by the raise with no click, and the turn asks nothing more
  *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
  *               and started again; the turn is resumed and the window follows
  *   delegate    the agent creates a thread and messages it; the thread's
@@ -60,6 +70,10 @@ import {
  *   webhook     one granted conversation advances to a fixed source Head after
  *               a browser turn; independent native rows prove zero attempts
  *               under the unchanged loopback destination refusal policy
+ *   peer        a paired peer gateway, granted comment and drive, leaves a
+ *               note and sends a turn; the window shows the note as a grant
+ *               and the turn, and the gateway's view and grant record name
+ *               that peer
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -103,21 +117,45 @@ import {
  *               its agent is parked though followed (its lease ends `idle`),
  *               a read then opens it, still closed, and it is parked again;
  *               only the next message sent there starts it again
+ *   provenance  a person's request in the main chat reaches a thread its
+ *               agent creates; the thread follows the message back with
+ *               read_turn to the person's exact words and the device they
+ *               were sent from (this computer) and says them; the
+ *               parent's close_thread of a thread it did not create is
+ *               refused, of its own is taken, and that thread is parked
  *   rename      another conversation is renamed from its row's More menu;
  *               the gateway's list and the window say the new title, and it
  *               keeps it after a message sent there
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   swipe       with the rail on, the right panel open and every side
+ *               column open, two-finger swipes left and right (one, a
+ *               fling, two back to back) over the chat, the sidebar and
+ *               the session list's head move no column: a sideways swipe
+ *               is no way to switch columns or the panel; with the
+ *               sidebar and the list folded by their keys a swipe right
+ *               opens nothing; a wide table and a wide code block (its
+ *               lines in a shadow root) still scroll under a swipe, and a
+ *               session row's own swipe still opens and closes its actions
+ *   touchId     the vault is sealed and Settings › Accounts asks for it,
+ *               with a fake Touch ID on: the dialog offers Touch ID ticked
+ *               and keeps the typed passphrase; the next unlock is the
+ *               fingerprint alone; a dismissed prompt leaves the form with
+ *               no failure and a Use Touch ID button that unlocks; changed
+ *               fingerprints drop the copy and say so; the Settings switch
+ *               turns it off and then rests
  *   rail        the side rail is turned on in Settings › Advanced ›
  *               Experimental and opened: the window's traffic lights stay
  *               where the host puts them above a compact rail; the top bar
  *               keeps its controls clear of them in every rail state; a message
  *               sent with the rail open is answered; closed, opened again,
  *               and turned off while open, the titlebar's controls go back to
- *               starting where the lights end
+ *               starting where the lights end; the chat's title in the pane's
+ *               bar goes only between where it stood and where it lands
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
- *               is asked once; in the setup window that ask opens, nothing
+ *               is asked once; in the setup window that ask opens, over a
+ *               locked vault, no passphrase is asked for, nothing
  *               dims the desktop, and a glow fills the screen and forms the
  *               window (glow, fill, form, open, in that order) before any of
  *               the window's words can be seen; welcome's words are all
@@ -165,8 +203,14 @@ import {
  *               gateway is found by a DNS-SD browse on its port, and Pair a
  *               device opens a code with the window's own sign-in, in a
  *               modal with one signal orb; Escape hides it, Show code
- *               brings the same code back, Cancel closes it, and leaving
- *               the tab and coming back still shows linking on
+ *               brings the same code back. A device then enters that code
+ *               the way the phone does, Approve in the modal (keeping its
+ *               fill on hover) makes it active and the device reads itself
+ *               paired; it is listed as the owner's phone, Pair a device
+ *               stays offered through the tab's polls, and Revoke drops it
+ *               with a "Revoked." that a later poll clears. A second code's
+ *               Cancel closes it, and leaving the tab and coming back still
+ *               shows linking on
  *   drift       the gateway is stopped and started again with its staged
  *               runtime directory moved and a different agent PATH and
  *               TMPDIR, the way an app update stages a new tree and
@@ -258,8 +302,14 @@ import {
  *               brings the chat back and puts the pill away; Talk in
  *               another chat asks before it ends the open call, Cancel
  *               leaves it and Talk here moves it; a call that drops
- *               with its chat in no pane is said in the window; End call
- *               closes the call and Talk is back
+ *               with its chat in no pane is said in the window; Pause on
+ *               the pill hangs up with the provider and keeps the pill,
+ *               saying Paused, with Resume in the composer too, and Resume
+ *               opens one new provider call handed what was said before;
+ *               Pause and Resume in the composer do the same; End call
+ *               closes the call and Talk is back; a new chat's home offers
+ *               Talk, the first thing said there starts the chat, its
+ *               reply is handed to the voice, and the call goes on in it
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows) and every place record into
@@ -277,6 +327,8 @@ import {
  *               the hint on one line, the count as 4/5); Create opens a new
  *               session's home in it, whose first message runs in the made
  *               folder with the notes in the agent's system prompt (Claude).
+ *               A channel row that is not selected keeps its hover fill
+ *               while the pointer moves onto its settings beside it.
  *               A second channel works in a folder chosen in the picker, and
  *               its first message runs there; the gateway lists both, with
  *               their folders, and each conversation in its own. When the
@@ -332,6 +384,24 @@ import {
  *               call; once it ends, the reply shows and no run does, while
  *               the gateway still keeps every call. Compact outlasts a
  *               reload; Detailed, chosen again, draws the folded run
+ *   ask         an agent asks its owner one decision (`ask_owner`) in a
+ *               conversation the window does not show: the list row carries
+ *               it, the row waits on the person, and the host's notice says
+ *               the question and names the conversation, all without the
+ *               window leaving the conversation it shows. Opening the
+ *               notice brings up its card, with each choice and the one
+ *               recommended; tapping the other choice sends its label as
+ *               the person's message, which the agent answers, and the
+ *               card, the row's ask and the notice all go
+ *   accessRequest  an agent asks to raise its chat's access (`request_access`):
+ *               the row's ask is Nessa's own question and choices with the
+ *               agent's reason, and Not now is the one recommended. The red
+ *               card says them and lists nothing yet; Approve raises the chat
+ *               to Auto by the person's own access command, and the agent's
+ *               turn on their Approve begins at a different permission mode
+ *               than the asking turn ran at (each turn says its own); the card stays to
+ *               list the three lines of what was allowed, and the row's ask
+ *               goes. The chat is set back to Ask after
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -345,8 +415,10 @@ import {
  * must be at rest, every turn ended as
  * planned, and nothing denied automatically or hidden behind a display limit.
  *
- * Build the gateway first (`cargo build -p nessa-server`). How to add a step
- * is in CODING_STANDARDS.md, "Conversation stress".
+ * Build the gateway first (`cargo build -p nessa-server`) and the peer
+ * example the `peer` step enrolls
+ * (`cargo build -p nessa-client-core --example read_only_sync`). How to add
+ * a step is in CODING_STANDARDS.md, "Conversation stress".
  *
  *   pnpm test:e2e:stress                        # the pull request's run
  *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
@@ -368,7 +440,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -382,11 +454,18 @@ import {
   STREAM_HOLD_MS,
   STREAM_WORDS,
   STRESS,
+  TABLE_HOLD_MS,
   TABLE_LINES,
+  RUN_PRINTS,
+  RUN_COMMAND,
   CODE_LINES,
+  MATH_LINES,
   TRACE_CALLS,
   TRACE_PAUSE_MS,
   WATCH_CALLS,
+  ASK,
+  ACCESS,
+  RAISE_REVIEWS,
   streamWord,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -432,6 +511,7 @@ import {
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { FAKE_CHATGPT_ACCOUNTS, startFakeOpenai } from "./lib/fake-openai.mjs"
 import {
   asEarlierPlaces,
   asOlderBuild,
@@ -448,6 +528,7 @@ import {
   openStressConversation,
   selectedStressConversation,
   selectStressModel,
+  clearStarredModels,
   chatIdentityTexts,
 } from "./lib/stress-conversation.mjs"
 import { phoneFilesVerifier, uploadedInputFiles } from "./lib/stress-input-files.mjs"
@@ -478,6 +559,7 @@ import {
   requireStressCapabilities,
   elevatedAccessAfter,
 } from "./lib/stress-profile.mjs"
+import { raisedTurn } from "./lib/raise-evidence.mjs"
 
 const INSTANCE = "conversation-stress"
 /** The conversation metadata version this build writes (`schema.sql`'s last line). */
@@ -501,6 +583,11 @@ const POOL = "peer:any"
  * The variable each agent is handed its saved login in on a worker: the
  * first of `login_variables` (crates/nessa-protocol/src/lease.rs).
  */
+/** The variable naming the file a ChatGPT token is handed to Codex in. */
+const CHATGPT_TOKEN_FILE = "NESSA_CHATGPT_TOKEN_FILE"
+/** Whether `text` holds any of `secrets`. */
+const secretsIn = (text, secrets) => secrets.some((secret) => text.includes(secret))
+
 const LOGIN_VARIABLES = {
   claude: "CLAUDE_CODE_OAUTH_TOKEN",
   codex: "CODEX_API_KEY",
@@ -523,7 +610,8 @@ const meta = {
   help: `
 Usage: node verification/desktop/scripts/conversation-stress.mjs [options]
 
-Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA). No
+Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA)
+and the peer example (cargo build -p nessa-client-core --example read_only_sync). No
 harness and no sign-in: the gateway runs scripted-agent.mjs with the stress
 scenario (scripts/mcp-test-server/scenarios/stress.mjs). It starts its own
 gateway; --url is not used.
@@ -584,6 +672,8 @@ const FRESH_CLIENTS = 3
  */
 const LAUNCH_STARTING_MS = 3_000
 const LAUNCH_LISTED_MS = 10_000
+/** A slow launch's hold: short, so outlasting it costs the run little. */
+const SLOW_LAUNCH_HOLD_MS = 1_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -606,6 +696,22 @@ const explain = (error) =>
     .join(" · ")
 
 const dock = (page) => page.locator(css.conversationDock)
+
+/**
+ * The composer says nothing of its own: what a control has to say is its
+ * tooltip (`ComposerNote`), so the docked composer holds no element but the
+ * draft and its row, and no status line anywhere in it.
+ */
+async function composerSaysNothing(page, when, failures) {
+  const said = await dock(page)
+    .locator(composerControls.said)
+    .evaluateAll((nodes) => nodes.map((node) => node.outerHTML.slice(0, 160)))
+    .catch(() => [])
+  if (said.length)
+    failures.push(
+      `the composer said something of its own ${when}: ${JSON.stringify(said)}`,
+    )
+}
 
 async function pageText(page) {
   return fold(
@@ -667,6 +773,256 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/**
+ * The `swipe` step's swipes, with the rail on and the wide table drawn in
+ * `message` (its scroller `port`) beside the wide code block `code`: a
+ * sideways two-finger swipe moves no side column and not the right panel,
+ * whether everything is open or the sidebars are folded, while the table,
+ * the code and a session row still take their own swipes.
+ */
+async function sidewaysSwipes(run, step, message, port, code, failures) {
+  const page = run.page
+  const columns = () =>
+    page.evaluate(
+      ({ frame, workspace }) => ({
+        rail: document.querySelector(frame)?.dataset.rail,
+        panel: document.querySelector(workspace)?.dataset.panel,
+        sidebar: document.querySelector(workspace)?.dataset.sidebar,
+        list: document.querySelector(workspace)?.dataset.list,
+      }),
+      { frame: css.workspaceWindow, workspace: css.workspace },
+    )
+  // Every column open to start: the sidebar and the list by their keys.
+  const start = await columns()
+  if (start.sidebar !== "open") await page.keyboard.press(keys.toggleSidebar)
+  if (start.list !== "open") await page.keyboard.press(keys.toggleSessionList)
+  // The right panel open too: a swipe moves none of them.
+  if (start.panel !== "open") await page.keyboard.press(keys.togglePanel)
+  const open = { panel: "open", sidebar: "open", list: "open" }
+  const at = async (want) => {
+    const now = await columns()
+    return Object.keys(want).every((each) => now[each] === want[each])
+  }
+  if (!(await waitFor(() => at(open), 5_000))) {
+    failures.push(`the side columns did not all open: ${JSON.stringify(await columns())}`)
+    return
+  }
+  // The rail as the window drew it beside the open panel.
+  const all = { ...open, rail: (await columns()).rail }
+  // Two fingers over the reply's words: `x` positive is the fingers
+  // moving left (the Mac's natural scrolling, which Chromium assumes).
+  // On Chromium the events go in through the browser's input with their
+  // own times 16 ms apart, as a trackpad sends them, so a slow machine
+  // cannot split one gesture in two; elsewhere they are sent as they
+  // come. The pause after outlasts the gesture's end, so each is its own
+  // swipe.
+  const words = message.locator("p").first()
+  const input =
+    run.engine === "chromium" || run.engine === undefined
+      ? await page.context().newCDPSession(page)
+      : null
+  let clock = Date.now() / 1000
+  const swipe = async (over, x, y = 0, events = 8) => {
+    await over.scrollIntoViewIfNeeded()
+    const box = await over.boundingBox()
+    const point = box && {
+      x: Math.round(box.x + Math.min(box.width / 2, 120)),
+      y: Math.round(box.y + Math.min(box.height / 2, 12)),
+    }
+    const onIt =
+      point &&
+      (await over.evaluate(
+        (element, { x, y }) =>
+          element.contains(document.elementFromPoint(x, y)) &&
+          document
+            .elementFromPoint(x, y)
+            ?.closest(".workspace-chat, .workspace-sidebar, .workspace-list") !== null,
+        point,
+      ))
+    if (!onIt) {
+      failures.push(
+        `nothing to swipe over in the chat or a side column at ${JSON.stringify(point)}`,
+      )
+      return
+    }
+    await page.mouse.move(point.x, point.y)
+    clock = Math.max(clock + 1, Date.now() / 1000)
+    // `x` is each event's travel, or a list of them for a gesture whose
+    // events differ (a fling's momentum dying down, then the next swipe).
+    const xs = Array.isArray(x) ? x : Array.from({ length: events }, () => x)
+    if (!input && Array.isArray(x))
+      // Elsewhere a gesture with no pause in it goes in from the page, one
+      // wheel event a frame, as a trackpad sends them: a slow round trip
+      // from the script cannot open a pause, and the window draws between
+      // events as it would.
+      await page.evaluate(
+        async ({ point, xs, y }) => {
+          const target = document.elementFromPoint(point.x, point.y)
+          for (const deltaX of xs) {
+            await new Promise((done) => requestAnimationFrame(done))
+            target?.dispatchEvent(
+              new WheelEvent("wheel", {
+                bubbles: true,
+                cancelable: true,
+                clientX: point.x,
+                clientY: point.y,
+                deltaX,
+                deltaY: y,
+              }),
+            )
+          }
+        },
+        { point, xs, y },
+      )
+    else
+      for (const [i, each] of xs.entries()) {
+        if (input)
+          await input.send("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: point.x,
+            y: point.y,
+            deltaX: each,
+            deltaY: y,
+            timestamp: clock + i * 0.016,
+          })
+        else await page.mouse.wheel(each, y)
+      }
+    await page.waitForTimeout(400)
+  }
+  // Each swipe has waited out its gesture (`swipe`'s pause), so the
+  // columns read now are the ones it left.
+  const expect = async (label, want) => {
+    const now = await columns()
+    if (!(await at(want)))
+      failures.push(
+        `${label}: the columns are ${JSON.stringify(now)}, not ${JSON.stringify(want)}`,
+      )
+  }
+  // Over the wide table the swipe is the table's: it scrolls, nothing folds.
+  // First, with every column open, where the reply is narrowest.
+  const hidden = await port.evaluate((each) => each.scrollWidth - each.clientWidth)
+  if (hidden <= 1) failures.push(`the wide table does not scroll (${hidden} px hidden)`)
+  const scrolled = await port.evaluate((each) => each.scrollLeft)
+  await swipe(port, 15)
+  await expect("a swipe over the wide table", all)
+  if ((await port.evaluate((each) => each.scrollLeft)) <= scrolled)
+    failures.push("a swipe over the wide table did not scroll it")
+  // Over a wide code block the same. The highlighter draws its lines in a
+  // shadow root, where the wheel's target is only the root's host and its
+  // scroller is out of reach of the target's own parents.
+  const codeScroll = () =>
+    code.evaluate((block) => {
+      const walk = (root) => {
+        for (const each of root.querySelectorAll("*")) {
+          const overflow = getComputedStyle(each).overflowX
+          if (
+            each.scrollWidth > each.clientWidth + 1 &&
+            (overflow === "auto" || overflow === "scroll")
+          )
+            return each.scrollLeft
+          const inner = each.shadowRoot && walk(each.shadowRoot)
+          if (inner !== null && inner !== undefined) return inner
+        }
+        return null
+      }
+      return walk(block)
+    })
+  // The highlighter draws a block's lines only once it is in view.
+  await code.scrollIntoViewIfNeeded()
+  if (!(await waitFor(async () => (await codeScroll()) !== null, 15_000)))
+    failures.push("the wide code block does not scroll")
+  else {
+    const before = await codeScroll()
+    await swipe(code, 15)
+    await expect("a swipe over the wide code block", all)
+    if ((await codeScroll()) <= before)
+      failures.push("a swipe over the wide code block did not scroll it")
+  }
+  // Over the reply's words a swipe either way moves nothing: one swipe, a
+  // fling, two back to back, and one picking up as the last one's momentum
+  // fades. The rail and the right panel stay too.
+  const fling = [15, 15, 15, 15, 15, 15, 8, 4, 2, 1, 0.5]
+  const fading = [15, 15, 15, 15, 15, 15, 12, 10, 8, 6, 5, 4, 3]
+  const picking = [4, 8, 14, 18, 18, 18, 18, 18]
+  const neg = (xs) => xs.map((each) => -each)
+  for (const [label, x, events] of [
+    ["a swipe left", 15, 8],
+    ["a fling left", 15, 30],
+    ["two swipes left back to back", [...fling, ...fling]],
+    ["a second swipe left as the first one's momentum fades", [...fading, ...picking]],
+    ["a swipe right", -15, 8],
+    ["two swipes right back to back", neg([...fling, ...fling])],
+  ]) {
+    await swipe(words, x, 0, events)
+    await expect(`${label} over the chat`, all)
+  }
+  // Over the side columns the same: the sidebar and the list's head.
+  const inSidebar = page.locator(css.overviewEntry).first()
+  const listHead = page.locator(`${css.sessionList} .desktop-column-title`).first()
+  for (const [label, over] of [
+    ["the sidebar", inSidebar],
+    ["the session list", listHead],
+  ]) {
+    await swipe(over, 15)
+    await expect(`a swipe left over ${label}`, all)
+    await swipe(over, -15)
+    await expect(`a swipe right over ${label}`, all)
+  }
+  // A session row's own two-finger swipe is still the row's: left uncovers
+  // its Archive and Delete, right covers them again, and no column moves.
+  // The row ends a wheel swipe after 140 ms without an event by its own
+  // clock, which a slow round trip from here would open, so each swipe
+  // goes in from the page as one burst, as session-rows.mjs sends them.
+  const row = page.locator(selectorFor.sessionListRowFor(run.main.id))
+  const tray = () => row.locator("xpath=..").getAttribute("data-swipe")
+  const rowSwipe = async (deltaX) => {
+    await row.scrollIntoViewIfNeeded()
+    await row.hover()
+    await row.evaluate((element, deltaX) => {
+      for (let i = 0; i < 6; i += 1)
+        element.dispatchEvent(
+          new WheelEvent("wheel", { deltaX, bubbles: true, cancelable: true }),
+        )
+    }, deltaX)
+    await page.waitForTimeout(400)
+  }
+  await rowSwipe(40)
+  await expect("a swipe left over a session row", all)
+  if (!(await waitFor(async () => (await tray()) === "open", 3_000)))
+    failures.push(`a swipe left over a session row left it ${await tray()}, not open`)
+  await rowSwipe(-40)
+  await expect("a swipe right over an open session row", all)
+  if (!(await waitFor(async () => (await tray()) === null, 3_000)))
+    failures.push(`a swipe right over an open session row left it ${await tray()}`)
+  // Folded by their keys, the sidebar and the list stay folded under a
+  // swipe right, as they once would have opened.
+  await page.keyboard.press(keys.toggleSessionList)
+  await page.keyboard.press(keys.toggleSidebar)
+  const none = { ...all, sidebar: "closed", list: "closed" }
+  if (!(await waitFor(() => at(none), 5_000)))
+    failures.push(
+      `the sidebars did not fold by their keys: ${JSON.stringify(await columns())}`,
+    )
+  else {
+    await swipe(words, -15)
+    await expect("a swipe right with the sidebars folded", none)
+    await swipe(words, -15, 0, 30)
+    await expect("a fling right with the sidebars folded", none)
+  }
+  await page.keyboard.press(keys.toggleSidebar)
+  await page.keyboard.press(keys.toggleSessionList)
+  if (!(await waitFor(() => at(all), 5_000)))
+    failures.push(
+      `the sidebars did not open by their keys: ${JSON.stringify(await columns())}`,
+    )
+  if (run.evidence)
+    await page.screenshot({ path: join(run.evidence, "swipe-all-open.png") })
+  // The panel as the step found it, for the steps after.
+  if (start.panel !== "open") await page.keyboard.press(keys.togglePanel)
+  // The conversation still takes a message.
+  await steps.reply(run, { ...step, extra: " after swiping" }, failures)
+}
 
 /**
  * Turns the side rail preview on or off where a person does: Settings ›
@@ -994,6 +1350,101 @@ async function channelRunning(page, name, running, failures) {
 }
 
 /**
+ * The pointer on a row's settings, beside its control, leaves the row its
+ * hover fill: the frame owns hover, so moving onto the action does not drop
+ * it. The fill at rest is read first; the hover fill is the one the control
+ * moves to under the pointer. Each is read once it stops changing. Answers
+ * whether there was a hover fill to compare.
+ */
+async function rowFillBesideItsSettings(page, row, name, failures) {
+  const control = row.locator(":scope > [data-size]")
+  const read = () =>
+    control.evaluate((it) => ({
+      fill: getComputedStyle(it).backgroundColor,
+      hovered: Boolean(
+        it.closest('[data-slot="sidebar-menu-item-row"]')?.matches(":hover"),
+      ),
+      animating: it
+        .getAnimations()
+        .some(
+          (animation) =>
+            ["running", "pending"].includes(animation.playState) &&
+            animation.effect?.getComputedTiming().iterations !== Infinity,
+        ),
+    }))
+  const settled = async () => {
+    let last = null
+    return (
+      (await waitFor(async () => {
+        const now = await read()
+        if (now.animating) {
+          last = null
+          return null
+        }
+        const same = last !== null && now.fill === last.fill
+        last = now
+        return same ? now : null
+      }, 5_000)) ??
+      last ??
+      (await read())
+    )
+  }
+  await page.mouse.move(600, 400)
+  const atRest = (await settled()).fill
+  await control.hover({ timeout: 10_000 })
+  // Waits past any transition delay for the fill to leave its rest.
+  if (!(await waitFor(async () => (await read()).fill !== atRest, 2_000))) {
+    // A selected row keeps one fill under the pointer and away from it, so
+    // there is nothing to tell apart.
+    log(
+      `channel ${name} has the same fill at rest and pointed at, so its hover was not compared`,
+    )
+    return false
+  }
+  let onControl = await settled()
+  // WebKit can drop :hover if a concurrent sidebar update shifts layout under
+  // the stationary pointer; re-hover the control once before taking the baseline.
+  if (!onControl.hovered || onControl.fill === atRest) {
+    await control.hover({ timeout: 10_000 })
+    await waitFor(async () => (await read()).fill !== atRest, 2_000)
+    onControl = await settled()
+  }
+  await row.locator("[data-channel-settings-open]").hover({ timeout: 10_000 })
+  const beside = await settled()
+  if (beside.fill !== onControl.fill)
+    failures.push(
+      `channel ${name} pointed at its settings loses the row's hover fill: ${beside.fill}, not ${onControl.fill}`,
+    )
+  return true
+}
+
+/**
+ * With two channels in the sidebar one is not selected, so its hover fill
+ * differs from its rest and can be weighed beside its settings. The columns
+ * layout's check: the tree draws channels as branches without these rows.
+ */
+async function channelRowsKeepHover(page, failures) {
+  const rows = page
+    .locator(`${css.sidebar} ${css.kitRowFrame}`)
+    .filter({ has: page.locator("[data-channel-settings-open]") })
+  const count = await rows.count()
+  if (count < 2) {
+    if (!(await page.locator(`${css.sidebar} [data-row="channel"]`).count()))
+      failures.push(`the sidebar shows ${count} channel rows with settings, not 2`)
+    return
+  }
+  let compared = false
+  for (let index = 0; index < count && !compared; index++) {
+    const row = rows.nth(index)
+    const name = (await row.locator(":scope > [data-size]").textContent())?.trim() ?? ""
+    compared = await rowFillBesideItsSettings(page, row, name, failures)
+  }
+  await page.mouse.move(600, 400)
+  if (!compared)
+    failures.push(`no channel row of ${count} has a hover fill apart from its rest fill`)
+}
+
+/**
  * While a turn runs, the window shows work one way: shimmering words, with no
  * turning arc in a pane's header, the sidebar, or the line under the turn.
  * A line under the turn, where one is drawn, is its words alone; a session
@@ -1229,52 +1680,152 @@ function railLayout(page) {
  * stands in the corner beside the toggle, 8px past the toggle's mark with the
  * rail closed and 20px with it open (clear of the pill), moving only
  * between the two. Settled, the toggle (with the rail closed) stands on
- * Agents' icon column. Returns what it found wrong.
+ * Agents' icon column. The first pane's name, in the chat's titlebar, goes
+ * only between where it stood and where it lands, never past either: in the
+ * window's corner it stands still while its pane moves under it, rather than
+ * ride the pane's flight from under the window's controls and back.
+ * Returns what it found wrong.
  */
 function footerThroughToggle(page) {
-  return page.evaluate(async (toggleSelector) => {
-    const words = () =>
-      document.querySelector(".side-rail-studio .desktop-identity-words")
-    const toggle = document.querySelector(toggleSelector)
-    const mark = () => toggle.querySelector("svg").getBoundingClientRect()
-    const middle = (e) => {
-      const at = e.getBoundingClientRect()
-      return at.left + at.width / 2
-    }
-    const failures = []
-    if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
-    const seen = []
-    const started = performance.now()
-    toggle.click()
-    await new Promise((done) => {
-      const frame = () => {
-        if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
-        if (performance.now() - started < 900) requestAnimationFrame(frame)
-        else done()
+  // The engine as Playwright launched it: every context's user agent claims
+  // Chrome on a Mac (`openPage`), so the page cannot tell WebKit by it.
+  const webkit = page.context().browser()?.browserType().name() === "webkit"
+  return page.evaluate(
+    async ([toggleSelector, webkit]) => {
+      const words = () =>
+        document.querySelector(".side-rail-studio .desktop-identity-words")
+      const name = () => document.querySelector(".split-panes-grid .workspace-pane-name")
+      const names = []
+      const toggle = document.querySelector(toggleSelector)
+      const mark = () => toggle.querySelector("svg").getBoundingClientRect()
+      const middle = (e) => {
+        const at = e.getBoundingClientRect()
+        return at.left + at.width / 2
       }
-      requestAnimationFrame(frame)
-    })
-    const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
-    if (off !== undefined)
-      failures.push(
-        `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
-      )
-    const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
-    const last = seen.at(-1)
-    if (last !== undefined && Math.abs(last - want) > 0.5)
-      failures.push(
-        `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
-      )
-    const icon = document.querySelector(".agents-overview-entry svg")
-    if (toggle.getAttribute("aria-expanded") === "false" && icon) {
-      const apart = middle(toggle) - middle(icon)
-      if (Math.abs(apart) > 0.5)
+      const failures = []
+      if (!words()) failures.push(`no "nessa Studio" beside the rail's toggle`)
+      const seen = []
+      // Where the name stood before the toggle: a flight's first frame already
+      // draws the change.
+      const from = name()?.getBoundingClientRect().left
+      const started = performance.now()
+      toggle.click()
+      await new Promise((done) => {
+        const frame = () => {
+          if (words()) seen.push(words().getBoundingClientRect().left - mark().right)
+          if (name()) names.push(name().getBoundingClientRect().left)
+          if (performance.now() - started < 900) requestAnimationFrame(frame)
+          else done()
+        }
+        requestAnimationFrame(frame)
+      })
+      const off = seen.find((gap) => gap < 7.5 || gap > 20.5)
+      if (off !== undefined)
         failures.push(
-          `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+          `"nessa Studio" stood ${off.toFixed(1)}px past the toggle's mark, not 8-20px`,
         )
-    }
-    return failures
-  }, css.sideRailToggle)
+      const want = toggle.getAttribute("aria-expanded") === "true" ? 20 : 8
+      const last = seen.at(-1)
+      if (last !== undefined && Math.abs(last - want) > 0.5)
+        failures.push(
+          `"nessa Studio" settled ${last.toFixed(1)}px past the toggle's mark, not ${want}px`,
+        )
+      if (from === undefined || !name())
+        failures.push("no pane name in the chat's titlebar")
+      const to = names.at(-1)
+      // Chromium holds the name within half a pixel. WebKit leaves a few
+      // (0.7, 1.3 and 2.5px seen in CI, never the same frame twice): the pane,
+      // its counter-scaled bar and the name each move on their own transform,
+      // and WebKit lands their sum a little off. Riding the pane's flight, as
+      // before this check, moves the name 32px or more.
+      const slack = webkit ? 4 : 1
+      const strayed = names.find(
+        (left) => left < Math.min(from, to) - slack || left > Math.max(from, to) + slack,
+      )
+      if (strayed !== undefined)
+        failures.push(
+          `the pane's name went to ${strayed.toFixed(1)}px, outside ${from.toFixed(1)}-${to.toFixed(1)}px, as the rail toggled (every frame: ${names.map((left) => left.toFixed(1)).join(" ")})`,
+        )
+      // Agents' icon is on screen only with the sidebar open.
+      const icon = document.querySelector(
+        '.workspace-window[data-sidebar="open"] .agents-overview-entry svg',
+      )
+      if (toggle.getAttribute("aria-expanded") === "false" && icon) {
+        const apart = middle(toggle) - middle(icon)
+        if (Math.abs(apart) > 0.5)
+          failures.push(
+            `the closed rail's toggle is ${apart.toFixed(1)}px off Agents' icon`,
+          )
+      }
+      return failures
+    },
+    [css.sideRailToggle, webkit],
+  )
+}
+
+/**
+ * With the sidebar and the session list folded, the chat's pane stands alone
+ * in the window's corner and its title stands past the window's controls.
+ * Closing and opening the rail moves the pane under it; the title stays
+ * where it is, every frame (`footerThroughToggle`), and the columns go back
+ * as they were.
+ */
+async function titleWithThePanesAlone(page, failures) {
+  const columns = () =>
+    page.evaluate((workspace) => {
+      const at = document.querySelector(workspace)
+      return { sidebar: at?.dataset.sidebar, list: at?.dataset.list }
+    }, css.workspace)
+  const before = await columns()
+  if (before.sidebar === "open") await page.keyboard.press(keys.toggleSidebar)
+  if (before.list === "open") await page.keyboard.press(keys.toggleSessionList)
+  const alone = await waitFor(
+    () =>
+      page.evaluate(
+        (workspace) =>
+          document.querySelector(workspace)?.hasAttribute("data-panes-alone"),
+        css.workspace,
+      ),
+    5_000,
+  )
+  if (!alone) {
+    failures.push(
+      `folding the side columns left the panes not alone: ${JSON.stringify(await columns())}`,
+    )
+    return
+  }
+  // Let the folds land before the rail moves the pane again.
+  await page.waitForTimeout(900)
+  const name = (left) => `${left?.toFixed(1)}px`
+  const where = () =>
+    page.evaluate(
+      () =>
+        document
+          .querySelector(".split-panes-grid .workspace-pane-name")
+          ?.getBoundingClientRect().left,
+    )
+  const start = await where()
+  for (const open of [false, true]) {
+    failures.push(
+      ...(await footerThroughToggle(page)).map((failure) => `panes alone: ${failure}`),
+    )
+    const now = await where()
+    if (start === undefined || now === undefined || Math.abs(now - start) > 0.5)
+      failures.push(
+        `with the panes alone and the rail ${open ? "open" : "closed"}, the chat's title stands at ${name(now)}, not ${name(start)}`,
+      )
+  }
+  if (before.sidebar === "open") await page.keyboard.press(keys.toggleSidebar)
+  if (before.list === "open") await page.keyboard.press(keys.toggleSessionList)
+  if (
+    !(await waitFor(async () => {
+      const now = await columns()
+      return now.sidebar === before.sidebar && now.list === before.list
+    }, 5_000))
+  )
+    failures.push(
+      `the side columns did not open back: ${JSON.stringify(await columns())}`,
+    )
 }
 
 /** The row of the conversation `conversationId` in the window's list. */
@@ -1516,6 +2067,220 @@ function carried(view, seen, text) {
  * behind a failure is followed to the turn that carries it on. `seen` are the
  * turns from before the send, left out of what a failure lists.
  */
+/**
+ * Whether the gateway was built with terminals; a failure naming how to
+ * build it when not (`scripts/terminal/ghostty.sh`).
+ */
+/**
+ * ⌘\ offers terminals: the open one by its name, under the terminal glyph,
+ * chats under their agent's tile, and a new terminal, which opens beside.
+ * The new one is ended from its own pane, leaving `opened`'s in front.
+ */
+async function opensBeside(run, opened, name, listed, failures) {
+  const page = run.page
+  await page
+    .locator(`.workspace-terminal-pane${css.focusedPane} .workspace-pane-title`)
+    .click()
+  const panes = await page.locator(css.pane).count()
+  await page.keyboard.press(keys.openBeside)
+  const dialog = page.getByRole("dialog", { name: "Open beside" })
+  if (
+    !(await dialog.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("⌘\\ beside a terminal opened no Open beside picker")
+    return
+  }
+  const terminalRow = dialog.getByRole("option", { name: new RegExp(`^${name}`) })
+  if (!(await terminalRow.count()))
+    failures.push(`the Open beside picker does not offer the terminal "${name}"`)
+  else if (!(await terminalRow.locator("svg").count()))
+    failures.push("the Open beside picker's terminal row has no icon")
+  if (!(await dialog.locator('[role="option"] .workspace-agent-tile').count()))
+    failures.push("the Open beside picker shows no agent tile on its chats")
+  const fresh = dialog.getByRole("option", { name: /^New terminal in #/ })
+  if (!(await fresh.count())) {
+    failures.push("the Open beside picker offers no New terminal")
+    await page.keyboard.press(keys.escape)
+    return
+  }
+  await fresh.click()
+  const made = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  if (!made) {
+    failures.push("New terminal in the Open beside picker opened no terminal")
+    return
+  }
+  if (
+    !(await waitFor(
+      async () => (await page.locator(css.pane).count()) === panes + 1,
+      5_000,
+    ))
+  )
+    failures.push("New terminal in the Open beside picker did not open a pane beside")
+  const beside = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+  if ((await beside.locator(".workspace-pane-title").innerText()) === name)
+    failures.push("the new terminal did not take the focus beside")
+  await beside.getByRole("button", { name: "End Terminal" }).click()
+  if (
+    !(await waitFor(async () => (await page.locator(css.pane).count()) === panes, 5_000))
+  )
+    failures.push("ending the terminal opened beside left its pane")
+}
+
+/**
+ * A watched Run that ended stays open, its box no taller than what it
+ * printed; the bar's chevron folds the output away and brings it back.
+ */
+async function foldsItsOutput(block, failures, shot) {
+  const output = block.locator("[data-run-output]")
+  const fold = block.locator("[data-run-fold]")
+  if (!(await output.count())) {
+    failures.push("a Run that ended while watched folded its output away")
+    return
+  }
+  const fitted = await waitFor(async () => {
+    const [box, grid] = await Promise.all([
+      output.boundingBox(),
+      output.locator('[data-slot="terminal-grid"]').boundingBox(),
+    ])
+    return box && grid && box.height < grid.height
+  }, 5_000)
+  if (!fitted) failures.push("an ended Run's box keeps the blank rows under its output")
+  await shot?.("open")
+  await fold.click()
+  if (
+    !(await waitFor(async () => (await output.count()) === 0, 3_000)) ||
+    (await fold.getAttribute("aria-expanded")) !== "false"
+  )
+    failures.push("the Run bar's chevron did not fold the output away")
+  await shot?.("folded")
+  await fold.click()
+  if (!(await waitFor(async () => (await output.count()) === 1, 3_000)))
+    failures.push("the Run bar's chevron did not bring the output back")
+}
+
+async function terminalsBuilt(run, failures) {
+  try {
+    await run.client.terminals.list()
+    return true
+  } catch (error) {
+    failures.push(
+      `the gateway has no terminals (${error.code ?? error.message}; it logged ${JSON.stringify(terminalLog(run))}): build it with eval "$(scripts/terminal/ghostty.sh)" && cargo build -p nessa-server --features nessa-server/terminals`,
+    )
+    return false
+  }
+}
+
+/** What the gateway logged about terminals, last few lines: why one is unavailable. */
+function terminalLog(run) {
+  return run.stack.gateway
+    .log()
+    .split("\n")
+    .filter((line) => /terminal|pty/i.test(line))
+    .slice(-4)
+}
+
+/**
+ * Whether the terminal in `grid` reflows to its pane: with the window made
+ * narrower, the grid draws at full size (no scale) and holds fewer columns,
+ * which only a resize of the terminal itself gives. A pane that never took
+ * the terminal's size scales it down instead.
+ */
+async function reflowsToItsPane(page, grid, failures) {
+  const look = () =>
+    grid.evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      scaled: getComputedStyle(element).transform !== "none",
+    }))
+  const settled = await waitFor(
+    async () => (await look()).width > 0 && !(await look()).scaled,
+    5_000,
+  )
+  if (!settled) {
+    failures.push("the terminal opened scaled down: its pane never took its size")
+    return
+  }
+  const before = await look()
+  const size = page.viewportSize()
+  if (!size) return
+  await page.setViewportSize({ width: size.width - 320, height: size.height })
+  try {
+    const reflowed = await waitFor(async () => {
+      const now = await look()
+      return !now.scaled && now.width < before.width - 100 ? now : null
+    }, 5_000)
+    if (!reflowed)
+      failures.push(
+        `a narrower window did not reflow the terminal (${JSON.stringify({ before, after: await look() })})`,
+      )
+  } finally {
+    await page.setViewportSize(size)
+  }
+}
+
+/**
+ * Opens a second shell with ⌘J (it takes the focused pane), then clicks the
+ * first terminal's row: the pane shows the first terminal again, `word` and
+ * all, with no click inside it. The second shell is ended through the
+ * gateway after. Whether the pane came back.
+ */
+async function switchesBack(run, grid, row, listed, opened, word) {
+  const page = run.page
+  await page.keyboard.press(keys.newTerminal)
+  const second = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        each.terminalId !== opened.terminalId &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  const away = await waitFor(
+    async () => !(await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  await row.click()
+  const back = await waitFor(
+    async () => (await gridRows(grid)).some((each) => each.trim() === word),
+    10_000,
+  )
+  if (second) await run.client.terminals.close(second.terminalId).catch(() => {})
+  return Boolean(second && away && back)
+}
+
+/** A terminal grid's rows as text, top to bottom. */
+async function gridRows(grid) {
+  return grid
+    .locator('[data-slot="terminal-row"]')
+    .evaluateAll((rows) => rows.map((row) => row.textContent ?? ""))
+    .catch(() => [])
+}
+
+/** Shows the main conversation in the focused pane again, after a step put a terminal there. */
+async function showMainAgain(run, failures) {
+  const row = run.page.locator(selectorFor.sessionListRowFor(run.main.id))
+  await row.click({ timeout: 10_000 }).catch(() => {})
+  const shown = await dock(run.page)
+    .locator("textarea")
+    .waitFor({ timeout: 10_000 })
+    .then(
+      () => true,
+      () => false,
+    )
+  if (!shown) failures.push("the main conversation did not show again after the terminal")
+}
+
 async function settled(run, conversationId, seen, text, status, failures, seconds = 60) {
   const end = Date.now() + seconds * 1000
   let view
@@ -1711,6 +2476,120 @@ async function pickAccess(page, mode) {
   if (!restored) throw new Error("the access menu did not restore focus to its control")
 }
 
+/**
+ * The session's own permission mode a scenario turn says it ran at
+ * (`SAYS.ranAt`), fixed when the turn began; undefined when it said none.
+ */
+function ranAt(turn) {
+  const said = (turn?.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("")
+  const at = said.lastIndexOf(SAYS.ranAt)
+  return at < 0 ? undefined : said.slice(at + SAYS.ranAt.length).trim()
+}
+
+/**
+ * The red card's whole round, once the chat's agent offers {@link ACCESS}:
+ * the agent asks, the card says Nessa's words, Approve raises the access and
+ * only then answers, and the card lists what was allowed.
+ */
+async function approveAccess(run, step, conversationId, named, failures) {
+  const title = await titleOf(run, conversationId)
+  await openStressConversation(run.page, conversationId, title)
+  const asking = prompt(run, STRESS.requestAccess, step)
+  await run.client.conversation.submit(
+    run.client.conversation.prepare(conversationId, asking),
+  )
+  const { view: asked, turn: askingTurn } = await settled(
+    run,
+    conversationId,
+    new Set(named?.messages.map((each) => each.executionId) ?? []),
+    asking,
+    "completed",
+    failures,
+  )
+  if (failures.length) return
+  const rowAsk = async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.find((each) => each.conversationId === conversationId)?.ask
+  }
+  const ask = await waitFor(rowAsk, 15_000)
+  if (!ask?.access) {
+    failures.push(`the list row carries ${JSON.stringify(ask)}, not an access request`)
+    return
+  }
+  if (
+    ask.access.mode !== ACCESS.access ||
+    ask.access.grants.length !== 3 ||
+    ask.question !== "Allow auto approval in this chat?" ||
+    ask.choices.map((each) => each.label).join("|") !== `${STRESS.approved}|Not now` ||
+    ask.recommended !== 1 ||
+    ask.reason !== ACCESS.reason
+  )
+    failures.push(`the row's access request is ${JSON.stringify(ask)}`)
+  const card = run.page.locator(`[data-access-request="${ACCESS.access}"]`)
+  if (
+    !(await card
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false))
+  ) {
+    failures.push("the chat does not draw the red access card")
+    return
+  }
+  if (!(await card.getByText(ask.question).count()))
+    failures.push("the access card does not say Nessa's question")
+  if (!(await card.getByText(ACCESS.reason).count()))
+    failures.push("the access card does not say the agent's reason")
+  if (await card.locator("[data-slot=access-request-grants]").count())
+    failures.push("the access card lists what is allowed before it is approved")
+  if ((await run.client.conversation.read(conversationId)).approvalMode !== "ask")
+    failures.push("asking for access changed the chat's access")
+  await card.getByRole("button", { name: STRESS.approved, exact: true }).click()
+  if (!(await accessIs(run, conversationId, ACCESS.access)))
+    failures.push("Approve did not raise the chat to the access asked for")
+  const { turn: answered } = await settled(
+    run,
+    conversationId,
+    new Set(asked?.messages.map((each) => each.executionId) ?? []),
+    STRESS.approved,
+    "completed",
+    failures,
+  )
+  // The agent's session says the permission mode each turn began at: the
+  // Approve turn must begin at the raised one, not the Ask the asking turn
+  // ran at. That is fixed when the answer went, whenever it is read.
+  const before = ranAt(askingTurn)
+  const after = ranAt(answered)
+  if (!before || !after)
+    failures.push(
+      `the scenario did not say the mode its turns ran at (${before}, ${after})`,
+    )
+  else if (after === before)
+    failures.push(
+      `the Approve turn ran at ${after}, the mode the chat asked at: the answer went before the access changed`,
+    )
+  await expectShown(run.page, `${SAYS.approvedAccess}${STRESS.approved}`, failures)
+  const listed = card.locator("[data-slot=access-request-grants] li")
+  const lines = await waitFor(async () => {
+    const shown = await listed.allTextContents()
+    return shown.length === 3 ? shown : null
+  }, 15_000)
+  if (!lines || lines.join("|") !== ask.access.grants.join("|"))
+    failures.push(
+      `the approved card lists ${JSON.stringify(lines)}, not ${JSON.stringify(ask.access.grants)}; it says ${JSON.stringify(await card.textContent().catch(() => null))}`,
+    )
+  if (await card.getByRole("button").count())
+    failures.push("the approved card still offers a choice")
+  if (
+    await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
+      (cleared) => !cleared,
+    )
+  )
+    failures.push("the list row still carries the approved access request")
+}
+
 /** Waits for the gateway to say the conversation runs at `mode`. */
 const accessIs = (run, conversationId, mode, ms = 20_000) =>
   waitFor(async () => {
@@ -1859,27 +2738,241 @@ function otherAgent(agent) {
   return agent === "claude" ? "codex" : "claude"
 }
 
-/** Picks `model` in a composer's picker: its provider's tab, then the model. */
-async function pickModel(page, picker, model) {
-  await picker.click()
-  await page
-    .locator(css.modelProviderTab)
-    .filter({ hasText: providerName(model.provider) })
-    .first()
-    .click()
-  await page
-    .locator(css.modelOption)
-    .filter({ hasText: model.displayName })
-    .first()
-    .click()
+/** The `picker` step's work, with the stars cleared around it by the step. */
+async function pickerStep(run, step, failures) {
+  const page = run.page
+  const chip = dock(page).locator(css.modelChip)
+  if (!(await waitFor(async () => !(await chip.isDisabled()), 10_000))) {
+    failures.push("the established conversation's model chip is disabled")
+    return
+  }
+  const before = await readWithReviews(run.client, run.main.id)
+  const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
+  const bars = (model) =>
+    (model.reasoning?.effortLevels ?? []).filter((level) => level !== "none")
+  const target =
+    current &&
+    catalog.models.find(
+      (model) =>
+        model.provider === current.provider &&
+        model.modelId !== current.modelId &&
+        bars(model).length >= 2,
+    )
+  if (!target)
+    throw new CannotRun(
+      "no second catalog model with levels in this conversation's provider",
+    )
+  // The chat goes to Auto where its model offers it. A target not offered at
+  // Auto on this platform (only Ask is verified for every model) takes the
+  // chat to Ask in the same change, and the shield says so; one offered at
+  // Auto keeps it.
+  const { agents } = await run.client.agents.list()
+  const offered = (modelId) =>
+    agents
+      .flatMap((agent) => agent.models)
+      .find((model) => model.modelId === modelId)
+      ?.approvalModes?.map((choice) => choice.id) ?? ["ask"]
+  const startMode = offered(current.modelId).includes("auto") ? "auto" : "ask"
+  if (before.approvalMode !== startMode) {
+    await pickAccess(page, startMode)
+    if (!(await accessIs(run, run.main.id, startMode))) {
+      failures.push(`the chat did not come to ${startMode} before the model change`)
+      return
+    }
+  }
+  const endMode = offered(target.modelId).includes(startMode) ? startMode : "ask"
+  const row = () =>
+    page.locator(css.modelOption).filter({
+      has: page
+        .locator(css.modelOptionLabel)
+        .getByText(target.displayName, { exact: true }),
+    })
+  const opened = () => page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  const closed = () =>
+    page
+      .locator(css.modelPicker)
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false)
+  const star = async () => {
+    const button = row().locator(css.modelStar)
+    await row().hover()
+    await button.click()
+    if ((await button.getAttribute("aria-pressed")) !== "true")
+      failures.push(`${target.displayName}'s star is not on once pressed`)
+  }
+
+  // A star, then the picker opens on Starred with the model listed once.
+  await chip.click()
+  await opened()
+  await page.locator(css.modelSearch).fill(target.displayName)
+  await star()
+  await page.locator(css.modelSearch).fill("")
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  await chip.click()
+  await opened()
+  const onStarred = await page
+    .locator(`${css.modelRail}[data-filter="starred"]`)
+    .getAttribute("aria-current")
+  if (onStarred !== "true")
+    failures.push("with a star, the picker did not open on Starred")
+  if ((await row().count()) !== 1)
+    failures.push(`Starred does not list ${target.displayName} once`)
+  if (run.evidence)
+    await page
+      .locator(css.modelPicker)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-starred.png`) })
+      .catch(() => {})
+
+  if ((await row().getAttribute("aria-disabled")) === "true")
+    throw new CannotRun(`${target.displayName} cannot be chosen in this conversation`)
+  // A sideways swipe over the row moves its level one step, and the picker
+  // stays open. Fingers moving right (a negative deltaX) light one bar more.
+  const lit = () => row().locator(`${css.modelBar}[data-lit]`).count()
+  const total = await row().locator(css.modelBar).count()
+  const litBefore = await lit()
+  const up = litBefore < total
+  await row().hover()
+  // What the page received, for the failure message: each wheel's sideways
+  // distance, unit, and time.
+  await page.evaluate(() => {
+    const seen = []
+    window.__pickerWheels = seen
+    window.addEventListener(
+      "wheel",
+      (event) =>
+        seen.push([
+          event.deltaX,
+          event.deltaY,
+          event.deltaMode,
+          Math.round(event.timeStamp),
+        ]),
+      { capture: true, passive: true },
+    )
+  })
+  // A swipe is a run of small moves less than 160 ms apart (the kit's
+  // gesture gap); a pause longer than that starts a new swipe. Checking the
+  // bars between moves takes longer than that, so one probe move learns how
+  // far a move reaches in this engine, and after a pause that ends it, one
+  // burst carries just past one step (44 px).
+  const sign = up ? -1 : 1
+  await page.mouse.wheel(sign * 16, 0)
+  const reach = Math.abs(
+    await page.evaluate(() => window.__pickerWheels.at(-1)?.[0] ?? 0),
+  )
+  await page.waitForTimeout(400)
+  const moves = reach > 0 ? Math.floor(44 / reach) + 1 : 0
+  await Promise.all(Array.from({ length: moves }, () => page.mouse.wheel(sign * 16, 0)))
+  const litAfter = litBefore + (up ? 1 : -1)
+  if (!(await waitFor(async () => (await lit()) === litAfter, 5_000)))
+    failures.push(
+      `a sideways swipe left ${await lit()} of ${target.displayName}'s bars lit, not ${litAfter} (wheels seen [dx, dy, mode, ms]: ${await page.evaluate(() => JSON.stringify(window.__pickerWheels))})`,
+    )
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a sideways swipe closed the model picker")
+
+  // One press of a bar: that model at that level, and the picker closes.
+  const bar = row().locator(css.modelBar).nth(1)
+  const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
+  await bar.click()
+  if (!(await closed())) failures.push("a bar left the model picker open")
+  const named = `Change model, currently ${target.displayName}, ${level}`
+  if (
+    !(await waitFor(async () => (await chip.getAttribute("aria-label")) === named, 5_000))
+  )
+    failures.push(
+      `a bar left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
+    )
+  const fast = dock(page).locator(css.composerFast)
+  if ((await fast.isDisabled()) === target.fastMode)
+    failures.push(
+      `Fast is${target.fastMode ? " not" : ""} offered for ${target.displayName}`,
+    )
+
+  // The next message runs on it, and the chip still names that level.
+  const text = prompt(run, STRESS.model, step)
+  const seen = await send(run, run.main.id, text, failures)
+  const confirmed = await waitFor(async () => {
+    const view = await readWithReviews(run.client, run.main.id)
+    return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+  }, 15_000)
+  if (!confirmed) failures.push(`sending did not run on ${target.displayName}`)
+  await settled(run, run.main.id, seen, text, "completed", failures)
+  await expectShown(page, `${SAYS.model}${target.modelId}`, failures)
+  const access = (await readWithReviews(run.client, run.main.id)).approvalMode
+  if (access !== endMode)
+    failures.push(
+      `after the change to ${target.displayName} the chat runs at ${access}, not ${endMode}`,
+    )
+  const stepped =
+    endMode !== startMode
+      ? `Access is now Ask for approval. This model doesn’t offer ${startMode === "auto" ? "Auto approval" : "Full access"} here.`
+      : undefined
+  // The shield says it, as its tooltip; the composer has no line for it.
+  const noticeText = () =>
+    dock(page)
+      .locator(composerControls.access)
+      .getAttribute("data-tooltip")
+      .then((text) => text ?? "")
+      .catch(() => "")
+  if (stepped && !(await waitFor(async () => (await noticeText()) === stepped, 10_000)))
+    failures.push(`the shield did not say the chat moved to Ask: "${await noticeText()}"`)
+  if (!stepped && (await noticeText()).includes("Access is now"))
+    failures.push(
+      `the shield says access moved though it was kept: "${await noticeText()}"`,
+    )
+  await composerSaysNothing(page, "after a model change", failures)
+  if (
+    (await dock(page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")) !== composerControls.accessValue[endMode]
+  )
+    failures.push(`the shield does not show ${endMode} after the model change`)
+  if (run.evidence && stepped)
+    await dock(page)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-stepped.png`) })
+      .catch(() => {})
+  if ((await chip.getAttribute("aria-label")) !== named)
+    failures.push(
+      `after the send the chip says "${await chip.getAttribute("aria-label")}"`,
+    )
+
+  // The star off again, so later runs open where the model is.
+  await chip.click()
+  await opened()
+  // On Starred, the model leaves the list as its star comes off.
+  await row().hover()
+  await row().locator(css.modelStar).click()
+  if (
+    !(await row()
+      .waitFor({ state: "detached", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false))
+  )
+    failures.push(`unstarred, ${target.displayName} stayed under Starred`)
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  if (run.evidence)
+    writeFileSync(
+      join(run.evidence, `picker-${run.engine ?? "window"}-${step.index}.json`),
+      JSON.stringify(
+        {
+          before: current.modelId,
+          after: target.modelId,
+          level,
+          access: { before: startMode, after: endMode },
+          confirmed: confirmed?.runtime,
+        },
+        null,
+        2,
+      ),
+    )
 }
 
-/** A catalog provider's tab in the picker, as the window names it (`composer-options.ts`). */
-function providerName(provider) {
-  return (
-    { anthropic: "Anthropic", openai: "OpenAI", opencode: "OpenCode" }[provider] ??
-    provider
-  )
+/** Picks `model` in a composer's or a new channel's picker, by its exact name. */
+async function pickModel(page, picker, model) {
+  await selectStressModel(page, picker, model.displayName)
 }
 
 /**
@@ -1893,7 +2986,7 @@ function providerName(provider) {
 async function makeChannel(
   run,
   failures,
-  { name, folder, refusedFolder, notes, resource, dropped, model },
+  { name, folder, refusedFolder, notes, resource, dropped, model, coordinator = true },
 ) {
   const { page } = run
   const pick = (kind, value) =>
@@ -1961,9 +3054,33 @@ async function makeChannel(
   // Boat (no keys, or a gateway that cannot say) skips these choices rather
   // than failing on Boat's setup.
   const boat = await boatProbe(run.client)
-  if (!boat.ready)
-    log(`${name}: Boat is ${boat.state}, so its placement choices are skipped`)
-  else {
+  const note = flow.locator("[data-new-channel-placement-note]")
+  const boatConnect = flow.locator('[data-cloud-connect="boat"]')
+  // All local, the step says nothing about clouds.
+  if ((await note.count()) || (await flow.locator("[data-cloud-connect]").count()))
+    failures.push("with everything local, the placement step still talks about clouds")
+  if (!boat.ready) {
+    // A cloud not connected is still offered; chosen, it asks to be connected
+    // right here, and the question waits until it is or another place is.
+    await workerLocation.selectOption("boat")
+    if (!(await boatConnect.isVisible()))
+      failures.push("New threads on a Boat not connected does not offer to connect it")
+    if (!(await note.isVisible()))
+      failures.push(
+        "a cloud is chosen, yet the placement step does not say what that means",
+      )
+    else await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
+    await photograph(`${name}-3-placement-connect`)
+    await flow.locator(".new-channel-placement").focus()
+    await page.keyboard.press(keys.enter)
+    if (
+      !(await flow.locator(`${css.newChannelAsked}[data-step="placement"]`).isVisible())
+    )
+      failures.push("the placement question moved on while its Boat was not connected")
+    await workerLocation.selectOption("local")
+    if (await boatConnect.count())
+      failures.push("Boat's connect form stays after the threads went back to Local")
+  } else {
     const offered = await waitFor(
       () =>
         coordinatorLocation
@@ -1981,9 +3098,22 @@ async function makeChannel(
       await workerLocation.selectOption("boat")
       if ((await coordinatorLocation.inputValue()) !== "local")
         failures.push("changing worker placement also changed coordinator placement")
+      if (await boatConnect.count())
+        failures.push("Boat is connected, yet choosing it asks to connect it")
+      if (!(await note.isVisible()))
+        failures.push(
+          "a cloud is chosen, yet the placement step does not say what that means",
+        )
+      else
+        await saidWhole(page, "[data-new-channel-placement-note]", "placement", failures)
       await workerLocation.selectOption("local")
     }
   }
+  // On unless asked off; either way it can be switched later in settings.
+  const coordinatorChoice = flow.locator("[data-new-channel-coordinator]")
+  if ((await coordinatorChoice.inputValue()) !== "on")
+    failures.push("a new channel's coordinator is not on until it is turned off")
+  if (!coordinator) await coordinatorChoice.selectOption("off")
   await photograph(`${name}-3-placement`)
   await flow.locator(".new-channel-placement").focus()
   await page.keyboard.press(keys.enter)
@@ -2045,6 +3175,10 @@ async function makeChannel(
   const { channels } = await run.client.channels.list()
   const listed = channels.find((channel) => channel.name === name)
   if (!listed) failures.push(`the gateway does not list the channel ${name}`)
+  if (listed && listed.coordinatorOn !== coordinator)
+    failures.push(
+      `the channel ${name} was made with its coordinator ${listed.coordinatorOn ? "on" : "off"}`,
+    )
   if (
     listed &&
     (listed.coordinatorPlacement !== "local" ||
@@ -2991,7 +4125,349 @@ async function unusedNativeContext(run, step, failures) {
   })
 }
 
+/** The enrolled-peer example (`read_only_sync`), built beside the gateway. */
+function peerExampleBin() {
+  const bin = join(repoRoot, "target/debug/examples/read_only_sync")
+  if (!existsSync(bin))
+    throw new Error(
+      "the peer example is not built (cargo build -p nessa-client-core --example read_only_sync)",
+    )
+  return bin
+}
+
+/** The last JSON object `read_only_sync` wrote. Diagnostics stay on stderr. */
+function peerOutcome(text) {
+  const lines = text.trim().split("\n")
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (!lines[index].startsWith("{")) continue
+    try {
+      return JSON.parse(lines[index])
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/** Run one peer-example command. `input` is the enrollment code for `pair`. */
+function peerExample(args, input) {
+  const result = spawnSync(peerExampleBin(), args, {
+    input,
+    encoding: "utf8",
+    timeout: 60_000,
+  })
+  return {
+    status: result.status,
+    outcome: peerOutcome(result.stdout ?? ""),
+    stderr: (result.stderr ?? "").trim(),
+    error: result.error,
+  }
+}
+
+/**
+ * Enroll a peer gateway against `invitationId` with `code`, approving the
+ * claimed key while `pair` holds the invitation. The credential id is the
+ * one `status` names once the enrollment is active.
+ */
+async function enrollPeer(run, profile, code, invitationId) {
+  const child = spawn(peerExampleBin(), ["pair", profile, "peer"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk
+  })
+  child.stdin.end(`${code}\n`)
+  const exited = new Promise((resolve) => {
+    child.once("exit", (status) => resolve(status))
+  })
+  const streamsClosed = Promise.all([
+    new Promise((resolve) => child.stdout.on("close", resolve)),
+    new Promise((resolve) => child.stderr.on("close", resolve)),
+  ])
+  try {
+    const deviceKey = await waitFor(async () => {
+      try {
+        return (await run.client.pairing.status(invitationId)).claimedDeviceKey ?? false
+      } catch {
+        return false
+      }
+    }, 30_000)
+    if (!deviceKey)
+      throw new Error(
+        `the peer never claimed its invitation: ${stderr.trim() || stdout.trim()}`,
+      )
+    const approved = await run.client.pairing.approve(invitationId, deviceKey)
+    if (approved.activationStopped)
+      throw new Error(
+        `the peer's approval stopped ${approved.activationStopped}: ${approved.status.phase}`,
+      )
+    const status = await Promise.race([exited, sleep(30_000).then(() => "timeout")])
+    if (status === "timeout")
+      throw new Error(`the peer's enrollment did not finish: ${stderr.trim()}`)
+    await streamsClosed
+    let enrollment = peerOutcome(stdout)?.enrollment
+    for (let tries = 0; enrollment?.phase !== "active" && tries < 40; tries += 1) {
+      await sleep(250)
+      const read = peerExample(["status", profile])
+      enrollment = read.outcome?.enrollment ?? enrollment
+      if (tries === 39 && enrollment?.phase !== "active")
+        throw new Error(
+          `the peer did not become active (${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
+        )
+    }
+    if (!enrollment?.credentialId)
+      throw new Error(
+        `the peer enrollment named no credential: ${JSON.stringify(enrollment)}`,
+      )
+    return enrollment
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
+}
+
+/**
+ * The `launch` step's slow launch: the host's startup outlasts its hold of
+ * the window's read, so the window is refused as still starting. True when
+ * the window stayed uncovered and listed the main conversation once up.
+ */
+async function slowLaunch(run, failures) {
+  const page = run.page
+  const removeKey = () =>
+    page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
+  await page.evaluate(
+    ([key, hold]) => sessionStorage.setItem(key, String(hold)),
+    [STARTING.key, SLOW_LAUNCH_HOLD_MS],
+  )
+  let covered
+  let refused
+  try {
+    await page.reload()
+    // Wait until the host has refused at least once as still starting.
+    const passed = await page
+      .waitForFunction(() => window.__fakeHostStillStarting > 0, null, {
+        timeout: SLOW_LAUNCH_HOLD_MS + LAUNCH_STARTING_MS,
+      })
+      .then(() => true)
+      .catch(() => false)
+    refused = passed
+    // And a little after: the refusal has reached the window by now.
+    covered = await page
+      .locator(css.startupScreen)
+      .waitFor({ timeout: LAUNCH_STARTING_MS })
+      .then(() => true)
+      .catch(() => false)
+  } finally {
+    await removeKey().catch(() => removeKey().catch(() => {}))
+  }
+  if (!refused) {
+    failures.push("the slow launch's startup never outlasted the host's hold")
+    return false
+  }
+  if (covered) {
+    failures.push(
+      "the window showed the startup screen for a startup still running past the host's hold",
+    )
+    return false
+  }
+  const listed = await page
+    .locator(selectorFor.sessionListRowFor(run.main.id))
+    .waitFor({ timeout: LAUNCH_LISTED_MS })
+    .then(() => true)
+    .catch(() => false)
+  if (!listed) {
+    failures.push(
+      `after a slow launch the window did not list the main conversation within ${LAUNCH_LISTED_MS}ms of the gateway being up`,
+    )
+    return false
+  }
+  if ((await page.locator(css.startupScreen).count()) > 0) {
+    failures.push("the startup screen covers the window after a slow launch was up")
+    return false
+  }
+  return true
+}
+
+const unsignedSwitch = (...args) => steps.unsignedSwitchBody(...args)
+const failedModelControl = (...args) => steps.failedControlBody(...args)
+const stuckModelControl = (...args) => steps.stuckControlBody(...args)
+
 const steps = {
+  /** The cloud for new thread VMs is picked in Settings › Connections ›
+   * Accounts: a VM made while Agent37 is chosen is made on Agent37 (the
+   * fixture's fake one), and its thread stays there after Boat is chosen
+   * again, while a new thread goes to Boat. */
+  async cloud(run, step, failures) {
+    const original = run.main
+    const fixture = run.stack.vmFixture
+    const choose = async (cloud) => {
+      await openAccounts(run.page)
+      await unlockRequestedVault(run.client, run.page)
+      const connected = await run.page
+        .locator('[data-agent37-state="connected"]')
+        .waitFor({ timeout: 10_000 })
+        .then(
+          () => true,
+          () => false,
+        )
+      if (!connected) failures.push("Settings does not show Agent37 connected")
+      const row = run.page.locator("[data-cloud-choice]")
+      await pickChoice(run.page, row, cloud)
+      const shown = await waitFor(
+        async () => (await row.getAttribute("data-cloud-choice")) === cloud,
+        5_000,
+      )
+      if (!shown) failures.push(`the cloud choice does not show ${cloud} once picked`)
+      const saved = (await run.client.cloud.read()).cloud
+      if (saved !== cloud)
+        failures.push(`the gateway kept ${saved} after ${cloud} was picked`)
+      await closeSettings(run.page)
+    }
+    const made = (id) =>
+      fixture
+        .events()
+        .filter((event) => event.thread === id && event.kind === "created")
+        .map((event) => event.cloud)
+    const talk = async (id, said) => {
+      await run.client.conversation.submit(run.client.conversation.prepare(id, said))
+      await settled(run, id, new Set(), said, "completed", failures)
+    }
+    const open = async (id) => {
+      await run.client.conversation.create({
+        conversationId: id,
+        agent: run.stack.agent,
+        environment: "boat:thread",
+      })
+    }
+    await choose("agent37")
+    const onAgent37 = randomUUID()
+    await open(onAgent37)
+    await talk(onAgent37, `${STRESS.reply} cloud agent37 ${step.index}`)
+    if (made(onAgent37).join() !== "agent37")
+      failures.push(
+        `a VM made with Agent37 chosen was made on: ${made(onAgent37).join()}`,
+      )
+    await choose("boat")
+    // Rested once idle, the thread's next turn opens its VM again: on the
+    // cloud it was made on, whatever is chosen now.
+    const events = () => fixture.events().filter((event) => event.thread === onAgent37)
+    let rested = -1
+    if (
+      !(await waitFor(
+        () =>
+          (rested = events().findIndex(
+            (event) => event.kind === "rested" && event.cloud === "agent37",
+          )) >= 0,
+        (PARK_IDLE_SECONDS + 30) * 1000,
+      ))
+    )
+      failures.push("the thread on Agent37 was not rested on Agent37 once idle")
+    await talk(onAgent37, `${STRESS.reply} cloud stays ${step.index}`)
+    const after = events().slice(rested + 1)
+    if (!after.some((event) => event.kind === "connected" && event.cloud === "agent37"))
+      failures.push(
+        "the thread on Agent37 was not opened again on Agent37 after its rest",
+      )
+    if (made(onAgent37).join() !== "agent37" || events().some((e) => e.cloud === "boat"))
+      failures.push(
+        `a thread on Agent37 reached Boat after Boat was chosen: ${JSON.stringify(events())}`,
+      )
+    const onBoat = randomUUID()
+    await open(onBoat)
+    await talk(onBoat, `${STRESS.reply} cloud boat ${step.index}`)
+    if (made(onBoat).join() !== "boat")
+      failures.push(`a VM made with Boat chosen was made on: ${made(onBoat).join()}`)
+    // A channel names its own cloud: its threads go to Agent37 while Boat is
+    // the cloud chosen for new thread VMs, and the channel says so back.
+    const name = `stress-cloud-r${step.index}-s${run.knobs.seed}`
+    // Made here as setup; the person moves its threads to Agent37 in the
+    // channel's settings, from the menu that lists every cloud.
+    const channel = await run.client.channels.create({
+      requestId: name,
+      name,
+      agent: run.stack.agent,
+      model: run.stack.profile.model,
+    })
+    const inChannel = randomUUID()
+    try {
+      await run.page.reload()
+      await unlockRequestedVault(run.client, run.page)
+      const named = run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(name, { exact: true })
+        .first()
+      await named.hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="${channel.channelId}"]`,
+        )
+        .click()
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator(`[data-channel-placement="${channel.channelId}"]`)
+      try {
+        await pickChoice(
+          run.page,
+          control.locator('[data-placement-row="threads"]'),
+          "agent37",
+        )
+        if (
+          !(await waitFor(
+            async () =>
+              (await control.getAttribute("data-thread-placement")) === "agent37",
+            10_000,
+          ))
+        )
+          failures.push("the channel settings do not show new threads on Agent37")
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `cloud-${run.engine}-channel-agent37.png`),
+          })
+      } finally {
+        const dialog = run.page.locator(css.channelSettingsDialog)
+        for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+          await run.page.keyboard.press(keys.escape)
+          await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+        }
+      }
+      const { channels } = await run.client.channels.list()
+      const listed = channels.find((each) => each.channelId === channel.channelId)
+      if (listed?.threadPlacement !== "agent37")
+        failures.push(`a channel moved to Agent37 reads back ${listed?.threadPlacement}`)
+      await run.client.conversation.create({
+        conversationId: inChannel,
+        agent: run.stack.agent,
+        channelId: channel.channelId,
+      })
+      await talk(inChannel, `${STRESS.reply} cloud channel ${step.index}`)
+      if (made(inChannel).join() !== "agent37")
+        failures.push(
+          `a thread in a channel on Agent37 was made on: ${made(inChannel).join()}`,
+        )
+      run.checked.push(inChannel)
+    } finally {
+      await run.client.channels
+        .setPlacement({
+          requestId: `${name}-back`,
+          channelId: channel.channelId,
+          coordinatorPlacement: "local",
+          threadPlacement: "local",
+        })
+        .catch((error) =>
+          failures.push(`${name} did not go back here: ${explain(error)}`),
+        )
+    }
+    run.checked.push(onAgent37, onBoat)
+    run.main = original
+    await openStressConversation(run.page, original.id, original.title)
+  },
   async vmBackground(run, step, failures) {
     const original = run.main
     const id = randomUUID()
@@ -3114,20 +4590,30 @@ const steps = {
         failures.push("the completed VM background task did not permit idle rest")
       // Boat fails the rested VM's next opening. Sent from the composer, the
       // message is shown not sent, and the workspace records why, as one of
-      // the causes a person acts on. Send Again then opens the VM and the
+      // the causes a person acts on. Send again then opens the VM and the
       // message goes through. A read of the rested conversation would open
       // its VM itself, so its turns are the ones read before it rested.
       const after = `${STRESS.reply} VM open fails ${step.index}`
       const seen = new Set(view.messages.map((each) => each.executionId))
       writeFileSync(join(run.stack.vmFixture.root, id, "fail-next-open"), "fail")
       await send(run, id, after, failures, seen)
-      const unsent = run.page.locator("[data-send-failure]")
+      // Said right under the message, in two words; Copy holds the rest.
+      const unsent = run.page.locator(css.unsent)
       if (!(await waitFor(async () => (await unsent.count()) === 1, 60_000)))
         failures.push("a send whose VM could not be opened was not shown as not sent")
-      else if (!(await unsent.textContent())?.includes("Error sending"))
+      else if (!(await unsent.textContent())?.includes("Container didn’t start"))
         failures.push(
           `a send whose VM could not be opened says ${JSON.stringify(await unsent.textContent())}`,
         )
+      if (
+        (await unsent.count()) === 1 &&
+        !(await unsent.evaluate((row) =>
+          row.closest('[data-role="user"]')?.hasAttribute("data-unsent"),
+        ))
+      )
+        failures.push("the row saying a send did not go is not under its message")
+      if ((await run.page.locator(css.sendFailure).count()) !== 0)
+        failures.push("a chat's composer still carries a card for a send that did not go")
       if (
         !run.stack.vmFixture
           .events()
@@ -3141,10 +4627,45 @@ const steps = {
       )
         failures.push("a failed VM opening was not recorded with its cause")
       if ((await unsent.count()) === 1) {
-        await unsent.getByRole("button", { name: "Send Again" }).click()
+        // Waking the rested VM is slowed so a person sees each step: the
+        // live row names it instead of Thinking, and the reply then says
+        // how long the container took, opening to each step.
+        writeFileSync(join(run.stack.vmFixture.root, `slow-next-open-${id}`), "3000")
+        const said = new Set()
+        const live = run.page.locator(".workspace-live")
+        const watching = (async () => {
+          const until = Date.now() + 30_000
+          while (Date.now() < until && !said.has("done")) {
+            const text = await live
+              .first()
+              .textContent({ timeout: 200 })
+              .catch(() => null)
+            if (text) said.add(text.replace(/\d+:\d+.*$/, "").trim())
+            await sleep(100)
+          }
+        })()
+        await unsent.getByRole("button", { name: "Send again" }).click()
         await settled(run, id, seen, after, "completed", failures)
+        said.add("done")
+        await watching
+        if (![...said].some((text) => text.startsWith("Waking container")))
+          failures.push(`waking a rested VM did not say so: ${JSON.stringify([...said])}`)
         if (!(await waitFor(async () => (await unsent.count()) === 0, 10_000)))
           failures.push("the message sent again still shows as not sent")
+        const ready = run.page
+          .locator('[data-role="agent"] [data-setup-trace]')
+          .filter({ hasText: /Container ready in \d+s/ })
+        if (!(await waitFor(async () => (await ready.count()) >= 1, 10_000)))
+          failures.push("a reply that waited on its VM does not say how long it took")
+        else {
+          await ready.last().locator('[data-slot="tool-trace-line"]').click()
+          const listed = await ready
+            .last()
+            .locator('[data-slot="tool-trace-step"]')
+            .allTextContents()
+          if (!listed.some((text) => text.includes("Waking container")))
+            failures.push(`the container's steps list ${JSON.stringify(listed)}`)
+        }
       }
       if (run.evidence)
         writeView(run.evidence, `views/vm-background-${run.engine}-${step.index}.json`, {
@@ -3297,8 +4818,16 @@ const steps = {
         path: join(run.evidence, `model-${run.engine}-picker.png`),
         scale: "css",
       })
-    const options = run.page.locator(css.modelOption)
-    await options.filter({ hasText: target.displayName }).first().click()
+    await run.page.locator(css.modelSearch).fill(target.displayName)
+    await run.page
+      .locator(css.modelOption)
+      .filter({
+        has: run.page
+          .locator(css.modelOptionLabel)
+          .getByText(target.displayName, { exact: true }),
+      })
+      .locator(css.modelOptionLabel)
+      .click()
     // Picking only stages the model: the picker shows it, and the gateway is
     // asked for nothing until the next message is sent.
     if (
@@ -3372,6 +4901,22 @@ const steps = {
         ),
       )
   },
+  /**
+   * The model and thinking picker: a star lists a model under Starred, where
+   * the picker then opens; one press of a bar stages that model at that
+   * level, which the chip names, and closes the picker; Fast beside the chip
+   * is offered only for a model that has it; and the next message runs on
+   * the model chosen. The star is taken off again.
+   */
+  async picker(run, step, failures) {
+    await clearStarredModels(run.page)
+    try {
+      await pickerStep(run, step, failures)
+    } finally {
+      await clearStarredModels(run.page).catch(() => {})
+    }
+  },
+
   async reply(run, step, failures, sendBy) {
     const text = prompt(run, STRESS.reply, step, step.extra ?? "")
     const seen = await send(
@@ -3388,8 +4933,8 @@ const steps = {
     // given first; the person's own message is the text they sent.
     const echoed = turn?.retried ? "[" : text
     await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
-    if ((await run.page.locator(css.sendFailure).count()) > 0)
-      failures.push("the composer shows a send failure")
+    if ((await run.page.locator(`${css.sendFailure}, ${css.unsent}`).count()) > 0)
+      failures.push("the window shows a send failure")
     // The message after a sign-in refusal supersedes it (ADR 501).
     if (
       step.after === "signIn" &&
@@ -3460,6 +5005,18 @@ const steps = {
 
   async stream(run, step, failures) {
     const text = prompt(run, STRESS.stream, step)
+    // Every task the window runs for 50 ms or more while the reply streams.
+    await run.page.evaluate(() => {
+      window.__stressLongTasks = []
+      window.__stressLongObserver?.disconnect()
+      window.__stressLongObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries())
+          window.__stressLongTasks.push(entry.duration)
+      })
+      if (PerformanceObserver.supportedEntryTypes?.includes("longtask"))
+        window.__stressLongObserver.observe({ type: "longtask" })
+      else window.__stressLongTasks = null
+    })
     const seen = await send(run, run.main.id, text, failures)
     const last = streamWord(STREAM_WORDS - 1).trim()
     // Live: the reply's newest words are drawn while the turn still runs,
@@ -3468,6 +5025,15 @@ const steps = {
       failures.push(`while streaming, the window never showed the newest words (${last})`)
     else if ((await pageText(run.page)).includes(fold(SAYS.streamEnd)))
       failures.push("the newest words were drawn only after the turn ended")
+    const long = await run.page.evaluate(() => {
+      window.__stressLongObserver?.disconnect()
+      return window.__stressLongTasks
+    })
+    if (!long) console.log(`stream: long tasks are not measured in ${run.engine}`)
+    else
+      console.log(
+        `stream: ${long.length} tasks of 50 ms or more while ${STREAM_WORDS} words streamed, longest ${Math.round(Math.max(0, ...long))} ms, ${Math.round(long.reduce((sum, each) => sum + each, 0))} ms in all`,
+      )
     // The sidebar closed and opened again draws the same reply, not an
     // emptied one.
     await run.page.keyboard.press(keys.toggleSidebar)
@@ -3918,9 +5484,10 @@ const steps = {
       if (!(await stopShown(run.page)))
         failures.push("Send did not turn into Stop while the turn ran")
       await pickAccess(run.page, step.to)
-      // A change the running turn holds back says nothing: the shield shows
-      // the choice at once and the composer adds no line about it (Saurav
-      // asked for the "Access changes when the agent stops." line to go).
+      // A change made mid-turn says nothing: the shield shows the choice at
+      // once, the gateway takes it while the turn runs (the `raise` step
+      // checks the turn's next call is decided at it), and the composer adds
+      // no line about it.
       const chosen = await waitFor(
         async () =>
           (await dock(run.page)
@@ -3930,19 +5497,10 @@ const steps = {
         5_000,
       )
       if (!chosen) failures.push("the shield did not show the choice while the turn ran")
-      let said = null
       for (const _ of Array.from({ length: 6 })) {
-        const notices = await dock(run.page)
-          .locator(composerControls.notice)
-          .allInnerTexts()
-          .catch(() => [])
-        if (notices.length) said = notices
+        await composerSaysNothing(run.page, "of the mid-turn access change", failures)
         await run.page.waitForTimeout(250)
       }
-      if (said)
-        failures.push(
-          `the composer spoke of the held access change: ${JSON.stringify(said)}`,
-        )
       if (run.evidence && !run.accessHintShot) {
         run.accessHintShot = true
         await dock(run.page)
@@ -3964,6 +5522,86 @@ const steps = {
       failures.push(
         `the shield shows ${shield}, not ${composerControls.accessValue[step.to]}`,
       )
+    run.mode = step.to
+  },
+
+  async raise(run, step, failures) {
+    if (!(await accessIs(run, run.main.id, step.from)))
+      failures.push(`the raise does not start at ${step.from}`)
+    const recordingBefore = readFileSync(run.stack.acpRecording, "utf8")
+    const text = prompt(run, STRESS.raise, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const first = `Raise 1 of ${RAISE_REVIEWS}`
+    const asked = await untilTurn(
+      run,
+      run.main.id,
+      { text },
+      (_turn, current) => current.permissions.some((each) => each.title === first),
+      30,
+    )
+    if (!asked.view?.permissions?.some((each) => each.title === first)) {
+      failures.push("the raise turn did not ask its first review")
+      return
+    }
+    if (!(await card(run.page)))
+      failures.push("no card for the review open when access was raised")
+    // Raised while the turn waits on that card, as a person does who meant
+    // to give it full access and is asked anyway.
+    await pickAccess(run.page, step.to)
+    if (!(await accessIs(run, run.main.id, step.to)))
+      failures.push(`the gateway did not run the chat at ${step.to} after the raise`)
+    // The review open at the raise is allowed by it; none after it is asked,
+    // so the turn ends with nobody clicking anything.
+    const { turn, view } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    const said = (turn?.parts ?? []).map((part) => part.text ?? "").join("")
+    for (let n = 1; n <= RAISE_REVIEWS; n += 1)
+      if (!said.includes(`Raised ${n}.`))
+        failures.push(
+          `review ${n} of the raise turn was not allowed: ${JSON.stringify(said.slice(-120))}`,
+        )
+    if (!said.includes(SAYS.raised)) failures.push("the raise turn did not finish")
+    // On the agent's wire: the mode change went while the turn waited on its
+    // first review, that review was answered after it, and nothing more was
+    // asked (the turn runs fast once allowed, so a read of the view cannot
+    // tell this apart from a change held until the turn ended).
+    const wire = raisedTurn(
+      recordingBefore,
+      readFileSync(run.stack.acpRecording, "utf8"),
+      text,
+    )
+    if (!wire) failures.push("the raise turn's prompt is not in the agent's recording")
+    else {
+      if (!wire.modeChanged)
+        failures.push(
+          "the raise reached the agent only after its turn, not while it waited",
+        )
+      if (!wire.answeredAfterChange)
+        failures.push(
+          "the review open at the raise was answered before the agent took it",
+        )
+      if (wire.asked !== 1)
+        failures.push(
+          `the raised turn asked ${wire.asked} reviews, not only the one open at the raise`,
+        )
+    }
+    if (view?.permissions?.length)
+      failures.push(`${view.permissions.length} reviews still open after the raise`)
+    if (await card(run.page, 1_000))
+      failures.push("an approval card is still shown after the raise")
+    await expectShown(run.page, SAYS.raised, failures)
+    const shield = await dock(run.page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")
+      .catch(() => null)
+    if (shield !== composerControls.accessValue[step.to])
+      failures.push(`the shield shows ${shield} after the raise, not ${step.to}`)
     run.mode = step.to
   },
 
@@ -4011,14 +5649,15 @@ const steps = {
     const notice = await waitFor(
       async () =>
         (
-          await dock(run.page)
-            .locator(composerControls.notice)
-            .innerText()
-            .catch(() => "")
+          (await dock(run.page)
+            .locator(composerControls.access)
+            .getAttribute("data-tooltip")
+            .catch(() => "")) ?? ""
         ).includes("This model doesn’t offer that access."),
       10_000,
     )
-    if (!notice) failures.push("the window did not explain the unavailable access choice")
+    if (!notice) failures.push("the shield did not explain the unavailable access choice")
+    await composerSaysNothing(run.page, "of the unavailable access choice", failures)
     const after = await readWithReviews(run.client, run.main.id)
     if (
       before.approvalMode !== "ask" ||
@@ -4211,6 +5850,143 @@ const steps = {
           "Explicit unlock after passphrase change was not reflected by gateway",
         )
       await closeSettings(run.page)
+    })
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async touchId(run, step, failures) {
+    const touchId = run.stack.vault.touchId
+    const dialog = run.page.locator('[data-vault-dialog="unlock"]')
+    const remember = dialog.getByLabel("Use Touch ID to unlock next time", {
+      exact: true,
+    })
+    const useTouchId = dialog.getByRole("button", { name: "Use Touch ID", exact: true })
+    const state = async () => (await run.client.vault.status()).state
+    // Sealed, then Accounts opened: its rows ask for the vault, as a launch does.
+    const leaveSettings = async () => {
+      if (await run.page.$(css.settings)) await closeSettings(run.page)
+    }
+    const lockedAccounts = async () => {
+      await leaveSettings()
+      // A gateway restarted by an earlier step ends the app's vault session;
+      // a status read reconnects it, as the app does, before the lock.
+      await run.stack.vault.command({ operation: "status" })
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      await openAccounts(run.page)
+    }
+    await run.exclusive(async () => {
+      touchId.available = true
+      touchId.saved = null
+      touchId.answer = "pass"
+      touchId.prompts = 0
+      try {
+        // 1. Offered, ticked, on the typed unlock; the accepted passphrase is kept.
+        await lockedAccounts()
+        await dialog.waitFor()
+        if (!(await remember.isChecked()))
+          failures.push("the unlock dialog did not offer Touch ID ticked")
+        if (run.evidence)
+          await run.page
+            .getByRole("dialog", { name: "Unlock Nessa", exact: true })
+            .screenshot({ path: join(run.evidence, `touch-id-offer-${run.engine}.png`) })
+            .catch(() => {})
+        await dialog.getByLabel("Passphrase", { exact: true }).fill(VAULT_PASSPHRASE)
+        await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+        await dialog.waitFor({ state: "hidden" })
+        if (touchId.saved !== VAULT_PASSPHRASE)
+          failures.push("the passphrase was not kept for Touch ID after a ticked unlock")
+        const toggle = run.page
+          .locator(selectorFor.settingRow("vault-touch-id"))
+          .getByRole("switch")
+        await toggle.waitFor()
+        if ((await toggle.getAttribute("aria-checked")) !== "true")
+          failures.push("Settings does not show Touch ID on after it was kept")
+
+        // 2. The next unlock is a fingerprint alone: nothing typed.
+        await lockedAccounts()
+        for (const until = Date.now() + 15_000; Date.now() < until;) {
+          if ((await state()) === "unlocked" && !(await dialog.isVisible())) break
+          await run.page.waitForTimeout(100)
+        }
+        if ((await state()) !== "unlocked")
+          failures.push("a passing fingerprint did not unlock the vault")
+        if (await dialog.isVisible())
+          failures.push("the unlock dialog stayed open after a passing fingerprint")
+        if (touchId.prompts !== 1)
+          failures.push(`the fingerprint was asked ${touchId.prompts} times, not once`)
+
+        // 3. A dismissed prompt leaves the form, and its button asks again.
+        touchId.answer = "cancel"
+        await lockedAccounts()
+        // The button shows, resting, while the prompt is up; it wakes after.
+        await useTouchId.waitFor()
+        await run.page
+          .waitForFunction(
+            (button) => button && !button.disabled,
+            await useTouchId.elementHandle(),
+            { timeout: 10_000 },
+          )
+          .catch(() =>
+            failures.push("after a dismissed prompt, Use Touch ID rests disabled"),
+          )
+        if ((await dialog.getByRole("alert").count()) !== 0)
+          failures.push("a dismissed Touch ID prompt was shown as a failure")
+        if (touchId.prompts !== 2)
+          failures.push("a dismissed prompt was asked again on its own")
+        touchId.answer = "pass"
+        await useTouchId.click()
+        await dialog.waitFor({ state: "hidden" })
+        if ((await state()) !== "unlocked")
+          failures.push("Use Touch ID after a dismissed prompt did not unlock")
+
+        // 4. Changed fingerprints drop the copy and say so; typing keeps it again.
+        touchId.answer = "changed"
+        await lockedAccounts()
+        await dialog
+          .getByRole("alert")
+          .filter({ hasText: "Your fingerprints changed" })
+          .waitFor()
+        if (touchId.saved !== null)
+          failures.push("changed fingerprints left the passphrase kept")
+        await remember.waitFor()
+        await dialog.getByLabel("Passphrase", { exact: true }).fill(VAULT_PASSPHRASE)
+        await dialog.getByRole("button", { name: "Unlock", exact: true }).click()
+        await dialog.waitFor({ state: "hidden" })
+        if (touchId.saved !== VAULT_PASSPHRASE)
+          failures.push("unlocking again after changed fingerprints did not keep it")
+
+        // 5. Settings turns it off, and the switch then rests.
+        if ((await toggle.getAttribute("aria-checked")) !== "true")
+          failures.push("Settings did not read Touch ID on again after the dialog")
+        await toggle.click()
+        await run.page
+          .locator(
+            `${selectorFor.settingRow("vault-touch-id")} [role="switch"][aria-checked="false"]`,
+          )
+          .waitFor()
+        if (touchId.saved !== null)
+          failures.push("turning Touch ID off kept the passphrase")
+        if (!(await toggle.isDisabled()))
+          failures.push(
+            "with nothing kept, the Touch ID switch can be turned on from Settings",
+          )
+        if (run.evidence)
+          await run.page
+            .locator(selectorFor.settingRow("vault-touch-id"))
+            .screenshot({
+              path: join(run.evidence, `touch-id-settings-${run.engine}.png`),
+            })
+            .catch(() => {})
+      } finally {
+        touchId.available = false
+        touchId.saved = null
+        touchId.answer = "pass"
+        if ((await state()) !== "unlocked") await run.stack.vault.unlock()
+        // A dialog left open by a failure above is dismissed first.
+        if (await dialog.isVisible()) await run.page.keyboard.press("Escape")
+        await leaveSettings()
+      }
     })
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
@@ -4733,6 +6509,282 @@ const steps = {
     }
   },
 
+  async chatgpt(run, step, failures) {
+    const openai = run.stack.openai
+    if (!openai) {
+      failures.push("the stack was started without the fake OpenAI")
+      return
+    }
+    const [first, second] = FAKE_CHATGPT_ACCOUNTS
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `chatgpt-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    const panel = run.page.locator(".settings-chatgpt")
+    const chatgpt = async () => (await run.client.logins.status()).chatgpt
+    const idOf = async (account) =>
+      (await chatgpt())?.accounts.find((each) => each.email === account.email)?.id
+    try {
+      // Both accounts signed in from Settings, the browser played by the
+      // fake: Continue, then its address opened as the account.
+      await run.exclusive(async () => {
+        const needsUnlock = (await run.client.vault.status()).state === "locked"
+        await openAccounts(run.page)
+        if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+        await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+        for (const [index, account] of [first, second].entries()) {
+          await panel.locator("[data-chatgpt-continue]").click()
+          await unlockVault(run.page)
+          const open = panel.locator("[data-chatgpt-open]")
+          if (
+            !(await open
+              .waitFor({ timeout: 15_000 })
+              .then(() => true)
+              .catch(() => false))
+          ) {
+            failures.push(`no Open ChatGPT link for ${account.email}`)
+            return
+          }
+          if (index === 0) await shot("waiting")
+          const back = await openai.approve(await open.getAttribute("href"), account)
+          if (back.status !== 200)
+            failures.push(`the gateway answered the browser's return with ${back.status}`)
+          const ended = await panel
+            .locator('[data-chatgpt-ended="signed_in"]')
+            .waitFor({ timeout: 15_000 })
+            .then(() => true)
+            .catch(() => false)
+          if (!ended) failures.push(`Settings does not say ${account.email} signed in`)
+          const listed = await panel
+            .locator(`[data-chatgpt-account="${account.email}"]`)
+            .waitFor({ timeout: 5_000 })
+            .then(() => true)
+            .catch(() => false)
+          if (!listed) failures.push(`Settings does not list ${account.email}`)
+          if (failures.length) return
+        }
+        // The first is chosen for Codex.
+        const id = await idOf(first)
+        const row = panel.locator(`[data-chatgpt-account="${first.email}"]`)
+        if ((await row.getAttribute("data-chatgpt-in-use")) === null && id) {
+          await row.locator(`[data-chatgpt-use="${id}"]`).click()
+          await unlockVault(run.page)
+        }
+        if (
+          !(await waitFor(
+            async () => (await chatgpt())?.accounts.find((each) => each.id === id)?.inUse,
+            15_000,
+          ))
+        )
+          failures.push(`${first.email} is not in use after Use`)
+        else await shot("accounts")
+        const shown = await run.page.locator("[data-settings-layers]").innerText()
+        if (openai.secrets().some((secret) => shown.includes(secret)))
+          failures.push("Settings shows a ChatGPT token")
+        await closeSettings(run.page)
+      })
+      if (failures.length) return
+      const status = await run.client.logins.status()
+      if (status.chatgpt?.accounts.length !== 2)
+        failures.push(
+          `the gateway keeps ${status.chatgpt?.accounts.length} ChatGPT accounts, not 2`,
+        )
+      if (openai.secrets().some((secret) => JSON.stringify(status).includes(secret)))
+        failures.push("logins.status answered with a ChatGPT token")
+      if (failures.length) return
+      await steps.chatgptOnWorker(run, step, failures, { first, second, idOf })
+    } finally {
+      // Both removed again whatever happened, each revoked at OpenAI.
+      try {
+        await run.stack.vault.unlock()
+        for (const each of (await chatgpt())?.accounts ?? [])
+          await run.client.logins.chatgptRemove(each.id)
+      } catch (error) {
+        failures.push(`the ChatGPT accounts could not be removed again: ${error.message}`)
+      }
+    }
+    if ((await chatgpt())?.accounts.length)
+      failures.push("a ChatGPT account was kept after removal")
+    if (openai.calls.revoke < 2)
+      failures.push(
+        `removing both accounts revoked ${openai.calls.revoke} refresh tokens, not 2`,
+      )
+    if (openai.calls.reused)
+      failures.push(
+        `the gateway reused a rotated refresh token ${openai.calls.reused} times`,
+      )
+    // No record or log holds a token.
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const audit = join(namespace, "conversations", "audit", "logins")
+    const records = existsSync(audit)
+      ? readdirSync(audit).map((name) => readFileSync(join(audit, name), "utf8"))
+      : []
+    const secrets = openai.secrets()
+    if (records.some((text) => secrets.some((secret) => text.includes(secret))))
+      failures.push("a saved-login record holds a ChatGPT token")
+    if (secrets.some((secret) => run.stack.gateway.log().includes(secret)))
+      failures.push("the gateway's log holds a ChatGPT token")
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async chatgptOnWorker(run, step, failures, { first, second, idOf }) {
+    const openai = run.stack.openai
+    const agent = "codex"
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    // Linking restarts the gateway, which locks its vault.
+    await run.stack.vault.unlock()
+    // Each launch of Codex on the worker records its token file's name, the
+    // token in it, and whether a variable held the token instead.
+    const launches = join(tmpdir(), `nessa-stress-chatgpt-${randomUUID()}.txt`)
+    writeFileSync(launches, "")
+    const seen = () =>
+      readFileSync(launches, "utf8")
+        .split("\n")
+        .slice(0, -1)
+        .map((line) => {
+          const [file, token, key] = line.split(" ")
+          return { file, token, key }
+        })
+    let worker
+    let owner
+    let following = null
+    try {
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      const launch = scriptedLaunch(agent, {
+        scenario: run.stack.scenario,
+        nativeContext: run.stack.nativeContext,
+        model: run.stack.profile.model,
+      })
+      const recording = [
+        "/bin/sh",
+        "-c",
+        `printf '%s %s %s\\n' "\${${CHATGPT_TOKEN_FILE}:--}" "$(cat "\${${CHATGPT_TOKEN_FILE}:-/dev/null}" 2>/dev/null || true)" "\${CODEX_API_KEY:+key}" >> '${launches}'; exec "$@"`,
+        "sh",
+        ...launch.command.argv,
+      ]
+      worker = await startWorker({
+        owner,
+        address: run.nativeAddress,
+        agent,
+        launch: { ...launch, command: { ...launch.command, argv: recording } },
+        label: `chatgpt${step.index}`,
+        logins: true,
+        connected: async (name) =>
+          (await offers(run, (environments) => environments.includes(name))).includes(
+            name,
+          ),
+      })
+      await run.client.logins.setDevice(worker.name, true)
+      // `keep`: followed from the start, so its agent is not parked once
+      // idle and its lease stays.
+      const talk = async (label, keep = false) => {
+        const before = seen().length
+        const conversationId = randomUUID()
+        await run.client.conversation.create({
+          conversationId,
+          agent,
+          environment: worker.name,
+        })
+        if (keep)
+          following = await run.client.subscriptions.view(conversationId, {
+            view: () => {},
+            ended: () => {
+              following = null
+            },
+          })
+        const text = prompt(run, STRESS.reply, step, ` chatgpt ${label}`)
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { view } = await settled(
+          run,
+          conversationId,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+        if (view?.lease?.host !== worker.name)
+          failures.push(`its lease runs on ${view?.lease?.host}, not ${worker.name}`)
+        if (failures.length === 0) failures.push(...(await atRest(run, [conversationId])))
+        return { conversationId, launched: seen().slice(before) }
+      }
+      const handed = (launched, account, label) => {
+        if (launched.length === 0) {
+          failures.push(`${label}: Codex was never launched on the worker`)
+          return null
+        }
+        for (const each of launched) {
+          if (each.key)
+            failures.push(`${label}: Codex was launched with an API key variable`)
+          if (openai.subjectOf(each.token) !== account.subject)
+            failures.push(
+              `${label}: Codex's token file held ${each.token ? "a token of another account" : "nothing"}`,
+            )
+        }
+        return launched.at(-1)
+      }
+      // The first account: Codex starts with its token in a file. Followed,
+      // it stays open: a minute in, the gateway renews the token and the
+      // machine replaces it in the same file.
+      const { launched } = await talk("first", true)
+      const started = handed(launched, first, "first account")
+      if (!started || failures.length) return
+      const renewed = await waitFor(() => {
+        try {
+          const now = readFileSync(started.file, "utf8")
+          return now !== started.token && openai.subjectOf(now) === first.subject
+        } catch {
+          return false
+        }
+      }, 150_000)
+      if (!renewed)
+        failures.push("the worker's token file was not renewed while its lease ran")
+      following?.close()
+      following = null
+      if (failures.length) return
+      // The second account chosen: the next Codex runs on it.
+      await run.client.logins.chatgptUse(await idOf(second))
+      const other = await talk("second")
+      handed(other.launched, second, "second account")
+      if (failures.length) return
+      // The key again: nothing of ChatGPT's is handed.
+      await run.client.logins.chatgptUse(null)
+      const none = await talk("none")
+      if (none.launched.some((each) => each.token))
+        failures.push("with no account in use Codex was still handed a ChatGPT token")
+      if (secretsIn(worker.log(), openai.secrets()))
+        failures.push("the worker's log holds a ChatGPT token")
+    } finally {
+      following?.close()
+      if (worker) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${worker.label}.log`), worker.log())
+        await worker.close()
+      }
+      owner?.close()
+      rmSync(launches, { force: true })
+      try {
+        await run.stack.vault.unlock()
+        if (worker?.name) await run.client.logins.setDevice(worker.name, false)
+      } catch (error) {
+        failures.push(`the worker's switch could not be turned off: ${error.message}`)
+      }
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
+  },
+
   async voice(run, step, failures) {
     const realtime = run.stack.realtime
     if (!realtime) {
@@ -5138,11 +7190,86 @@ const steps = {
         .catch(() =>
           failures.push("unmuting the voice on the pill did not reach the call"),
         )
+      // Pause on the pill hangs up with the provider and keeps the call: the
+      // pill stays, saying so, and the composer offers Resume. Resume opens a
+      // new provider call, handed what was said before the pause.
+      const callsBeforePause = realtime.calls()
+      await face.getByRole("button", { name: "Pause call", exact: true }).click()
+      if (!(await waitFor(() => !realtime.open(), 5_000)))
+        failures.push("Pause on the pill left the provider's call open")
+      if (!(await pillSays("Paused")))
+        failures.push("the paused call's pill does not say Paused")
+      else if (run.evidence)
+        await pill.screenshot({
+          path: join(run.evidence, "voice-pill-paused.png"),
+          omitBackground: true,
+        })
+      if (
+        !(await pane
+          .getByRole("button", { name: "Resume call", exact: true })
+          .waitFor({ timeout: 5_000 })
+          .then(() => true)
+          .catch(() => false))
+      )
+        failures.push(
+          "the composer does not offer Resume for the call paused on the pill",
+        )
+      const toldBeforeResume = realtime.told().length
+      await face.getByRole("button", { name: "Resume call", exact: true }).click()
+      if (
+        !(await waitFor(
+          () => realtime.open() && realtime.calls() === callsBeforePause + 1,
+          10_000,
+        ))
+      )
+        failures.push(
+          `Resume on the pill opened ${realtime.calls() - callsBeforePause} calls, not one`,
+        )
+      if (!(await pillSays("Listening")))
+        failures.push("the resumed call's pill does not say Listening")
+      const recapped = await waitFor(
+        () =>
+          realtime
+            .told()
+            .slice(toldBeforeResume)
+            .some(
+              (told) =>
+                told.startsWith("The person paused this call") &&
+                told.includes(`reply r${step.index} voice s${run.knobs.seed}`),
+            ),
+        5_000,
+      )
+      if (!recapped)
+        failures.push("the resumed call was not handed what was said before the pause")
     }
     // Back in the window, the composer has the switches and the pill goes.
     await front(true)
     if (!(await waitFor(async () => (await face.count()) === 0, 5_000)))
       failures.push("the pill stays while the window with the call is in front")
+    // Pause and Resume in the composer do the same as on the pill; the line
+    // above the composer says the call is paused.
+    const callsBeforeComposerPause = realtime.calls()
+    await pane.getByRole("button", { name: "Pause call", exact: true }).click()
+    if (
+      !(await waitFor(
+        async () => !realtime.open() && (await phase()) === "paused",
+        5_000,
+      ))
+    )
+      failures.push(`Pause in the composer left the call ${await phase()}`)
+    await expectShown(run.page, "Paused", failures, 5_000)
+    await shot("paused")
+    await pane.getByRole("button", { name: "Resume call", exact: true }).click()
+    if (
+      !(await waitFor(
+        async () =>
+          realtime.open() &&
+          realtime.calls() === callsBeforeComposerPause + 1 &&
+          (await phase()) === "listening",
+        10_000,
+      ))
+    )
+      failures.push(`Resume in the composer left the call ${await phase()}`)
     // The person opens another chat while they talk. The call goes on: its
     // chat is in no pane now, so its switches float on the pill though the
     // window is still in front, and the call still hears its chat. What is
@@ -5438,6 +7565,87 @@ const steps = {
     if (!realtime.received.some((event) => event.type === "response.create"))
       failures.push("the voice was never asked to speak")
 
+    // A new chat's home offers Talk: the first thing said starts the chat,
+    // and the call goes on in the conversation that takes the home's place.
+    await run.page.keyboard.press(keys.newSession)
+    const newHome = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    const homeTalk = newHome.getByRole("button", { name: "Talk", exact: true })
+    // Home has its own selection: the fixture model, as the `fresh` step picks it.
+    await newHome
+      .locator(css.field)
+      .waitFor({ timeout: 15_000 })
+      .catch(() => {})
+    const newModel = catalog.models.find((row) => row.modelId === run.stack.profile.model)
+    await selectStressModel(
+      run.page,
+      newHome.locator(css.modelChip),
+      newModel.displayName,
+    )
+    if (
+      !(await homeTalk
+        .waitFor({ timeout: 10_000 })
+        .then(() => true)
+        .catch(() => false))
+    )
+      failures.push("a new chat's home offers no Talk")
+    else {
+      const focusedPhase = () =>
+        run.page
+          .locator(`${css.focusedPane} .voice-dock`)
+          .getAttribute("data-phase", { timeout: 1_000 })
+          .catch(() => null)
+      const callsBeforeNew = realtime.calls()
+      await homeTalk.click()
+      if (
+        !(await waitFor(
+          async () =>
+            realtime.open() &&
+            realtime.calls() === callsBeforeNew + 1 &&
+            (await focusedPhase()) === "listening",
+          15_000,
+        ))
+      )
+        failures.push(
+          `Talk on a new chat's home did not open a call (phase ${await focusedPhase()})`,
+        )
+      else {
+        await shot("new-chat-listening")
+        const first = prompt(run, `Please ${STRESS.reply}`, step, " voice new chat")
+        realtime.say(first)
+        await expectShown(run.page, `${SAYS.echo}${first}`, failures)
+        if (
+          !(await waitFor(
+            async () =>
+              (await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) ===
+                0 &&
+              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+            10_000,
+          ))
+        )
+          failures.push(
+            "what was said on a new chat's home did not start the chat with the call in it",
+          )
+        if (
+          !(await waitFor(
+            () => realtime.told().includes(`Agent reply:\n${SAYS.echo}${first}`),
+            15_000,
+          ))
+        )
+          failures.push(
+            "the reply in the chat started by voice was not handed to the voice",
+          )
+        await shot("new-chat-started")
+      }
+      await run.page
+        .locator(css.focusedPane)
+        .getByRole("button", { name: "End call", exact: true })
+        .click({ timeout: 5_000 })
+        .catch(() => {})
+      if (!(await waitFor(() => !realtime.open(), 10_000)))
+        failures.push("End call left the call in the chat started by voice open")
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
+
     // The key never left the gateway's vault: not in its log, nor its audit.
     if (run.stack.gateway.log().includes(realtime.key))
       failures.push("the gateway logged the voice key")
@@ -5560,6 +7768,12 @@ const steps = {
         failures.push("the startup screen covers the window after the gateway was up")
         return
       }
+      // A slow launch: startup runs past the host's hold of the window's
+      // read (a busy Mac took 26.7 s against the 15 s hold). The host refuses
+      // the read as still starting, which is no failure: the window must not
+      // cover itself with "couldn't start", and lists the conversation once
+      // the gateway is up. The hold is shortened for this launch only.
+      if (!(await slowLaunch(run, failures))) return
       await unlockRequestedVault(run.client, page)
       await openStressConversation(page, run.main.id, run.main.title)
     })
@@ -5811,6 +8025,7 @@ const steps = {
         }
       }
       await studioWithTheCorner(run.page, failures)
+      await titleWithThePanesAlone(run.page, failures)
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
@@ -5895,10 +8110,26 @@ const steps = {
       }
       // The host opens the setup window for that ask; this page is that
       // window, over the same gateway, as the real host builds it. Both
-      // agents are ready, so a click on either is a choice.
-      const page = await setupWindow(run, (page) =>
-        agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
-      )
+      // agents are ready, so a click on either is a choice. The vault is
+      // locked first, as after a restart: onboarding still asks for no
+      // passphrase (`setupWindow` refuses a vault dialog).
+      // Through the native vault session that owns it, as the app would.
+      const lock = await run.stack.vault.command({ operation: "lock" })
+      if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
+      let page
+      try {
+        page = await setupWindow(run, (page) =>
+          agentsProbe(page, () => ({ claude: "ready", codex: "ready" })),
+        )
+      } finally {
+        // An unlock that fails is its own failure, never in place of what
+        // the window did.
+        await run.stack.vault
+          .unlock()
+          .catch((error) =>
+            failures.push(`the vault did not unlock again: ${error.message}`),
+          )
+      }
       try {
         const heading = (name) => page.getByRole("heading", { name, exact: true })
         const button = (name) => page.getByRole("button", { name, exact: true })
@@ -6398,6 +8629,9 @@ const steps = {
         await openLinkedDevices(run.page)
         if (await switchLinking(run, false, failures)) await closeSettings(run.page)
       })
+      // Switching linking off restarted the gateway, which sealed its vault:
+      // unlocked again, so the steps after this one find it as it was.
+      await run.stack.vault.unlock()
       // Back to the main conversation, in the default channel: the chat
       // above left the session list showing the step's channel.
       await run.page
@@ -6488,9 +8722,19 @@ const steps = {
           ))
         )
           failures.push("the Devices view drew no hub card")
-        // Its cards run under the bottom-left corner, so it draws no "nessa Studio".
-        if ((await page.locator(".side-rail-studio").count()) !== 0)
-          failures.push(`the Devices view still draws "nessa Studio" in its corner`)
+        // It keeps "nessa Studio", the way to Settings, in the bottom-left
+        // corner as Agents does, and its page fades out before that corner.
+        if (
+          !(await page.locator(".side-rail-studio .desktop-identity-button").isVisible())
+        )
+          failures.push(`the Devices view draws no "nessa Studio" in its corner`)
+        const faded = await page.evaluate(
+          () =>
+            getComputedStyle(document.querySelector(".devices-page") ?? document.body)
+              .maskImage,
+        )
+        if (!faded || faded === "none")
+          failures.push(`the Devices page does not fade out under "nessa Studio"`)
         // Its titlebar's free room moves the window, as over a chat.
         const drags = await page.evaluate(() => {
           const space = document.querySelector(".workspace-titlebar-space")
@@ -6558,12 +8802,12 @@ const steps = {
         await list.waitFor({ timeout: 5_000 })
         if (
           (await list.locator(`[data-devices-worker="${id}"]`).count()) !== 1 ||
-          (await list.locator("[data-devices-cloud]").count()) !== 1
+          (await list.locator('[data-devices-cloud-id="boat"]').count()) !== 1
         )
           failures.push("the worker and the cloud are not in one list")
         if (
           (await list
-            .locator("[data-devices-cloud] [data-slot=device-figure]")
+            .locator('[data-devices-cloud-id="boat"] [data-slot=device-figure]')
             .getAttribute("data-kind")) !== "boat"
         )
           failures.push("Boat's tile is not drawn as a boat")
@@ -6586,7 +8830,7 @@ const steps = {
           failures.push("the Devices title still has a line under it")
         if ((await page.locator('[data-devices-action^="add"]').count()) !== 1)
           failures.push("Devices offers Add device more than once")
-        const boatSays = await list.locator("[data-devices-cloud]").innerText()
+        const boatSays = await list.locator('[data-devices-cloud-id="boat"]').innerText()
         if (/Offline/.test(boatSays) && /Not connected/.test(boatSays))
           failures.push(`Boat's tile says its state twice: ${boatSays}`)
         // The `ssh` step's suggestions are a section of their own, under it.
@@ -6603,7 +8847,7 @@ const steps = {
           )
         )
           failures.push("Devices still sends Boat to Settings")
-        await list.locator("[data-devices-cloud]").click()
+        await list.locator('[data-devices-cloud-id="boat"]').click()
         const cloud = page.locator('[data-devices-page="cloud"]')
         await cloud.waitFor({ timeout: 5_000 })
         // It says where Boat stands, and offers the one thing to do about it:
@@ -6654,6 +8898,37 @@ const steps = {
           )
         if (JSON.stringify(kinds) !== JSON.stringify(["computer", "phone", "cloud"]))
           failures.push(`Add device offers ${JSON.stringify(kinds)}`)
+        // Add device › Cloud offers every cloud, each opening its own page.
+        await page.locator('[data-devices-add="cloud"]').click()
+        const offered = await page
+          .locator("[data-devices-add-cloud]")
+          .evaluateAll((each) =>
+            each.map((button) => button.getAttribute("data-devices-add-cloud")),
+          )
+        if (JSON.stringify(offered) !== JSON.stringify(["boat", "agent37"]))
+          failures.push(`Add device › Cloud offers ${JSON.stringify(offered)}`)
+        await page.locator('[data-devices-add-cloud="agent37"]').click()
+        if (
+          !(await page
+            .locator('[data-devices-cloud-page="agent37"] [data-setting="agent37"]')
+            .waitFor({ timeout: 5_000 })
+            .then(
+              () => true,
+              () => false,
+            ))
+        )
+          failures.push("Add device › Cloud › Agent37 does not open Agent37's page")
+        // A cloud's own page never offers another cloud: the default cloud
+        // is chosen once, in Settings › Accounts.
+        if (
+          (await page
+            .locator('[data-devices-cloud-page="agent37"] [data-cloud-choice]')
+            .count()) > 0
+        )
+          failures.push("Agent37's page offers a choice of cloud")
+        await photograph("cloud-agent37")
+        await page.locator('[data-devices-action="back"]').click()
+        await page.locator('[data-devices-action="add"]').click()
         // A phone pairs right here: Settings' rows, drawn as cards on Devices,
         // and the code's modal on top of the page, giving focus back on Escape.
         await page.locator('[data-devices-add="phone"]').click()
@@ -7479,6 +9754,131 @@ const steps = {
       failures.push(`the window-control audit holds ${JSON.stringify(closes)}`)
   },
 
+  async peer(run, step, failures) {
+    // The owner sees the result in the window. The note and the turn are
+    // sent by the paired gateway, on its own credential, after the owner
+    // grants comment and drive. The composer's Send would be the owner.
+    const note = `peer note ${step.index}`
+    const drive = `${STRESS.reply} peer drive ${step.index}`
+    const conversationId = randomUUID()
+    const root = mkdtempSync(join(tmpdir(), "nessa-stress-peer-"))
+    let linked = false
+    try {
+      linked = await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        const on = await switchLinking(run, true, failures)
+        if (on) await closeSettings(run.page)
+        return on
+      })
+      if (!linked || failures.length) return
+      await run.client.conversation.create({
+        conversationId,
+        agent: run.stack.agent,
+      })
+      run.checked.push(conversationId)
+      const stateRoot = join(root, "state")
+      const cache = join(root, "cache")
+      mkdirSync(stateRoot, { mode: 0o700 })
+      mkdirSync(cache, { mode: 0o700 })
+      const profile = join(root, "profile.json")
+      writeFileSync(
+        profile,
+        JSON.stringify({
+          stateRoot,
+          stateDirectory: "device",
+          cache,
+          gatewayAddress: run.nativeAddress,
+        }),
+        { mode: 0o600 },
+      )
+      const { code, status } = await run.client.pairing.create({ enrollee: "gateway" })
+      const enrollment = await enrollPeer(run, profile, code, status.invitationId)
+      await run.client.conversation.share(conversationId, enrollment.credentialId, [
+        "read",
+        "comment",
+      ])
+      await run.client.conversation.share(
+        conversationId,
+        enrollment.credentialId,
+        ["read", "comment", "drive"],
+        { preset: "read_only_tools" },
+      )
+      const commented = peerExample(["comment", profile, conversationId, note])
+      if (!commented.outcome?.successful)
+        failures.push(
+          `the peer's note was refused: ${commented.outcome?.refusal ?? commented.stderr ?? commented.error?.message ?? commented.status}`,
+        )
+      const driven = peerExample(["drive", profile, conversationId, drive])
+      if (!driven.outcome?.successful)
+        failures.push(
+          `the peer's turn was refused: ${driven.outcome?.refusal ?? driven.stderr ?? driven.error?.message ?? driven.status}`,
+        )
+      if (failures.length) return
+      await settled(run, conversationId, new Set(), drive, "completed", failures)
+      const view = await run.client.conversation.read(conversationId)
+      const saved = view.notes.find((each) => each.text === note)
+      if (saved?.author.kind !== "grant")
+        failures.push(
+          `the gateway's view does not show the peer's note as a grant: ${JSON.stringify(saved?.author ?? null)}`,
+        )
+      await run.exclusive(async () => {
+        await openStressConversation(
+          run.page,
+          conversationId,
+          await titleOf(run, conversationId),
+        )
+        await expectShown(run.page, note, failures)
+        await expectShown(run.page, drive, failures)
+        if ((await run.page.locator('[data-note-author="grant"]').count()) < 1)
+          failures.push("the window does not show the peer's note as a grant")
+        if (run.evidence)
+          await run.page
+            .screenshot({
+              path: join(run.evidence, `peer-${step.index}.png`),
+              scale: "css",
+            })
+            .catch(() => {})
+      })
+      const uses = join(
+        run.stack.gateway.directory,
+        "ci",
+        "instances",
+        INSTANCE,
+        "access-grants",
+        "grant-uses",
+      )
+      const records = existsSync(uses)
+        ? readdirSync(uses).map((name) =>
+            JSON.parse(readFileSync(join(uses, name), "utf8")),
+          )
+        : []
+      const mine = records.filter(
+        (record) => record.target?.conversationId === conversationId,
+      )
+      for (const action of ["conversation.comment", "conversation.drive"]) {
+        const recorded = mine.find((record) => record.target?.action === action)
+        if (!recorded?.grant?.principalId?.startsWith("gateway:"))
+          failures.push(
+            `the grant record for ${action} does not name the peer: ${JSON.stringify(recorded ?? null)}`,
+          )
+      }
+      log(
+        `peer ${enrollment.credentialId} commented and drove ${conversationId} at epoch ${enrollment.accessEpoch}`,
+      )
+    } catch (error) {
+      failures.push(`a granted peer could not comment and drive: ${error.message}`)
+    } finally {
+      if (linked) {
+        await run.exclusive(async () => {
+          await openStressConversation(run.page, run.main.id, run.main.title)
+          await openLinkedDevices(run.page)
+          if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+        })
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
+  },
+
   async webhook(run, step, failures) {
     // The panel creates this conversation and holds the default owner grants,
     // including credential.manage. Sharing must use that same conversation owner.
@@ -7667,6 +10067,7 @@ const steps = {
           notes,
           dropped.map(({ path }) => path),
         )
+        await run.exclusive(() => channelRowsKeepHover(run.page, failures))
         // A thread its agent makes naming where it runs stays in the
         // channel.
         const thread =
@@ -7758,9 +10159,9 @@ const steps = {
           failures.push("the new window conversation did not use the exact fixture model")
         await expectShown(run.page, `${SAYS.echo}${text}`, failures)
       }
-      // Answered or not, a send the window took and then failed says so in
-      // its composer, with the code it was refused with.
-      const refused = run.page.locator(css.sendFailure)
+      // Answered or not, a send the window took and then failed says so
+      // under its message.
+      const refused = run.page.locator(`${css.sendFailure}, ${css.unsent}`)
       if ((await refused.count()) > 0)
         failures.push(
           `the first message of a new conversation failed: ${fold(await refused.first().innerText())}`,
@@ -7898,6 +10299,193 @@ const steps = {
     )
   },
 
+  async ask(run, step, failures) {
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    // Named by a first turn, so the notice has a title to say.
+    const naming = prompt(run, STRESS.reply, step, " ask")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    const shown = await run.page
+      .locator(`${selectorFor.sessionListRowFor(run.main.id)}[aria-selected=true]`)
+      .count()
+    const asking = prompt(run, STRESS.ask, step)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, asking),
+    )
+    const { view: asked } = await settled(
+      run,
+      conversationId,
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
+      asking,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const rowAsk = async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return conversations.find((each) => each.conversationId === conversationId)?.ask
+    }
+    const ask = await waitFor(rowAsk, 15_000)
+    if (!ask) {
+      failures.push("the list row does not carry the agent's ask")
+      return
+    }
+    if (
+      ask.question !== ASK.question ||
+      ask.choices.map((each) => each.label).join("|") !==
+        ASK.choices.map((each) => each.label).join("|") ||
+      ask.recommended !== ASK.recommended ||
+      ask.reason !== ASK.reason
+    )
+      failures.push(`the row's ask is ${JSON.stringify(ask)}, not what the agent asked`)
+    // The row waits on the person, though the window does not follow it.
+    const waiting = await run.page
+      .locator(
+        `.workspace-list [data-list-group="needs-you"] [data-session-row="${conversationId}"]`,
+      )
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!waiting)
+      failures.push("the asked conversation's row does not wait on the person")
+    const notice = await waitFor(async () => {
+      const notices = await hostNotices(run.page)
+      return (
+        notices?.up.find(
+          (each) =>
+            each.conversationId === conversationId &&
+            each.executionId === ask.askId &&
+            each.permissionId === "owner-ask",
+        ) ?? null
+      )
+    }, 30_000)
+    if (!notice) {
+      failures.push("no notice was posted for the agent's ask")
+      return
+    }
+    if (notice.title !== ASK.question)
+      failures.push(
+        `the ask's notice says ${JSON.stringify(notice.title)}, not the question`,
+      )
+    if (notice.body !== title)
+      failures.push(
+        `the ask's notice names ${JSON.stringify(notice.body)}, not the conversation ${JSON.stringify(title)}`,
+      )
+    // Nothing was taken from the person: the window shows what it showed.
+    const still = await run.page
+      .locator(`${selectorFor.sessionListRowFor(run.main.id)}[aria-selected=true]`)
+      .count()
+    if (still !== shown)
+      failures.push("the window left the conversation it showed when the agent asked")
+    const listening = await run.page.evaluate(
+      (id) => window.__fakeHostOpenNotice?.(id) ?? 0,
+      conversationId,
+    )
+    if (listening !== 1)
+      failures.push(`${listening} windows listened for an opened notice, not 1`)
+    const card = run.page.locator(`[data-owner-ask="${ask.askId}"]`)
+    const drawn = await card
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!drawn) {
+      failures.push("opening the ask's notice did not bring up its card")
+      return
+    }
+    const recommended = card.locator(
+      `[data-owner-ask-choice="${ASK.choices[ASK.recommended].label}"] [data-owner-ask-recommended]`,
+    )
+    if (
+      (await card.locator("[data-owner-ask-recommended]").count()) !== 1 ||
+      !(await recommended.count())
+    )
+      failures.push("the card does not mark the one recommended choice")
+    if (!(await card.getByText(ASK.reason, { exact: false }).count()))
+      failures.push("the card does not say why that choice is recommended")
+    for (const choice of ASK.choices)
+      if (!(await card.getByText(choice.consequence).count()))
+        failures.push(`the card does not say what ${JSON.stringify(choice.label)} does`)
+    // The person picks the other choice: its label goes as their message.
+    const other = ASK.choices.find((_, index) => index !== ASK.recommended).label
+    await card.locator(`[data-owner-ask-choice="${other}"]`).click()
+    await settled(
+      run,
+      conversationId,
+      new Set(asked?.messages.map((each) => each.executionId) ?? []),
+      other,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.answered}${other}`, failures)
+    const gone = await card
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!gone) failures.push("the ask's card stayed after the person answered")
+    if (
+      await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
+        (cleared) => !cleared,
+      )
+    )
+      failures.push("the list row still carries the ask the person answered")
+    await noticeTakenBack(run, notice, "answered with a choice", failures)
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async accessRequest(run, step, failures) {
+    const { agents } = await run.client.agents.list()
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    const naming = prompt(run, STRESS.reply, step, " access")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // Auto is what the agent asks for. The stress stack's agent offers it;
+    // one that does not would check nothing here, so that is a failure, not
+    // a pass.
+    const offered =
+      agents
+        .flatMap((agent) => agent.models)
+        .find((model) => model.modelId === named?.model)
+        ?.approvalModes?.map((choice) => choice.id) ?? []
+    if (!offered.includes(ACCESS.access)) {
+      failures.push(
+        `${named?.model} offers no ${ACCESS.access}, so the access request was not checked`,
+      )
+      return
+    }
+    try {
+      await approveAccess(run, step, conversationId, named, failures)
+    } finally {
+      // Leave the chat as other steps expect it, however this one ended.
+      await run.client.conversation.setApprovalMode(conversationId, "ask").catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+
   async park(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " park")
@@ -7957,6 +10545,326 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  /**
+   * How agents talk, set in the default channel's settings (the Nessa
+   * level): Threads take the person's own words, saved only on Save. A chat
+   * started after it is told those words; the main chat, started before,
+   * keeps Nessa's plain style, so its agent is not restarted by the change.
+   * Only Claude's reply says its system prompt, so only there are the words
+   * checked in what the agent was told.
+   */
+  async style(run, step, failures) {
+    const marker = `Style marker r${step.index} s${run.knobs.seed}: answer in one line.`
+    const told = run.stack.agent === "claude"
+    const close = async () => {
+      const dialog = run.page.locator(css.channelSettingsDialog)
+      for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+        await run.page.keyboard.press(keys.escape)
+        await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+      }
+    }
+    try {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(MAIN_CHANNEL, { exact: true })
+        .first()
+        .hover({ timeout: 15_000 })
+      await run.page
+        .locator(
+          `${css.channelSettingsOpen}[data-channel-settings-open="gateway-conversations"]`,
+        )
+        .click({ timeout: 10_000 })
+      const control = run.page
+        .locator(css.channelSettingsDialog)
+        .locator('[data-reply-style="nessa"]')
+      const threads = control.locator('[data-reply-style-role="thread"]')
+      await threads.locator("[data-choice-trigger]:enabled").waitFor({ timeout: 10_000 })
+      await pickChoice(run.page, threads, "custom")
+      await control.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
+      // Choosing "Your own" saves nothing until Save.
+      const before = await run.client.replyStyle.read()
+      if (before.nessa.thread?.mode === "custom")
+        failures.push("choosing Your own saved before Save was pressed")
+      await control.locator('[data-reply-style-save="thread"]').click({ timeout: 10_000 })
+      const saved = await waitFor(async () => {
+        const read = await run.client.replyStyle.read()
+        return (
+          read.effective.thread.mode === "custom" && read.effective.thread.text === marker
+        )
+      }, 10_000)
+      if (!saved)
+        failures.push("the gateway never read back the Threads style as saved, trimmed")
+      if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `style-${run.engine}-threads-own.png`),
+        })
+    } finally {
+      await close()
+    }
+    // A new chat in the default channel is told the words.
+    const text = prompt(run, STRESS.channel, step, " styled")
+    await run.page.keyboard.press(keys.newSession)
+    const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+    await home.locator(css.field).waitFor({ timeout: 15_000 })
+    await home.locator(css.field).fill(text)
+    await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+    const conversationId = await waitFor(
+      () => selectedStressConversation(run.page, text),
+      30_000,
+    )
+    if (!conversationId) {
+      failures.push("the chat started after the style change was never listed")
+    } else {
+      run.checked.push(conversationId)
+      const { view } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        text,
+        "completed",
+        failures,
+      )
+      const reply = (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text)
+        .join("")
+      if (told && !reply.includes(marker))
+        failures.push(
+          `the new chat was not told the Threads style: ${fold(reply.slice(0, 300))}`,
+        )
+      if (told && reply.includes("How to write to the person:"))
+        failures.push("the new chat was told Nessa's plain style beside the person's own")
+    }
+    // The main chat started before: it keeps the plain style it began with.
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const again = prompt(run, STRESS.channel, step, " kept")
+    const seen = await send(run, run.main.id, again, failures)
+    const { view } = await settled(run, run.main.id, seen, again, "completed", failures)
+    const kept = (view?.messages.find((each) => each.userText === again)?.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("")
+    if (told && kept.includes(marker))
+      failures.push("a chat started before the change was told the new style")
+    if (told && !kept.includes("How to write to the person:"))
+      failures.push(
+        `the main chat lost the plain style it began with: ${fold(kept.slice(0, 300))}`,
+      )
+    // Back to Nessa's plain style, as nothing chosen, for the steps after.
+    const reset = await run.client.replyStyle.set("thread", undefined)
+    if (reset.nessa.thread !== undefined || reset.effective.thread.mode !== "plain")
+      failures.push(
+        `clearing the Threads style read back ${JSON.stringify(reset.nessa.thread)}`,
+      )
+  },
+
+  /**
+   * A channel's coordinator, switched in its settings at any time. Made with
+   * it on, the channel's first chat is its coordinator, and (said only in
+   * Claude's reply) it is told its job. Off, the channel keeps that chat but
+   * no longer opens at it: a new chat there is an ordinary thread, told no
+   * job. On again, it is the same coordinator chat, pinned as the first row of
+   * the channel's list above newer threads. A channel made with it
+   * off says so, and still names the main chat it would have.
+   */
+  async coordinator(run, step, failures) {
+    const told = run.stack.agent === "claude"
+    const job = "You are this channel's coordinator."
+    const replyTo = (view, text) =>
+      (view?.messages.find((each) => each.userText === text)?.parts ?? [])
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text)
+        .join("")
+    const listedNow = async (channelId) =>
+      (await run.client.channels.list()).channels.find(
+        (each) => each.channelId === channelId,
+      )
+    const dialog = run.page.locator(css.channelSettingsDialog)
+    const close = async () => {
+      for (let tries = 0; tries < 3 && (await dialog.count()) > 0; tries += 1) {
+        await run.page.keyboard.press(keys.escape)
+        await dialog.waitFor({ state: "detached", timeout: 2_000 }).catch(() => {})
+      }
+    }
+    const switchTo = async (made, on) => {
+      try {
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText(made.name, { exact: true })
+          .first()
+          .hover({ timeout: 15_000 })
+        await run.page
+          .locator(
+            `${css.channelSettingsOpen}[data-channel-settings-open="${made.channelId}"]`,
+          )
+          .click({ timeout: 10_000 })
+        const control = dialog.locator(`[data-channel-coordinator="${made.channelId}"]`)
+        await control
+          .locator("[data-choice-trigger]:enabled")
+          .waitFor({ timeout: 10_000 })
+        await pickChoice(run.page, control, on ? "on" : "off")
+        const shown = await waitFor(
+          async () => (await control.getAttribute("data-coordinator-on")) === String(on),
+          10_000,
+        )
+        if (!shown)
+          failures.push(
+            `the channel settings never showed the coordinator ${on ? "on" : "off"}`,
+          )
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(
+              run.evidence,
+              `coordinator-${run.engine}-${on ? "on" : "off"}.png`,
+            ),
+          })
+      } finally {
+        await close()
+      }
+      const now = await waitFor(async () => {
+        const listed = await listedNow(made.channelId)
+        return listed?.coordinatorOn === on ? listed : null
+      }, 10_000)
+      if (!now)
+        failures.push(`the gateway never listed the coordinator ${on ? "on" : "off"}`)
+      else if (now.coordinatorConversationId !== made.coordinatorConversationId)
+        failures.push(
+          `switching the coordinator ${on ? "on" : "off"} changed its chat from ${made.coordinatorConversationId} to ${now.coordinatorConversationId}`,
+        )
+      return now
+    }
+    // The list's first row, and its group, while the channel is shown.
+    const pinnedCheck = async (made, on) => {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText(made.name, { exact: true })
+        .first()
+        .click({ timeout: 15_000 })
+      const top = async () => {
+        const row = run.page.locator("[data-list-group] [data-session-row]").first()
+        if ((await row.count()) === 0) return null
+        return {
+          id: await row.getAttribute("data-session-row"),
+          group: await row.evaluate((node) =>
+            node.closest("[data-list-group]")?.getAttribute("data-list-group"),
+          ),
+        }
+      }
+      const pinned = await waitFor(async () => {
+        const first = await top()
+        const at =
+          first?.id === made.coordinatorConversationId && first.group === "coordinator"
+        return at === on ? first : null
+      }, 10_000)
+      if (!pinned)
+        failures.push(
+          on
+            ? `the coordinator is not the list's first row, in its own group: ${JSON.stringify(await top())}`
+            : `the list still pins the coordinator while it is off`,
+        )
+    }
+    try {
+      const made = await makeChannel(run, failures, {
+        name: `stress-coord-r${step.index}-s${run.knobs.seed}`,
+      })
+      if (made) {
+        // Made with it on, the channel opens at its coordinator's chat.
+        const first = await talkInChannel(run, step, made, failures)
+        if (first && first !== made.coordinatorConversationId)
+          failures.push(
+            `the first chat in a channel with a coordinator is ${first}, not its coordinator ${made.coordinatorConversationId}`,
+          )
+        if (first && told) {
+          const view = await run.client.conversation.read(first)
+          const reply = (view?.messages ?? [])
+            .flatMap((each) => each.parts ?? [])
+            .filter((part) => part.kind === "text")
+            .map((part) => part.text)
+            .join("")
+          if (!reply.includes(job))
+            failures.push(
+              `the coordinator was not told its job: ${fold(reply.slice(0, 300))}`,
+            )
+        }
+        // Off: a new chat in the channel is an ordinary thread, told no job.
+        if (await switchTo(made, false)) {
+          const text = prompt(run, STRESS.channel, step, " without a coordinator")
+          await run.page.keyboard.press(keys.newSession)
+          const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+          await home.locator(css.field).waitFor({ timeout: 15_000 })
+          await home.locator(css.field).fill(text)
+          await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+          const thread = await waitFor(
+            () => selectedStressConversation(run.page, text),
+            30_000,
+          )
+          if (!thread)
+            failures.push("the chat started with the coordinator off was never listed")
+          else {
+            run.checked.push(thread)
+            if (thread === made.coordinatorConversationId)
+              failures.push(
+                "a new chat with the coordinator off opened the coordinator's chat",
+              )
+            const { view } = await settled(
+              run,
+              thread,
+              new Set(),
+              text,
+              "completed",
+              failures,
+            )
+            const { conversations } = await run.client.conversation.list({})
+            const summary = conversations.find((each) => each.conversationId === thread)
+            if (summary?.channelId !== made.channelId)
+              failures.push(
+                `the chat started with the coordinator off is in ${summary?.channelId ?? "no channel"}`,
+              )
+            if (told && replyTo(view, text).includes(job))
+              failures.push(
+                "a thread started with the coordinator off was told the coordinator's job",
+              )
+          }
+          // Off, it is an ordinary row: no Coordinator group in the list.
+          await pinnedCheck(made, false)
+          // On again: the same coordinator chat, which still answers.
+          if (await switchTo(made, true)) {
+            // Pinned at the top of the list, above the newer thread.
+            await pinnedCheck(made, true)
+            await openStressConversation(run.page, made.coordinatorConversationId)
+            const again = prompt(run, STRESS.channel, step, " coordinator again")
+            const seen = await send(run, made.coordinatorConversationId, again, failures)
+            await settled(
+              run,
+              made.coordinatorConversationId,
+              seen,
+              again,
+              "completed",
+              failures,
+            )
+          }
+        }
+      }
+      // Made with it off: it says so and still names the chat it would have.
+      const quiet = await makeChannel(run, failures, {
+        name: `stress-quiet-r${step.index}-s${run.knobs.seed}`,
+        coordinator: false,
+      })
+      if (quiet && !quiet.coordinatorConversationId)
+        failures.push(
+          "a channel made without a coordinator names no main chat to turn on",
+        )
+    } finally {
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+
   async huddle(run, step, failures) {
     const conversationId = randomUUID()
     run.failureConversationId = conversationId
@@ -8001,6 +10909,79 @@ const steps = {
         },
       )
     })
+  },
+
+  async provenance(run, step, failures) {
+    // A thread the parent did not create: the parent's close of it is refused.
+    const strangerId = randomUUID()
+    await run.client.conversation.create({
+      conversationId: strangerId,
+      agent: run.stack.agent,
+    })
+    run.checked.push(strangerId)
+    const text = prompt(
+      run,
+      STRESS.provenance,
+      step,
+      ` args:${JSON.stringify({ threadId: strangerId })} :args`,
+    )
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const found = new RegExp(
+      `${SAYS.provenance}([0-9a-f-]{36}) \\| (.*?) \\| (.*?) \\| (.*)`,
+      "s",
+    ).exec(said)
+    if (!found) {
+      failures.push(
+        `the provenance turn did not say what happened: ${said.slice(0, 200)}`,
+      )
+      return
+    }
+    const [, childId, refused, closing, reply] = found
+    run.checked.push(childId)
+    // The thread read the message back to the person's exact words: the turn
+    // the check typed, not the parent agent's relay of it, sent from the
+    // window, which signs in with a token on this computer.
+    if (!reply.includes(`${SAYS.origin}person on computer: ${text}`))
+      failures.push(
+        `the thread did not follow its message back to the person's words: ${reply.slice(0, 200)}`,
+      )
+    // Asked for, the person's earlier words in the main chat come with it:
+    // each the person's, none the turn the chain starts at.
+    const before = reply.split(SAYS.earlier)[1]
+    let earlier
+    try {
+      earlier = before === "${chain.earlier}" ? [] : JSON.parse(before)
+    } catch {
+      earlier = null
+    }
+    if (
+      !Array.isArray(earlier) ||
+      earlier.some((each) => each.origin !== "person" || each.said === text)
+    )
+      failures.push(
+        `the thread's read of the person's earlier words was wrong: ${before?.slice(0, 200)}`,
+      )
+    else log(`provenance earlier ${earlier.length}`)
+    if (!refused.startsWith("not_your_thread"))
+      failures.push(
+        `closing a thread the parent did not create was not refused: ${refused}`,
+      )
+    if (closing !== "true")
+      failures.push(`the parent's close of its own thread answered closing ${closing}`)
+    // The closed thread's agent is parked; the stranger, never closed, is not.
+    const parked = await waitFor(async () => {
+      const lease = (await followedOnce(run, childId)).lease
+      return lease?.state === "ended" && lease?.cause === "idle" ? lease : null
+    }, 45_000)
+    if (!parked) {
+      const lease = (await followedOnce(run, childId)).lease
+      failures.push(
+        `the thread its parent closed was not parked: its lease is ${lease?.state ?? "missing"}`,
+      )
+    }
   },
 
   async close(run, step, failures) {
@@ -8203,6 +11184,333 @@ const steps = {
    * asked for. The window draws a line at the switch, and the fork opens
    * on the copied turns and a line after them.
    */
+  /**
+   * A switch to an agent that is not signed in where the conversation runs:
+   * the harness answers its session/new with "authentication required"
+   * (`--refusals`), as Codex on a VM with no saved login does. The send is
+   * refused before anything reaches either agent, the picker says why in
+   * words (not a bare model_change_not_applied) and the composer nothing, the picker goes back to the
+   * conversation's own model, no switch is recorded, and the next message
+   * runs on the agent it was on.
+   */
+  async unsigned(run, step, failures) {
+    try {
+      await unsignedSwitch(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async unsignedSwitchBody(run, step, failures) {
+    const other = otherAgent(run.stack.agent)
+    const target = catalog.models.find((model) => model.modelId === MODELS[other])
+    if (!target) throw new CannotRun(`the catalog has no ${MODELS[other]}`)
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " unsigned")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    const picker = dock(run.page).locator(css.modelChip)
+    const own = catalog.models.find((model) => model.modelId === before.model)
+    if (!own) throw new CannotRun(`the catalog has no ${before.model}`)
+    const refusal = join(run.stack.refusals, `${other}.session-new`)
+    writeFileSync(refusal, "")
+    try {
+      await pickModel(run.page, picker, target)
+      const refused = prompt(run, STRESS.reply, step, " refused switch")
+      await send(run, conversationId, refused, failures)
+      const pickerSays = () =>
+        dock(run.page)
+          .locator(composerControls.pickerNote)
+          .getAttribute("data-tooltip")
+          .then((text) => text ?? "")
+          .catch(() => "")
+      const said = await waitFor(
+        async () => (await pickerSays()).includes(composerControls.signInRequired),
+        30_000,
+      )
+      await composerSaysNothing(run.page, "of the refused switch", failures)
+      if (run.evidence)
+        await dock(run.page)
+          .locator(".desktop-composer")
+          .screenshot({ path: join(run.evidence, `unsigned-${run.engine}.png`) })
+          .catch(() => {})
+      if (!said) {
+        failures.push(
+          `the picker did not say the agent isn't signed in: ${JSON.stringify(await pickerSays())}`,
+        )
+      }
+      if (run.evidence)
+        await run.page.screenshot({
+          path: join(run.evidence, `unsigned-${run.engine}.png`),
+          scale: "css",
+        })
+      if (
+        !(await waitFor(
+          async () =>
+            (await picker.getAttribute("aria-label"))?.includes(own.displayName),
+          5_000,
+        ))
+      )
+        failures.push("the picker did not go back to the conversation's own model")
+      const view = await run.client.conversation.read(conversationId)
+      if (view.model !== before.model || view.handoffs.length)
+        failures.push("a switch the agent could not open was recorded")
+      if (view.messages.some((each) => each.userText === refused))
+        failures.push("the message sent with the refused switch reached an agent")
+    } finally {
+      rmSync(refusal, { force: true })
+    }
+    const after = prompt(run, STRESS.reply, step, " after refused switch")
+    const seen = await send(run, conversationId, after, failures)
+    const { turn } = await settled(
+      run,
+      conversationId,
+      seen,
+      after,
+      "completed",
+      failures,
+    )
+    if (turn && turn.model && turn.model !== before.model)
+      failures.push(`the next message ran on ${turn.model}, not ${before.model}`)
+  },
+  /**
+   * A model change the agent fails while a turn runs: the harness answers
+   * its set_config_option with an internal error (`--refusals`), which ends
+   * the agent's worker and the turn with it, as Claude's adapter did for a
+   * real person. The change is settled without anyone asking again: nothing
+   * stays pending, the composer says nothing of it, the turn is not
+   * left at work with a Stop that stops nothing, and the next message
+   * completes.
+   */
+  async failedControl(run, step, failures) {
+    try {
+      await failedModelControl(run, step, failures)
+    } finally {
+      // The steps after read the main conversation in the window.
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    }
+  },
+  async failedControlBody(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " control")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length || !before) return
+    const current = catalog.models.find(
+      (model) => model.modelId === before.runtime?.model,
+    )
+    const target =
+      current &&
+      catalog.models.find(
+        (model) =>
+          model.provider === current.provider && model.modelId !== current.modelId,
+      )
+    if (!target)
+      throw new CannotRun("no second catalog model in this conversation's provider")
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
+    // Watched as a follower does, which opens and recovers nothing (a read
+    // would: an opening read settles a pending change itself, and would
+    // hide a gateway that never settles it on its own).
+    // A follower subscribes again from its last cursor when its view ends
+    // (the agent it followed was retired), as the product protocol says.
+    let latest = null
+    let cursor
+    let following = null
+    const follow = async () => {
+      following = await run.client.subscriptions.view(
+        conversationId,
+        {
+          view: (frame) => {
+            latest = frame.view
+            cursor = frame.cursor
+          },
+          ended: () => {
+            following = null
+          },
+        },
+        cursor ? { after: cursor } : {},
+      )
+    }
+    await follow()
+    const held = prompt(run, STRESS.pause, step, " control")
+    await send(run, conversationId, held, failures)
+    if (!(await stopShown(run.page)))
+      failures.push("Send did not turn into Stop while the turn ran")
+    const refusal = join(run.stack.refusals, `${run.stack.agent}.model`)
+    writeFileSync(refusal, "")
+    let answer
+    try {
+      answer = await run.client.conversation
+        .setModel(conversationId, target.modelId)
+        .then(
+          () => "applied",
+          (error) => error.code ?? error.message,
+        )
+    } finally {
+      rmSync(refusal, { force: true })
+    }
+    if (answer === "applied")
+      failures.push("a model control the agent failed was answered as applied")
+    const unsettled = (view) =>
+      view.modelChange || view.messages.some((each) => !ended(each))
+    const quiet = await waitFor(async () => {
+      if (!following) await follow().catch(() => {})
+      return latest && !unsettled(latest) ? latest : null
+    }, 90_000).finally(() => following?.close())
+    if (!quiet) {
+      const view = latest ?? { messages: [] }
+      failures.push(
+        `after a failed model control the conversation stayed unsettled: ${JSON.stringify(
+          {
+            modelChange: view.modelChange,
+            turns: view.messages.map((each) => each.status),
+          },
+        )}`,
+      )
+      return
+    }
+    await composerSaysNothing(run.page, "after a failed model control", failures)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `failed-control-${run.engine ?? "window"}-${step.index}.json`),
+        JSON.stringify(
+          { answer, before: current.modelId, after: quiet.runtime?.model },
+          null,
+          2,
+        ),
+      )
+    const after = prompt(run, STRESS.reply, step, " after failed control")
+    const seen = await send(run, conversationId, after, failures)
+    await settled(run, conversationId, seen, after, "completed", failures)
+    if (failures.length) return
+    await stuckModelControl(run, step, conversationId, target, failures)
+  },
+  /**
+   * The same failed control, but the agent cannot be opened again to settle
+   * it either (its `session/resume` fails too), as a person's Boat chat was
+   * left: the gateway holds the change unconfirmed, and only a send can
+   * settle it. The window must not wait for a settle nobody asks for: the
+   * composer says nothing, Send is offered, and once the agent can open
+   * again the person's next message settles the change and completes.
+   */
+  async stuckControlBody(run, step, conversationId, target, failures) {
+    const control = join(run.stack.refusals, `${run.stack.agent}.model`)
+    const resume = join(run.stack.refusals, `${run.stack.agent}.session-resume`)
+    const held = prompt(run, STRESS.pause, step, " stuck control")
+    await send(run, conversationId, held, failures)
+    if (!(await stopShown(run.page)))
+      failures.push("Send did not turn into Stop while the turn ran")
+    writeFileSync(control, "")
+    writeFileSync(resume, "")
+    try {
+      const answer = await run.client.conversation
+        .setModel(conversationId, target.modelId)
+        .then(
+          () => "applied",
+          (error) => error.code ?? error.message,
+        )
+      rmSync(control, { force: true })
+      if (answer === "applied")
+        failures.push("a model control the agent failed was answered as applied")
+      const stuck = await waitFor(async () => {
+        const view = await run.client.conversation.read(conversationId).catch(() => null)
+        return view?.modelChange?.status === "recovery_required" &&
+          view.messages.every((each) => ended(each))
+          ? view
+          : null
+      }, 60_000)
+      if (!stuck) {
+        failures.push("the change the agent could not settle was not left unconfirmed")
+        return
+      }
+      const box = dock(run.page).locator("textarea")
+      await box.fill(prompt(run, STRESS.reply, step, " while unconfirmed"))
+      const offered = await waitFor(
+        async () =>
+          await dock(run.page)
+            .getByRole(...composerControls.send)
+            .isEnabled()
+            .catch(() => false),
+        10_000,
+      )
+      if (!offered)
+        failures.push(
+          "Send was held while the gateway waited for a send to settle the change",
+        )
+      await composerSaysNothing(run.page, "while the change was unconfirmed", failures)
+      const warns = await dock(run.page)
+        .locator(composerControls.pickerNote)
+        .getAttribute("data-attention")
+        .catch(() => null)
+      if (warns !== "warning")
+        failures.push("the picker did not mark the change it will check on the next send")
+      if (run.evidence)
+        await dock(run.page)
+          .screenshot({ path: join(run.evidence, `stuck-control-${run.engine}.png`) })
+          .catch(() => {})
+      await box.fill("")
+    } finally {
+      rmSync(control, { force: true })
+      rmSync(resume, { force: true })
+    }
+    const next = prompt(run, STRESS.reply, step, " after stuck control")
+    // Read before Send: the picker shows the settled model once the send settles it.
+    const shown = await dock(run.page)
+      .locator(css.modelChip)
+      .getAttribute("aria-label")
+      .catch(() => null)
+    const seen = await send(run, conversationId, next, failures)
+    const { view, turn } = await settled(
+      run,
+      conversationId,
+      seen,
+      next,
+      "completed",
+      failures,
+    )
+    const ran = catalog.models.find((model) => model.modelId === turn?.model)
+    if (ran && shown && !shown.includes(ran.displayName))
+      failures.push(
+        `the picker showed "${shown}" and the message ran on ${ran.displayName}`,
+      )
+    if (view?.modelChange)
+      failures.push(
+        `the send did not settle the unconfirmed change: ${JSON.stringify(view.modelChange)}`,
+      )
+    await composerSaysNothing(run.page, "after the send settled the change", failures)
+  },
   async handoff(run, step, failures) {
     const other = otherAgent(run.stack.agent)
     const target = catalog.models.find((model) => model.modelId === MODELS[other])
@@ -8891,9 +12199,10 @@ const steps = {
   },
 
   /**
-   * The composer's row: attach and the model's short name at its start; at
-   * its end the access and thinking choices, a hairline, then what acts. No
-   * project is offered there, and nothing stands under the card.
+   * The composer's row: attach, the model's short name with its thinking
+   * level, and Fast at its start; at its end the access choice, a hairline,
+   * then what acts. No project is offered there, and nothing stands under
+   * the card.
    */
   async composer(run, step, failures) {
     await run.exclusive(async () => {
@@ -8903,7 +12212,9 @@ const steps = {
       await row.waitFor({ timeout: 10_000 })
       // The chip draws the model's short name; its whole name stays its label.
       const model = await row.locator(".desktop-chip-model").evaluate((chip) => ({
-        drawn: JSON.parse(getComputedStyle(chip, "::after").content || '""'),
+        drawn:
+          chip.querySelector('[data-slot="model-level-picker-trigger-label"]')
+            ?.textContent ?? "",
         label: chip.getAttribute("aria-label") ?? "",
       }))
       if (model.drawn === "" || /^(Claude|OpenAI)\s/.test(model.drawn))
@@ -8914,25 +12225,26 @@ const steps = {
         )
       if ((await dock.locator('[aria-label^="Project"]').count()) > 0)
         failures.push("the composer still offers a project")
-      // Left to right at the row's end: thinking, the hairline, Send.
+      // Left to right: the model, Fast beside it, then at the row's end
+      // access, the hairline, Send.
       const edges = await row.evaluate((element) => {
         const left = (selector) =>
           element.querySelector(selector)?.getBoundingClientRect().left ?? null
         return {
-          thinking: left(".desktop-chip-thinking"),
+          model: left(".desktop-chip-model"),
+          fast: left(".desktop-composer-fast"),
+          access: left('[data-slot="composer-access-mode"]'),
           divider: left(".desktop-composer-divider"),
           send: left(".desktop-send"),
         }
       })
-      if (!(
-        edges.thinking !== null &&
-        edges.divider !== null &&
-        edges.send !== null &&
-        edges.thinking < edges.divider &&
-        edges.divider < edges.send
-      ))
+      const order = ["model", "fast", "access", "divider", "send"]
+      if (
+        order.some((part) => edges[part] === null) ||
+        order.some((part, at) => at > 0 && edges[order[at - 1]] >= edges[part])
+      )
         failures.push(
-          `the row's end is not thinking, hairline, Send: ${JSON.stringify(edges)}`,
+          `the row is not model, Fast, access, hairline, Send: ${JSON.stringify(edges)}`,
         )
       // Nothing under the card: the dock ends with the composer.
       const under = await dock.evaluate((element) => {
@@ -9274,25 +12586,331 @@ const steps = {
         path: join(run.evidence, `attach-${run.engine}-${step.index}-sent.png`),
       })
   },
+  async terminal(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const word = `stress-terminal-r${step.index}-s${run.knobs.seed}`
+      const listed = await run.client.terminals.list()
+      // The main chat in front, so ⌘J opens in its (default) channel and not
+      // in one an earlier step left in front.
+      await showMainAgain(run, failures)
+      const warned = []
+      const onConsole = (message) => {
+        if (/terminal/i.test(message.text())) warned.push(message.text())
+      }
+      page.on("console", onConsole)
+      // ⌘J opens a shell in the channel in front, in the focused pane.
+      await page.keyboard.press(keys.newTerminal)
+      const pane = page.locator(`.workspace-terminal-pane${css.focusedPane}`)
+      const grid = pane.locator('[data-slot="terminal-grid"]')
+      const shown = await grid.waitFor({ timeout: 15_000 }).then(
+        () => true,
+        () => false,
+      )
+      page.off("console", onConsole)
+      if (!shown) {
+        failures.push(
+          `⌘J showed no terminal in the focused pane${warned.length ? `: ${warned.join(" | ")}` : ""}; the gateway said ${JSON.stringify(terminalLog(run))}`,
+        )
+        return
+      }
+      const opened = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find(
+          (each) =>
+            each.kind === "shell" &&
+            !listed.some((old) => old.terminalId === each.terminalId),
+        )
+      }, 10_000)
+      if (!opened) {
+        failures.push("the gateway does not list the terminal ⌘J opened")
+        return
+      }
+      // The pane sizes the terminal before anyone clicks it: a narrower
+      // window reflows the shell to the pane, never shrinks its text.
+      await reflowsToItsPane(page, grid, failures)
+      // A real shell: what is typed runs, and its output is a row of its own.
+      await grid.click()
+      await page.keyboard.type(`echo ${word}`)
+      await page.keyboard.press(keys.enter)
+      const ran = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === word),
+        15_000,
+      )
+      if (!ran)
+        failures.push(
+          `the terminal never printed ${word}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()).slice(-4))}`,
+        )
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `terminal-${run.engine}-${step.index}.png`),
+        })
+      // Listed in the channel's session list, with no path on the row.
+      const row = page.locator(`[data-terminal-row="${opened.terminalId}"]`)
+      if (
+        !(await row.waitFor({ timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list has no row for the terminal")
+      else if ((await row.innerText()).includes(opened.folder))
+        failures.push("the terminal's session row shows its folder")
+      // Switching: a second ⌘J shell takes the pane; the first one's row
+      // brings it back, its own output showing without a click in the pane.
+      if (!(await switchesBack(run, grid, row, listed, opened, word)))
+        failures.push(
+          `the first terminal's row did not show its own output in the pane: ${JSON.stringify((await gridRows(grid)).filter((each) => each.trim()).slice(-3))}`,
+        )
+      // The details popover names its folder and shell.
+      await pane.getByRole("button", { name: "Terminal Details" }).click()
+      const details = page.locator(".workspace-terminal-details")
+      const said = await details.waitFor({ timeout: 5_000 }).then(
+        () => details.innerText(),
+        () => "",
+      )
+      for (const part of ["Runs on", opened.folder, opened.shell])
+        if (!said.includes(part))
+          failures.push(`the terminal's details do not say ${part}`)
+      await page.keyboard.press(keys.escape)
+      // Renamed from its row: the gateway keeps the name and the row and the
+      // pane's title show it.
+      const name = `stress shell ${step.index}`
+      await row.hover()
+      // The row's buttons are hover chrome, hidden from the accessibility tree.
+      await row.locator(`button[aria-label="Rename ${opened.title}"]`).click()
+      const field = row.getByRole("textbox", { name: "Terminal name" })
+      await field.fill(name)
+      await field.press(keys.enter)
+      const renamed = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return now.find((each) => each.terminalId === opened.terminalId)?.title === name
+      }, 5_000)
+      if (!renamed) failures.push("the gateway did not keep the terminal's new name")
+      else if (
+        !(await waitFor(
+          async () =>
+            (await row.innerText()).includes(name) &&
+            (await pane.locator(".workspace-pane-title").innerText()) === name,
+          5_000,
+        ))
+      )
+        failures.push("the terminal's row or pane does not show its new name")
+      await opensBeside(run, opened, name, listed, failures)
+      // The pane's × ends it: the gateway lists it no more, nor does the window.
+      await pane.getByRole("button", { name: "End Terminal" }).click()
+      const ended = await waitFor(async () => {
+        const now = await run.client.terminals.list()
+        return !now.some((each) => each.terminalId === opened.terminalId)
+      }, 10_000)
+      if (!ended)
+        failures.push("the terminal is still listed after its pane's × ended it")
+      if (
+        !(await row.waitFor({ state: "detached", timeout: 5_000 }).then(
+          () => true,
+          () => false,
+        ))
+      )
+        failures.push("the session list still shows the ended terminal")
+      await showMainAgain(run, failures)
+    })
+  },
+  async run(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    const asked = prompt(run, STRESS.runBlock, step)
+    const seen = await send(run, run.main.id, asked, failures)
+    const { turn } = await settled(run, run.main.id, seen, asked, "completed", failures)
+    if (!turn) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.runBlock}${asked}` })
+      const blocks = message.locator("[data-run-block]")
+      if (!(await waitFor(async () => (await blocks.count()) === 2, 15_000))) {
+        failures.push(`the reply drew ${await blocks.count()} Run blocks, not 2`)
+        return
+      }
+      const [prints, waits] = [blocks.nth(0), blocks.nth(1)]
+      // Run: the output shows under the block, then its exit and time.
+      await prints.locator("[data-run-button]").click()
+      const finished = await waitFor(
+        async () => (await prints.getAttribute("data-run-state")) === "exited",
+        20_000,
+      )
+      if (!finished) {
+        failures.push("the first Run never ended")
+        return
+      }
+      const grid = prints.locator('[data-slot="terminal-grid"]')
+      const printed = await waitFor(
+        async () => (await gridRows(grid)).some((row) => row.trim() === RUN_PRINTS),
+        10_000,
+      )
+      if (!printed)
+        failures.push(
+          `Run's output does not show ${RUN_PRINTS}: ${JSON.stringify((await gridRows(grid)).filter((row) => row.trim()))}`,
+        )
+      // Scrolling the chat over the output scrolls the chat, not its history.
+      await grid.hover()
+      await run.page.mouse.wheel(0, -400)
+      await run.page.waitForTimeout(300)
+      if (await prints.locator('[data-slot="terminal-scrolled"]').count())
+        failures.push("scrolling the chat over Run's output scrolled the output back")
+      // As typed in a terminal: the prompt, then the command, above its output.
+      // A long prompt wraps the command onto the next row, so the rows above
+      // the output are read as one run of text.
+      const rows = await gridRows(grid)
+      const printedAt = rows.findIndex((row) => row.trim() === RUN_PRINTS)
+      const above = rows.slice(0, Math.max(printedAt, 0)).join("").trimEnd()
+      const prompted =
+        above.endsWith(RUN_COMMAND) &&
+        above.slice(0, -RUN_COMMAND.length).trim().length > 0
+      if (printedAt < 0 || !prompted)
+        failures.push(
+          `Run's output does not show the command after a prompt above what it printed: ${JSON.stringify(rows.filter((row) => row.trim()))}`,
+        )
+      const status = prints.locator("[data-run-exit]")
+      const words = (await status.count()) ? await status.innerText() : ""
+      if (!/^exit 0 · \d/.test(words))
+        failures.push(`the finished Run says ${JSON.stringify(words)}`)
+      const runs = (await run.client.terminals.list()).filter(
+        (each) => each.kind === "run" && each.conversationId === run.main.id,
+      )
+      if (!runs.some((each) => each.state === "exited" && each.exitStatus === 0))
+        failures.push("the gateway does not list the finished run as exited 0")
+      if (!(await prints.locator("[data-run-button]").innerText()).includes("Run again"))
+        failures.push("a finished Run does not offer Run again")
+      // The box stops at the last printed row, and the bar folds it away.
+      await foldsItsOutput(
+        prints,
+        failures,
+        run.evidence
+          ? (state) =>
+              message.screenshot({
+                path: join(run.evidence, `run-${run.engine}-${step.index}-${state}.png`),
+              })
+          : undefined,
+      )
+      if (run.evidence)
+        await message.screenshot({
+          path: join(run.evidence, `run-${run.engine}-${step.index}.png`),
+        })
+      // The console fence runs its $ line only, and the stop icon interrupts it.
+      await waits.locator("[data-run-button]").click()
+      const running = await waitFor(
+        async () => (await waits.getAttribute("data-run-state")) === "running",
+        15_000,
+      )
+      if (!running) failures.push("the console fence's Run never started")
+      else {
+        await waits.getByRole("button", { name: "Stop" }).click()
+        const stopped = await waitFor(
+          async () => (await waits.getAttribute("data-run-state")) === "exited",
+          10_000,
+        )
+        const exit = stopped
+          ? await waits.locator("[data-run-exit]").getAttribute("data-run-exit")
+          : ""
+        if (!stopped) failures.push("Stop did not end the console fence's run")
+        else if (exit === "0") failures.push("a stopped run says it exited 0")
+      }
+      // Run again starts a new run under the same block; the terminal icon opens it in a pane.
+      await prints.locator("[data-run-button]").click()
+      const again = await waitFor(async () => {
+        const now = (await run.client.terminals.list()).filter(
+          (each) => each.kind === "run" && each.conversationId === run.main.id,
+        )
+        return now.length === runs.length + 2
+      }, 15_000)
+      if (!again) failures.push("Run again did not start a new run")
+      // Beside the chat: the chat stays in its own pane.
+      const panesBefore = await page.locator(css.pane).count()
+      await prints.getByRole("button", { name: "Open Beside" }).click()
+      const pane = page.locator(".workspace-terminal-pane")
+      if (
+        !(await pane
+          .first()
+          .waitFor({ timeout: 5_000 })
+          .then(
+            () => true,
+            () => false,
+          ))
+      )
+        failures.push("the Run's terminal icon opened no pane")
+      else {
+        if ((await page.locator(css.pane).count()) !== panesBefore + 1)
+          failures.push("the Run's terminal icon took the chat's pane, not one beside it")
+        if (await prints.locator("[data-run-output]").count())
+          failures.push("the Run still draws its output inline while a pane shows it")
+        if (run.evidence)
+          await page.screenshot({
+            path: join(run.evidence, `run-${run.engine}-${step.index}-beside.png`),
+          })
+        const close = pane.first().getByRole("button", { name: /^(Close|End Terminal)$/ })
+        await close.click()
+      }
+      // Leave no runs behind.
+      for (const each of await run.client.terminals.list())
+        if (each.kind === "run" && each.conversationId === run.main.id)
+          await run.client.terminals.close(each.terminalId).catch(() => {})
+      await showMainAgain(run, failures)
+    })
+  },
   async table(run, step, failures) {
-    const text = prompt(run, STRESS.table, step)
+    // The answer repeats the question, so it names this chat by its id: the
+    // window draws that id as the chat's pill.
+    const asked = prompt(run, STRESS.table, step)
+    const text = `${asked} for ${run.main.id}`
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${asked}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
     const seen = await send(run, run.main.id, text, failures)
+    // Words (the kit's ReplyMarkdown) parses each finished block once, so a
+    // block that has finished is never drawn again while the rest streams.
+    // The turn holds after its tables; while it holds, every cell of the
+    // first table is marked, and each must be the same element once the
+    // code, the diagram and the maths have arrived. (Only the fade-in spans
+    // inside a cell go when the reply stops streaming.)
+    const midStream = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await message.locator('[data-slot="mermaid-diagram"]').count()) === 0,
+      TABLE_HOLD_MS + 15_000,
+    )
+    if (!midStream)
+      failures.push("the window never drew the two tables before the rest of the answer")
+    else
+      await tables.first().evaluate((table) => {
+        for (const cell of table.querySelectorAll("th, td")) cell.dataset.stressSeen = "1"
+      })
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    const expected = `${SAYS.table}${text}\n\n${[...TABLE_LINES, "", ...CODE_LINES]
+    const expected = `${SAYS.table}${text}\n\n${[
+      ...TABLE_LINES,
+      "",
+      ...CODE_LINES,
+      "",
+      ...MATH_LINES,
+    ]
       .map((line) => `${line}\n`)
       .join("")}`
     if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
-    // The list previews the answer as prose: a table's pipes and dashes are
-    // left out (UI audit #3).
+    // The list previews the answer as prose: a table's pipes and dashes and
+    // the code are left out (UI audit #3); the maths line is prose and stays.
     let listed
     const previewed = await waitFor(async () => {
       const { conversations } = await run.client.conversation.list({})
       listed = conversations.find((each) => each.conversationId === run.main.id)
-      return listed?.preview === `${SAYS.table}${text}`.trim()
+      return (
+        listed?.preview ===
+        [`${SAYS.table}${text}`.trim(), ...MATH_LINES.filter(Boolean)].join(" ")
+      )
     }, 10_000)
     if (!previewed)
       failures.push(
@@ -9301,10 +12919,6 @@ const steps = {
     // The window draws both tables in the agent's message, and draws them
     // whole: no word split across lines, the narrow table inside the reply,
     // the wide one scrolling in its own panel with its hidden side faded.
-    const message = run.page
-      .locator('.workspace-message[data-role="agent"]')
-      .filter({ hasText: `${SAYS.table}${text}` })
-    const tables = message.locator('[data-slot="markdown-table"]')
     // Both tables whole: the last cell streamed is drawn, and the window has
     // finished revealing the answer (no word still in its fade-in span), so
     // every column has its final width.
@@ -9322,8 +12936,55 @@ const steps = {
       )
       return
     }
+    // The reply is drawn by Words, not react-markdown; the first table was
+    // kept as it streamed; and the maths streamed last is drawn with KaTeX
+    // from the TeX Words read, inline and as one display block, with no
+    // dollar sign left in the reply's prose.
+    const read = () =>
+      message.evaluate(
+        (element, id) => ({
+          reply: element.querySelectorAll('[data-slot="reply-markdown"]').length,
+          reactMarkdown: element.querySelectorAll('[data-slot="message-markdown"]')
+            .length,
+          redrawn:
+            element
+              .querySelector('[data-slot="markdown-table"]')
+              ?.querySelectorAll(":is(th, td):not([data-stress-seen])").length ?? -1,
+          inline: element.querySelectorAll(".katex:not(.katex-display .katex)").length,
+          display: element.querySelectorAll(".katex-display").length,
+          dollars: [...element.querySelectorAll('[data-slot="reply-markdown"] > p')]
+            .map((paragraph) => paragraph.textContent)
+            .filter((line) => line.includes("$")),
+          pill: element.querySelectorAll(`[data-chat-pill="${id}"]`).length,
+        }),
+        run.main.id,
+      )
+    // KaTeX loads lazily, so the formulas may show as TeX for a moment.
+    let words = await read()
+    await waitFor(async () => {
+      words = await read()
+      return words.inline === 2 && words.display === 1
+    }, 10_000)
+    if (words.reply !== 1 || words.reactMarkdown !== 0)
+      failures.push(
+        `the answer is drawn by ${words.reply} ReplyMarkdown and ${words.reactMarkdown} MessageMarkdown, not Words alone`,
+      )
+    if (midStream && words.redrawn)
+      failures.push(
+        `${words.redrawn} cells of the first table were drawn again while the rest of the answer streamed`,
+      )
+    if (words.pill !== 1)
+      failures.push(`the answer drew ${words.pill} pills for this chat's id, not 1`)
+    if (words.inline !== 2 || words.display !== 1 || words.dollars.length)
+      failures.push(
+        `the answer's maths drew ${words.inline} inline and ${words.display} display formulas, with ${JSON.stringify(words.dollars)} left as text`,
+      )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `table-reply-${run.engine}-${step.index}.png`),
+      })
     // Short runs each table holds, which a squeezed column used to split.
-    const words = [
+    const cut = [
       ["Price", "$16.99", "CAD", "$150"],
       ["Runtime", "Format", "Projectionist"],
     ]
@@ -9355,7 +13016,7 @@ const steps = {
           }
         },
       )
-    }, words)
+    }, cut)
     // Each table shows its data rows once, as streamed: a table's lines less
     // its heading and delimiter.
     const rows = TABLE_LINES.join("\n")
@@ -9385,7 +13046,7 @@ const steps = {
         const rgba = color.match(/rgba\([^)]*,\s*([\d.]+)\s*\)/)
         return rgba ? Number(rgba[1]) : 1
       }
-      const prose = element.querySelector('[data-slot="message-markdown"] > p')
+      const prose = element.querySelector('[data-slot="reply-markdown"] > p')
       const table = element.querySelector('[data-slot="markdown-table"]')
       const before = table.previousElementSibling
       const cells = table.querySelectorAll("tbody td")
@@ -9523,7 +13184,44 @@ const steps = {
     await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
     if (!(await faded(true, false)))
       failures.push("scrolled to its end, the wide table did not fade its left side")
+    await codeBlocksShowTheirCode(message, failures)
     await codeStaysDark(run.page, message, failures)
+  },
+
+  async swipe(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      // An answer with a table wider than the reply: its panel scrolls
+      // sideways, and a swipe over it scrolls it.
+      const text = prompt(run, STRESS.table, step)
+      const seen = await send(run, run.main.id, text, failures)
+      const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+      if (!turn) return
+      const message = page
+        .locator('.workspace-message[data-role="agent"]')
+        .filter({ hasText: `${SAYS.table}${text}` })
+      const port = message
+        .locator('[data-slot="markdown-table"]')
+        .nth(1)
+        .locator('[data-slot="table-container"]')
+      if (!(await waitFor(async () => (await port.count()) === 1, 15_000))) {
+        failures.push("the wide table to swipe over was not drawn")
+        return
+      }
+      // The wide code block must have drawn its line before a swipe over it
+      // can say anything about who took the swipe.
+      await codeBlocksShowTheirCode(message, failures)
+      if (failures.length) return
+      await setSideRail(page, true, failures)
+      if (failures.length) return
+      try {
+        const code = message.locator('[data-slot="code-block"]').nth(1)
+        await sidewaysSwipes(run, step, message, port, code, failures)
+      } finally {
+        // Back as the other steps expect it, whatever failed: the rail off.
+        await setSideRail(page, false, failures)
+      }
+    })
   },
 
   async long(run, step, failures) {
@@ -9781,18 +13479,24 @@ const MENU_ROW = 30
 async function modelTilesSquare(run, row, failures) {
   const page = run.page
   await row.locator(".desktop-chip-model").click({ timeout: 10_000 })
-  const tiles = page.locator(
-    '[data-slot="searchable-listbox-option"] .desktop-provider-mark',
-  )
+  await page.locator(css.modelPicker).waitFor({ timeout: 5_000 })
+  // Every model, not only the provider the picker opens on.
+  await page.locator(`${css.modelRail}[data-filter="all"]`).click()
+  const tiles = page.locator(`${css.modelOption} [data-slot="model-level-picker-mark"]`)
   await tiles.first().waitFor({ timeout: 5_000 })
   const boxes = await tiles.evaluateAll((all) =>
     all.map((tile) => {
       const box = tile.getBoundingClientRect()
-      const slot = tile.parentElement?.getBoundingClientRect()
+      const row = tile.closest('[role="option"]')?.getBoundingClientRect()
       return {
         width: Math.round(box.width * 10) / 10,
         height: Math.round(box.height * 10) / 10,
-        fits: !!slot && box.left >= slot.left - 0.5 && box.right <= slot.right + 0.5,
+        fits:
+          !!row &&
+          box.top >= row.top - 0.5 &&
+          box.bottom <= row.bottom + 0.5 &&
+          box.left >= row.left - 0.5 &&
+          box.right <= row.right + 0.5,
       }
     }),
   )
@@ -9801,22 +13505,19 @@ async function modelTilesSquare(run, row, failures) {
       failures.push(
         `a model row's provider tile is ${box.width}x${box.height}px, not a square of 12px or more`,
       )
-    else if (!box.fits)
-      failures.push("a model row's provider tile spills out of its icon slot")
+    else if (!box.fits) failures.push("a model row's provider tile spills out of its row")
   if (run.evidence)
     await page
-      .locator('[data-slot="searchable-listbox-option"]')
-      .first()
-      .locator("xpath=ancestor::*[@role='listbox'][1]")
+      .locator(css.modelPicker)
       .screenshot({ path: join(run.evidence, `composer-${run.engine}-models.png`) })
       .catch(() => {})
   await page.keyboard.press(keys.escape)
-  const closed = await tiles
-    .first()
+  const closed = await page
+    .locator(css.modelPicker)
     .waitFor({ state: "detached", timeout: 5_000 })
     .then(() => true)
     .catch(() => false)
-  if (!closed) failures.push("Escape did not close the model menu")
+  if (!closed) failures.push("Escape did not close the model picker")
   return closed
 }
 
@@ -9843,10 +13544,7 @@ async function stackedComposersFold(run, failures) {
           key: pane.dataset.paneKey,
           focused: pane.hasAttribute("data-pane-focused"),
           running: form?.hasAttribute("data-running") ?? false,
-          // A notice keeps the line: there is something to read.
-          empty:
-            (form?.hasAttribute("data-empty") ?? false) &&
-            !form.querySelector(":scope > .desktop-composer-notice"),
+          empty: form?.hasAttribute("data-empty") ?? false,
           width: Math.round(box?.width ?? 0),
           height: Math.round(box?.height ?? 0),
           circle: wake ? getComputedStyle(wake).display !== "none" : false,
@@ -10538,8 +14236,10 @@ async function setupWindow(run, prepare) {
   // Onboarding does not ask for the vault on its own (#1340), locked or not:
   // nothing in it needs protected data, so no unlock dialog is drawn.
   await page.waitForTimeout(1500)
-  if ((await page.locator("[data-vault-dialog]").count()) !== 0)
+  if ((await page.locator("[data-vault-dialog]").count()) !== 0) {
+    await page.close()
     throw new Error("the setup window opened a vault dialog on its own")
+  }
   return page
 }
 
@@ -10589,11 +14289,72 @@ async function welcomedAtOnce(page, failures) {
  * its boxes' fills. The page's appearance is put back after, whatever the
  * check found.
  */
+/**
+ * The code each fenced block in a `table` answer holds, in order, read from
+ * the lines the scripted agent streams (`CODE_LINES`): Mermaid is a diagram,
+ * not a block.
+ */
+function fencedCode() {
+  const fences = []
+  let open = null
+  for (const line of CODE_LINES) {
+    if (line.startsWith("```")) {
+      if (open === null) open = { language: line.slice(3), lines: [] }
+      else {
+        if (open.language !== "mermaid") fences.push(open.lines.join("\n"))
+        open = null
+      }
+    } else if (open !== null) open.lines.push(line)
+  }
+  return fences
+}
+
+/**
+ * Every code block in the answer shows its own code and takes room. The
+ * highlighter draws its lines inside a shadow root, so a block whose engine
+ * never drew stays an empty, zero-height `<pre>` that every check reading
+ * the block's box or colour would pass.
+ */
+async function codeBlocksShowTheirCode(message, failures) {
+  const want = fencedCode()
+  const read = () =>
+    message.evaluate((element) =>
+      [...element.querySelectorAll('[data-slot="code-block"]')].map((block) => ({
+        text: [...block.querySelectorAll("*")]
+          .map((each) => each.shadowRoot?.textContent ?? "")
+          .join(""),
+        height: block.getBoundingClientRect().height,
+      })),
+    )
+  const shows = (blocks) =>
+    blocks.length === want.length &&
+    blocks.every(
+      (block, index) =>
+        block.height > 0 &&
+        want[index].split("\n").every((line) => block.text.includes(line)),
+    )
+  if (await waitFor(async () => shows(await read()), 20_000)) return
+  const blocks = await read()
+  if (blocks.length !== want.length)
+    failures.push(`the answer has ${blocks.length} code blocks, not ${want.length}`)
+  for (const [index, block] of blocks.entries()) {
+    const missing = (want[index] ?? "")
+      .split("\n")
+      .filter((line) => !block.text.includes(line))
+    if (missing.length > 0 || block.height <= 0)
+      failures.push(
+        `code block ${index + 1} does not show its code (${Math.round(block.height)} px high, missing ${JSON.stringify(missing)})`,
+      )
+  }
+}
+
 async function codeStaysDark(page, message, failures) {
-  const block = message.locator('[data-slot="code-block"]')
+  // The first block, with its one short line; the second is the wide one.
+  const blocks = message.locator('[data-slot="code-block"]')
+  const block = blocks.first()
   const diagram = message.locator('[data-slot="mermaid-diagram"] svg')
   const drawn = await waitFor(
-    async () => (await block.count()) === 1 && (await diagram.count()) >= 1,
+    async () => (await blocks.count()) === 2 && (await diagram.count()) >= 1,
     20_000,
   )
   if (!drawn) {
@@ -11367,6 +15128,16 @@ async function pairFromWindow(run, failures) {
   const again = await codeIn().catch(() => "")
   if (again !== code)
     failures.push(`Show code showed ${JSON.stringify(again)}, not the open code`)
+  if (failures.length !== before) return false
+  // A device enters the code the way the phone does, is approved in this
+  // modal, ends paired, and is revoked again from the list.
+  if (!(await phonePairs(run, code, failures))) return false
+  // A second code is cancelled from its modal.
+  await page.locator(selectorFor.linkedAction("pair")).click()
+  await dialog
+    .locator(css.pairingCode)
+    .waitFor({ timeout: 10_000 })
+    .catch(() => failures.push("Pair a device opened no second code"))
   await dialog.locator(selectorFor.linkedAction("cancel")).click()
   await dialog
     .waitFor({ state: "detached", timeout: 10_000 })
@@ -11376,6 +15147,181 @@ async function pairFromWindow(run, failures) {
     .waitFor({ timeout: 10_000 })
     .catch(() => failures.push("Pair a device was not offered again after cancelling"))
   return failures.length === before
+}
+
+/**
+ * Pair a real device with the open `code`, the way the phone does: the
+ * native client (`read_only_sync pair`, the device class an owner's phone
+ * code accepts) redeems it on the native port, its key shows in the modal,
+ * and Approve there makes it active. The client must read its own active
+ * status, which is where a phone holding an older wire contract failed while
+ * the window already listed it. Approve keeps its primary fill on hover. The
+ * device is then listed as the owner's phone, Pair a device stays offered
+ * through the tab's quiet polls, and Revoke drops it with a "Revoked." that a
+ * later poll clears. Resolves whether all of that held. The modal is closed
+ * and nothing is left open.
+ */
+async function phonePairs(run, code, failures) {
+  const { page } = run
+  const before = failures.length
+  const dialog = page.locator(css.pairingDialog)
+  const root = mkdtempSync(join(tmpdir(), "nessa-stress-phone-"))
+  const stateRoot = join(root, "state")
+  const cache = join(root, "cache")
+  mkdirSync(stateRoot, { mode: 0o700 })
+  mkdirSync(cache, { mode: 0o700 })
+  const profile = join(root, "profile.json")
+  writeFileSync(
+    profile,
+    JSON.stringify({
+      stateRoot,
+      stateDirectory: "device",
+      cache,
+      gatewayAddress: run.nativeAddress,
+    }),
+    { mode: 0o600 },
+  )
+  const child = spawn(peerExampleBin(), ["pair", profile], {
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk) => (stdout += chunk))
+  child.stderr.on("data", (chunk) => (stderr += chunk))
+  const exited = new Promise((resolve) => child.once("exit", resolve))
+  child.stdin.end(`${code}\n`)
+  try {
+    const approve = dialog.locator(selectorFor.linkedAction("approve"))
+    const claimed = await approve
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!claimed) {
+      failures.push(
+        `the device's key never showed in the pairing modal: ${stderr.trim() || stdout.trim()}`,
+      )
+      return false
+    }
+    if (await approve.isDisabled()) failures.push("Approve was drawn disabled")
+    // Hovered, Approve keeps a primary fill under its dark label: it must
+    // not take the plain button's faint hover, which Deny shows.
+    // Both are read once their fill has stopped moving: mid-transition, any
+    // two buttons can differ.
+    const deny = dialog.locator(selectorFor.linkedAction("deny"))
+    await deny.hover()
+    const plain = await restingFill(deny)
+    await approve.hover()
+    const fill = await restingFill(approve)
+    if (fill === plain)
+      failures.push(`hovered Approve has the plain button's fill ${plain}`)
+    if (run.evidence)
+      await page
+        .screenshot({ path: join(run.evidence, `pairing-${run.engine}-approve.png`) })
+        .catch(() => {})
+    await approve.click()
+    const status = await Promise.race([exited, sleep(30_000).then(() => "timeout")])
+    let enrollment = peerOutcome(stdout)?.enrollment
+    if (status === "timeout")
+      failures.push(`the device's pairing did not finish: ${stderr.trim()}`)
+    else {
+      // `pair` can return once its claim is confirmed, before the approval
+      // has activated it: ask the device again until it reads itself active.
+      let read = { stderr: "" }
+      for (let tries = 0; enrollment?.phase !== "active" && tries < 40; tries += 1) {
+        if (tries > 0) await sleep(250)
+        read = peerExample(["status", profile])
+        enrollment = read.outcome?.enrollment ?? enrollment
+      }
+      if (enrollment?.phase !== "active")
+        failures.push(
+          `the device did not read itself paired (exit ${status}, ${enrollment?.phase ?? "no status"}): ${read.stderr || stderr.trim()}`,
+        )
+    }
+    if (failures.length !== before) return false
+    await page.keyboard.press("Escape")
+    await dialog.waitFor({ state: "detached", timeout: 10_000 }).catch(() => {})
+    const row = page.locator(
+      `${css.linked} [data-credential="${enrollment.credentialId}"]`,
+    )
+    const listed = await row
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!listed) {
+      failures.push("the paired device was not listed under Your devices")
+      return false
+    }
+    if (!(await row.innerText()).includes(OWNER_PHONE_LABEL))
+      failures.push(
+        `the paired device is not listed as ${JSON.stringify(OWNER_PHONE_LABEL)}`,
+      )
+    if (!(await pairOfferedThroughPolls(run, failures))) return false
+    await row.locator(selectorFor.linkedAction("revoke")).click()
+    await row.locator(selectorFor.linkedAction("confirm-revoke")).click()
+    await row
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .catch(() => failures.push("the revoked device stayed listed"))
+    const notice = page.locator(`${css.linked} [data-linked-notice]`)
+    const said = await waitFor(
+      async () =>
+        ((await notice.innerText().catch(() => "")) || "").startsWith("Revoked."),
+      5_000,
+    )
+    if (!said) failures.push("Revoke said nothing")
+    // The next quiet poll has read the list without it: the line goes.
+    const spent = await waitFor(async () => (await notice.count()) === 0, 15_000)
+    if (!spent)
+      failures.push(`"Revoked." stayed under the page after the list was read again`)
+    return failures.length === before
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** A button's background once two reads 200 ms apart agree. */
+async function restingFill(button) {
+  const read = () => button.evaluate((node) => getComputedStyle(node).backgroundColor)
+  let last = await read()
+  for (let tries = 0; tries < 20; tries++) {
+    await sleep(200)
+    const now = await read()
+    if (now === last) return now
+    last = now
+  }
+  return last
+}
+
+/** How the window lists a phone paired with a code from the window. */
+const OWNER_PHONE_LABEL = "Your phone · full access"
+
+/**
+ * Pair a device stays offered while the tab sits: its quiet poll, every few
+ * seconds, is not a request the person waits on, so it does not grey the
+ * button out. Sampled across more than one poll.
+ */
+async function pairOfferedThroughPolls(run, failures) {
+  const pair = run.page.locator(selectorFor.linkedAction("pair"))
+  const offered = await pair
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!offered) {
+    failures.push("Pair a device was not offered once the device was paired")
+    return false
+  }
+  const end = Date.now() + 9_000
+  while (Date.now() < end) {
+    if (await pair.isDisabled()) {
+      failures.push("Pair a device greyed out while the tab only polled")
+      return false
+    }
+    await sleep(100)
+  }
+  return true
 }
 
 /**
@@ -12210,7 +16156,12 @@ async function startStack(options) {
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
+  // The `chatgpt` step's OpenAI sign-in, on this machine.
+  const openai = knobs.chatgpts > 0 ? await startFakeOpenai() : null
   const environment = {
+    ...(openai
+      ? { NESSA_CHATGPT_SIGN_IN: openai.config(join(directory, "chatgpt-sign-in.json")) }
+      : {}),
     ...(nativeContext ? { CLAUDE_CONFIG_DIR: nativeContext.baseline } : {}),
     ...(realtime
       ? {
@@ -12229,11 +16180,15 @@ async function startStack(options) {
   }
   let stack
   try {
-    const vmFixture = selected.some((step) => step.kind === "vmBackground")
+    const vmFixture = selected.some((step) =>
+      ["vmBackground", "cloud"].includes(step.kind),
+    )
       ? await vmBackgroundFixture(directory, PARK_IDLE_SECONDS)
       : null
     Object.assign(environment, vmFixture?.environment)
     let restoreReport = null
+    const refusals = join(directory, "refusals")
+    mkdirSync(refusals, { recursive: true })
     stack = await startGatewayStack(options, INSTANCE, {
       executable: vmFixture?.executable,
       vault: true,
@@ -12287,11 +16242,18 @@ async function startStack(options) {
       model: profile.model,
       evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 || vmFixture ? PARK_IDLE_SECONDS : 0 },
+      // Where the `unsigned` and `failedControl` steps ask the scripted agents
+      // to refuse a call (`scripted-agent.mjs` `--refusals`).
+      refusals,
       // The agent a `handoff` step switches its conversation to.
       others: [
         ...new Set([
-          ...(knobs.handoffs > 0 ? [otherAgent(options.agent)] : []),
+          ...(knobs.handoffs > 0 || knobs.unsigned > 0
+            ? [otherAgent(options.agent)]
+            : []),
           ...(nativeContext && options.agent !== "claude" ? ["claude"] : []),
+          // The `chatgpt` step runs Codex on its worker.
+          ...(knobs.chatgpts > 0 && options.agent !== "codex" ? ["codex"] : []),
         ]),
       ],
       // Off, at a port of its own: the `linking` step turns it on from
@@ -12305,6 +16267,7 @@ async function startStack(options) {
     const { agents } = await stack.client.agents.list()
     stack.profile = selectStressFixture(profile, agents)
     stack.vmFixture = vmFixture
+    stack.refusals = refusals
     stack.fakeSsh = fakeSsh
     // The PATH the gateway was started with: a step that changes it adds to
     // this one, so what another step put there (the `ssh` step's stand-in)
@@ -12315,6 +16278,7 @@ async function startStack(options) {
     await stack?.close()
     await github?.close()
     await realtime?.close()
+    await openai?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -12325,6 +16289,7 @@ async function startStack(options) {
     } finally {
       await github?.close()
       await realtime?.close()
+      await openai?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -12337,6 +16302,7 @@ async function startStack(options) {
     nativeListen,
     github,
     realtime,
+    openai,
     scenario,
     nativeContext,
     // Removed when the stack closes.

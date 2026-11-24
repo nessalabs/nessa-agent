@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-const host = vi.hoisted(() => ({ vaultCommand: vi.fn() }))
+const host = vi.hoisted(() => ({ vaultCommand: vi.fn(), vaultBiometrics: vi.fn() }))
 vi.mock("../../host", () => host)
 import { nativeVault } from "./native"
 describe("native vault transport", () => {
@@ -73,5 +73,50 @@ describe("native vault transport", () => {
     await expect(
       nativeVault.changePassphrase("synthetic replacement phrase"),
     ).rejects.toMatchObject({ code: "vault_change_not_confirmed" })
+  })
+})
+describe("native Touch ID transport", () => {
+  const biometrics = nativeVault.biometrics!
+  it("asks the host to remember only when told to", async () => {
+    host.vaultCommand.mockClear()
+    host.vaultCommand.mockResolvedValue({ ok: true, status: { state: "unlocked" } })
+    await nativeVault.unlock("private passphrase words")
+    await nativeVault.unlock("private passphrase words", true)
+    expect(host.vaultCommand.mock.calls).toEqual([
+      [{ operation: "unlock", passphrase: "private passphrase words" }],
+      [{ operation: "unlock", passphrase: "private passphrase words", remember: true }],
+    ])
+  })
+  it("reads only two booleans as status, and nothing kept where unavailable", async () => {
+    host.vaultBiometrics.mockResolvedValueOnce({ available: true, saved: true })
+    expect(await biometrics.status()).toEqual({ available: true, saved: true })
+    host.vaultBiometrics.mockResolvedValueOnce({ available: false, saved: true })
+    expect(await biometrics.status()).toEqual({ available: false, saved: false })
+    for (const odd of [undefined, { available: true }, { available: "yes", saved: true }])
+      host.vaultBiometrics.mockResolvedValueOnce(odd)
+    for (let i = 0; i < 3; i += 1)
+      expect(await biometrics.status()).toEqual({ available: false, saved: false })
+    host.vaultBiometrics.mockRejectedValueOnce("forbidden")
+    expect(await biometrics.status()).toEqual({ available: false, saved: false })
+  })
+  it("answers a fingerprint unlock as the vault's reply, and keeps only known refusals", async () => {
+    host.vaultBiometrics.mockResolvedValueOnce({
+      ok: true,
+      status: { state: "unlocked" },
+    })
+    expect(await biometrics.unlock()).toBe("unlocked")
+    host.vaultBiometrics.mockResolvedValueOnce({
+      ok: false,
+      code: "vault_wrong_passphrase",
+    })
+    await expect(biometrics.unlock()).rejects.toMatchObject({
+      code: "vault_wrong_passphrase",
+    })
+    host.vaultBiometrics.mockRejectedValueOnce("biometric_cancelled")
+    await expect(biometrics.unlock()).rejects.toMatchObject({
+      code: "biometric_cancelled",
+    })
+    host.vaultBiometrics.mockRejectedValueOnce("a private native message")
+    await expect(biometrics.unlock()).rejects.toMatchObject({ code: "vault_unavailable" })
   })
 })

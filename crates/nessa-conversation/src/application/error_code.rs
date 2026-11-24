@@ -178,6 +178,9 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // Startup never reaches the provider with input. This code carries
             // no claim that a later attachment attempt will succeed.
             AgentError::StartupDeadline(_) => ConversationErrorCode::AgentStartupDeadline,
+            // The provider answered that it needs signing in where the
+            // conversation runs: no retry differs until someone signs it in.
+            AgentError::AuthenticationRequired { .. } => ConversationErrorCode::AgentSignInRequired,
             // Saved state this gateway cannot read, which it will not be able
             // to read later either: the failure is cached and every later
             // command is answered from it without touching the provider again.

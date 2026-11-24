@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from "react"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { Button } from "@nessa-ui/react/button"
 import { Input } from "@nessa-ui/react/input"
+import { Checkbox } from "@nessa-ui/react/checkbox"
 import contract from "../../../protocol/defaults/vault-contract.json"
 import type { VaultDialog as View } from "../application/controller"
 import { vaultFailureCopy as copy } from "./failure-copy"
@@ -11,16 +12,20 @@ export function VaultDialog({
   view,
   container,
   onSubmit,
+  onBiometric,
   onCancel,
   onRetry,
 }: {
   view: Exclude<View, { kind: "closed" }>
   container: HTMLElement | null
-  onSubmit: (passphrase: string) => Promise<void>
+  onSubmit: (passphrase: string, remember: boolean) => Promise<void>
+  onBiometric: () => Promise<void>
   onCancel: () => void
   onRetry: () => void
 }) {
   const [passphrase, setPassphrase] = useState("")
+  // Offered ticked: the person sees it, and it is why this dialog exists.
+  const [remember, setRemember] = useState(true)
   const [confirmation, setConfirmation] = useState("")
   const [help, setHelp] = useState(false)
   const [mismatch, setMismatch] = useState(false)
@@ -29,6 +34,8 @@ export function VaultDialog({
   const minimum = setup ? contract.minimumSetupCharacters : contract.minimumCharacters
   const ready = view.kind === "setup" || view.kind === "unlock"
   const busy = ready && view.busy
+  const biometric = ready ? view.biometric : undefined
+  const fingerprint = ready && view.fingerprint === true
   const title = setup ? "Create your Nessa vault" : "Unlock Nessa"
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -41,7 +48,7 @@ export function VaultDialog({
     setPassphrase("")
     setConfirmation("")
     setMismatch(false)
-    void onSubmit(input)
+    void onSubmit(input, biometric?.available === true && remember)
   }
   return (
     <Dialog
@@ -50,7 +57,9 @@ export function VaultDialog({
       description={
         setup
           ? "Protect saved GitHub credentials and local events."
-          : "Enter your passphrase to use protected data."
+          : biometric?.saved
+            ? "Use Touch ID or enter your passphrase to use protected data."
+            : "Enter your passphrase to use protected data."
       }
       open
       onOpenChange={(open) => {
@@ -100,6 +109,22 @@ export function VaultDialog({
                 />
               </>
             ) : null}
+            {fingerprint ? (
+              <p role="status" className="vault-hint">
+                Waiting for Touch ID…
+              </p>
+            ) : null}
+            {biometric?.available && !biometric.saved ? (
+              <label className="vault-remember" htmlFor={`${id}-remember`}>
+                <Checkbox
+                  id={`${id}-remember`}
+                  checked={remember}
+                  disabled={busy}
+                  onChange={(event) => setRemember(event.target.checked)}
+                />
+                Use Touch ID to unlock next time
+              </label>
+            ) : null}
             <p id={`${id}-hint`} className="vault-hint">
               {setup
                 ? `Use ${contract.minimumSetupCharacters}+ characters. Choose unique words; avoid common passwords and repeated text.`
@@ -121,6 +146,18 @@ export function VaultDialog({
               <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
                 Later
               </Button>
+              {biometric?.saved && view.kind === "unlock" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    void onBiometric()
+                  }}
+                >
+                  Use Touch ID
+                </Button>
+              ) : null}
               <Button
                 type="submit"
                 disabled={
@@ -130,7 +167,7 @@ export function VaultDialog({
                     contract.maximumPassphraseBytes
                 }
               >
-                {busy ? "Unlocking…" : setup ? "Create vault" : "Unlock"}
+                {busy && !fingerprint ? "Unlocking…" : setup ? "Create vault" : "Unlock"}
               </Button>
             </div>
           </form>
@@ -140,6 +177,13 @@ export function VaultDialog({
             <li>Protected data is encrypted on this device.</li>
             <li>Unlock lasts until Nessa quits or its gateway restarts.</li>
             <li>Nessa cannot recover a forgotten passphrase.</li>
+            {biometric?.available ? (
+              <li>
+                With Touch ID on, your passphrase is kept in your login keychain and only
+                used after your fingerprint. Adding or removing a fingerprint turns it
+                off.
+              </li>
+            ) : null}
           </ul>
         ) : null}
       </div>

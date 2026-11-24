@@ -15,6 +15,7 @@ export type ShortcutCommand =
   | "togglePanel"
   | "newSession"
   | "newSessionBeside"
+  | "newTerminal"
   | "splitRight"
   | "splitDown"
   | "closePane"

@@ -14,6 +14,7 @@ const made: Channel = {
   coordinatorPlacement: "local",
   threadPlacement: "local",
   coordinatorConversationId: null,
+  coordinatorOn: false,
   createdAtMs: 1000,
 }
 
@@ -28,6 +29,7 @@ const conversations: Channel = {
   coordinatorPlacement: "local",
   threadPlacement: "local",
   coordinatorConversationId: null,
+  coordinatorOn: false,
   createdAtMs: 0,
 }
 

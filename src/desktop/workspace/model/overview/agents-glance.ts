@@ -18,8 +18,19 @@
  * narrows, and what it says it keeps out is what the filter keeps out of
  * that group.
  */
-import { byRecency, type SessionSummary } from "../workspace-index"
-import { passes, tagsOf as sessionTagsOf, type AgentsFilter, type TagsOf } from "./filter"
+import type { SessionSummary } from "../workspace-index"
+import {
+  isOverviewTerminalAgent,
+  terminalOverviewGroup,
+  type TerminalEntry,
+} from "../terminal"
+import {
+  passes,
+  rangeStart,
+  tagsOf as sessionTagsOf,
+  type AgentsFilter,
+  type TagsOf,
+} from "./filter"
 
 /** A group of the overview, as its header counts it and the person can show it alone. */
 export type AgentsGroup = "needsYou" | "working" | "finished" | "earlier"
@@ -96,12 +107,34 @@ export interface GlanceContext {
    * to it, does not vanish from under them. It goes once they move on.
    */
   readonly looking?: string | null
+  /** Open terminals; those running a recognized AI agent (Claude/Codex) appear in the overview. */
+  readonly terminals?: readonly TerminalEntry[]
+}
+
+function terminalPasses(
+  terminal: TerminalEntry,
+  of: AgentsGroup,
+  filter: AgentsFilter,
+  now: number,
+): boolean {
+  if (filter.tags.length > 0) return false
+  if (of === "needsYou") return true
+  if (filter.scope === "ongoing" && of !== "working") return false
+  const updatedAt = terminal.programStatus?.updatedAtMs ?? terminal.startedAtMs
+  return updatedAt >= rangeStart(filter.range, now)
 }
 
 export function agentsGlance(
   sessions: readonly SessionSummary[],
   held: readonly Held[],
-  { filter, group = null, now, tagsOf = sessionTagsOf, looking = null }: GlanceContext,
+  {
+    filter,
+    group = null,
+    now,
+    tagsOf = sessionTagsOf,
+    looking = null,
+    terminals = [],
+  }: GlanceContext,
 ): AgentsGlance {
   const listed = new Map(sessions.map((session) => [session.id, session]))
   // A held request whose session is gone — archived meanwhile — is not kept;
@@ -115,7 +148,7 @@ export function agentsGlance(
   // Each session sorted once into its group (`groupOf`), whatever it is: what
   // the group lists, what the header counts, and what the footer says is
   // kept out all come from this one pass.
-  const lists: Record<AgentsGroup, SessionSummary[]> = {
+  const lists: Record<AgentsGroup, Array<{ id: string; updatedAt: number }>> = {
     needsYou: [],
     working: [],
     finished: [],
@@ -137,15 +170,31 @@ export function agentsGlance(
     // Listed as the filter lets it through, in the group shown; the session
     // looked at whatever the filter and the group say.
     if (session.id === looking || (through && inGroup(session, group)))
-      lists[of].push(session)
+      lists[of].push({ id: session.id, updatedAt: session.updatedAt })
     else if (!through && inGroup(session, group)) hidden += 1
   }
-  const ids = (of: AgentsGroup) => lists[of].sort(byRecency).map((session) => session.id)
+  for (const terminal of terminals) {
+    if (!isOverviewTerminalAgent(terminal)) continue
+    const of = terminalOverviewGroup(terminal)
+    const through = terminalPasses(terminal, of, filter, now)
+    if (through) counts[of] += 1
+    const inChosen = group === null || of === group
+    if (terminal.id === looking || (through && inChosen)) {
+      lists[of].push({
+        id: terminal.id,
+        updatedAt: terminal.programStatus?.updatedAtMs ?? terminal.startedAtMs,
+      })
+    } else if (!through && inChosen) {
+      hidden += 1
+    }
+  }
+  const byNewest = (
+    a: { id: string; updatedAt: number },
+    b: { id: string; updatedAt: number },
+  ) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1)
+  const ids = (of: AgentsGroup) => lists[of].sort(byNewest).map((entry) => entry.id)
   const needsYou = [
-    ...lists.needsYou.map((session) => ({
-      id: session.id,
-      updatedAt: session.updatedAt,
-    })),
+    ...lists.needsYou,
     ...[...holding.values()]
       .filter(
         (hold) => hold.sessionId === looking || group === null || group === "needsYou",

@@ -7,7 +7,10 @@ use super::{
     socket::{failure, success},
     state::ProductRouteState,
 };
-use crate::conversation::application::{load_conversation, AccessAction};
+use crate::conversation::application::{
+    load_conversation, AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource,
+    AccessSubject, RequestShape,
+};
 use crate::voice::application::{VoiceCaller, VoiceError, VoiceStatus as Status};
 use crate::voice::domain::{CallTransport, VoiceKey};
 use nessa_auth::application::session::AuthenticatedSession;
@@ -85,6 +88,16 @@ pub(super) async fn dispatch(
 /// conversation must exist. An ungranted one answers `conversation_not_found`
 /// as a missing one does, so a call is never minted (and paid for) about
 /// nothing.
+///
+/// The one exception is a new chat started by voice: its id is the one the
+/// window chose for it, and the first thing the person says starts it, as
+/// the first typed message would. Whether the caller may start a chat is
+/// Cedar's to answer, asked as starting one would be: `channel.use` on the
+/// catalogue owner's channel for a person or a paired party (only the
+/// owner's own surface is permitted), and the phone's own policy on
+/// `conversation.create` for an owner phone. Phones and paired parties are
+/// refused a missing id by their admission above already; asking again here
+/// keeps the rule from resting on how they were admitted.
 async fn admit_call(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -99,11 +112,72 @@ async fn admit_call(
     let Some((_, conversations, _)) = state.reads.passive_read.as_ref() else {
         return Err(ConversationErrorCode::ConversationsNotConfigured.as_str());
     };
-    load_conversation(conversations.as_ref(), &id)
+    let exists = load_conversation(conversations.as_ref(), &id)
         .await
         .map_err(|_| "temporarily_unavailable")?
-        .ok_or("conversation_not_found")?;
-    Ok(())
+        .is_some();
+    if exists {
+        return Ok(());
+    }
+    admit_start(state, session).await
+}
+
+/// May `session` start a chat? Asked of Cedar, with the caller's facts.
+async fn admit_start(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), &'static str> {
+    if super::owner_phone::admit_method(state, session, "conversation.create")
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let policy = state
+        .reads
+        .conversation_access
+        .as_deref()
+        .ok_or("temporarily_unavailable")?;
+    let context = session.context();
+    let binding = super::read_access::paired_binding(state, session).await?;
+    let (subject, organization, owner) = match &binding {
+        Some(binding) => (
+            AccessSubject::PairedReader {
+                organization: &binding.organization_id,
+                signed_in_as: context.principal_id(),
+                binding_owner: &binding.owner_id,
+                receiver: &binding.receiver_id,
+            },
+            &binding.organization_id,
+            &binding.owner_id,
+        ),
+        None => (
+            AccessSubject::Person {
+                organization: context.organization_id(),
+                principal: context.principal_id(),
+            },
+            context.organization_id(),
+            context.principal_id(),
+        ),
+    };
+    let ask = AccessAsk {
+        subject,
+        action: AccessAction::ChannelUse,
+        resource: AccessResource::Channel {
+            organization,
+            owner,
+        },
+        held: None,
+        request: RequestShape::default(),
+        target: None,
+    };
+    match policy.evaluate(&ask) {
+        AccessDecision::Allow { .. } => Ok(()),
+        AccessDecision::Deny(AccessDenial::Unavailable) => Err("temporarily_unavailable"),
+        // Refused as a missing chat is: nothing is told about whether
+        // the caller could have started one.
+        AccessDecision::Deny(_) => Err("conversation_not_found"),
+    }
 }
 
 fn status_answer(frame: &RequestFrame, answer: Result<Status, VoiceError>) -> OutgoingMessage {

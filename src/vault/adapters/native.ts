@@ -1,6 +1,9 @@
-import { vaultCommand } from "../../host"
+import { vaultBiometrics, vaultCommand } from "../../host"
 import {
+  biometricFailures,
   VaultRefusal,
+  type BiometricStatus,
+  type VaultBiometrics,
   type VaultSource,
   type VaultFailure,
   type VaultState,
@@ -22,14 +25,30 @@ export const nativeVault: VaultSource = {
       })
     return statusRead
   },
-  setup: (passphrase) => call("setup", passphrase),
-  unlock: (passphrase) => call("unlock", passphrase),
+  setup: (passphrase, remember) => call("setup", passphrase, remember),
+  unlock: (passphrase, remember) => call("unlock", passphrase, remember),
   changePassphrase: (passphrase) => call("changePassphrase", passphrase),
   lock: () => call("lock"),
+  biometrics: {
+    status: () => biometricStatus("status"),
+    unlock: async () => {
+      let raw: unknown
+      try {
+        raw = await vaultBiometrics({ operation: "unlock" })
+      } catch (cause) {
+        if (biometricFailures.some((known) => known === cause))
+          throw new VaultRefusal(cause as (typeof biometricFailures)[number])
+        refuse(cause, "vault_unavailable")
+      }
+      return reply(raw, "unlock", "vault_unavailable")
+    },
+    forget: () => biometricStatus("forget"),
+  } satisfies VaultBiometrics,
 }
 async function call(
   operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase",
   passphrase?: string,
+  remember?: boolean,
 ): Promise<VaultState> {
   let raw: unknown
   const unknown =
@@ -38,23 +57,54 @@ async function call(
     raw = await vaultCommand({
       operation,
       ...(passphrase === undefined ? {} : { passphrase }),
+      ...(remember ? { remember: true } : {}),
     })
   } catch (cause) {
-    // Only the native command's closed serialized refusal codes are trusted;
-    // arbitrary errors can follow delivery and must remain unconfirmed.
-    switch (cause) {
-      case "vault_busy":
-        throw new VaultRefusal("vault_busy")
-      case "forbidden":
-        throw new VaultRefusal("vault_forbidden")
-      case "vault_unavailable":
-        throw new VaultRefusal("vault_unavailable")
-      case "vault_change_not_confirmed":
-        throw new VaultRefusal("vault_change_not_confirmed")
-      default:
-        throw new VaultRefusal(unknown)
-    }
+    refuse(cause, unknown)
   }
+  return reply(raw, operation, unknown)
+}
+/** Only the native command's closed serialized refusal codes are trusted;
+ * arbitrary errors can follow delivery and must remain unconfirmed. */
+function refuse(cause: unknown, unknown: VaultFailure): never {
+  switch (cause) {
+    case "vault_busy":
+      throw new VaultRefusal("vault_busy")
+    case "forbidden":
+      throw new VaultRefusal("vault_forbidden")
+    case "vault_unavailable":
+      throw new VaultRefusal("vault_unavailable")
+    case "vault_change_not_confirmed":
+      throw new VaultRefusal("vault_change_not_confirmed")
+    default:
+      throw new VaultRefusal(unknown)
+  }
+}
+/** `{available, saved}`, both booleans and nothing else; anything else is
+ * read as no Touch ID, so the passphrase form stays the way in. */
+async function biometricStatus(operation: "status" | "forget"): Promise<BiometricStatus> {
+  let raw: unknown
+  try {
+    raw = await vaultBiometrics({ operation })
+  } catch {
+    return { available: false, saved: false }
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    return { available: false, saved: false }
+  const value = raw as Record<string, unknown>
+  const available = Object.hasOwn(value, "available") ? value.available : undefined
+  const saved = Object.hasOwn(value, "saved") ? value.saved : undefined
+  return Object.keys(value).length === 2 &&
+    typeof available === "boolean" &&
+    typeof saved === "boolean"
+    ? { available, saved: available && saved }
+    : { available: false, saved: false }
+}
+function reply(
+  raw: unknown,
+  operation: "status" | "setup" | "unlock" | "lock" | "changePassphrase",
+  unknown: VaultFailure,
+): VaultState {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     throw new VaultRefusal(unknown)
   const value = raw as Record<string, unknown>

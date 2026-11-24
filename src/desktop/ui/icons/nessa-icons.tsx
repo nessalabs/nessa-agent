@@ -98,6 +98,22 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M12 4v12" />
     </>,
   ),
+  // Chat context: a list whose first line is lit, the others quieter.
+  chatContext: drawn(
+    <>
+      <path d="M8 6.5h8.5" />
+      <path d="M8 10h6M8 13.5h7" opacity={0.55} />
+      <Dot x={4.5} y={6.5} r={1.05} />
+      <g opacity={0.55}>
+        <Dot x={4.5} y={10} r={1.05} />
+        <Dot x={4.5} y={13.5} r={1.05} />
+      </g>
+    </>,
+  ),
+  // A laptop: a screen of the window shape on its base.
+  device: drawn(
+    <path d="M4.5 5.5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1V13h-11zM2.75 15.5h14.5" />,
+  ),
   sessionList: drawn(
     <>
       <path d="M8 6.5h8M8 10h8M8 13.5h5" />
@@ -182,6 +198,15 @@ export const nessaIcons: DesktopIconFamily = {
   send: drawn(<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />, 1.6),
   // Filled, as a running turn's Stop sits on the same disc as send.
   stop: drawn(<rect x="6" y="6" width="8" height="8" rx="2" fill="currentColor" />),
+  // A clock face at three: the time left before a choice is picked.
+  timer: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.25" />
+      <path d="M10 6.5V10h2.75" />
+    </>,
+  ),
+  pause: drawn(<path d="M7.5 5.5v9M12.5 5.5v9" />, 1.8),
+  resume: drawn(<path d="M7 5.25v9.5L14.5 10z" fill="currentColor" />),
   // A plus: files are added to the message, as a row is added to a list.
   attach: drawn(<path d="M10 4.5v11M4.5 10h11" />),
   folder: drawn(folder),
@@ -257,6 +282,12 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M6.5 8l2 2-2 2M10.5 12.25h3" />
     </>,
   ),
+  details: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.5" />
+      <path d="M10 9.25v4M10 6.75v.01" />
+    </>,
+  ),
   site: drawn(
     <>
       <circle cx="10" cy="10" r="6.5" />
@@ -293,6 +324,13 @@ export const nessaIcons: DesktopIconFamily = {
       <path d="M8 12l4-4" />
       <circle cx="6.25" cy="13.75" r="2.25" />
       <circle cx="13.75" cy="6.25" r="2.25" />
+    </>,
+  ),
+  // Chat settings: a speech bubble with two lines of text.
+  chatSettings: drawn(
+    <>
+      <path d="M4 4.5h12a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H9l-3.5 2.75V14H4a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1z" />
+      <path d="M6.5 8h7M6.5 10.75h4.5" />
     </>,
   ),
   privacy: drawn(

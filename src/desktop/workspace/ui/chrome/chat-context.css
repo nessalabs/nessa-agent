@@ -1,0 +1,122 @@
+/*
+ * Chat context (`chat-context.tsx`): the column on a chat pane's right. Sections
+ * fold from their headers; rows are an icon, a name that truncates, and a
+ * quiet trailing value. Tokens are the window's.
+ */
+.chat-context {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--desktop-gutter) * 2.5);
+  padding: 0 var(--desktop-gutter) calc(var(--desktop-gutter) * 2);
+  color: var(--foreground);
+}
+
+.chat-context-section,
+.chat-context-body,
+.chat-context-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--desktop-control-inset);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-context-row {
+  display: flex;
+  min-width: 0;
+  min-height: var(--desktop-control-size);
+  align-items: center;
+  gap: var(--desktop-gutter);
+  padding-inline: var(--desktop-gutter) var(--desktop-control-inset);
+  border-radius: var(--desktop-radius-sm);
+  font: var(--desktop-text-body) / 1.3 var(--nessa-font-sans);
+}
+
+.chat-context-row:hover {
+  background: var(--desktop-hover);
+}
+
+.chat-context-row > svg {
+  flex: none;
+  color: var(--desktop-muted);
+}
+
+.chat-context-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-trail {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-name + .chat-context-trail {
+  max-width: 55%;
+}
+
+.chat-context-none {
+  margin: 0;
+  padding: var(--desktop-control-inset) var(--desktop-gutter);
+  color: var(--desktop-muted);
+  font: var(--desktop-text-footnote) var(--nessa-font-sans);
+}
+
+/* A plugin's row shows only when the plugin drew something for this chat. */
+.chat-context-plugin:has(> .chat-context-plugin-accessory:empty) {
+  display: none;
+}
+
+/* Decisions (`decisions.tsx`): a dot for where each stands (`decisions.css`),
+ * the question, and one quiet line under it. */
+.chat-context-decisions > li {
+  display: contents;
+}
+
+.chat-context-decision {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  row-gap: 1px;
+  padding-block: var(--desktop-control-inset);
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.chat-context-decision:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: 1px;
+}
+
+.chat-context-decision[data-state="waiting"] .chat-context-name {
+  font-weight: 500;
+}
+
+.chat-context-line {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-more {
+  align-self: flex-start;
+  margin-inline-start: calc(var(--desktop-gutter) * 2);
+  color: var(--desktop-muted);
+}

@@ -9,6 +9,7 @@
  * ```text
  *   { kind: "session", sessionId }        ──▶  "s:" + sessionId
  *   { kind: "widget", widget: { plugin, id } } ──▶  "w:" + encodeId(plugin) + ":" + encodeId(id)
+ *   { kind: "terminal", terminalId }      ──▶  "t:" + terminalId
  * ```
  *
  * The prefix tells the kinds apart, and an encoded part never holds a `:`
@@ -24,10 +25,13 @@
  */
 import { decodeId, encodeId } from "../../model/id-encoding"
 import type { WidgetRef } from "../../widgets/model/widget-ref"
+import { isTerminalId } from "./gateway-id"
 
 export type PaneItem =
   | { readonly kind: "session"; readonly sessionId: string }
   | { readonly kind: "widget"; readonly widget: WidgetRef }
+  /** One of the person's terminals (`terminal.*`), which a pane shows as a chat. */
+  | { readonly kind: "terminal"; readonly terminalId: string }
 
 declare const paneItemBrand: unique symbol
 /** A pane item as split panes hold it; made only by `paneItemKey`. */
@@ -35,6 +39,7 @@ export type PaneItemKey = string & { readonly [paneItemBrand]: true }
 
 const sessionPrefix = "s:"
 const widgetPrefix = "w:"
+const terminalPrefix = "t:"
 
 /** The item showing a session, listed or new. */
 export function sessionItem(sessionId: string): PaneItem {
@@ -46,12 +51,19 @@ export function widgetItem(widget: WidgetRef): PaneItem {
   return { kind: "widget", widget }
 }
 
+/** The item showing a terminal. */
+export function terminalItem(terminalId: string): PaneItem {
+  return { kind: "terminal", terminalId }
+}
+
 /** The key split panes hold for `item`. */
 export function paneItemKey(item: PaneItem): PaneItemKey {
   const key =
     item.kind === "session"
       ? `${sessionPrefix}${item.sessionId}`
-      : `${widgetPrefix}${encodeId(item.widget.plugin)}:${encodeId(item.widget.id)}`
+      : item.kind === "terminal"
+        ? `${terminalPrefix}${item.terminalId}`
+        : `${widgetPrefix}${encodeId(item.widget.plugin)}:${encodeId(item.widget.id)}`
   return key as PaneItemKey
 }
 
@@ -68,6 +80,10 @@ export const roomProbeKey = "?" as PaneItemKey
  */
 export function paneItemOf(key: string): PaneItem | null {
   if (key.startsWith(sessionPrefix)) return sessionItem(key.slice(sessionPrefix.length))
+  if (key.startsWith(terminalPrefix)) {
+    const id = key.slice(terminalPrefix.length)
+    return isTerminalId(id) ? terminalItem(id) : null
+  }
   if (!key.startsWith(widgetPrefix)) return null
   const parts = key.slice(widgetPrefix.length).split(":")
   if (parts.length !== 2) return null

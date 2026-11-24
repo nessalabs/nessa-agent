@@ -202,6 +202,7 @@ design evidence. See [provenance](provenance.md) for executed checks and exclusi
 | [Local vault](services/gateway/local-vault.md) | Direct model | 3 rules held; 28 states |
 | [Stop the captured parent turn and descendants](services/gateway/parent-stop.md) | Direct model | 4 rules held; 132 states |
 | [Enroll, read and forget peer gateways](services/gateway/peer-gateways.md) | Direct model | 6 rules held; 11 states |
+| [Announce a paired gateway on the local network](services/gateway/peer-discovery.md) | Direct model | AnnounceOnlyInstalled and ExpiryKeepsPhase; Rust discovery tests hold the byte and reconnect rules |
 | [Wait for busy record discovery within one read](services/gateway/record-read-discovery.md) | Direct model | 4 rules held; 43 states |
 | [Bounded physical history reads](services/gateway/record-reads.md) | Direct model | 2 rules held; 8 states |
 | [Reach a gateway through a tunnel](services/gateway/tunnel-connectivity.md) | Direct model | 4 rules held; 12 states |

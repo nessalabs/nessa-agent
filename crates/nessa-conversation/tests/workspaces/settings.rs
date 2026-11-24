@@ -1,7 +1,7 @@
 //! Boat's adapter uses the real vault's encryption and unlock-generation fence.
 use crate::workspaces::{
     application::Settings,
-    domain::{BoatConnection, Failure},
+    domain::{BoatConnection, CloudConnection, Failure},
     infrastructure::VaultSettings,
 };
 use nessa_vault::{
@@ -55,7 +55,10 @@ async fn tokens_are_encrypted_and_stale_unlocks_cannot_publish_or_clear_the_new_
     assert!(matches!(settings.read().await, Err(Failure::Locked)));
     vault.create(&session.lease(), passphrase(), &[]).unwrap();
     let generation = settings.generation().unwrap();
-    settings.save(generation, connection()).await.unwrap();
+    settings
+        .save(generation, CloudConnection::Boat(connection()))
+        .await
+        .unwrap();
     let encrypted = std::fs::read(root.path().join("vault/entries.enc")).unwrap();
     assert!(!encrypted
         .windows(b"boat-fixture-secret-token".len())
@@ -65,10 +68,14 @@ async fn tokens_are_encrypted_and_stale_unlocks_cannot_publish_or_clear_the_new_
     assert_eq!(settings.clear().await, Err(Failure::Locked));
     vault.unlock(&session.lease(), passphrase()).unwrap();
     assert_eq!(
-        settings.save(generation, connection()).await,
+        settings
+            .save(generation, CloudConnection::Boat(connection()))
+            .await,
         Err(Failure::Locked)
     );
-    let saved = settings.read().await.unwrap();
+    let Ok(CloudConnection::Boat(saved)) = settings.read().await else {
+        panic!("the saved Boat connection was not read back");
+    };
     assert_eq!(saved.account.token.as_slice(), b"boat-fixture-secret-token");
     assert_eq!(saved.environment, "nessa");
     session.close().unwrap();

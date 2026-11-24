@@ -23,20 +23,32 @@
  * queries/attachment-resources owns shared original retention classification
  * and resource-wide preview eviction.
  */
-export { AGENT_HUES, questionAnswerReady, questionChoices } from "./model"
+export { AGENT_HUES, questionAnswerReady, questionChoices, textContent } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
 export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
 export { UsageLimitCard } from "./ui/usage-limit-card"
+// A decision an agent asked the person: the panel's and the desktop window's card.
+export { OwnerAskCard } from "./ui/owner-ask-card"
+export {
+  AccessRequestCard,
+  AccessRequestHost,
+  isAccessRequest,
+} from "./ui/access-request-card"
+export type { RaiseOutcome } from "./model/access-approval"
+export { forgetChatApprovals } from "./ui/access-approvals"
+export { useOwnerAsks } from "./ui/use-owner-asks"
+export type { OwnerAskAccessView, OwnerAskView } from "./model/owner-ask"
+export { undoLabels } from "./model/owner-ask"
 export { usageLimitOnClientClock } from "./model"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.
 export { HeldFilesProvider } from "./ui/held-files"
 // Input reference tiles, also used by desktop metadata placeholders.
 export { MessageImages } from "./ui/message-images"
-export { PublishedFiles } from "./ui/published-files"
+export { PublishedFiles, SaveButton as SavePublishedFile } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
 export { shownNote } from "./adapters/gateway/notes"
 // Staging an image into a conversation: every surface that sends one uploads it here.

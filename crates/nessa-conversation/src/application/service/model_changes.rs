@@ -113,14 +113,14 @@ impl ConversationService {
         if record.model() == &model {
             return Err(ConversationError::ModelChangeNotApplied);
         }
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         let configured = self
             .inner
             .agents
             .resolve_model(
                 record.agent().ok_or(ConversationError::AgentUnsupported)?,
                 model.as_str(),
-                place.as_ref(),
+                &place,
             )
             .await?;
         let live = self.resolve(id, caller).await?;
@@ -225,7 +225,20 @@ impl ConversationService {
             ConversationModelApplication::Applied(_) => ConversationModelRequestState::Applied,
             ConversationModelApplication::Refused => ConversationModelRequestState::NotApplied,
             ConversationModelApplication::Uncertain => {
-                let _ = self.recover_model_change(id, caller).await;
+                // Recovery retires this agent and opens the conversation
+                // again, and an agent's history stays leased while any handle
+                // to it is kept: holding this one would leave the reopening
+                // refused as busy and the change pending, with nothing left to
+                // settle it.
+                drop(live);
+                if let Err(error) = self.recover_model_change(id, caller).await {
+                    // The turn the failed control ended is owed, and its
+                    // agent is gone: no settle of its will ask for a retry,
+                    // so this does. The retry settles the change first
+                    // (`resume_owed`), then resumes the turn.
+                    tracing::warn!(conversation_id = %id, %error, "a model change left uncertain could not be settled yet; the owed work's retry settles it");
+                    self.schedule_retry(id, true).await;
+                }
                 return Err(ConversationError::ModelChangeUncertain);
             }
         };
@@ -374,7 +387,7 @@ impl ConversationService {
             .await
             .map_err(|_| ConversationError::ModelChangeUncertain)?;
         let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
-        let place = self.agent_place(id).await?;
+        let place = self.agent_brief(id).await?;
         let prior = self
             .inner
             .agents
@@ -382,7 +395,7 @@ impl ConversationService {
                 agent,
                 record.model().as_str(),
                 record.approval_mode(),
-                place.as_ref(),
+                &place,
             )
             .await?;
         let (committed, _) = self.committed_with_order(id).await?;
@@ -399,7 +412,7 @@ impl ConversationService {
                     agent,
                     request.requested_model.as_str(),
                     selection.approval_mode,
-                    place.as_ref(),
+                    &place,
                 )
                 .await?;
             (

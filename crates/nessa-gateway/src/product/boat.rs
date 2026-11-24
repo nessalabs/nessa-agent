@@ -51,7 +51,12 @@ pub(super) async fn dispatch(
             "boat.disconnect"
                 if frame.params.is_null() || frame.params == serde_json::json!({}) =>
             {
-                service.disconnect().await
+                service
+                    .disconnect(
+                        crate::workspaces::domain::Cloud::Boat,
+                        session.context().principal_id().as_str(),
+                    )
+                    .await
             }
             "boat.save" => {
                 let Ok(params) = serde_json::from_value::<BoatSaveParams>(std::mem::replace(
@@ -75,11 +80,16 @@ pub(super) async fn dispatch(
         if let Err(error) = result {
             return failure(&frame.id, code(error));
         }
-        match service.settings.read().await {
-            Ok(saved) => success(
+        let Some(settings) = service.settings(crate::workspaces::domain::Cloud::Boat) else {
+            return failure(&frame.id, "boat_unavailable");
+        };
+        match settings.read().await {
+            Ok(crate::workspaces::domain::CloudConnection::Boat(saved)) => success(
                 &frame.id,
                 &serde_json::json!({"state":"connected","environment":saved.environment,"image":saved.image}),
             ),
+            // Boat's settings hold only a Boat connection.
+            Ok(_) => failure(&frame.id, "boat_storage_unavailable"),
             Err(Failure::Locked) => success(&frame.id, &serde_json::json!({"state":"locked"})),
             Err(Failure::NotConfigured) => {
                 success(&frame.id, &serde_json::json!({"state":"disconnected"}))

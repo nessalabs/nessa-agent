@@ -32,9 +32,9 @@ use nessa_protocol::product::generated::{
     wire_shape_session_authenticate_params, wire_shape_session_challenge,
     ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionEndReason,
     ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewCursor,
-    ConversationViewed, ProductClientMetadata, ProductSessionReady, ProductSurface,
-    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge,
-    CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
+    ConversationViewed, GrantsChanged, GrantsSubscribeParams, ProductClientMetadata,
+    ProductSessionReady, ProductSurface, ProductSurfaceKind, SessionAuthenticateParams,
+    SessionChallenge, CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
     MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
     PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION, TRANSCRIPT_STATES,
@@ -113,6 +113,12 @@ pub(super) enum RpcKind {
 /// shows, so a burst past [`QUEUED_VIEWS`] drops the oldest and keeps the
 /// newest in arrival order.
 const QUEUED_VIEWS: usize = 4;
+/// Grant frames kept while a record read shares this connection. A further
+/// frame closes it. Dropping one would skip an incremental page; the follow
+/// retries from the cursor it has committed.
+const QUEUED_GRANT_FRAMES: usize = 8;
+/// Bytes of those queued frames, measured as the event payload's JSON.
+const QUEUED_GRANT_BYTES: usize = 512 * 1024;
 
 struct Parked {
     views: Vec<ConversationViewed>,
@@ -145,6 +151,12 @@ struct SubscriptionInbox {
     closed: bool,
 }
 
+/// One grant-subscription delivery.
+pub(crate) enum GrantDelivery {
+    Changed(GrantsChanged),
+    Ended(ConversationSubscriptionEnded),
+}
+
 /// One delivery from the subscription feed, in arrival order.
 pub(crate) enum SubscriptionDelivery {
     View(Box<ConversationViewed>),
@@ -168,6 +180,15 @@ struct Events {
     /// No kept view in this incarnation may sit behind this cursor. It starts
     /// as `conversation.subscribe`'s `after` and moves to each view kept.
     floor: Option<ConversationViewCursor>,
+    /// Grant frames for this connection's one `grants.subscribe`, with the
+    /// payload bytes counted toward [`QUEUED_GRANT_BYTES`].
+    grants: Vec<(usize, GrantsChanged)>,
+    grant_bytes: usize,
+    grant_ended: Option<ConversationSubscriptionEnded>,
+    grant_id: Option<String>,
+    /// Set while `grants.subscribe` is unanswered, so a frame that arrives
+    /// with the reply is kept.
+    grant_opening: bool,
 }
 impl Events {
     fn new(policy: GatewayPolicy) -> Self {
@@ -178,6 +199,11 @@ impl Events {
             opening: None,
             opening_conversation: None,
             floor: None,
+            grants: Vec::new(),
+            grant_bytes: 0,
+            grant_ended: None,
+            grant_id: None,
+            grant_opening: false,
         }
     }
     /// `session.terminated` is this connection's close, the same acceptance
@@ -193,6 +219,8 @@ impl Events {
             product_event::CONVERSATION_SUBSCRIPTION_ENDED => {
                 self.observe_subscription_end(event.payload)
             }
+            product_event::GRANTS_CHANGED => self.observe_grants(event.payload),
+            product_event::GRANTS_SUBSCRIPTION_ENDED => self.observe_grant_end(event.payload),
             _ => self.count_unexpected(),
         }
     }
@@ -304,6 +332,57 @@ impl Events {
             return self.count_unexpected();
         };
         parked.ended.get_or_insert(ended);
+        Ok(())
+    }
+    fn observe_grants(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let changed = match strict_decode::<GrantsChanged>(payload) {
+            Ok(changed) if conforming_subscription_id(&changed.subscription_id) => changed,
+            _ => return Ok(()),
+        };
+        if let Some(id) = &self.grant_id {
+            if changed.subscription_id != *id {
+                return Err(GatewayError::Protocol);
+            }
+        } else if !self.grant_opening {
+            return self.count_unexpected();
+        }
+        let bytes = serde_json::to_string(&changed)
+            .map(|text| text.len())
+            .unwrap_or(usize::MAX);
+        if self.grants.len() >= QUEUED_GRANT_FRAMES
+            || self.grant_bytes.saturating_add(bytes) > QUEUED_GRANT_BYTES
+        {
+            tracing::warn!(
+                limit = "client.grant_frames",
+                "product session hit an operational limit"
+            );
+            return Err(GatewayError::Protocol);
+        }
+        self.grant_bytes = self.grant_bytes.saturating_add(bytes);
+        self.grants.push((bytes, changed));
+        Ok(())
+    }
+    fn pop_grant(&mut self) -> Option<GrantsChanged> {
+        if self.grants.is_empty() {
+            return None;
+        }
+        let (bytes, changed) = self.grants.remove(0);
+        self.grant_bytes = self.grant_bytes.saturating_sub(bytes);
+        Some(changed)
+    }
+    fn observe_grant_end(&mut self, payload: serde_json::Value) -> Result<(), GatewayError> {
+        let ended = match strict_decode::<ConversationSubscriptionEnded>(payload) {
+            Ok(ended) if conforming_subscription_id(&ended.subscription_id) => ended,
+            _ => return Ok(()),
+        };
+        if let Some(id) = &self.grant_id {
+            if ended.subscription_id != *id {
+                return Err(GatewayError::Protocol);
+            }
+        } else if !self.grant_opening {
+            return self.count_unexpected();
+        }
+        self.grant_ended.get_or_insert(ended);
         Ok(())
     }
     fn count_unexpected(&mut self) -> Result<(), GatewayError> {
@@ -637,6 +716,162 @@ impl Session {
         });
         Ok(result.subscription_id)
     }
+    /// Open this connection's grant subscription. A frame that arrived with
+    /// the reply is kept and comes out of [`Self::next_grant`] first.
+    pub(crate) fn subscribe_grants(
+        &mut self,
+        params: &GrantsSubscribeParams,
+    ) -> Result<String, GatewayError> {
+        if self.events.grant_id.is_some() || self.events.grant_opening {
+            return Err(self.fail(GatewayError::Busy));
+        }
+        self.events.grant_opening = true;
+        let value = match self.rpc(product_method::GRANTS_SUBSCRIBE, params, RpcKind::Subscribe) {
+            Ok(value) => value,
+            Err(error) => {
+                self.events.grant_opening = false;
+                self.events.grants.clear();
+                self.events.grant_bytes = 0;
+                self.events.grant_ended = None;
+                return Err(error);
+            }
+        };
+        let result = match strict_decode::<ConversationSubscribeResult>(value) {
+            Ok(result) if conforming_subscription_id(&result.subscription_id) => result,
+            _ => {
+                self.events.grant_opening = false;
+                return Err(self.fail(GatewayError::Protocol));
+            }
+        };
+        self.events.grant_opening = false;
+        self.events.grant_id = Some(result.subscription_id.clone());
+        Ok(result.subscription_id)
+    }
+    pub(crate) fn grant_subscription(&self) -> Option<String> {
+        self.events.grant_id.clone()
+    }
+    pub(crate) fn grant_page(
+        &mut self,
+        params: &nessa_protocol::product::generated::GrantsPageParams,
+    ) -> Result<(), GatewayError> {
+        let value = self.rpc(product_method::GRANTS_PAGE, params, RpcKind::Subscribe)?;
+        let result = strict_decode::<ConversationSubscribeResult>(value)?;
+        if result.subscription_id != params.subscription_id {
+            return Err(self.fail(GatewayError::Protocol));
+        }
+        Ok(())
+    }
+    /// The next grant frame already queued, or one frame of socket progress.
+    /// An idle tick is `Ok(None)` and leaves the socket up. A timeout of a
+    /// blocking read is not used here: that path closes the connection.
+    pub(crate) fn poll_grant(&mut self) -> Result<Option<GrantDelivery>, GatewayError> {
+        if let Some(error) = self.active.as_ref().and_then(|active| active.failure) {
+            return Err(error);
+        }
+        loop {
+            if let Some(delivery) = self.take_grant()? {
+                return Ok(Some(delivery));
+            }
+            if !self.poll_socket(200)? {
+                return Ok(None);
+            }
+        }
+    }
+    fn take_grant(&mut self) -> Result<Option<GrantDelivery>, GatewayError> {
+        if self.events.grant_id.is_none() {
+            return Err(GatewayError::Busy);
+        }
+        if let Some(changed) = self.events.pop_grant() {
+            return Ok(Some(GrantDelivery::Changed(changed)));
+        }
+        if let Some(ended) = self.events.grant_ended.take() {
+            self.events.grant_id = None;
+            return Ok(Some(GrantDelivery::Ended(ended)));
+        }
+        Ok(None)
+    }
+    /// The next view already queued, or one frame of socket progress. An idle
+    /// tick is `Ok(None)` and leaves the socket up.
+    pub(crate) fn poll_view(&mut self) -> Result<Option<Wait>, GatewayError> {
+        if let Some(error) = self.active.as_ref().and_then(|active| active.failure) {
+            return Err(error);
+        }
+        loop {
+            if let Some(wait) = self.take_view()? {
+                return Ok(Some(wait));
+            }
+            if !self.poll_socket(50)? {
+                return Ok(None);
+            }
+        }
+    }
+    fn take_view(&mut self) -> Result<Option<Wait>, GatewayError> {
+        let inbox = self
+            .events
+            .subscription
+            .as_mut()
+            .ok_or(GatewayError::Busy)?;
+        if inbox.closed {
+            return Err(GatewayError::Closed(None));
+        }
+        if let Some(ended) = inbox.parked.ended.take() {
+            inbox.closed = true;
+            inbox.parked.views.clear();
+            let reason = match ended.reason {
+                ConversationSubscriptionEndReason::Lagging => SubscriptionEnd::Lagging,
+                ConversationSubscriptionEndReason::Refused => SubscriptionEnd::Refused,
+                ConversationSubscriptionEndReason::SourceClosed => SubscriptionEnd::SourceClosed,
+                ConversationSubscriptionEndReason::TooLarge => SubscriptionEnd::TooLarge,
+            };
+            let cause = (reason == SubscriptionEnd::Refused).then(|| {
+                ended
+                    .code
+                    .map_or(GatewayError::Protocol, subscription_refusal)
+            });
+            return Ok(Some(Wait::Ended(Ended { reason, cause })));
+        }
+        if let Some(viewed) = inbox.parked.views.pop() {
+            inbox.parked.views.clear();
+            return Ok(Some(Wait::View {
+                cursor: ViewCursor {
+                    incarnation: viewed.cursor.incarnation,
+                    position: viewed.cursor.position,
+                },
+                during_pass: true,
+            }));
+        }
+        Ok(None)
+    }
+    /// Read one product frame without treating an idle tick as a failed
+    /// operation. `true` when a frame was observed.
+    fn poll_socket(&mut self, slice_ms: u64) -> Result<bool, GatewayError> {
+        let polled = {
+            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
+            socket
+                .transport
+                .stream_mut()
+                .begin_poll(None, slice_ms, 5_000);
+            socket.poll()
+        };
+        let text = match polled {
+            Ok(text) => text,
+            Err(error) => return Err(self.fail(error)),
+        };
+        let Some(text) = text else {
+            return Ok(false);
+        };
+        let message =
+            OutgoingMessage::decode(&text).map_err(|_| self.fail(GatewayError::Protocol))?;
+        match message {
+            OutgoingMessage::Response(_) => Err(self.fail(GatewayError::Correlation)),
+            OutgoingMessage::Event(event) => {
+                self.events
+                    .observe(event)
+                    .map_err(|error| self.fail(error))?;
+                Ok(true)
+            }
+        }
+    }
     /// The next kept view, or the subscription's end once every kept view
     /// has been taken. Waits under the current operation's deadline.
     pub(crate) fn next_delivery(&mut self) -> Result<SubscriptionDelivery, GatewayError> {
@@ -928,7 +1163,9 @@ pub(crate) fn subscription_refusal(code: String) -> GatewayError {
         "subscription_capacity" => SubscriptionRefusal::Subscription(SubscriptionCode::Capacity),
         "subscription_duplicate" => SubscriptionRefusal::Subscription(SubscriptionCode::Duplicate),
         "unknown_subscription" => SubscriptionRefusal::Subscription(SubscriptionCode::Unknown),
-        "cursor_ahead" => SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead),
+        "cursor_ahead" | "incarnation_changed" | "grant_log_floor" => {
+            SubscriptionRefusal::Subscription(SubscriptionCode::CursorAhead)
+        }
         _ => match serde_json::from_value::<ConversationErrorCode>(serde_json::Value::String(code))
         {
             Ok(code) => SubscriptionRefusal::Conversation(code),
@@ -980,4 +1217,77 @@ fn conforming_subscription_id(id: &str) -> bool {
                     .expect("generated pattern compiles")
             })
             .is_match(id)
+}
+
+#[cfg(test)]
+mod grant_inbox_tests {
+    use super::{Events, QUEUED_GRANT_BYTES, QUEUED_GRANT_FRAMES};
+    use crate::read_only_sync::application::GatewayPolicy;
+    use nessa_protocol::product::generated::{product_event, GrantStreamCursor, GrantsChanged};
+    use nessa_protocol::protocol::EventFrame;
+    fn events() -> Events {
+        let mut events = Events::new(GatewayPolicy::new(1_000, 1_000, 4).unwrap());
+        events.grant_opening = true;
+        events
+    }
+
+    fn frame(id: &str, marker: &str) -> GrantsChanged {
+        GrantsChanged {
+            subscription_id: id.to_owned(),
+            cursor: GrantStreamCursor {
+                incarnation: "inc".to_owned(),
+                position: "1".to_owned(),
+            },
+            complete: true,
+            replaces: false,
+            snapshot_id: None,
+            grants: vec![nessa_protocol::product::generated::GrantFrameEntry {
+                conversation_id: marker.to_owned(),
+                absent: false,
+                capabilities: Some("read".to_owned()),
+                policy_revision: Some("1".to_owned()),
+            }],
+        }
+    }
+
+    fn push(
+        events: &mut Events,
+        changed: &GrantsChanged,
+    ) -> Result<(), crate::read_only_sync::application::GatewayError> {
+        let event = EventFrame::push(product_event::GRANTS_CHANGED, changed, 1, 1).unwrap();
+        events.observe(event)
+    }
+
+    #[test]
+    fn one_grant_frame_past_the_count_closes_the_inbox() {
+        let mut events = events();
+        for index in 0..QUEUED_GRANT_FRAMES {
+            push(&mut events, &frame("1", &index.to_string())).unwrap();
+        }
+        let extra = push(&mut events, &frame("1", "extra"));
+        assert!(extra.is_err());
+        assert_eq!(events.grants.len(), QUEUED_GRANT_FRAMES);
+        let first = events.pop_grant().unwrap();
+        assert_eq!(first.grants[0].conversation_id, "0");
+        push(&mut events, &frame("1", "after")).unwrap();
+    }
+
+    #[test]
+    fn one_grant_frame_past_the_byte_bound_is_not_kept() {
+        let mut events = events();
+        let mut heavy = frame("1", "heavy");
+        heavy.grants[0].capabilities = Some("x".repeat(QUEUED_GRANT_BYTES));
+        assert!(push(&mut events, &heavy).is_err());
+        assert!(events.grants.is_empty());
+        push(&mut events, &frame("1", "small")).unwrap();
+        assert_eq!(events.grants.len(), 1);
+    }
+
+    #[test]
+    fn a_grant_frame_for_no_subscription_is_not_queued() {
+        let mut events = events();
+        events.grant_opening = false;
+        push(&mut events, &frame("1", "stray")).unwrap();
+        assert!(events.grants.is_empty());
+    }
 }

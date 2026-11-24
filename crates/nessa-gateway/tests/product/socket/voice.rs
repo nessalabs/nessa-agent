@@ -189,17 +189,22 @@ async fn a_saved_key_is_never_answered_and_shapes_are_checked_first() {
         code_of(dispatch(&state, &session, bad).await),
         "invalid_request"
     );
-    // Nor about a conversation the gateway does not keep.
-    let missing = with(
-        "6b",
-        "voice.startCall",
-        json!({ "conversationId": "00000000-0000-4000-8000-0000000000ff" }),
-    );
-    assert_eq!(
-        code_of(dispatch(&state, &session, missing).await),
-        "conversation_not_found"
-    );
     assert_eq!(kept.0.lock().unwrap().len(), records);
+    // The owner may call about a chat it is starting: the window chose its
+    // id, and the first thing said starts it.
+    let starting = payload(
+        dispatch(
+            &state,
+            &session,
+            with(
+                "6b",
+                "voice.startCall",
+                json!({ "conversationId": "00000000-0000-4000-8000-0000000000ff" }),
+            ),
+        )
+        .await,
+    );
+    assert_eq!(starting["clientSecret"], "ek_route");
     let call = payload(
         dispatch(
             &state,
@@ -215,4 +220,35 @@ async fn a_saved_key_is_never_answered_and_shapes_are_checked_first() {
     assert_eq!(call["transport"], "scripted");
     assert_eq!(call["clientSecret"], "ek_route");
     assert!(!call.to_string().contains(KEY));
+}
+
+#[tokio::test]
+async fn a_paired_device_calls_only_about_a_chat_that_exists() {
+    let (calls, _memory, kept) = voice();
+    let (state, authority) = fixture(MembershipRole::Admin);
+    *authority.snapshot.lock().unwrap() = snapshot_with(
+        MembershipRole::Admin,
+        MembershipStatus::Active,
+        &["credential.manage", "conversation.write"],
+    );
+    let state = state.with_voice(calls).with_passive_read(
+        Arc::new(RecordBinding),
+        repository_of(vec![owned_conversation(CHAT, "owner")]),
+        Arc::new(GrantedConversation(CHAT.into())),
+        Arc::new(conversation_support::ObservedPolicy::default()),
+    );
+    let session = authenticate(&state).await;
+    let saved = payload(dispatch(&state, &session, with("1", "voice.saveKey", json!({ "key": KEY }))).await);
+    assert_eq!(saved["keySaved"], true);
+    let records = kept.0.lock().unwrap().len();
+    // Only the owner starts a chat by voice: a device must name one there.
+    let missing = with(
+        "2",
+        "voice.startCall",
+        json!({ "conversationId": "00000000-0000-4000-8000-0000000000ff" }),
+    );
+    // `code_of` holds that the answer is a refusal.
+    let refused = code_of(dispatch(&state, &session, missing).await);
+    assert!(!refused.is_empty());
+    assert_eq!(kept.0.lock().unwrap().len(), records);
 }

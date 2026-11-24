@@ -81,6 +81,7 @@ function fixture(run) {
       "crates/nessa-conversation/src/domain/value_objects/channel.rs",
       "crates/nessa-conversation/src/domain/value_objects/vm_lifetime.rs",
       "crates/nessa-gateway/src/logins/domain.rs",
+      "crates/nessa-gateway/src/logins/chatgpt/domain.rs",
       "crates/nessa-protocol/src/lease.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
       "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
@@ -501,8 +502,8 @@ test("a saved-login length bound changed on one side alone refuses to publish", 
     const source = join(path, "crates/nessa-protocol/src/lease.rs")
     const before = readFileSync(source, "utf8")
     const after = before.replace(
-      "pub const MAX_LOGIN_BYTES: usize = 4096;",
-      "pub const MAX_LOGIN_BYTES: usize = 4095;",
+      "pub const MAX_LOGIN_BYTES: usize = 16_384;",
+      "pub const MAX_LOGIN_BYTES: usize = 16_383;",
     )
     assert.notEqual(after, before)
     writeFileSync(source, after)

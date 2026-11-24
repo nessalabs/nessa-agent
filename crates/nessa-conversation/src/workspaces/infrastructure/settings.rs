@@ -5,7 +5,7 @@
 //! recorded.
 use crate::workspaces::{
     application::Settings,
-    domain::{BoatConnection, Failure},
+    domain::{BoatConnection, CloudConnection, Failure},
 };
 use async_trait::async_trait;
 use nessa_vault::{application::Vault, domain::EntryName};
@@ -42,7 +42,7 @@ impl Settings for VaultSettings {
     fn generation(&self) -> Result<u64, Failure> {
         self.0.unlocked_generation().ok_or(Failure::Locked)
     }
-    async fn read(&self) -> Result<BoatConnection, Failure> {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
         let generation = self.generation()?;
         let vault = self.0.clone();
         tokio::task::spawn_blocking(move || {
@@ -52,12 +52,16 @@ impl Settings for VaultSettings {
                 .ok_or(Failure::NotConfigured)?;
             let stored: Stored = serde_json::from_slice(&bytes).map_err(|_| Failure::Storage)?;
             BoatConnection::new(stored.token, stored.environment, stored.image)
+                .map(CloudConnection::Boat)
                 .map_err(|_| Failure::Storage)
         })
         .await
         .map_err(|_| Failure::Storage)?
     }
-    async fn save(&self, generation: u64, connection: BoatConnection) -> Result<(), Failure> {
+    async fn save(&self, generation: u64, connection: CloudConnection) -> Result<(), Failure> {
+        let CloudConnection::Boat(connection) = connection else {
+            return Err(Failure::InvalidInput);
+        };
         let vault = self.0.clone();
         tokio::task::spawn_blocking(move || {
             let token = std::str::from_utf8(connection.account.token.as_slice())

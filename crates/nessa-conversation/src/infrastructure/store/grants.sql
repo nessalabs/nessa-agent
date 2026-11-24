@@ -129,7 +129,6 @@ CREATE TABLE person_link_changes (
     observed_at_ms INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX person_link_changes_credential ON person_link_changes (credential_id, sequence);
-
 -- One directory resource. The id is minted here; the path is not the id.
 -- The binding is the 32 bytes in `.nessa-binding` on that canonical path.
 CREATE TABLE directory_resources (
@@ -177,6 +176,27 @@ CREATE TABLE directory_pending_audits (
     before TEXT,
     after TEXT,
     at_ms INTEGER NOT NULL
+) STRICT;
+
+-- One grant log per paired receiver. `head` is the last committed position.
+-- The incarnation is minted with the first record and does not change when
+-- the log is trimmed. A missing row is the empty log: incarnation `none`, head 0.
+CREATE TABLE grant_streams (
+    receiver_id TEXT PRIMARY KEY,
+    incarnation TEXT NOT NULL,
+    head INTEGER NOT NULL
+) STRICT;
+-- One record per grant commit for that receiver, in the same write as the
+-- grant. `capabilities` NULL is a tombstone. Positions at or below
+-- head - 1024 are deleted; trimming does not mint an incarnation.
+CREATE TABLE grant_log (
+    receiver_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    capabilities TEXT,
+    policy TEXT,
+    policy_revision INTEGER,
+    PRIMARY KEY (receiver_id, position)
 ) STRICT;
 
 PRAGMA user_version = 2;

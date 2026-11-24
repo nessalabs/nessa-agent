@@ -88,7 +88,55 @@ export function appVault({ endpoint, credential }) {
       reject()
     })
   }
+  /** The host's Touch ID, faked as `vault/application/biometrics.rs` behaves:
+   * a typed unlock or setup that asked to remember saves its accepted
+   * passphrase, a change replaces a saved one, a fingerprint releases it
+   * into an ordinary unlock, and a copy the vault refuses is dropped.
+   * `answer` is what the next prompt does: "pass", "cancel" or "changed"
+   * (fingers were added or removed, so the copy is dropped). A refusal is
+   * answered as `{ refused }`, which the fake host rejects with, as Tauri
+   * rejects with the command's serialized error. Off until a step turns it
+   * on, so other steps never see the offer. */
+  const touchId = { available: false, saved: null, answer: "pass", prompts: 0 }
   async function command(request) {
+    const { remember, ...wire } = request
+    const reply = await childCommand(wire)
+    const accepted = reply.ok === true && reply.status?.state === "unlocked"
+    if (
+      touchId.available &&
+      ((["unlock", "setup"].includes(wire.operation) && remember === true && accepted) ||
+        (wire.operation === "changePassphrase" &&
+          touchId.saved !== null &&
+          (reply.ok === true || reply.code === "vault_changed_audit_unavailable")))
+    )
+      touchId.saved = wire.passphrase
+    return reply
+  }
+  async function biometrics({ operation }) {
+    const status = () => ({
+      available: touchId.available,
+      saved: touchId.available && touchId.saved !== null,
+    })
+    if (operation === "status") return status()
+    if (operation === "forget") {
+      touchId.saved = null
+      return status()
+    }
+    if (operation !== "unlock") throw new Error(`unknown Touch ID operation ${operation}`)
+    if (!touchId.available) return { refused: "biometric_unavailable" }
+    if (touchId.saved === null) return { refused: "biometric_missing" }
+    touchId.prompts += 1
+    if (touchId.answer === "cancel") return { refused: "biometric_cancelled" }
+    if (touchId.answer === "changed") {
+      touchId.saved = null
+      return { refused: "biometric_changed" }
+    }
+    const reply = await childCommand({ operation: "unlock", passphrase: touchId.saved })
+    if (reply.ok === false && reply.code === "vault_wrong_passphrase")
+      touchId.saved = null
+    return reply
+  }
+  async function childCommand(request) {
     if (busy) return { ok: false, code: "vault_busy" }
     busy = true
     try {
@@ -118,6 +166,7 @@ export function appVault({ endpoint, credential }) {
   }
   return {
     command,
+    touchId,
     stop,
     close: async () => {
       closed = true
@@ -136,6 +185,7 @@ export function appVault({ endpoint, credential }) {
     },
     async install(page) {
       await page.exposeFunction("__NESSA_VAULT_COMMAND", command)
+      await page.exposeFunction("__NESSA_VAULT_BIOMETRICS", biometrics)
     },
   }
 }

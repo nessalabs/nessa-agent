@@ -10,6 +10,7 @@ import {
 import { paneItemOf } from "../../model/pane-item"
 import { EmptyWorkspace } from "./empty-state"
 import { Pane } from "./pane"
+import { TerminalPane } from "./terminal-pane"
 import { WidgetWindow } from "./widget-window"
 import "./panes.css"
 
@@ -52,6 +53,15 @@ const ShownPaneOf = memo(function ShownPaneOf({ placement, frame, multi }: Shown
     selectPaneSession(state, placement.key),
   )
   const held = sessionId === null ? paneItemOf(placement.item) : null
+  if (held?.kind === "terminal")
+    return (
+      <TerminalPane
+        placement={placement}
+        frame={frame}
+        multi={multi}
+        terminalId={held.terminalId}
+      />
+    )
   return (
     <Pane
       placement={placement}

@@ -1,7 +1,7 @@
 /**
  * The quick switcher's search: a subsequence match that favours runs and word
- * starts, and the rows it offers — sessions, channels, and starting a new
- * session with what was typed. The switcher renders these rows; it decides
+ * starts, and the rows it offers — sessions, the person's terminals,
+ * channels, and starting a new session (with what was typed) or a terminal. The switcher renders these rows; it decides
  * nothing about them.
  */
 import {
@@ -12,6 +12,7 @@ import {
   type SessionSummary,
 } from "./workspace-index"
 import { statusLabels } from "./session-groups"
+import type { TerminalEntry } from "./terminal"
 
 export interface FuzzyMatch {
   readonly score: number
@@ -54,11 +55,23 @@ export type SwitcherRow =
       readonly hits: readonly number[]
     }
   | {
+      readonly kind: "terminal"
+      readonly group: string
+      readonly terminal: TerminalEntry
+      readonly hits: readonly number[]
+    }
+  | {
       readonly kind: "new"
       readonly group: string
       readonly channelId: string
       /** The message to start with: what was typed, when anything was. */
       readonly text?: string
+    }
+  | {
+      /** A new shell in the channel, as ⌘J opens. */
+      readonly kind: "newTerminal"
+      readonly group: string
+      readonly channelId: string
     }
 
 const recentCount = 6
@@ -76,13 +89,20 @@ export function switcherRows({
   sessions,
   channels,
   channelId,
+  terminals = null,
 }: {
   query: string
   sessions: readonly SessionSummary[]
   channels: readonly Channel[]
   /** The channel a new session would start in. */
   channelId: string
+  /**
+   * The person's shells, when the window has terminals; a new one is offered
+   * only then. A Run's terminal belongs to its reply and is not listed.
+   */
+  terminals?: readonly TerminalEntry[] | null
 }): SwitcherRow[] {
+  const shells = (terminals ?? []).filter((terminal) => terminal.kind === "shell")
   const channelName = (id: string) =>
     channels.find((channel) => channel.id === id)?.name ?? ""
   const trimmed = query.trim()
@@ -94,6 +114,7 @@ export function switcherRows({
       .slice(0, recentCount)
     return [
       { kind: "new", group: "", channelId },
+      ...(terminals ? [{ kind: "newTerminal", group: "", channelId } as const] : []),
       ...waiting.map((session): SwitcherRow => ({
         kind: "session",
         group: statusLabels["needs-you"],
@@ -106,6 +127,15 @@ export function switcherRows({
         session,
         hits: [],
       })),
+      ...[...shells]
+        .sort((a, b) => b.startedAtMs - a.startedAtMs)
+        .slice(0, recentCount)
+        .map((terminal): SwitcherRow => ({
+          kind: "terminal",
+          group: "Terminals",
+          terminal,
+          hits: [],
+        })),
     ]
   }
   const sessionMatches = sessions
@@ -132,6 +162,11 @@ export function switcherRows({
     .filter((entry) => entry.match !== null)
     .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0))
     .slice(0, channelMatchCount)
+  const terminalMatches = shells
+    .map((terminal) => ({ terminal, match: fuzzy(trimmed, terminal.title) }))
+    .filter((entry) => entry.match !== null)
+    .sort((a, b) => (b.match?.score ?? 0) - (a.match?.score ?? 0))
+    .slice(0, sessionMatchCount)
   return [
     ...sessionMatches.map((match): SwitcherRow => ({
       kind: "session",
@@ -143,6 +178,12 @@ export function switcherRows({
       kind: "channel",
       group: "Channels",
       channel: entry.channel,
+      hits: entry.match?.hits ?? [],
+    })),
+    ...terminalMatches.map((entry): SwitcherRow => ({
+      kind: "terminal",
+      group: "Terminals",
+      terminal: entry.terminal,
       hits: entry.match?.hits ?? [],
     })),
     { kind: "new", group: "Start", channelId, text: trimmed },

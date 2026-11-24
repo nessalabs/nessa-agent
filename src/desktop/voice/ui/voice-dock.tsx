@@ -27,6 +27,8 @@ export function voiceLine(snapshot: VoiceSnapshot): string {
         snapshot.hearing.trim() ||
         (snapshot.microphoneOn ? (snapshot.hint ?? "Listening") : "Microphone off")
       )
+    case "paused":
+      return "Paused"
     case "failed":
     case "dropped":
       return snapshot.notice ?? ""
@@ -47,6 +49,7 @@ export function voiceLineRuns(snapshot: VoiceSnapshot): boolean {
     case "listening":
       return snapshot.hearing.trim() !== ""
     case "connecting":
+    case "paused":
     case "failed":
     case "dropped":
     case "idle":

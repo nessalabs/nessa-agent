@@ -53,15 +53,16 @@ function answerable(draft: ChannelDraft, step: ChannelStep): boolean {
  */
 export function channelCreationOpened(
   state: WorkspaceState,
-  { opening, model }: { opening: string; model: ModelRef },
+  { opening, model, gatewayId }: { opening: string; model: ModelRef; gatewayId?: string },
 ): WorkspaceState {
   if (!state.channelMaking.creatable) return state
+  const base = emptyDraft(model)
   return {
     ...state,
     content: "panes",
     channelCreation: {
       opening,
-      draft: emptyDraft(model),
+      draft: gatewayId ? { ...base, gatewayId } : base,
       asking: "name",
       answered: [],
       requestId: null,

@@ -1,8 +1,13 @@
 import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
 import { agentForProvider } from "../model/composer-options"
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"
-import { Composer, type ComposerAccess, type ComposerImages } from "./composer"
+import {
+  Composer,
+  type ComposerAccess,
+  type ComposerImages,
+  type ComposerVoice,
+} from "./composer"
 import { HeaderArt } from "./header-art"
 import { greetingAt } from "../model/greeting"
 import { useNow } from "../../clock"
@@ -31,6 +36,8 @@ export function Home({
   composerClassName,
   access,
   images,
+  voice,
+  voiceDock,
 }: {
   /** Sends the first message; without it the composer says chat is not connected. */
   onSend?: (text: string) => void
@@ -47,6 +54,13 @@ export function Home({
   access?: ComposerAccess
   /** The images on the first message, held by the caller. */
   images?: ComposerImages
+  /**
+   * A voice call, so a new chat can be started by talking: what the person
+   * asks first starts it, as the first typed message would.
+   */
+  voice?: ComposerVoice
+  /** What the call shows above the composer while it talks to this chat. */
+  voiceDock?: ReactNode
 }) {
   const [page, setPage] = useState(false)
   const [greeting] = useGreetingPreference()
@@ -69,6 +83,7 @@ export function Home({
             }
           >
             {agent ? <SelectedAgentSetup agent={agent} /> : null}
+            {voiceDock}
             <Composer
               page={page}
               onPageChange={setPage}
@@ -79,6 +94,7 @@ export function Home({
               onTextChange={onTextChange}
               access={access}
               images={images}
+              voice={voice}
             />
           </div>
         </div>

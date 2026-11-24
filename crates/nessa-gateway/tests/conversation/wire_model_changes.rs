@@ -680,6 +680,9 @@ impl ScheduledMessageStore for ScheduleReads {
     ) -> ConversationFuture<'_, bool> {
         schedule_unavailable()
     }
+    fn continued_from(&self, _: &str, _: &str) -> ConversationFuture<'_, Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
     fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
         schedule_unavailable()
     }

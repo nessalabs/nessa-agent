@@ -3,17 +3,17 @@
 //! owner's conversations. `docs/design/read-grants.md` holds the rules and
 //! the state table its tests are written from.
 //!
-//! A grant has a capability set, read and for a device also comment and
-//! drive, and a drive grant its constraints ([`ShareAccess`]): the tool
-//! policy and command hosts. What each capability lets its holder do is the
+//! A grant has a capability set, read and, when granted, comment and drive,
+//! and a drive grant its constraints ([`ShareAccess`]): the tool policy and
+//! command hosts. What each capability lets its holder do is the
 //! conversation access policy's (`ConversationAccessPolicyEvaluator`): a
 //! grant that includes read reads, and reads exactly as read alone does
 //! (row J1); only a grant that includes drive drives the conversation it
 //! names, and one that includes comment leaves notes in it (rows J11 and
-//! J17). Comment and drive also require a principal signed in as the
-//! binding owner, which is the device. This module reads the facts the
-//! policy is asked with, the conversation and the capabilities its receiver
-//! holds there ([`paired_facts`]), and never compares capabilities itself.
+//! J17). The capability is the decision for a device and for a gateway
+//! principal. This module reads the facts the policy is asked with, the
+//! conversation and the capabilities its receiver holds there
+//! ([`paired_facts`]), and never compares capabilities itself.
 //!
 //! Every read path a paired party reaches asks the policy, and none keeps
 //! its own copy:
@@ -63,6 +63,41 @@ use nessa_protocol::conversation::fence_capture::FenceCapture;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_sdk::application::agent_execution::sessions::{NoteCandidates, NoteRecord};
 use nessa_sdk::domain::agent_execution::executions::Initiator;
+use std::sync::Arc;
+use tokio::sync::Notify;
+
+/// The empty grant log's incarnation. The first commit mints another.
+pub const EMPTY_GRANT_INCARNATION: &str = "none";
+/// Grant-log records kept per receiver. Older than this, a resume takes a snapshot.
+pub const GRANT_LOG_RETAINED: u64 = 1024;
+
+/// This receiver's grant log, as the subscription reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantStream {
+    pub incarnation: String,
+    pub head: u64,
+    /// The oldest retained log position. `None` when the log holds nothing.
+    pub oldest: Option<u64>,
+}
+
+/// One grant-log record, in commit order. `capabilities` is `None` on a tombstone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantLogEntry {
+    pub position: u64,
+    pub conversation_id: String,
+    pub capabilities: Option<String>,
+    pub policy: Option<String>,
+    pub policy_revision: Option<u64>,
+}
+
+/// One live grant on the receiver, for a full snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantSnapshotEntry {
+    pub conversation_id: String,
+    pub capabilities: String,
+    pub policy: Option<String>,
+    pub policy_revision: u64,
+}
 
 /// Who is reading, as far as read grants are concerned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,6 +258,31 @@ async fn deliverable(
         AccessDecision::Deny(AccessDenial::Unavailable) => None,
         AccessDecision::Deny(_) => Some(false),
     }
+}
+
+/// One comment or drive admission, written before the command runs.
+///
+/// The first record for one receiver, one command, and one request on a
+/// conversation stands. A retry of that same call keeps its principal,
+/// epoch, and person. Another receiver, or another command, is its own
+/// record even when the request text matches. The capability is not copied
+/// here: Cedar read it from the grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantUse {
+    pub conversation_id: ConversationId,
+    /// The Cedar action, `conversation.comment` or `conversation.drive`.
+    pub action: &'static str,
+    /// The socket method, such as `conversation.send` or `conversation.steer`.
+    pub command: String,
+    pub principal_id: PrincipalId,
+    pub receiver_id: String,
+    pub policy_revision: u64,
+    /// The person a same-person link named for this gateway principal and
+    /// credential when the command was admitted. Absent when no link was
+    /// committed. The link adds no capability.
+    pub person: Option<PrincipalId>,
+    pub request_id: String,
+    pub observed_at_ms: u64,
 }
 
 /// The capabilities a party holds on one conversation, and the grant epoch
@@ -405,6 +465,14 @@ pub trait ShareGrants: Send + Sync {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
 
+    /// Record `use_` before a comment or drive command runs. The local store
+    /// writes it beside the grant file. A store that does not keep this
+    /// record refuses, so a comment or a drive is not admitted without the
+    /// audit. A failure is [`ConversationError::Audit`] and the command does
+    /// not run.
+    fn record_use(&self, _use: GrantUse) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Err(ConversationError::Audit) })
+    }
     /// The grant `receiver_id` holds on `id`, or `None` when it holds none
     /// there.
     fn held_grant<'a>(
@@ -491,6 +559,38 @@ pub trait ShareGrants: Send + Sync {
         receiver_id: &'a str,
         policy_revision: u64,
     ) -> ConversationFuture<'a, RevisionHold>;
+    /// Wakes after a grant-log append. A store with no log never wakes.
+    fn grant_log_notify(&self) -> Arc<Notify> {
+        Arc::new(Notify::new())
+    }
+    /// This receiver's grant log head. The empty log is incarnation `none` at 0.
+    fn grant_stream<'a>(&'a self, receiver_id: &'a str) -> ConversationFuture<'a, GrantStream> {
+        let _ = receiver_id;
+        Box::pin(async {
+            Ok(GrantStream {
+                incarnation: EMPTY_GRANT_INCARNATION.to_owned(),
+                head: 0,
+                oldest: None,
+            })
+        })
+    }
+    /// Log records with `position` greater than `after`, in order.
+    fn grant_log_after<'a>(
+        &'a self,
+        receiver_id: &'a str,
+        after: u64,
+    ) -> ConversationFuture<'a, Vec<GrantLogEntry>> {
+        let _ = (receiver_id, after);
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    /// The grants this receiver holds now.
+    fn grant_snapshot<'a>(
+        &'a self,
+        receiver_id: &'a str,
+    ) -> ConversationFuture<'a, Vec<GrantSnapshotEntry>> {
+        let _ = receiver_id;
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// A grant revision kept still until this is dropped.
@@ -550,7 +650,9 @@ impl ShareConversation<'_> {
     /// `InvalidInput` and writes nothing (row J3). Comment and drive are
     /// asked of Cedar (`grant.comment`, `grant.drive`) before they are
     /// written. A denial writes nothing and carries the policy ids Cedar
-    /// named. The use case does not match a gateway principal on its own.
+    /// named. The capability is the decision: a gateway principal is granted
+    /// comment or drive when those permits allow it. The use case does not
+    /// match a gateway principal on its own.
     /// The credential must have an active receiver
     /// binding and a registry answer about that exact credential, or
     /// `ShareTargetNotPaired`. Whether the caller may share this

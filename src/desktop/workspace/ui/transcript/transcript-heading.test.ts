@@ -23,6 +23,7 @@ describe("the heading's word on the agent's lease", () => {
 describe("the heading's word on where the agent runs", () => {
   it("is the channel's placement before any lease", () => {
     expect(placeNote(undefined, "boat")).toBe("Boat workspace")
+    expect(placeNote(undefined, "agent37")).toBe("Agent37 workspace")
     expect(placeNote(undefined, "local")).toBe("This computer")
     expect(placeNote(undefined, undefined)).toBeUndefined()
   })
@@ -31,8 +32,13 @@ describe("the heading's word on where the agent runs", () => {
     expect(placeNote({ state: "live", environment: "here" }, "boat")).toBe(
       "This computer",
     )
+    // A cloud VM's lease does not name its cloud: the channel's cloud place
+    // does, and with none it is a cloud workspace, never Boat by default.
     expect(placeNote({ state: "live", environment: "boat" }, "local")).toBe(
-      "Boat workspace",
+      "Cloud workspace",
+    )
+    expect(placeNote({ state: "live", environment: "boat" }, "agent37")).toBe(
+      "Agent37 workspace",
     )
     expect(
       placeNote({ state: "live", environment: "ssh", host: "devbox" }, undefined),

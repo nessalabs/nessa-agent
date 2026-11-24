@@ -35,6 +35,26 @@ pub enum EnvironmentEvent {
         observed_environment: Option<String>,
         observed_version: Option<u32>,
     },
+    /// New thread VMs are about to go to another cloud: chosen by
+    /// `principal`, or reset to Boat because the cloud they went to was
+    /// disconnected. Recorded before the choice is saved.
+    WorkspaceCloudChosen {
+        before: String,
+        after: String,
+        cause: String,
+        principal: String,
+    },
+    /// An Agent37 VM was refused before workspace commands or grants: it
+    /// runs another template release or image than it was admitted under.
+    Agent37AdmissionRefused {
+        thread: String,
+        vm: String,
+        template: String,
+        template_revision: Option<u64>,
+        image_digest: Option<String>,
+        cause: String,
+        disposition: String,
+    },
     /// Rollback observation after receipt-save failure; false means erasure is unconfirmed.
     WorkspaceRollbackObserved {
         thread: String,

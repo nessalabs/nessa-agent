@@ -1,8 +1,20 @@
 import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
+import { codexChatgptSignIn } from "../provider-authentication/model/chatgpt-sign-in"
+import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
+import {
+  replyStyleGateway,
+  type ReplyStyleGateway,
+} from "./settings/adapters/reply-style-gateway"
 import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
-import type { VaultApi, BoatApi } from "@nessa/client"
+import type {
+  Agent37Api,
+  CloudApi,
+  VaultApi,
+  BoatApi,
+  ReplyStyleApi,
+} from "@nessa/client"
 /**
  * The desktop window's composition: every outside thing it talks to — the
  * workspace source, the clock, ids, the page's measure of the panes' room,
@@ -41,6 +53,7 @@ import {
   bindWaitingReviewNotices,
   browserReviewNotifier,
   hostReviewNotices,
+  mergedNotices,
   openReviewEvent,
   waitingReviewNotices,
   type HostNotices,
@@ -61,6 +74,7 @@ import {
   type VoiceKeyGateway,
 } from "./voice"
 import {
+  decisionSettingsGateway,
   githubGateway,
   savedLoginsGateway,
   type SavedLoginsClient,
@@ -69,6 +83,8 @@ import {
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  type DecisionSettingsClient,
+  type DecisionSettingsGateway,
   type GithubClient,
   type GithubGateway,
   type LinkedDevicesClient,
@@ -113,7 +129,20 @@ import {
   rememberedFilter,
   inMemorySharing,
   sharingGateway,
+  decisionsGateway,
+  sampleDecisions,
+  type DecisionSource,
+  type DecisionsClient,
   channelGateway,
+  terminalGateway,
+  type TerminalClient,
+  createGatewayRegistry,
+  multiGatewaySource,
+  multiTerminalGateway,
+  multiChannelGateway,
+  remoteGatewayStore,
+  type RemoteClientConnector,
+  type RemoteGatewayStore,
   inMemoryChannels,
   windowPublisher,
   windowCommandInbox,
@@ -142,10 +171,15 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly devices: DevicesGateway | undefined
   /** Claude and Codex native-hook choices, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly nativeHooks: NativeHooksGateway | undefined
+  /** Auto-pick, for Settings › Chat settings › Decisions; absent without a gateway. Provided by `main.tsx`. */
+  readonly decisionSettings: DecisionSettingsGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly boat: BoatGateway | undefined
+  /** How agents talk, at the Nessa level and per channel; absent without a gateway. Provided by `main.tsx`. */
+  readonly replyStyle: ReplyStyleGateway | undefined
+  readonly agent37: Agent37Gateway | undefined
   readonly github: GithubGateway | undefined
   /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
   readonly voice: VoiceGateway | undefined
@@ -167,6 +201,12 @@ export interface DesktopDependencies extends WorkspaceDependencies {
    * an empty list in place of a source it has not read. Provided by `main.tsx`.
    */
   readonly subagents: SubagentSource
+  /**
+   * Where Chat context reads a chat's decisions: the gateway's own, the
+   * sample's beside the sample workspace, and none beside a given source.
+   * Provided by `main.tsx`.
+   */
+  readonly decisions: DecisionSource | undefined
 }
 
 export function createDesktopDependencies(
@@ -176,6 +216,8 @@ export function createDesktopDependencies(
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
     /** The host's Claude sign-in minting for Boat VMs, where it has one (`main.tsx`). */
     mintClaudeSignIn?: { available: () => Promise<boolean>; mint: () => Promise<string> }
+    /** Hands an address to the person's own browser, where the host can. */
+    openInBrowser?: (url: string) => void
     /** A Boat sign-in beside a given `workspace`; the gateway's own is composed here. */
     boatClaudeSignIn?: WorkspaceDependencies["boatClaudeSignIn"]
     /**
@@ -217,6 +259,10 @@ export function createDesktopDependencies(
     paths?: WorkspaceDependencies["paths"]
     /** Where channels are made, beside a given `workspace`; the gateway's own and the sample's are composed here. */
     channels?: WorkspaceDependencies["channels"]
+    /** Injectable storage for persisted remote gateways (tests). */
+    gatewayStore?: RemoteGatewayStore
+    /** Injectable connector for remote gateways (tests). */
+    connectRemote?: RemoteClientConnector
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own. The clock is a steady
@@ -247,8 +293,42 @@ export function createDesktopDependencies(
     options.workspace === undefined && gateway
       ? gatewayWorkspace(gateway, { now, after }, widgets, apps, options.reviewNotices)
       : undefined
+  const localChannels = source
+    ? channelGateway({ connected: () => source.connected() })
+    : undefined
+  const localTerminals = source
+    ? terminalGateway({
+        connected: () => source.connected(),
+        newId,
+      })
+    : undefined
+  const gatewayRegistry =
+    source && localChannels && localTerminals
+      ? createGatewayRegistry({
+          local: {
+            label: "This Mac",
+            url: "local",
+            workspace: source,
+            terminals: localTerminals,
+            channels: localChannels,
+          },
+          store: options.gatewayStore ?? remoteGatewayStore(),
+          now,
+          after,
+          newId,
+          imageBytes: {
+            bytes: async (url) => (await fetch(url)).blob(),
+            digest: sha256Digest,
+          },
+          connectRemote: options.connectRemote,
+        })
+      : undefined
   const workspace =
-    options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
+    options.workspace ??
+    (gatewayRegistry ? multiGatewaySource(gatewayRegistry) : undefined) ??
+    source ??
+    samples ??
+    inMemorySource({ now, after })
   // The clients the window publishes on: the changes asked of it arrive there.
   const windowClients = source ? clientsSeen(() => source.connected()) : undefined
   const publisher = windowClients
@@ -261,6 +341,7 @@ export function createDesktopDependencies(
     : undefined
   return {
     workspace,
+    gatewayRegistry,
     agentInstallations: source
       ? gatewayAgentInstallations(
           () => source.connected().then((client) => client.agents),
@@ -282,6 +363,16 @@ export function createDesktopDependencies(
               (await source.connected()).boat.saveClaudeSignIn({ token }),
           })
         : undefined),
+    // A ChatGPT account for Codex on other computers, kept by the gateway.
+    codexChatgptSignIn: source
+      ? codexChatgptSignIn({
+          status: async () => (await (await source.connected()).logins.status()).chatgpt,
+          begin: async (accountId) =>
+            (await (await source.connected()).logins.chatgptSignIn(accountId)).chatgpt,
+          open: options.openInBrowser,
+          pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        })
+      : undefined,
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
@@ -292,11 +383,16 @@ export function createDesktopDependencies(
     nativeHooks: source
       ? nativeHooksGateway({ connected: () => source.connected() })
       : undefined,
+    decisionSettings: source
+      ? decisionSettingsGateway({ connected: () => source.connected() })
+      : undefined,
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     boat: source ? boatGateway(() => source.connected()) : undefined,
+    replyStyle: source ? replyStyleGateway(() => source.connected()) : undefined,
+    agent37: source ? agent37Gateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
     voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
@@ -310,12 +406,14 @@ export function createDesktopDependencies(
         : options.sharing,
     // Channels are made on the gateway's own client; the sample makes them in
     // memory, and a window with neither offers no add button.
-    channels: source
-      ? channelGateway({ connected: () => source.connected() })
+    channels: gatewayRegistry
+      ? multiChannelGateway(gatewayRegistry)
       : samples
         ? inMemoryChannels({ add: (channel) => samples.addChannel(channel) })
         : options.channels,
     paths: options.paths,
+    // Terminals are the gateway's own; the sample has none.
+    terminals: gatewayRegistry ? multiTerminalGateway(gatewayRegistry) : undefined,
     // What the window shows, for the person's agents, and the changes they
     // ask of it: only a gateway has any.
     windowPublisher: publisher,
@@ -333,6 +431,11 @@ export function createDesktopDependencies(
     questionFlights: createQuestionFlights(),
     widgets,
     subagents,
+    decisions: source
+      ? decisionsGateway({ connected: () => source.connected() })
+      : samples
+        ? sampleDecisions({ now })
+        : undefined,
     heldFiles: source
       ? heldFileReader(() => source.connected().then((client) => client.attachments))
       : // The sample's and a given source's sessions name no file anybody holds.
@@ -342,27 +445,41 @@ export function createDesktopDependencies(
   }
 }
 
-/** A gateway client the window can show conversations, draw apps, read held files, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
+/** A gateway client the window can show conversations, draw apps, read held files and decisions, manage MCP servers, pair devices, set native hooks, sign in to GitHub, share sessions and start voice calls through. */
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
   SavedLoginsClient &
-  GithubClient & { readonly vault: VaultApi; readonly boat: BoatApi } & McpServersClient &
+  GithubClient & {
+    readonly vault: VaultApi
+    readonly boat: BoatApi
+    readonly agent37: Agent37Api
+    readonly cloud: CloudApi
+    readonly replyStyle: ReplyStyleApi
+  } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &
+  DecisionSettingsClient &
   PermissionRulesClient &
   SharingClient &
+  DecisionsClient &
   WindowPublishClient &
-  WindowCommandClient & {
+  WindowCommandClient &
+  TerminalClient & {
     readonly agents: AgentsApi
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi
   }
 
-/** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
-function reviewWaiting(
-  host: HostNotices | undefined,
-): (reviews: readonly WaitingReview[]) => void {
+/**
+ * Notices for reviews that are waiting, replaced by each snapshot the gateway
+ * sends, and for decisions agents asked, replaced by each list that changes
+ * them: one set of notices.
+ */
+function reviewWaiting(host: HostNotices | undefined): {
+  reviews: (reviews: readonly WaitingReview[]) => void
+  asks: (asks: readonly WaitingReview[]) => void
+} {
   const notices = host
     ? hostReviewNotices(host)
     : waitingReviewNotices(
@@ -371,7 +488,7 @@ function reviewWaiting(
         }),
       )
   bindWaitingReviewNotices(notices.showWaiting)
-  return notices.apply
+  return mergedNotices(notices.apply)
 }
 
 /**
@@ -388,19 +505,23 @@ function gatewayWorkspace(
   apps: AppsOptions | undefined,
   reviewNotices: HostNotices | undefined,
 ): GatewaySource<WindowGatewayClient> {
-  const onReviewWaiting = reviewWaiting(reviewNotices)
+  const waiting = reviewWaiting(reviewNotices)
+  const onReviewWaiting = waiting.reviews
+  const onAsksWaiting = waiting.asks
   // A pasted image's bytes are behind its object URL; Web Crypto names them.
   const imageBytes: ImageBytes = {
     bytes: async (url) => (await fetch(url)).blob(),
     digest: sha256Digest,
   }
-  if (!apps) return gatewaySource({ connect, clock, onReviewWaiting, imageBytes })
+  if (!apps)
+    return gatewaySource({ connect, clock, onReviewWaiting, onAsksWaiting, imageBytes })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
   const source: GatewaySource<WindowGatewayClient> = gatewaySource({
     connect,
     clock,
     onReviewWaiting,
+    onAsksWaiting,
     imageBytes,
     apps: gatewayApps({
       registry,

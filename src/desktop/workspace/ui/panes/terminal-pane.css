@@ -1,0 +1,58 @@
+/*
+ * A terminal's pane: the grid fills the body, inset a little from the pane's
+ * edges so the first column does not touch them. The header stays the slim
+ * pane header every pane has.
+ */
+.workspace-terminal-body {
+  padding: 4px 8px 8px 12px;
+}
+
+.workspace-terminal-body > [data-slot="terminal"] {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+}
+
+.workspace-terminal-ended {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  white-space: nowrap;
+}
+
+.workspace-terminal-gone {
+  margin: auto;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+}
+
+.workspace-terminal-details {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: 12px 14px;
+  font-size: var(--desktop-text-body);
+}
+
+.workspace-terminal-details dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+
+.workspace-terminal-details dt {
+  color: var(--desktop-muted);
+}
+
+.workspace-terminal-details dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.workspace-terminal-path {
+  font-family: var(--font-mono);
+  font-size: var(--desktop-text-footnote);
+  overflow-wrap: anywhere;
+}

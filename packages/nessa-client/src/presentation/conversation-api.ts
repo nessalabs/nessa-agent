@@ -25,6 +25,8 @@ import type {
   ConversationMessageDelivery,
   ConversationMessageReceipt,
   ConversationMessageStatusResult,
+  ConversationDecisionsResult,
+  DecisionSettings,
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
@@ -66,6 +68,9 @@ import {
   conversationList,
   conversationMessageReceipt,
   conversationMessageStatus,
+  conversationDecisions,
+  decisionSettings,
+  pauseAutoPickApplied,
   conversationObserve,
   conversationView,
   conversationEarlier,
@@ -424,6 +429,18 @@ export type ConversationApi = {
     title: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /** What `conversationId`'s agents asked its owner with `ask_owner`, and what became of each — waiting, decided by the owner's next message, or replaced by a newer ask — newest first, at most 100. The owner's alone: anyone else is refused `conversation_not_found`. */
+  decisions: (conversationId: string) => Promise<ConversationDecisionsResult>
+  /** How the caller's decisions behave: whether an ask its agent allowed it on, whose recommended choice is easy to undo, is answered with that choice after `autoPickAfterSeconds` with no answer. Until set: on, after 300 seconds. */
+  decisionSettings: () => Promise<DecisionSettings>
+  /** Keep how the caller's decisions behave; answers with what was kept. A wait outside 60 to 86,400 seconds is refused here, before it is sent. */
+  setDecisionSettings: (settings: DecisionSettings) => Promise<DecisionSettings>
+  /** Hold, or let go, auto-pick on one decision still waiting in `conversationId`. `applied` is false when that ask is not waiting any more. The owner's alone, as for `decisions`. */
+  pauseAutoPick: (
+    conversationId: string,
+    askId: string,
+    paused: boolean,
+  ) => Promise<boolean>
   /**
    * The owner's remembered permission rules, in the order they were stored.
    * A shared user is refused. A rule is one tool in one workspace.
@@ -470,10 +487,11 @@ export type ConversationApi = {
    * either mistake `invalid_request`, as it does a set that is not one of
    * those three and a policy past the schema's bounds (published in
    * `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
-   * `maxCommandHosts`, `maxCommandHostBytes`). Comment and drive for a
-   * gateway principal are refused `capabilities_refused`. `details.policies`
-   * names the Cedar policy ids, and is empty when no permit matched. Nothing
-   * is written. A grant that names no `commandHosts` runs commands nowhere.
+   * `maxCommandHosts`, `maxCommandHostBytes`). Comment and drive are the
+   * capability on the grant, including for a gateway principal. A credential
+   * that is not a paired reader is refused `capabilities_refused`.
+   * `details.policies` names the Cedar policy ids, and is empty when no
+   * permit matched. Nothing is written. A grant that names no `commandHosts` runs commands nowhere.
    * The answer names the grant's `policyRevision`, the grant epoch, once the
    * share is made. `applied` is false when that same receiver and credential
    * already held those capabilities and constraints, and the epoch is kept.
@@ -1261,6 +1279,32 @@ export function createConversationApi(
         (value) => conversationMutation(value, requestId),
         false,
       )
+    },
+    decisions: async (id) =>
+      conversationDecisions(
+        await session.request(ProductMethod.ConversationDecisions, {
+          conversationId: validConversationId(id),
+        }),
+      ),
+    decisionSettings: async () =>
+      decisionSettings(
+        await session.request(ProductMethod.ConversationDecisionSettings, {}),
+      ),
+    setDecisionSettings: async (settings) =>
+      decisionSettings(
+        await session.request(
+          ProductMethod.ConversationSetDecisionSettings,
+          decisionSettings(settings),
+        ),
+      ),
+    pauseAutoPick: async (id, askId, paused) => {
+      if (!/^[0-9a-f]{32}$/.test(askId)) throw new Error("Invalid ask ID")
+      const answer = await session.request(ProductMethod.ConversationPauseAutoPick, {
+        conversationId: validConversationId(id),
+        askId,
+        paused,
+      })
+      return pauseAutoPickApplied(answer)
     },
     delete: (id, options) =>
       action(ProductMethod.ConversationDelete, id, {}, options, false, {

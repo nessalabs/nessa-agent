@@ -11,6 +11,7 @@
 mod connection;
 mod delivery;
 mod events;
+mod grants;
 mod target;
 
 pub(super) use connection::ConnectionSubscriptions;

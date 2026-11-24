@@ -1,4 +1,4 @@
-//! A startup resume waits for retained model evidence, as it does preset evidence.
+//! A startup resume settles retained model evidence before any successor runs, as an Open would.
 use super::*;
 use crate::application::{
     ConversationModelRequest, ConversationModelRequestState, ConversationRepository,
@@ -86,7 +86,7 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
     let configured = first
         .inner
         .agents
-        .resolve_model(record.agent().unwrap(), "second-model", None)
+        .resolve_model(record.agent().unwrap(), "second-model", &Default::default())
         .await
         .unwrap();
     let target = live.lease.model_provider(configured.provider).unwrap();
@@ -145,6 +145,11 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
         assert!(metadata.pending_model_change(&id).await.unwrap().is_none());
     }
     assert_eq!(second.resume_unfinished().await.unwrap(), 1);
+    // Either way the evidence is settled before any successor runs: an Open
+    // settles it, or resumption does as a read would (a change its caller
+    // gave up on is asked about by no one else), and the owed turn's retry
+    // then runs on the model the conversation was left on.
+    until(|| !marks.holds(&id)).await;
     let live = second
         .live_now(&id, &caller("inspect-result"))
         .await
@@ -160,30 +165,17 @@ async fn startup_model_evidence(reconcile_before_start: bool) {
     let after = live.agent.session_manager().snapshot().await.unwrap();
     let native = resumed_provider.executions.lock().unwrap().clone();
     let retained = metadata.pending_model_change(&id).await.unwrap();
-    if reconcile_before_start {
-        until(|| !marks.holds(&id)).await;
-    }
-    let mark_held = marks.holds(&id);
+    drop(live);
     second.shutdown().await.unwrap();
     assert!(resumed_provider.model_updates.lock().unwrap().is_empty());
     assert_eq!(after.provider, intent.prior_identity);
-    if reconcile_before_start {
-        assert_eq!(after.invocations.len(), 2);
-        assert_eq!(native.len(), 1);
-        assert!(retained.is_none());
-        assert!(!mark_held);
-    } else {
-        assert_eq!(after.invocations.len(), original.invocations.len(),
-            "pending model evidence admitted a successor: native={native:?}; retained={retained:?}; mark={mark_held}");
-        assert!(native.is_empty());
-        assert_eq!(after.invocations, original.invocations);
-        assert_eq!(retained, Some(intent));
-        assert!(mark_held);
-    }
+    assert_eq!(after.invocations.len(), 2);
+    assert_eq!(native.len(), 1);
+    assert!(retained.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn startup_resumption_waits_for_pending_model_evidence() {
+async fn startup_resumption_settles_pending_model_evidence_itself() {
     startup_model_evidence(false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -3,8 +3,7 @@
 use crate::workspaces::{
     application::Assignments,
     domain::{
-        AdmissionRefusal, AdmissionRejection, Assignment, EnvironmentIdentity, Failure,
-        RefusalDisposition,
+        AdmissionRefusal, AdmissionRejection, Admitted, Assignment, Failure, RefusalDisposition,
     },
 };
 use async_trait::async_trait;
@@ -35,14 +34,14 @@ enum StoredAssignment {
         vm: String,
         image: String,
         #[serde(with = "identity")]
-        admission: EnvironmentIdentity,
+        admission: Admitted,
     },
     Refused {
         thread: String,
         vm: String,
         image: String,
         #[serde(with = "identity")]
-        admission: EnvironmentIdentity,
+        admission: Admitted,
         #[serde(with = "rejection")]
         rejection: AdmissionRejection,
         #[serde(with = "StoredDisposition")]
@@ -124,35 +123,65 @@ mod rejection {
         Ok(rejection)
     }
 }
+/// A VM's admission. A Boat VM's is written as it always was; an Agent37
+/// VM's names its template release and digest instead, so each reads one
+/// way only.
 mod identity {
-    use super::EnvironmentIdentity;
+    use super::Admitted;
+    use crate::workspaces::domain::{EnvironmentIdentity, TemplateRelease};
     use serde::{Deserialize, Serialize};
     #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Boat(Boat),
+        Agent37(Agent37),
+    }
+    #[derive(Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Wire {
+    struct Boat {
         id: String,
         name: String,
         version_id: String,
         version: u32,
     }
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Agent37 {
+        template: String,
+        revision: Option<u64>,
+        digest: Option<String>,
+    }
     pub(super) fn serialize<S: serde::Serializer>(
-        value: &EnvironmentIdentity,
+        value: &Admitted,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        Wire {
-            id: value.id().into(),
-            name: value.name().into(),
-            version_id: value.version_id().into(),
-            version: value.version(),
+        match value {
+            Admitted::Boat(value) => Wire::Boat(Boat {
+                id: value.id().into(),
+                name: value.name().into(),
+                version_id: value.version_id().into(),
+                version: value.version(),
+            }),
+            Admitted::Agent37(value) => Wire::Agent37(Agent37 {
+                template: value.template().into(),
+                revision: value.revision(),
+                digest: value.digest().map(str::to_owned),
+            }),
         }
         .serialize(serializer)
     }
     pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<EnvironmentIdentity, D::Error> {
-        let wire = Wire::deserialize(deserializer)?;
-        EnvironmentIdentity::new(wire.id, wire.name, wire.version_id, wire.version)
-            .map_err(|_| serde::de::Error::custom("invalid environment identity"))
+    ) -> Result<Admitted, D::Error> {
+        match Wire::deserialize(deserializer)? {
+            Wire::Boat(wire) => {
+                EnvironmentIdentity::new(wire.id, wire.name, wire.version_id, wire.version)
+                    .map(Admitted::Boat)
+            }
+            Wire::Agent37(wire) => TemplateRelease::new(wire.template, wire.revision, wire.digest)
+                .map(Admitted::Agent37),
+        }
+        .map_err(|_| serde::de::Error::custom("invalid environment identity"))
     }
 }
 impl<'de> Deserialize<'de> for PersistedAssignment {

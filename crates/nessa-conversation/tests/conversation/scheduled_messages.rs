@@ -670,6 +670,9 @@ impl ScheduledMessageStore for RecordingStore {
             }
         })
     }
+    fn continued_from(&self, _: &str, _: &str) -> ConversationFuture<'_, Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
     fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
         let known = self.known_status.lock().unwrap().clone();
         if let Some(status) = known {
@@ -939,6 +942,9 @@ impl ScheduledMessageStore for NotifyOnDue {
         _: u64,
     ) -> ConversationFuture<'_, bool> {
         Box::pin(async { Ok(false) })
+    }
+    fn continued_from(&self, _: &str, _: &str) -> ConversationFuture<'_, Option<String>> {
+        Box::pin(async { Ok(None) })
     }
     fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
         Box::pin(async { Err(ConversationError::Unavailable) })
@@ -2570,6 +2576,9 @@ impl ScheduledMessageStore for ScriptedSchedule {
     ) -> ConversationFuture<'_, bool> {
         store_error()
     }
+    fn continued_from(&self, _: &str, _: &str) -> ConversationFuture<'_, Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
     fn status(&self, _: &str) -> ConversationFuture<'_, Option<String>> {
         Box::pin(async { Err(ConversationError::Metadata) })
     }
@@ -4087,10 +4096,12 @@ async fn a_detached_scheduled_command_keeps_its_submission_permit() {
         entered: Notify::new(),
         release: Notify::new(),
     });
+    let acting = caller();
     let waiting = service.submit_command_permitted(
         commands.clone(),
         id.clone(),
-        caller(),
+        acting.clone(),
+        acting,
         Initiation::owner(),
         false,
         "held-command".into(),
