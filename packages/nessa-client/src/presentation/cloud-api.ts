@@ -211,7 +211,9 @@ export function createCloudApi(session: RpcRequester): CloudApi {
             throw new TypeError("Invalid cloud box sleep result")
           }
           const obj = raw as Record<string, unknown>
-          return parseCloudBoxSummary(Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null)
+          return parseCloudBoxSummary(
+            Object.hasOwn(obj, "cloudBox") ? obj.cloudBox : null,
+          )
         },
         CLOUD_BOX_MUTATION_TIMEOUT_MS,
       ),
