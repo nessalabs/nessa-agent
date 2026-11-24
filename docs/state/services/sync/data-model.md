@@ -22,7 +22,7 @@ diagramLinks: {}
 
 A sync value names one receiver, one origin, and one stream, plus the incarnation, schema, and access epoch that make that stream currently readable. Records are an append-only sequence inside that exact scope. Catalogue entries are the latest value of each key inside a catalogue scope. The two stores do not share a cursor.
 
-The types below are defined in pinned `nessa-sync` `f2a05ef24fcff66df9d55e508539cec718e2d805` unless the paragraph names a file in this repository. This page records the fields those types expose and the fields this repository stores beside them.
+The types below are defined in pinned `nessa-sync` `341c9b844257403bb297f27d7ed9aecbe93e4406` unless the paragraph names a file in this repository. This page records the fields those types expose and the fields this repository stores beside them.
 
 ## Scope
 

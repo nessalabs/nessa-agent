@@ -4237,7 +4237,7 @@ dependencies = [
 [[package]]
 name = "nessa-sync"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/sync-engine?rev=f2a05ef24fcff66df9d55e508539cec718e2d805#f2a05ef24fcff66df9d55e508539cec718e2d805"
+source = "git+https://github.com/nessalabs/sync-engine?rev=341c9b844257403bb297f27d7ed9aecbe93e4406#341c9b844257403bb297f27d7ed9aecbe93e4406"
 dependencies = [
  "sha2",
 ]

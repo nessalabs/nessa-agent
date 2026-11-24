@@ -15,6 +15,28 @@ The upstream [sync ADR](https://github.com/nessalabs/sync-engine/blob/1044e56f2f
 owns generic replication; [semantic record writer](semantic-record-writer.md)
 owns physical framing. This document owns the product transport integration.
 
+## Sync Engine pin compatibility
+
+The workspace uses one Sync Engine revision,
+[`341c9b844257403bb297f27d7ed9aecbe93e4406`](https://github.com/nessalabs/sync-engine/commit/341c9b844257403bb297f27d7ed9aecbe93e4406).
+The Product wire generator still uses that sole owner. Its consumed bounds
+remain 128 UTF-8 bytes per ID, 256 catalogue entries, and 1 MiB catalogue
+payload. The generator should not produce a schema or binding change.
+
+| Source outcome | Product v1 outcome |
+| --- | --- |
+| The source denies the authenticated read | Existing `forbidden` refusal; the client may recheck pinned authorization, not purge on this reply alone. |
+| Record or catalogue capabilities cannot be verified | Existing `unverifiable` refusal; no data, reset, retry hint, or stale-epoch claim. |
+| Catalogue needs versioned coverage, uses an unknown coverage version, or the saved completion predates coverage | The same `unverifiable` refusal; Product v1 has no coverage contract. No reset or deletion decision follows from the reply. |
+| Already supported authorization, source and identity outcomes | The existing wire codes are unchanged. |
+
+The application retains the typed upstream incompatibility and catalogue
+coverage evidence. The read-only sync CLI exposes separate capability, coverage,
+and invalid-access-response diagnostics; 64-bit values in new diagnostics
+are decimal strings. This pin does not select a new session, enable catalogue
+horizon or origin-epoch semantics in Nessa, or change pairing, routing, the
+physical data format, or the persisted cache schema.
+
 ## Outcome and scope
 
 A seeded, separately running read-only receiver downloads committed records over

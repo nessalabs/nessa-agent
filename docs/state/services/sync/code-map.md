@@ -19,7 +19,7 @@ diagramLinks: {}
 
 # Where the sync code lives
 
-The pass coordinator is not in this repository. Workspace `Cargo.toml` pins `nessa-sync` to git revision `f2a05ef24fcff66df9d55e508539cec718e2d805` with feature `transport`. The functions named in the first table are that crate's public API, read from the cargo git checkout of that revision. Everything after that table is a path in this repository.
+The pass coordinator is not in this repository. Workspace `Cargo.toml` pins `nessa-sync` to git revision `341c9b844257403bb297f27d7ed9aecbe93e4406` with feature `transport`. The functions named in the first table are that crate's public API, read from the cargo git checkout of that revision. Everything after that table is a path in this repository.
 
 A host calls the library. The library calls `ScopeAuthorizer`, `RecordSource` or `CatalogueSource`, and `ReplicaStore` or `CatalogueStore`. This repository implements those traits in the gateway adapters and the SQLite cache.
 

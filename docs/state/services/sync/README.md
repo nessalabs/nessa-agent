@@ -54,7 +54,7 @@ diagramDetails:
 
 Nessa copies saved conversation history from the gateway that owns it to another process that is allowed to read it. The follower asks for a bounded page, checks it, and saves it. A record written after that ask is copied on a later pass.
 
-The library that defines that ask is `nessa-sync`, pinned in the workspace `Cargo.toml` at `nessalabs/sync-engine` revision `f2a05ef24fcff66df9d55e508539cec718e2d805`. The library validates pages and calls host ports. It does not open sockets, start timers, or retry. This repository supplies the gateway source, the product RPCs, and the follower caches.
+The library that defines that ask is `nessa-sync`, pinned in the workspace `Cargo.toml` at `nessalabs/sync-engine` revision `341c9b844257403bb297f27d7ed9aecbe93e4406`. The library validates pages and calls host ports. It does not open sockets, start timers, or retry. This repository supplies the gateway source, the product RPCs, and the follower caches.
 
 ```mermaid
 flowchart TB
@@ -141,7 +141,7 @@ The library's `replication::history` module defines a recent tail and older page
 
 ## Open questions
 
-- The workspace pin matches the crate checkout used for these pages (`f2a05ef`). A later pin can change validation without a diff in this repository. These pages name that revision and do not vendor the library.
+- The workspace uses one Sync Engine pin. [The pin compatibility note](../../../design/authorized-record-reads.md#sync-engine-pin-compatibility) records which newer outcomes were reviewed and which Product behaviors are unchanged. These pages do not vendor the library.
 - No production caller of `replication::history` or of the library's artifact manifest ports was found. The design note in `docs/design/artifact-sync.md` describes transport as inactive; the code comment in `crates/nessa-attachments/src/infrastructure/store.rs` is the claim these pages rely on.
 - `finish_pass` is public in the library and unused here. The live bound is the driver's `max_pages`.
 
