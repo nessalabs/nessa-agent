@@ -328,8 +328,7 @@ fn directory_command(
             }
         }
         ParsedCommand::Run { program, arguments } => {
-            match directory.admit_execution(subject, &program, &arguments, SandboxKind::None, &[])
-            {
+            match directory.admit_execution(subject, &program, &arguments, SandboxKind::None, &[]) {
                 Ok(()) => None,
                 Err(error) => Some(error.to_string()),
             }
