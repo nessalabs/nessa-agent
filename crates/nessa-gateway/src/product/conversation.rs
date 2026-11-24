@@ -1412,13 +1412,16 @@ async fn append_shared(
         Ok(mut catalogue) => {
             let local = super::shared_chat::local_ids(state, &catalogue.rows).await?;
             catalogue.rows = super::shared_chat::omit_local(catalogue.rows, &local);
-            let shared_ids = catalogue.complete.then(|| {
-                catalogue
-                    .rows
-                    .iter()
-                    .map(|row| row.conversation_id.clone())
-                    .collect()
-            });
+            let shared_ids = catalogue
+                .complete
+                .then(|| {
+                    catalogue
+                        .rows
+                        .iter()
+                        .map(|row| row.conversation_id.clone())
+                        .collect()
+                })
+                .and_then(super::shared_chat::shared_membership);
             if !*page.complete {
                 return Ok(Some(super::shared_chat::SharedAppend {
                     next: None,

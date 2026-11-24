@@ -359,9 +359,21 @@ pub(super) fn append_bounded(
 pub(super) struct SharedAppend {
     pub next: Option<u64>,
     pub fingerprint: u32,
-    /// Every shared chat this filter includes, when the cache was read.
-    /// `None` when it was not read or the read was incomplete.
+    /// Every shared chat this filter includes, when the cache was read and
+    /// the set fits the list field. `None` when it was not read, the read
+    /// was incomplete, or the set is longer than the field can carry.
     pub shared_ids: Option<Vec<String>>,
+}
+
+/// The shared ids a list may name. The wire field holds at most
+/// [`MAX_CATALOGUE_ENTRIES`]. A longer set is left off: cutting it would
+/// look like the chats that did not fit had been withdrawn.
+pub(super) fn shared_membership(ids: Vec<String>) -> Option<Vec<String>> {
+    if ids.len() > MAX_CATALOGUE_ENTRIES {
+        None
+    } else {
+        Some(ids)
+    }
 }
 
 pub(super) fn append_catalogue(
@@ -1221,6 +1233,20 @@ mod tests {
             kept[0].updated_at_ms, 80,
             "an older copy leaves the catalogue time"
         );
+    }
+
+    #[test]
+    fn a_shared_membership_longer_than_the_field_is_left_off() {
+        let fitting: Vec<_> = (0..super::MAX_CATALOGUE_ENTRIES)
+            .map(|n| format!("id-{n}"))
+            .collect();
+        assert_eq!(
+            super::shared_membership(fitting.clone()).as_deref(),
+            Some(fitting.as_slice())
+        );
+        let mut over = fitting;
+        over.push("id-one-more".to_owned());
+        assert!(super::shared_membership(over).is_none());
     }
 
     #[test]

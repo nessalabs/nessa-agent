@@ -1780,7 +1780,9 @@ that cannot be read does the same: the rows that were read stay, and the list
 stays incomplete, so the missing row is not a withdrawal. Once a grant frame
 is stored, it is the membership: a catalogue row whose grant was revoked is
 not listed. The list names that set even when the local page is incomplete,
-so unshare takes the row off the window without waiting for the page to finish. Two peers that grant
+so unshare takes the row off the window without waiting for the page to finish.
+A set longer than the field can carry is left off the list, so the extra chats
+are not reported as withdrawn. Two peers that grant
 the same conversation id contribute one row, the first peer's, and that
 copy's archived flag is the one the list uses. A local
 conversation, including one archived or deleted, is not listed again from a
