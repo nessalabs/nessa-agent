@@ -59,6 +59,22 @@ when {
     !resource.deleted
 };
 
+// The same grant reads one range of a file that conversation holds. The
+// owner permit does not: a peer signs in as its own gateway principal.
+@id("grant.artifact_read")
+permit (
+    principal is NessaConversation::Reader,
+    action == NessaConversation::Action::"artifact.read",
+    resource is NessaConversation::Conversation
+)
+when {
+    context has capabilities &&
+    context.capabilities.contains("read") &&
+    principal.organization == resource.organization &&
+    principal.bindingOwner == resource.owner &&
+    !resource.deleted
+};
+
 // A grant that includes read shows the conversation it names in the reader's
 // catalogue, a tombstone included, so the reader learns it was deleted.
 @id("grant.catalogue_entry")

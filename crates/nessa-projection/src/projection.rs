@@ -1,6 +1,7 @@
 use crate::records;
 use crate::tool_uis::{McpToolUis, NoMcpToolUis};
 use crate::view_of::{IntoView, ViewOf};
+use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, LATEST_TIME_MS,
 };
@@ -693,7 +694,76 @@ pub fn retained_view(
         None,
     );
     projection.transcript_state(status.view_state().into_view());
+    // The fold records the provider the conversation was opened under. A
+    // catalogue entry is not required to know which agent that was.
+    if let Some(selection) = snapshot.and_then(selection_of_snapshot) {
+        projection.selection(selection);
+    }
     bound_view(projection.read())
+}
+
+/// When the retained fold was created and last updated, from the times saved
+/// with its events, notes, and handoffs. A time no summary can hold is left
+/// out. Both are `0` when the fold recorded none: a list read does not
+/// substitute the clock it happens to run on.
+pub fn retained_activity(snapshot: Option<&SessionSnapshot>) -> (u64, u64) {
+    let Some(snapshot) = snapshot else {
+        return (0, 0);
+    };
+    let mut earliest = None;
+    let mut latest = None;
+    let mut note = |at: u64| {
+        if at > LATEST_TIME_MS {
+            return;
+        }
+        earliest = Some(earliest.map_or(at, |seen: u64| seen.min(at)));
+        latest = Some(latest.map_or(at, |seen: u64| seen.max(at)));
+    };
+    for invocation in &snapshot.invocations {
+        for event in &invocation.events {
+            if let Some(at) = event.observed_at_ms() {
+                note(at);
+            }
+        }
+    }
+    for saved in &snapshot.notes {
+        note(saved.accepted_at_ms);
+        if let Some(retired) = saved.retired {
+            note(retired.at_ms);
+        }
+    }
+    for handoff in &snapshot.handoffs {
+        note(handoff.at_ms);
+    }
+    (earliest.unwrap_or(0), latest.unwrap_or(0))
+}
+
+/// The agent and model the retained fold was opened under, when that provider
+/// is one this product has an agent for. A mode the fold did not record stays
+/// ask, which is the mode a new conversation is opened in.
+fn selection_of_snapshot(snapshot: &SessionSnapshot) -> Option<ConversationSelectionView> {
+    let agent = AgentId::of_provider(snapshot.provider.name())?;
+    let approval_mode = snapshot
+        .current_configuration
+        .as_ref()
+        .and_then(|configuration| configuration.after().approval_mode())
+        .map(|mode| match mode {
+            nessa_sdk::application::agent_execution::providers::ApprovalMode::Ask => {
+                ConversationApprovalMode::Ask
+            }
+            nessa_sdk::application::agent_execution::providers::ApprovalMode::Auto => {
+                ConversationApprovalMode::Auto
+            }
+            nessa_sdk::application::agent_execution::providers::ApprovalMode::Full => {
+                ConversationApprovalMode::Full
+            }
+        })
+        .unwrap_or(ConversationApprovalMode::Ask);
+    Some(ConversationSelectionView {
+        agent,
+        model: snapshot.provider.model_id().to_owned(),
+        approval_mode,
+    })
 }
 
 impl Projection {

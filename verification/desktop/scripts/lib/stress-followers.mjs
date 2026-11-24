@@ -34,7 +34,12 @@ const REFUSED = new Set(["subscription_capacity", "subscription_duplicate"])
  * The gateway has no history to follow: the conversation was restored from
  * a source that is no longer there. Following it again cannot succeed.
  */
-const UNFOLLOWABLE = new Set(["deferred_source_unavailable"])
+const UNFOLLOWABLE = new Set([
+  "deferred_source_unavailable",
+  // A granted chat is on the list and has no local event log. Following it
+  // again cannot grow a history this gateway recorded.
+  "conversation_not_found",
+])
 
 /** Whether `error` is the gateway's answer, not a dropped connection. */
 const isRefusal = (error) =>

@@ -93,9 +93,6 @@ impl HeldReads {
         offset: u64,
         max_bytes: usize,
     ) -> Result<ArtifactBytes, HeldReadError> {
-        if max_bytes == 0 || max_bytes > Self::MAX_RANGE_BYTES || offset >= stored.size() {
-            return Err(HeldReadError::InvalidRequest);
-        }
         match self
             .ownership
             .owns(organization, principal, conversation)
@@ -105,6 +102,36 @@ impl HeldReads {
             Ok(Ownership::NotFound) => return Err(HeldReadError::ConversationNotFound),
             Ok(Ownership::Deleted) => return Err(HeldReadError::ConversationDeleted),
             Err(_) => return Err(HeldReadError::OwnershipUnavailable),
+        }
+        self.read_range(organization, conversation, stored, offset, max_bytes)
+            .await
+    }
+
+    /// The range `read` returns, after the caller has already admitted
+    /// `artifact.read`. A peer gateway is not the conversation's owner, so
+    /// the owner check would refuse a file its grant allows.
+    pub async fn read_admitted(
+        &self,
+        organization: &OrganizationId,
+        conversation: &ConversationId,
+        stored: &Attachment,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<ArtifactBytes, HeldReadError> {
+        self.read_range(organization, conversation, stored, offset, max_bytes)
+            .await
+    }
+
+    async fn read_range(
+        &self,
+        organization: &OrganizationId,
+        conversation: &ConversationId,
+        stored: &Attachment,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<ArtifactBytes, HeldReadError> {
+        if max_bytes == 0 || max_bytes > Self::MAX_RANGE_BYTES || offset >= stored.size() {
+            return Err(HeldReadError::InvalidRequest);
         }
         self.source
             .read_held(

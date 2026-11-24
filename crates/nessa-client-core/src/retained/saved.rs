@@ -5,8 +5,11 @@ use crate::read_only_sync::application::{
     offline::{SavedReads, SavedTranscript},
     CachedProgress,
 };
+use crate::read_only_sync::infrastructure::cache::EarlierFold;
 use nessa_protocol::conversation::{
-    catalogue_metadata::CatalogueMetadata, domain::ConversationId, view::ConversationView,
+    catalogue_metadata::CatalogueMetadata,
+    domain::ConversationId,
+    view::{ConversationEarlier, ConversationPoint, ConversationView},
 };
 use nessa_sync::replication::{
     catalogue::{CatalogueProgress, EntryKey, ManifestEntry},
@@ -112,6 +115,8 @@ pub enum RetainedTranscript {
 pub struct RetainedTranscriptSnapshot {
     progress: RetainedProgress,
     view: Box<ConversationView>,
+    created_at_ms: u64,
+    updated_at_ms: u64,
 }
 impl RetainedTranscriptSnapshot {
     /// Actual saved progress, independently of the presentation revision.
@@ -122,9 +127,32 @@ impl RetainedTranscriptSnapshot {
     pub fn view(&self) -> &ConversationView {
         &self.view
     }
+    /// Earliest time the fold saved with an event, note, or handoff. `0` when
+    /// it saved none.
+    pub fn created_at_ms(&self) -> u64 {
+        self.created_at_ms
+    }
+    /// Latest time the fold saved with an event, note, or handoff. `0` when
+    /// it saved none. A list read does not replace this with its own clock.
+    pub fn updated_at_ms(&self) -> u64 {
+        self.updated_at_ms
+    }
 }
 
 impl RetainedCache {
+    /// The origin a follow stored this conversation's transcript under.
+    /// `None` when the chat has not been copied. A catalogue read does not
+    /// use this: its origin is the catalogue scope.
+    pub fn transcript_origin(
+        &self,
+        receiver: &str,
+        conversation: &str,
+    ) -> Result<Option<String>, ReadFailure> {
+        self.cache
+            .transcript_origin(receiver, conversation)
+            .map_err(|error| cache_failure(&error))
+    }
+
     /// Discover the actual saved catalogue scope in one cache snapshot. This
     /// is evidence for target selection, not a claim that a later page shares
     /// the same snapshot. Pages return their own scope and generation.
@@ -186,12 +214,50 @@ impl RetainedCache {
         {
             SavedTranscript::NotLoaded => Ok(RetainedTranscript::NotLoaded),
             SavedTranscript::Deleted => Ok(RetainedTranscript::Deleted),
-            SavedTranscript::Retained { progress, view } => {
-                Ok(RetainedTranscript::Retained(RetainedTranscriptSnapshot {
-                    progress: RetainedProgress(progress),
-                    view,
-                }))
-            }
+            SavedTranscript::Retained {
+                progress,
+                view,
+                created_at_ms,
+                updated_at_ms,
+            } => Ok(RetainedTranscript::Retained(RetainedTranscriptSnapshot {
+                progress: RetainedProgress(progress),
+                view,
+                created_at_ms,
+                updated_at_ms,
+            })),
         }
     }
+
+    /// Turns before `before` in the retained fold. `None` when this cache
+    /// holds no transcript. `Err` is a point the fold does not contain, or a
+    /// cache that could not be read.
+    pub fn earlier(
+        &mut self,
+        receiver: &str,
+        origin: &str,
+        conversation: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<Option<ConversationEarlier>, EarlierMiss> {
+        let receiver = Id::new(receiver).map_err(|_| EarlierMiss::Read(ReadFailure::Protocol))?;
+        let origin = Id::new(origin).map_err(|_| EarlierMiss::Read(ReadFailure::Protocol))?;
+        match self
+            .cache
+            .retained_earlier(&receiver, &origin, conversation, before, after)
+            .map_err(|error| EarlierMiss::Read(cache_failure(&error)))?
+        {
+            EarlierFold::Absent => Ok(None),
+            EarlierFold::Invalid => Err(EarlierMiss::Point),
+            EarlierFold::Page(page) => Ok(Some(page)),
+        }
+    }
+}
+
+/// Why an earlier page was not returned.
+#[derive(Debug)]
+pub enum EarlierMiss {
+    /// The point is not in the retained history.
+    Point,
+    /// The cache could not be read.
+    Read(ReadFailure),
 }

@@ -863,6 +863,42 @@ fn owner_share_needs_a_reader_paired_by_the_owner() {
 }
 
 #[test]
+fn grant_artifact_read_follows_the_read_capability() {
+    let policy = policy();
+    let peer = Paired {
+        signed_in_as: "gateway:peer",
+        ..Paired::default()
+    };
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&paired(
+            &policy,
+            AccessAction::ArtifactRead,
+            on(&live),
+            &peer
+        )),
+        Some(&["grant.artifact_read".to_owned()][..])
+    );
+    assert!(!allowed(&paired(
+        &policy,
+        AccessAction::ArtifactRead,
+        on(&live),
+        &Paired {
+            signed_in_as: "gateway:peer",
+            held: None,
+            ..Paired::default()
+        }
+    )));
+    let deleted = conversation("org", "owner", true);
+    assert!(!allowed(&paired(
+        &policy,
+        AccessAction::ArtifactRead,
+        on(&deleted),
+        &peer
+    )));
+}
+
+#[test]
 fn grant_read_reads_its_grantors_live_conversation_with_any_role() {
     let policy = policy();
     assert_eq!(

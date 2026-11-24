@@ -510,6 +510,7 @@ import {
 } from "./lib/fake-github.mjs"
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
+import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { FAKE_CHATGPT_ACCOUNTS, startFakeOpenai } from "./lib/fake-openai.mjs"
 import {
@@ -4774,6 +4775,109 @@ const steps = {
         join(run.evidence, `paired-catalogue-${run.engine}-${step.index}.json`),
         JSON.stringify(result, null, 2),
       )
+  },
+  /**
+   * A chat the grantor shared, opened in this window from the follower's
+   * cache. The transcript is the cache's. A message typed here is refused
+   * and is not on the grantor. Unshare takes the row off the list.
+   */
+  async sharedChat(run, step, failures) {
+    const grantor = await startGrantor(run)
+    const enrolled = {}
+    let linked = false
+    try {
+      linked = true
+      await setWindowLinking(run, true)
+      const opened = await grantSharedChat(run, grantor, step, enrolled)
+      // The chat is in the default channel. A step before this one can leave
+      // the list on another channel, or fold the list, and the row is then
+      // not visible there.
+      await run.page
+        .locator(`${css.sidebar} nav`)
+        .getByText("Conversations", { exact: true })
+        .first()
+        .click({ timeout: 10_000 })
+        .catch(() => {})
+      if ((await run.page.locator(css.workspace).getAttribute("data-list")) !== "open")
+        await run.page.keyboard.press(keys.toggleSessionList)
+      const columns = await run.page.locator(css.sessionList).count()
+      const listedRow = run.page.locator(
+        columns
+          ? selectorFor.sessionListRowFor(opened.id)
+          : selectorFor.stressTreeSessionFor(opened.id),
+        { hasText: opened.title },
+      )
+      const shown = await listedRow.waitFor({ state: "visible", timeout: 60_000 }).then(
+        () => true,
+        () => false,
+      )
+      if (!shown)
+        throw new Error(`the granted chat never appeared in the window (${opened.id})`)
+      await openStressConversation(run.page, opened.id, opened.title)
+      const transcript = await waitFor(
+        async () => (await run.page.locator(".workspace-transcript").count()) === 1,
+        10_000,
+      )
+      if (!transcript) failures.push("the granted chat opened no transcript")
+      const copied = await waitFor(async () => {
+        const text = await run.page.locator(".workspace-transcript").innerText()
+        return text.includes("hello from the grantor") ? text : null
+      }, 15_000)
+      if (!copied) failures.push("the granted chat did not show what the grantor said")
+      const followerView = await run.client.conversation.read(opened.id)
+      const said = (view) =>
+        (view.messages ?? []).map((message) => message.userText).filter((text) => text)
+      const followerSaid = said(followerView)
+      const grantorSaid = said(await grantor.client.conversation.read(opened.id))
+      const prefix = JSON.stringify(grantorSaid.slice(0, followerSaid.length))
+      if (
+        !followerSaid.includes("hello from the grantor") ||
+        JSON.stringify(followerSaid) !== prefix
+      )
+        failures.push(
+          `the copied transcript ${JSON.stringify(followerSaid)} is not the grantor's ${JSON.stringify(grantorSaid)}`,
+        )
+      const note = `a note composed on the follower ${step.index}`
+      const box = dock(run.page).locator("textarea")
+      await box.fill(note)
+      await dock(run.page)
+        .getByRole(...composerControls.send)
+        .click()
+      const refused = await waitFor(async () => {
+        const banner = run.page.locator("[data-send-failure], [data-unsent]")
+        if ((await banner.count()) < 1) return null
+        return banner.first().innerText()
+      }, 15_000)
+      // The transcript says it under the message (`Couldn't send`). The
+      // overview card carries the gateway code. Either is the refusal.
+      if (
+        !refused ||
+        (!refused.includes("capabilities_refused") && !/couldn.t send/i.test(refused))
+      )
+        failures.push(
+          `the follower's send was ${JSON.stringify(refused)}, not capabilities_refused`,
+        )
+      const grantorView = await grantor.client.conversation.read(opened.id)
+      if (JSON.stringify(grantorView).includes(note))
+        failures.push("the follower's note was written on the grantor")
+      await grantor.client.conversation.unshare(opened.id, opened.credentialId)
+      const gone = await waitFor(
+        async () => (await sessionRow(run.page, opened.id).count()) === 0,
+        60_000,
+      )
+      if (!gone) failures.push("unshare left the granted chat in the window")
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    } finally {
+      if (enrolled.peerKey)
+        await run.client.peer.forget({ peerKey: enrolled.peerKey }).catch((error) => {
+          failures.push(`the grantor was not forgotten: ${error.message ?? error}`)
+        })
+      if (linked)
+        await setWindowLinking(run, false).catch((error) => {
+          failures.push(`linking was not turned back off: ${error.message ?? error}`)
+        })
+      await grantor.close()
+    }
   },
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
@@ -15444,6 +15548,164 @@ async function reachFromDevices(run, failures) {
   await page.locator('[data-rail-item="agents"]').click()
   await setSideRail(page, false, failures)
   return held
+}
+
+/** A second gateway that owns the chat this window will open. Native is on. */
+async function startGrantor(run) {
+  const port = await freePort()
+  const listen = await freePort()
+  const address = `127.0.0.1:${listen}`
+  const launch = scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario })
+  let gateway
+  try {
+    gateway = await startLocalGateway({
+      stage: "ci",
+      agent: run.stack.agent,
+      port,
+      instance: "shared-chat-grantor",
+      agentArgv: launch.command.argv,
+      stagedRuntime: launch.command.stagedRuntime,
+      semanticArgs: launch.command.semanticArgs,
+      model: launch.command.model,
+      mcpServers: [],
+      signedOut: true,
+      native: { enabled: true, listenAddress: address },
+    })
+    const client = await connectClient(gateway, "shared-chat-grantor", "panel")
+    return {
+      client,
+      address,
+      close: async () => {
+        client.close()
+        await gateway.stop()
+      },
+    }
+  } catch (error) {
+    await gateway?.stop()
+    throw error
+  }
+}
+
+/**
+ * Turn this window's gateway linking on or off, and reconnect the client.
+ * The restart is owned by the window: the browser's next conversation read
+ * is what says it came back, and that read is what keeps the connection
+ * refusal off the console check.
+ */
+async function setWindowLinking(run, enabled) {
+  // `during` reclassifies the restart's console lines and then resolves
+  // undefined. The window came back when this flag is set, which is the
+  // browser's next conversation read inside the observation.
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    let result
+    for (let tries = 0; tries < 20; tries += 1) {
+      try {
+        result = await run.client.pairing.setLinking(enabled)
+        break
+      } catch (error) {
+        if (!String(error).includes("pairing_busy") || tries === 19) throw error
+        await sleep(500)
+      }
+    }
+    if (result.applies !== "restarting") {
+      held = true
+      return true
+    }
+    run.client.close()
+    if (!(await run.restartConsole.readable(60_000))) return false
+    run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+    held = true
+    return true
+  })
+  if (!held)
+    throw new Error(`the window did not come back with linking ${enabled ? "on" : "off"}`)
+}
+
+/**
+ * Share one renamed chat from `grantor` to this window's gateway, and wait
+ * until the window's list names it.
+ */
+function samePeerKey(left, right) {
+  return (
+    left?.length === right?.length && left.every((byte, index) => byte === right[index])
+  )
+}
+
+async function grantSharedChat(run, grantor, step, enrolled) {
+  const id = randomUUID()
+  const title = `Shared chat ${step.index}`
+  await grantor.client.conversation.create({
+    conversationId: id,
+    agent: run.stack.agent,
+  })
+  // A conversation nothing was said in has no summary, so a rename is not
+  // stored and the follower's row has no title. Say something, then name it,
+  // and wait until the grantor's list shows that title before the follower
+  // copies the catalogue.
+  await grantor.client.conversation.submit(
+    grantor.client.conversation.prepare(id, "hello from the grantor"),
+  )
+  const said = await waitFor(async () => {
+    const row = (await grantor.client.conversation.list({})).conversations.find(
+      (each) => each.conversationId === id && each.title,
+    )
+    return row ?? null
+  }, 30_000)
+  if (!said) throw new Error("the granted chat was never listed on the grantor")
+  await grantor.client.conversation.rename(id, title)
+  const named = await waitFor(async () => {
+    const row = (await grantor.client.conversation.list({})).conversations.find(
+      (each) => each.conversationId === id && each.title === title,
+    )
+    return row ?? null
+  }, 15_000)
+  if (!named) throw new Error("the grantor did not keep the shared chat's title")
+  const created = await grantor.client.pairing.create({ enrollee: "gateway" })
+  const joined = await run.client.peer.enroll({
+    address: grantor.address,
+    code: created.code,
+  })
+  enrolled.peerKey = joined.peerKey
+  let claimed
+  for (let tries = 0; tries < 40 && !claimed; tries += 1) {
+    claimed = (await grantor.client.pairing.status(created.status.invitationId))
+      .claimedDeviceKey
+    if (!claimed) await sleep(250)
+  }
+  if (!claimed) throw new Error("the follower never claimed the grantor's invitation")
+  const approved = await grantor.client.pairing.approve(
+    created.status.invitationId,
+    claimed,
+  )
+  if (approved.activationStopped)
+    throw new Error(`approving the follower stopped: ${approved.activationStopped}`)
+  const peer = await waitFor(async () => {
+    const found = (await run.client.peer.list()).items.find((item) =>
+      samePeerKey(item.peerKey, enrolled.peerKey),
+    )
+    return found?.phase === "active" && found.credentialId ? found : null
+  }, 45_000)
+  if (!peer?.credentialId) {
+    const found = (await run.client.peer.list()).items.find((item) =>
+      samePeerKey(item.peerKey, enrolled.peerKey),
+    )
+    throw new Error(
+      `the follower has no credential for the grantor (${found?.phase ?? "absent"})`,
+    )
+  }
+  await grantor.client.conversation.share(id, peer.credentialId, ["read"])
+  await run.client.peer.follow({
+    peerKey: peer.peerKey,
+    conversations: [id],
+    keepBytes: 268435456,
+  })
+  const listed = await waitFor(async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.some((each) => each.conversationId === id) ? id : null
+  }, 45_000)
+  if (!listed) throw new Error("the granted chat never joined the follower's list")
+  return { id, title, credentialId: peer.credentialId }
 }
 
 /**

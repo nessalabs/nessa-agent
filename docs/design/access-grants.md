@@ -1764,6 +1764,54 @@ two databases.
 The access-grant refactor.
 ```
 
+Implemented. On the follower, `conversation.list`, `conversation.observe`,
+`conversation.read`, and `conversation.subscribe` read the peer cache of
+chats the follower chose to follow. Cedar's `owner.list` and `owner.read`
+admit that read for the local catalogue owner; anyone else is told the
+conversation is not found. The chat is that cache's saved projection, with
+read-only capabilities. A command that would change a chat the caller may
+read is refused `capabilities_refused` and is not sent to the grantor. The
+conversation metadata file is not written. A file or image the transcript
+names is read from the granting peer, one range at a time, for the catalogue
+owner Cedar admits. The grantor admits that range through `grant.artifact_read`
+when the peer's grant includes read. A peer cache that cannot be read leaves the list
+incomplete, so a chat it holds is not treated as gone. One retained transcript
+that cannot be read does the same: the rows that were read stay, and the list
+stays incomplete, so the missing row is not a withdrawal. Once a grant frame
+is stored, it is the membership: a catalogue row whose grant was revoked is
+not listed. The list names that set even when the local page is incomplete,
+so unshare takes the row off the window without waiting for the page to finish.
+A set longer than the field can carry is left off the list, so the extra chats
+are not reported as withdrawn. Two peers that grant
+the same conversation id contribute one row, the first peer's, and that
+copy's archived flag is the one the list uses. A local
+conversation, including one archived or deleted, is not listed again from a
+peer. A later observe page trusts its offset only while the replica list is
+the one that minted it. When that list has changed, the page stays
+incomplete and carries no cursor, so the walk does not claim membership.
+The catalogue is read so the list has the title and the agent, and a
+follow snapshot wakes that list as soon as the cache holds the chat,
+while the follow is still open. A grant copied after that snapshot is
+still named: the list keeps the catalogue row when it has one, and adds
+the retained transcript when it does not. The combined list is ordered
+newest first, so a new shared chat is not the first row cut from a full
+frame. The rows a list frame names are on screen when the frame arrives. Each
+frame is a clock. A writer still working from an older frame cannot take
+out a row a newer frame has named, and cannot put back a row a newer
+complete frame left out. A finished observe walk keeps the rows its frame
+named. The title is the grantor's: something is said, then the chat is
+renamed, and that title is what the follower's row shows. A grant the catalogue already lists keeps the snapshot's update time unless the retained transcript's saved activity is later. That time is the fold's, so a later list read of an unchanged chat does not make it look newly updated. A walk still running for an older frame
+does not put that older membership back. A catalogue reset or a damaged
+cache is returned before the follow, so the poller empties the cache and
+reads it again. A replica whose transcript has no cursor is not opened. The agent is the
+catalogue entry's when the snapshot has one, and otherwise the provider the
+retained transcript was opened under. That cursor's id uses a UUID run `ConversationId`
+refuses, so it cannot be a local conversation's own cursor. Composition injects the peer-cache adapter. Rows are
+appended only into the room a list or observe page has left, and a page that
+cannot hold them stays incomplete. A paired device of the follower and the
+owner phone do not receive these rows. Live updates from the grantor, and a peer's own comment
+or drive, stay with the later slices.
+
 ### 3. Let a peer comment and drive under its grant
 
 ```markdown

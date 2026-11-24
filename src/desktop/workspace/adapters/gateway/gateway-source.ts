@@ -883,6 +883,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
   // How many list frames have come: only the newest queued is applied (D18).
   let listFrames = 0
+  // The frame that last named each session, and the newest complete frame
+  // that left it out. A writer working from an older frame cannot take out
+  // a row a newer frame has named, or put back a row a newer frame omitted.
+  let listClock = 0
+  const namedAt = new Map<string, number>()
+  const omittedAt = new Map<string, number>()
+  // Shared chats the last list named in `sharedConversationIds`. That set is
+  // the whole shared membership even when the local page is incomplete, so a
+  // grant that leaves it is taken out without waiting for a finished walk.
+  let sharedSeen = new Set<string>()
 
   /** Lets a conversation's subscription go: no frame or end of it applies after. */
   const unfollow = (sessionId: string, why: unknown) => {
@@ -916,16 +926,38 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * only when `complete` is true — a session it does not name taken out. An
    * incomplete result proves nothing of what it leaves out.
    */
-  const applyList = (result: ConversationListResult): void => {
+  const applyList = (result: ConversationListResult, clock: number): void => {
     const listed = new Set<string>()
     for (const row of result.conversations) {
+      // A newer complete frame already left this row out.
+      if ((omittedAt.get(row.conversationId) ?? 0) > clock) continue
       listed.add(row.conversationId)
+      const named = namedAt.get(row.conversationId) ?? 0
+      if (clock >= named) namedAt.set(row.conversationId, clock)
       rows.set(row.conversationId, row)
       publish(row.conversationId)
     }
     if (result.complete)
-      for (const sessionId of summaries.keys())
-        if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
+      for (const sessionId of summaries.keys()) {
+        if (listed.has(sessionId)) continue
+        omittedAt.set(sessionId, Math.max(omittedAt.get(sessionId) ?? 0, clock))
+        if (takenOut(sessionId)) continue
+        // This result was read before a later frame named the session.
+        if ((namedAt.get(sessionId) ?? 0) > clock) continue
+        remove(sessionId)
+      }
+    const sharedIds = result.sharedConversationIds
+    if (sharedIds) {
+      const now = new Set(sharedIds)
+      for (const sessionId of sharedSeen) {
+        if (now.has(sessionId)) continue
+        omittedAt.set(sessionId, Math.max(omittedAt.get(sessionId) ?? 0, clock))
+        if (takenOut(sessionId)) continue
+        if ((namedAt.get(sessionId) ?? 0) > clock) continue
+        remove(sessionId)
+      }
+      sharedSeen = now
+    }
     noteAsks()
   }
 
@@ -970,7 +1002,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         cursor === undefined ? {} : { cursor },
       )
       for (const row of page.conversations) observed.set(row.conversationId, row)
-      if (page.complete) return { conversations: [...observed.values()], complete: true }
+      if (page.complete) {
+        // The list frame already named these rows. A finished walk fills in
+        // what that frame cut; it does not drop a row the frame named, such
+        // as a granted chat the local catalogue page does not repeat.
+        const merged = new Map(
+          listed.conversations.map((row) => [row.conversationId, row] as const),
+        )
+        for (const [id, row] of observed) merged.set(id, row)
+        return { conversations: [...merged.values()], complete: true }
+      }
       if (page.cursor === undefined || !cursorAdvances(cursor, page.cursor)) {
         const merged = new Map(
           listed.conversations.map((row) => [row.conversationId, row] as const),
@@ -995,6 +1036,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     connected: GatewayClient,
     result: ConversationListResult,
     current: () => boolean,
+    clock: number,
     // What was on its way as the frame came; a walk owed again keeps them,
     // since the frame was read no later than then.
     crossed = new Set(archiving),
@@ -1008,35 +1050,39 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // This frame walks now: a walk owed by an earlier one is no longer owed.
       unwalked = undefined
       const apply = (applied: ConversationListResult) =>
-        applyList({
-          ...applied,
-          conversations: applied.conversations
-            .filter(
-              (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
-            )
-            .map((row) => {
-              const renamed = crossedRenames.get(row.conversationId)
-              // Only while it is still the newest title: a walk owed again
-              // may come after a later rename, here or elsewhere.
-              const newest =
-                renaming.get(row.conversationId) === renamed ||
-                (!renaming.has(row.conversationId) &&
-                  rows.get(row.conversationId)?.title === renamed?.title)
-              if (!renamed?.stored) return row
-              // A frame cannot be ordered against the rename's answer. One
-              // that says a title from before the rename was read before it
-              // was stored; any other title came after it was asked, from
-              // the gateway or another client, and is the gateway's.
-              if (!renamed.before.has(row.title)) return row
-              if (newest) return { ...row, title: renamed.title }
-              // A later title is known: the newest stored here, else the row's.
-              const later = renaming.get(row.conversationId)
-              const title = later?.stored
-                ? later.title
-                : rows.get(row.conversationId)?.title
-              return title === undefined ? row : { ...row, title }
-            }),
-        })
+        applyList(
+          {
+            ...applied,
+            conversations: applied.conversations
+              .filter(
+                (row) =>
+                  !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
+              )
+              .map((row) => {
+                const renamed = crossedRenames.get(row.conversationId)
+                // Only while it is still the newest title: a walk owed again
+                // may come after a later rename, here or elsewhere.
+                const newest =
+                  renaming.get(row.conversationId) === renamed ||
+                  (!renaming.has(row.conversationId) &&
+                    rows.get(row.conversationId)?.title === renamed?.title)
+                if (!renamed?.stored) return row
+                // A frame cannot be ordered against the rename's answer. One
+                // that says a title from before the rename was read before it
+                // was stored; any other title came after it was asked, from
+                // the gateway or another client, and is the gateway's.
+                if (!renamed.before.has(row.title)) return row
+                if (newest) return { ...row, title: renamed.title }
+                // A later title is known: the newest stored here, else the row's.
+                const later = renaming.get(row.conversationId)
+                const title = later?.stored
+                  ? later.title
+                  : rows.get(row.conversationId)?.title
+                return title === undefined ? row : { ...row, title }
+              }),
+          },
+          clock,
+        )
       let applied = result
       if (!result.complete) {
         try {
@@ -1045,20 +1091,23 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             { subject: "index" },
           )
         } catch (error) {
-          if (!current()) return
+          if (!current() || mine !== listFrames) return
           // The rows the frame named still apply. The rest is not known, and
           // an unchanged list sends no frame to walk again: the list stays
           // unapplied, a gap, and the walk is owed to the retry clock, as an
           // open that failed is (D18, D17).
           apply(result)
-          unwalked = () => listFrame(connected, result, current, crossed, crossedRenames)
+          unwalked = () =>
+            listFrame(connected, result, current, clock, crossed, crossedRenames)
           gap = true
           settle(list, { error })
           scheduleRetry()
           return
         }
       }
-      if (!current()) return
+      // A frame that arrived while this walk ran is the membership. Applying
+      // this older page would take its rows back out.
+      if (!current() || mine !== listFrames) return
       apply(applied)
       list.applied = true
       if (gap) resync()
@@ -1099,7 +1148,15 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           .list(
             {
               list: (result) => {
-                if (current()) listFrame(connected, result, current)
+                if (!current()) return
+                // This frame names its rows now, before any walk. A writer
+                // still working from an older frame cannot take them out.
+                const clock = ++listClock
+                // A complete frame is membership, including what it leaves
+                // out. An incomplete one only names the rows it carries; the
+                // walk decides the rest.
+                applyList(result, clock)
+                listFrame(connected, result, current, clock)
               },
               ended: (end) => {
                 if (current()) listEnded(end)

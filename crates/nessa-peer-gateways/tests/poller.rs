@@ -494,7 +494,7 @@ async fn a_read_that_panics_still_reports_what_it_withdrew() {
     assert!(joined.as_ref().is_err_and(JoinError::is_panic));
     assert_eq!(
         read_ended(joined, &withdrawn),
-        (Err(ReadFailure::Cache), vec!["withdrawn".to_owned()])
+        (Err(ReadFailure::Cache), vec!["withdrawn".to_owned()], false)
     );
 }
 

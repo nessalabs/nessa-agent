@@ -87,7 +87,7 @@ pub(crate) fn run_local<C: SavedReads + CacheResets>(
             SavedTranscript::Deleted => {
                 json!({"state":"deleted", "connectionCheck":"notPerformed"})
             }
-            SavedTranscript::Retained { progress, view } => json!({
+            SavedTranscript::Retained { progress, view, .. } => json!({
                 "connectionCheck":"notPerformed", "downloaded":progress.downloaded.to_string(),
                 "applied":progress.applied.to_string(), "facts":progress.facts.to_string(), "view":view,
             }),
