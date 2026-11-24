@@ -1,6 +1,7 @@
 //! One SDK physical operation executes outside Tokio enter and joins its source on drop.
 use super::source::ReadSelection;
 use crate::application::{RecordHead, RecordReadError, RecordReadOperation, RecordReadValue};
+use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_sdk::{
     application::agent_execution::sessions::StorageError,
     domain::agent_execution::sessions::SessionId,
@@ -148,6 +149,8 @@ pub(super) fn storage_error(error: StorageError) -> RecordReadError {
 
 fn source_error(error: SourceError) -> RecordReadError {
     match error {
+        SourceError::Denied => RecordReadError::Admission(ReadRefusal::Forbidden),
+        SourceError::Incompatible(reason) => RecordReadError::Incompatible(reason),
         SourceError::Unavailable => RecordReadError::TemporarilyUnavailable,
         SourceError::Pruned => RecordReadError::HistoryPruned,
         SourceError::InvalidRequest => RecordReadError::InvalidRequest,
@@ -159,6 +162,22 @@ fn source_error(error: SourceError) -> RecordReadError {
 #[cfg(test)]
 mod discover_steps {
     use super::*;
+
+    #[test]
+    fn single_pin_preserves_typed_record_capability_and_denial() {
+        use nessa_protocol::conversation::read_scope::ReadRefusal;
+        use nessa_sync::replication::domain::CapabilityError;
+        let reason = CapabilityError::MissingReader(4);
+        assert_eq!(
+            source_error(SourceError::Incompatible(reason)),
+            RecordReadError::Incompatible(reason)
+        );
+        assert_eq!(
+            source_error(SourceError::Denied),
+            RecordReadError::Admission(ReadRefusal::Forbidden)
+        );
+    }
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]

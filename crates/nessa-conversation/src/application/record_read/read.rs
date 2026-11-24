@@ -6,12 +6,14 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::{
     passive_read_selector, validate_record_selector, ReadRefusal, ReceiverReadScope,
 };
-use nessa_sync::replication::domain::{Page, PageRequest, Scope};
+use nessa_sync::replication::domain::{CapabilityError, Page, PageRequest, Scope};
 use std::{future::Future, pin::Pin};
 
 /// Refusals keep admission, physical identity, and source failures distinct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordReadError {
+    /// The source's announced capabilities cannot be used by this reader.
+    Incompatible(CapabilityError),
     Admission(ReadRefusal),
     InvalidRequest,
     IdentityChanged,

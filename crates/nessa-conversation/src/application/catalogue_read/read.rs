@@ -11,15 +11,22 @@ use nessa_protocol::conversation::read_scope::{
 };
 use nessa_sync::replication::{
     catalogue::{
-        validate_catalogue_pass, validate_manifest_request, CataloguePass, ManifestEntry,
-        ManifestPage, ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
+        validate_catalogue_pass, validate_manifest_request, CatalogueHorizonHead, CataloguePass,
+        ManifestEntry, ManifestPage, ManifestRequest, ResolvedEntry, MAX_CATALOGUE_ENTRIES,
     },
-    domain::Scope,
+    domain::{CapabilityError, Scope},
 };
 use std::{future::Future, pin::Pin};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogueReadError {
+    Incompatible(CapabilityError),
+    HorizonRequired,
+    HorizonVersion(u16),
+    HorizonExpired {
+        completed: u64,
+        head: Box<CatalogueHorizonHead>,
+    },
     Admission(ReadRefusal),
     InvalidRequest,
     IdentityChanged,

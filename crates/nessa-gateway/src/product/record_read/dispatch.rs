@@ -131,6 +131,10 @@ pub async fn dispatch(
 fn error_code(error: RecordReadError) -> RecordReadErrorCode {
     match error {
         RecordReadError::Admission(refusal) => refusal_code(refusal),
+        // Product v1 has no capability negotiation. Preserve the typed
+        // reason in the source boundary, but do not pretend this read is
+        // retryable or that the stream identity changed.
+        RecordReadError::Incompatible(_) => RecordReadErrorCode::Unverifiable,
         RecordReadError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
@@ -171,3 +175,7 @@ pub(in crate::product) fn refusal_code(refusal: ReadRefusal) -> RecordReadErrorC
         ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/product/record_read/dispatch.rs"]
+mod tests;

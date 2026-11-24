@@ -11,7 +11,7 @@ use nessa_sync::replication::{
         CatalogueError, CatalogueProgressError, CatalogueSourceError, CatalogueStoreError,
         CatalogueValidationError,
     },
-    domain::ValidationError,
+    domain::{CapabilityError, ValidationError},
 };
 use serde_json::{json, Value};
 pub(crate) fn gateway_failure(error: GatewayError) -> Value {
@@ -124,11 +124,48 @@ fn validation_code(error: &ValidationError) -> &'static str {
         ValidationError::Noncontiguous => "noncontiguous",
         ValidationError::WrongRecord => "wrongRecord",
         ValidationError::PositionOverflow => "positionOverflow",
+        ValidationError::HeadBehindProgress => "headBehindProgress",
     }
 }
+fn capability_failure(error: &CapabilityError) -> Value {
+    match error {
+        CapabilityError::UnsupportedVersion(version) => {
+            json!({"code":"unsupportedVersion","version":version})
+        }
+        CapabilityError::MissingReader(required) => {
+            json!({"code":"missingReader","required":required.to_string()})
+        }
+        CapabilityError::MissingWriter(required) => {
+            json!({"code":"missingWriter","required":required.to_string()})
+        }
+        CapabilityError::InvalidSupport { reader, writer } => {
+            json!({"code":"invalidSupport","reader":reader.to_string(),"writer":writer.to_string()})
+        }
+    }
+}
+
+fn source_failure(error: &SourceError) -> Value {
+    let code = match error {
+        SourceError::Unavailable => "unavailable",
+        SourceError::Pruned => "pruned",
+        SourceError::InvalidRequest => "invalidRequest",
+        SourceError::IdentityChanged => "identityChanged",
+        SourceError::OversizedRecord => "oversizedRecord",
+        SourceError::Denied => "denied",
+        SourceError::Incompatible(reason) => {
+            return json!({"code":"incompatible","cause":capability_failure(reason)})
+        }
+    };
+    json!({"code":code})
+}
+
 pub(super) fn core_failure(error: &SyncError) -> Value {
     let code = match error {
         SyncError::Denied => "denied",
+        SyncError::InvalidAccessResponse => "invalidAccessResponse",
+        SyncError::Incompatible(reason) => {
+            return json!({"code":"incompatible","cause":capability_failure(reason)})
+        }
         SyncError::Unverifiable => "unverifiable",
         SyncError::WrongAccessScope => "wrongAccessScope",
         SyncError::SourceBehindCheckpoint => "sourceBehindCheckpoint",
@@ -136,7 +173,7 @@ pub(super) fn core_failure(error: &SyncError) -> Value {
             return json!({"code":"validation","cause":{"code":validation_code(cause)}})
         }
         SyncError::Source(cause) => {
-            return json!({"code":"source","cause":{"code":match cause { SourceError::Unavailable=>"unavailable",SourceError::Pruned=>"pruned",SourceError::InvalidRequest=>"invalidRequest",SourceError::IdentityChanged=>"identityChanged",SourceError::OversizedRecord=>"oversizedRecord"}}})
+            return json!({"code":"source","cause":source_failure(cause)});
         }
         SyncError::Store(cause) => {
             let code = match cause {
@@ -177,20 +214,67 @@ fn catalogue_progress_failure(error: &CatalogueProgressError) -> Value {
     };
     json!({"code":code})
 }
+fn catalogue_source_failure(error: &CatalogueSourceError) -> Value {
+    let code = match error {
+        CatalogueSourceError::Unavailable => "unavailable",
+        CatalogueSourceError::IdentityChanged => "identityChanged",
+        CatalogueSourceError::InvalidRequest => "invalidRequest",
+        CatalogueSourceError::OversizedEntry => "oversizedEntry",
+        CatalogueSourceError::Denied => "denied",
+        CatalogueSourceError::HorizonRequired => "horizonRequired",
+        CatalogueSourceError::HorizonVersion(version) => {
+            return json!({"code":"horizonVersion","version":version})
+        }
+        CatalogueSourceError::HorizonExpired { completed, head } => {
+            return json!({"code":"horizonExpired","completed":completed.to_string(),"horizon":head.horizon.to_string(),"revision":head.source.position().to_string(),"version":head.version})
+        }
+        CatalogueSourceError::Incompatible(reason) => {
+            return json!({"code":"incompatible","cause":capability_failure(reason)})
+        }
+    };
+    json!({"code":code})
+}
+
+fn catalogue_store_failure(error: &CatalogueStoreError) -> Value {
+    let code = match error {
+        CatalogueStoreError::Failed => "failed",
+        CatalogueStoreError::Uncertain => "uncertain",
+        CatalogueStoreError::Stale => "stale",
+        CatalogueStoreError::ResetRequired => "resetRequired",
+        CatalogueStoreError::Fenced => "fenced",
+        CatalogueStoreError::Conflict => "conflict",
+        CatalogueStoreError::HorizonExpired { completed, horizon } => {
+            return json!({"code":"horizonExpired","completed":completed.to_string(),"horizon":horizon.to_string()})
+        }
+        CatalogueStoreError::HorizonRegressed { previous, received } => {
+            return json!({"code":"horizonRegressed","previous":previous.to_string(),"received":received.to_string()})
+        }
+    };
+    json!({"code":code})
+}
+
 pub(super) fn catalogue_failure(error: &CatalogueError) -> Value {
     let code = match error {
         CatalogueError::Denied => "denied",
+        CatalogueError::InvalidAccessResponse => "invalidAccessResponse",
+        CatalogueError::Incompatible(reason) => {
+            return json!({"code":"incompatible","cause":capability_failure(reason)})
+        }
         CatalogueError::Unverifiable => "unverifiable",
         CatalogueError::WrongAccessScope => "wrongAccessScope",
         CatalogueError::Validation(cause) => {
             return json!({"code":"validation","cause":{"code":catalogue_validation_code(cause)}})
         }
         CatalogueError::Source(cause) => {
-            return json!({"code":"source","cause":{"code":match cause { CatalogueSourceError::Unavailable=>"unavailable",CatalogueSourceError::IdentityChanged=>"identityChanged",CatalogueSourceError::InvalidRequest=>"invalidRequest",CatalogueSourceError::OversizedEntry=>"oversizedEntry"}}})
+            return json!({"code":"source","cause":catalogue_source_failure(cause)});
         }
         CatalogueError::Store(cause) => {
-            return json!({"code":"store","cause":{"code":match cause {CatalogueStoreError::Failed=>"failed",CatalogueStoreError::Uncertain=>"uncertain",CatalogueStoreError::Stale=>"stale",CatalogueStoreError::ResetRequired=>"resetRequired",CatalogueStoreError::Fenced=>"fenced",CatalogueStoreError::Conflict=>"conflict"}}})
+            return json!({"code":"store","cause":catalogue_store_failure(cause)});
         }
     };
     json!({"code":code})
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/read_only_sync/entrypoint/online/causes.rs"]
+mod tests;
