@@ -69,6 +69,7 @@ use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_S
 use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 #[cfg(feature = "test-support")]
 use nessa_sync::replication::application::{RecordSource, ScopeAuthorizer};
+use nessa_sync::replication::infrastructure::session::SessionInterrupt;
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -79,7 +80,7 @@ use nessa_sync::replication::{
 pub(crate) use relay::race;
 use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
-use std::io::{Read, Result as IoResult, Write};
+use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -278,7 +279,7 @@ pub enum ReadFailure {
 #[derive(Default)]
 pub struct ReadStop {
     stopped: AtomicBool,
-    sockets: Mutex<Vec<StopSocket>>,
+    sockets: Mutex<Vec<Arc<StopSocket>>>,
     /// Held by `stop` while the flag is set, and by [`Self::admit`] while a
     /// hard link publishes a held file. The call that takes it first wins.
     publication: Mutex<()>,
@@ -286,10 +287,18 @@ pub struct ReadStop {
 /// A socket belongs to one read, even when several reads share cancellation.
 struct StopSocket {
     owner: Arc<()>,
-    /// This socket alone, so it leaves the list when it closes, while other
-    /// sockets of the same read stay.
-    id: Arc<()>,
     socket: TcpStream,
+    interrupted: AtomicBool,
+}
+impl SessionInterrupt for StopSocket {
+    fn interrupt(&self) -> IoResult<()> {
+        self.interrupted.store(true, Ordering::Release);
+        // The local fence is not evidence that the OS accepted shutdown.
+        match self.socket.shutdown(Shutdown::Both) {
+            Err(error) if error.kind() == ErrorKind::NotConnected => Ok(()),
+            result => result,
+        }
+    }
 }
 impl ReadStop {
     /// A stop not yet asked for.
@@ -308,7 +317,7 @@ impl ReadStop {
             self.stopped.store(true, Ordering::SeqCst);
         }
         for socket in self.lock().drain(..) {
-            let _ = socket.socket.shutdown(Shutdown::Both);
+            let _ = socket.interrupt();
         }
     }
     /// Run `link` while this holds the publication gate. `Err` when `stop`
@@ -331,27 +340,26 @@ impl ReadStop {
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<StopSocket>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<StopSocket>>> {
         self.sockets.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<()>> {
-        let handle = socket.try_clone()?;
-        let id = Arc::new(());
-        self.lock().push(StopSocket {
+    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<StopSocket>> {
+        let handle = Arc::new(StopSocket {
             owner: owner.clone(),
-            id: id.clone(),
-            socket: handle,
+            socket: socket.try_clone()?,
+            interrupted: AtomicBool::new(false),
         });
+        self.lock().push(handle.clone());
         // A stop between the check in `connect` and here still reaches it.
         if self.is_stopped() {
             self.stop();
         }
-        Ok(id)
+        Ok(handle)
     }
     /// One socket closed: drop its handle, so a read that reopens sessions
     /// for as long as it lives does not keep every closed one open.
-    fn forget(&self, id: &Arc<()>) {
-        self.lock().retain(|socket| !Arc::ptr_eq(&socket.id, id));
+    fn forget(&self, handle: &Arc<StopSocket>) {
+        self.lock().retain(|socket| !Arc::ptr_eq(socket, handle));
     }
     fn release(&self, owner: &Arc<()>) {
         self.lock()
@@ -397,7 +405,7 @@ impl Stopping {
         self.until
             .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
     }
-    fn register(&self, socket: &TcpStream) -> IoResult<Arc<()>> {
+    fn register(&self, socket: &TcpStream) -> IoResult<Arc<StopSocket>> {
         self.stop.register(&self.owner, socket)
     }
     fn release(&self) {
@@ -583,6 +591,12 @@ struct StoppableConnector {
 }
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
+        self.connect_socket(address, timeout)
+            .map(|socket| Box::new(socket) as Box<dyn GatewayStream>)
+    }
+}
+impl StoppableConnector {
+    fn connect_socket(&self, address: SocketAddr, timeout: Duration) -> IoResult<Socket> {
         // A dial itself cannot be stopped; it is bounded by `timeout`, at
         // most [`HANDSHAKE`]. With a relay the race between the two dials
         // asks the stop and the injected clock's budget as it waits.
@@ -618,8 +632,8 @@ impl GatewayConnector for StoppableConnector {
             Ordering::SeqCst,
         );
         let socket = connected?;
-        let id = self.ending.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.ending.stop.clone(), id)))
+        let handle = self.ending.register(&socket)?;
+        Ok(Socket::new(socket, self.ending.stop.clone(), handle))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -629,26 +643,34 @@ impl GatewayConnector for StoppableConnector {
 struct Socket {
     stream: TcpStream,
     stop: Arc<ReadStop>,
-    /// Its entry in `stop`, removed when this socket is dropped.
-    id: Arc<()>,
+    /// Its one exact shutdown descriptor, shared with the run-wide stop.
+    handle: Arc<StopSocket>,
     read_for: Cell<Duration>,
     write_for: Cell<Duration>,
 }
 impl Drop for Socket {
     fn drop(&mut self) {
-        self.stop.forget(&self.id);
+        let _ = self.handle.interrupt();
+        self.stop.forget(&self.handle);
     }
 }
 impl Socket {
-    fn new(stream: TcpStream, stop: Arc<ReadStop>, id: Arc<()>) -> Self {
+    fn new(stream: TcpStream, stop: Arc<ReadStop>, handle: Arc<StopSocket>) -> Self {
         Self {
             stream,
             stop,
-            id,
+            handle,
             read_for: Cell::new(STOP_SLICE),
             write_for: Cell::new(STOP_SLICE),
         }
     }
+    fn check_open(&self) -> IoResult<()> {
+        if self.stop.is_stopped() || self.handle.interrupted.load(Ordering::Acquire) {
+            return Err(io::Error::from(ErrorKind::ConnectionAborted));
+        }
+        Ok(())
+    }
+
     /// `operation` on the stream, its wait `total` taken a slice at a time.
     fn sliced<T>(
         &mut self,
@@ -658,9 +680,7 @@ impl Socket {
     ) -> IoResult<T> {
         let mut left = total;
         loop {
-            if self.stop.is_stopped() {
-                return Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
-            }
+            self.check_open()?;
             let slice = left.min(STOP_SLICE);
             set(&self.stream, Some(slice))?;
             match operation(&mut self.stream) {
@@ -696,6 +716,7 @@ impl Write for Socket {
         )
     }
     fn flush(&mut self) -> IoResult<()> {
+        self.check_open()?;
         self.stream.flush()
     }
 }
@@ -709,9 +730,15 @@ impl GatewayStream for Socket {
         Ok(())
     }
     fn shutdown(&self) -> IoResult<()> {
-        self.stream.shutdown(Shutdown::Both)
+        self.handle.interrupt()
     }
 }
+
+// Opt-in only in the process fixture; the normal catalogue and retained
+// refresh still choose Product and have one cache owner.
+#[cfg(feature = "test-support")]
+#[path = "retained/carrier.rs"]
+mod carrier;
 
 /// A complete frame continues the staged prefix only when it names the same
 /// snapshot. A replacement that fits in one frame would otherwise put the
@@ -2344,9 +2371,58 @@ mod grant_frames {
 
 #[cfg(test)]
 mod stop_sockets {
-    use super::ReadStop;
+    use super::{ReadStop, SessionInterrupt, Socket};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn interrupting_one_retained_connection_leaves_the_other_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = ReadStop::new();
+        let run = Arc::new(());
+        let connect = || {
+            let stream = TcpStream::connect(address).unwrap();
+            let (peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let handle = stop.register(&run, &stream).unwrap();
+            (
+                Socket::new(stream, stop.clone(), handle.clone()),
+                peer,
+                handle,
+            )
+        };
+        let (mut records, mut records_peer, interrupt) = connect();
+        let (mut product, mut product_peer, _) = connect();
+        interrupt.interrupt().unwrap();
+        interrupt.interrupt().unwrap();
+        assert!(!stop.is_stopped());
+        assert_eq!(
+            records.write(b"x").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            records.flush().unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(records_peer.read(&mut [0]).unwrap(), 0);
+
+        drop(records);
+        assert_eq!(stop.lock().len(), 1);
+        product.write_all(b"p").unwrap();
+        let mut byte = [0];
+        product_peer.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"p");
+
+        stop.stop();
+        assert_eq!(product_peer.read(&mut byte).unwrap(), 0);
+        assert_eq!(
+            product.write(b"x").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+    }
 
     #[test]
     fn a_closed_socket_leaves_the_stop_and_the_others_stay() {

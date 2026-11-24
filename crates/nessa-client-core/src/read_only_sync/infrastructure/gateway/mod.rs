@@ -9,6 +9,8 @@
 mod held_files;
 mod phone;
 mod session;
+#[cfg(feature = "test-support")]
+pub(crate) use session::select_native;
 pub(crate) use session::{
     subscription_refusal, CommandExchange, DeviceEvidence, GrantDelivery, LocalConnector, Session,
     SubscriptionDelivery,
