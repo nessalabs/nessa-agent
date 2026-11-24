@@ -1788,8 +1788,14 @@ while the follow is still open. A grant copied after that snapshot is
 still named: the list keeps the catalogue row when it has one, and adds
 the retained transcript when it does not. The combined list is ordered
 newest first, so a new shared chat is not the first row cut from a full
-frame. The rows a list frame names are on screen when the frame arrives, and a
-finished observe walk keeps them. A walk still running for an older frame
+frame. The rows a list frame names are on screen when the frame arrives. Each
+frame is a clock. A writer still working from an older frame cannot take
+out a row a newer frame has named, and cannot put back a row a newer
+complete frame left out. A finished observe walk keeps the rows its frame
+named. The title is the grantor's: something is said, then the chat is
+renamed, and that title is what the follower's row shows. A grant the catalogue already lists takes the later of
+the snapshot's update time and the copy's, so the copy is not the oldest
+row cut from a full frame. A walk still running for an older frame
 does not put that older membership back. A catalogue reset or a damaged
 cache is returned before the follow, so the poller empties the cache and
 reads it again. A replica whose transcript has no cursor is not opened. The agent is the

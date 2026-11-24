@@ -478,6 +478,35 @@ describe("the index and the list subscription", () => {
     ])
   })
 
+  it("an older walk cannot remove a row a newer frame named", async () => {
+    const { gateway, source, follow } = started()
+    for (const id of [conversationA, conversationB])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 1
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const held = deferred<void>()
+    let seen:
+      { conversations: { conversationId: string }[]; complete: boolean } | undefined
+    gateway.once("observe", async (normal) => {
+      seen = (await normal()) as {
+        conversations: { conversationId: string }[]
+        complete: boolean
+      }
+      await held.promise
+      return { ...seen, complete: true }
+    })
+    gateway.publishList()
+    await flush()
+    gateway.rows.set("d", row("d", { updatedAtMs: 1_000_000, title: "Shared chat" }))
+    gateway.publishList()
+    await flush()
+    held.resolve()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id)).toContain("d")
+  })
+
   it("a row a newer list frame names is shown while an older walk is still running", async () => {
     const { gateway, source, updates, follow } = started()
     for (const id of [conversationA, conversationB, "c"])

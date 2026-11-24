@@ -874,19 +874,26 @@ fn peer_rows(
 }
 
 /// Catalogue rows, plus retained grants the snapshot does not name. A grant
-/// the catalogue already lists stays that row.
+/// the catalogue already lists stays that row, and takes the later of the
+/// two update times so a copy that just landed is not the oldest row in a
+/// full frame.
 fn include_retained(
     mut rows: Vec<ConversationSummary>,
     retained: Vec<ConversationSummary>,
 ) -> Vec<ConversationSummary> {
-    let mut seen = HashSet::new();
-    for row in &rows {
-        seen.insert(row.conversation_id.clone());
+    let mut position = std::collections::HashMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        position.insert(row.conversation_id.clone(), index);
     }
     for row in retained {
-        if seen.insert(row.conversation_id.clone()) {
-            rows.push(row);
+        if let Some(index) = position.get(&row.conversation_id).copied() {
+            if row.updated_at_ms > rows[index].updated_at_ms {
+                rows[index].updated_at_ms = row.updated_at_ms;
+            }
+            continue;
         }
+        position.insert(row.conversation_id.clone(), rows.len());
+        rows.push(row);
     }
     rows
 }
@@ -1140,10 +1147,19 @@ mod tests {
     #[test]
     fn a_grant_the_catalogue_snapshot_missed_is_listed_once() {
         let catalogue = vec![summary("already")];
-        let retained = vec![summary("already"), summary("later")];
+        let mut copy = summary("already");
+        copy.updated_at_ms = 50;
+        let retained = vec![copy, summary("later")];
         let listed = include_retained(catalogue, retained);
-        let ids: Vec<_> = listed.into_iter().map(|row| row.conversation_id).collect();
+        let ids: Vec<_> = listed
+            .iter()
+            .map(|row| row.conversation_id.as_str())
+            .collect();
         assert_eq!(ids, ["already", "later"]);
+        assert_eq!(
+            listed[0].updated_at_ms, 50,
+            "the copy is newer than the snapshot"
+        );
     }
 
     struct Held {

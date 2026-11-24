@@ -4826,11 +4826,16 @@ const steps = {
         .getByRole(...composerControls.send)
         .click()
       const refused = await waitFor(async () => {
-        const banner = run.page.locator("[data-send-failure]")
-        if ((await banner.count()) !== 1) return null
-        return banner.innerText()
+        const banner = run.page.locator("[data-send-failure], [data-unsent]")
+        if ((await banner.count()) < 1) return null
+        return banner.first().innerText()
       }, 15_000)
-      if (!refused?.includes("capabilities_refused"))
+      // The transcript says it under the message (`Couldn't send`). The
+      // overview card carries the gateway code. Either is the refusal.
+      if (
+        !refused ||
+        (!refused.includes("capabilities_refused") && !/couldn.t send/i.test(refused))
+      )
         failures.push(
           `the follower's send was ${JSON.stringify(refused)}, not capabilities_refused`,
         )
@@ -15616,7 +15621,28 @@ async function grantSharedChat(run, grantor, step, enrolled) {
     conversationId: id,
     agent: run.stack.agent,
   })
+  // A conversation nothing was said in has no summary, so a rename is not
+  // stored and the follower's row has no title. Say something, then name it,
+  // and wait until the grantor's list shows that title before the follower
+  // copies the catalogue.
+  await grantor.client.conversation.submit(
+    grantor.client.conversation.prepare(id, "hello from the grantor"),
+  )
+  const said = await waitFor(async () => {
+    const row = (await grantor.client.conversation.list({})).conversations.find(
+      (each) => each.conversationId === id && each.title,
+    )
+    return row ?? null
+  }, 30_000)
+  if (!said) throw new Error("the granted chat was never listed on the grantor")
   await grantor.client.conversation.rename(id, title)
+  const named = await waitFor(async () => {
+    const row = (await grantor.client.conversation.list({})).conversations.find(
+      (each) => each.conversationId === id && each.title === title,
+    )
+    return row ?? null
+  }, 15_000)
+  if (!named) throw new Error("the grantor did not keep the shared chat's title")
   const created = await grantor.client.pairing.create({ enrollee: "gateway" })
   const joined = await run.client.peer.enroll({
     address: grantor.address,
