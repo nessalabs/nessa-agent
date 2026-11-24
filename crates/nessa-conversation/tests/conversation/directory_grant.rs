@@ -630,7 +630,8 @@ fn a_copied_binding_records_the_existing_resource_and_the_offered_path() {
         recorded.resource_id.as_deref(),
         Some(first.resource_id.as_str())
     );
-    assert_eq!(recorded.canonical_path, copy.to_str().unwrap());
+    let offered = std::fs::canonicalize(&copy).unwrap();
+    assert_eq!(recorded.canonical_path, offered.to_str().unwrap());
     assert_eq!(recorded.initiator, "owner");
     assert_eq!(recorded.before.as_deref(), Some("none"));
     assert_eq!(recorded.after.as_deref(), Some("none"));

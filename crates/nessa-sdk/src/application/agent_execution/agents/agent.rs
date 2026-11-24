@@ -184,6 +184,8 @@ struct ProposedReview {
     tool_id: ToolCallId,
     call: ToolReviewInput,
     initiation: Initiation,
+    /// Principal who submitted this turn, from the saved invocation.
+    caller: String,
 }
 
 /// Run the permission-review hooks without holding the evidence lock.
@@ -250,6 +252,7 @@ where
             &proposed.tool_id,
             &proposed.call,
             &proposed.initiation,
+            &proposed.caller,
             &suffix,
         );
         drop(guard);
@@ -1881,19 +1884,20 @@ impl Agent {
                 (
                     capture.then(|| EvaluationSuffix::capture(&record.events)),
                     record.initiation.clone(),
+                    record.actor.principal_id().to_owned(),
                 )
             })
             .await
         {
-            Ok((evaluation, initiation)) => evaluation
+            Ok((evaluation, initiation, caller)) => evaluation
                 .map_or(Ok(()), |evaluation| {
-                    hooks.before(&session_id, &input, &evaluation)
+                    hooks.before(&session_id, &input, &caller, &evaluation)
                 })
-                .map(|()| initiation),
+                .map(|()| (initiation, caller)),
             Err(error) => Err(AgentError::Storage(error)),
         };
-        let initiation = match before_gate {
-            Ok(initiation) => initiation,
+        let (initiation, caller) = match before_gate {
+            Ok(saved) => saved,
             Err(mut error) => {
                 if let Err(storage) = self
                     .record_undispatched_stop(index, saved_index, work)
@@ -2270,6 +2274,7 @@ impl Agent {
                                         tool_id: tool_id.clone(),
                                         call: call.clone(),
                                         initiation: initiation.clone(),
+                                        caller: caller.clone(),
                                     })
                                 }
                                 _ => None,
@@ -2575,7 +2580,13 @@ impl Agent {
             .with_invocation_events(index, EvaluationSuffix::capture)
             .await
             .unwrap_or_else(|_| EvaluationSuffix::incomplete());
-        hooks.after(session_id, input, &evaluation, result)
+        let caller = self
+            .inner
+            .manager
+            .with_invocation(index, |record| record.actor.principal_id().to_owned())
+            .await
+            .unwrap_or_default();
+        hooks.after(session_id, input, &caller, &evaluation, result)
     }
 
     /// Apply a permission-review refusal after the review has been retained.
@@ -3233,6 +3244,7 @@ mod hook_wait_tests {
                     arguments_json: "{}".into(),
                 },
                 initiation: Initiation::owner(),
+                caller: "owner".into(),
             },
             EvaluationSuffix::incomplete(),
             &Arc::new(AtomicBool::new(false)),
@@ -3290,6 +3302,7 @@ mod hook_wait_tests {
                         arguments_json: "{}".into(),
                     },
                     initiation: Initiation::owner(),
+                    caller: "owner".into(),
                 },
                 EvaluationSuffix::incomplete(),
                 &running,

@@ -71,6 +71,8 @@ pub struct InvocationContext<'a> {
     pub session_id: &'a ExecutionSessionId,
     /// Borrowed submitted message, execution identity, and estimated budgets.
     pub request: &'a ExecutionRequest,
+    /// Principal who submitted this turn, from the saved invocation.
+    pub caller: &'a str,
     /// Read-only suffix of this invocation's retained observations.
     ///
     /// Empty before the provider emits anything. At settlement it is the same
@@ -346,6 +348,7 @@ impl InvocationHooks {
         &self,
         session_id: &ExecutionSessionId,
         request: &ExecutionRequest,
+        caller: &str,
         evaluation: &EvaluationSuffix,
     ) -> Result<(), AgentError> {
         for (index, handler) in self.handlers.iter().enumerate() {
@@ -353,6 +356,7 @@ impl InvocationHooks {
             let context = InvocationContext {
                 session_id,
                 request,
+                caller,
                 observations,
             };
             if let Err(error) = invoke(|| handler.before_invocation(&context)) {
@@ -374,9 +378,10 @@ impl InvocationHooks {
         tool_id: &ToolCallId,
         input: &ToolReviewInput,
         initiation: &Initiation,
+        caller: &str,
         evaluation: &EvaluationSuffix,
     ) -> PermissionReviewDecision {
-        let call = ProposedToolCall::new(tool_id, input, initiation);
+        let call = ProposedToolCall::new(tool_id, input, initiation, caller);
         let observations = evaluation.window();
         let reviewing = self
             .handlers
@@ -428,6 +433,7 @@ impl InvocationHooks {
         &self,
         session_id: &ExecutionSessionId,
         request: &ExecutionRequest,
+        caller: &str,
         evaluation: &EvaluationSuffix,
         result: Result<ExecutionOutcome, AgentError>,
     ) -> Result<ExecutionOutcome, AgentError> {
@@ -441,6 +447,7 @@ impl InvocationHooks {
                 let context = InvocationContext {
                     session_id,
                     request,
+                    caller,
                     observations,
                 };
                 invoke(|| handler.after_invocation(&context, &result))
@@ -482,5 +489,50 @@ mod hook_thread_budget {
         assert!(!try_increment_counter(&count, 1));
         decrement_counter(&count);
         assert!(try_increment_counter(&count, 1));
+    }
+}
+
+#[cfg(test)]
+mod caller_is_the_saved_turn {
+    use std::sync::{Arc, Mutex};
+
+    use super::{InvocationHook, InvocationHooks, ToolVerdict};
+    use crate::application::agent_execution::hooks::observations::{
+        EvaluationSuffix, InvocationObservationWindow, ProposedToolCall,
+    };
+    use crate::application::agent_execution::tools::ToolReviewInput;
+    use crate::domain::agent_execution::executions::Initiation;
+    use crate::domain::agent_execution::tools::ToolCallId;
+
+    struct Remember(Mutex<String>);
+
+    impl InvocationHook for Remember {
+        fn before_permission_review(
+            &self,
+            call: &ProposedToolCall<'_>,
+            _: &InvocationObservationWindow<'_>,
+        ) -> Result<ToolVerdict, super::HookError> {
+            *self.0.lock().expect("caller") = call.caller().to_owned();
+            Ok(ToolVerdict::Allow)
+        }
+    }
+
+    #[test]
+    fn a_permission_review_is_judged_as_the_turn_caller() {
+        let remembered = Arc::new(Remember(Mutex::new(String::new())));
+        let hooks = InvocationHooks::new(vec![remembered.clone()]);
+        let tool = ToolCallId::new("bash").unwrap();
+        let input = ToolReviewInput {
+            name: "bash".into(),
+            arguments_json: r#"{"command":"ls"}"#.into(),
+        };
+        let _ = hooks.before_permission_review(
+            &tool,
+            &input,
+            &Initiation::owner(),
+            "peer-9",
+            &EvaluationSuffix::incomplete(),
+        );
+        assert_eq!(remembered.0.lock().expect("caller").as_str(), "peer-9");
     }
 }

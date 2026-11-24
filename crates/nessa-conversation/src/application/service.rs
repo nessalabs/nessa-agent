@@ -2477,7 +2477,6 @@ impl ConversationService {
                                     admitted: admitted_policies.clone(),
                                     source,
                                     directory: service.inner.directory.clone(),
-                                    directory_subject: actor.principal_id().to_owned(),
                                 }));
                             }
                             // Every agent: whether a send to this thread

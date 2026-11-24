@@ -245,8 +245,6 @@ pub struct DriveToolHook {
     pub source: ToolSource,
     /// Directory grants, when composition bound them.
     pub directory: Arc<OnceLock<Arc<super::DirectoryAccess>>>,
-    /// The principal opening the conversation. Command rules are that subject's.
-    pub directory_subject: String,
 }
 
 impl InvocationHook for DriveToolHook {
@@ -263,7 +261,7 @@ impl InvocationHook for DriveToolHook {
         ) {
             return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
         }
-        if let Some(reason) = directory_command(self, call) {
+        if let Some(reason) = directory_command(self, call.caller(), call) {
             return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
         }
         Ok(ToolVerdict::Allow)
@@ -300,7 +298,7 @@ impl InvocationHook for DriveToolHook {
             if asked.contains(&id) || !reported.insert(id) {
                 continue;
             }
-            if let Err(error) = directory.report_unasked(&self.directory_subject, &name) {
+            if let Err(error) = directory.report_unasked(context.caller, &name) {
                 failure.get_or_insert(error);
             }
         }
@@ -311,30 +309,27 @@ impl InvocationHook for DriveToolHook {
     }
 }
 
-fn directory_command(hook: &DriveToolHook, call: &ProposedToolCall<'_>) -> Option<String> {
+fn directory_command(
+    hook: &DriveToolHook,
+    subject: &str,
+    call: &ProposedToolCall<'_>,
+) -> Option<String> {
     let directory = hook.directory.get()?;
     match command_arguments(call.arguments_json()) {
         ParsedCommand::Skip => None,
         ParsedCommand::Unsafe(command) => {
-            if let Err(error) =
-                directory.admit_shell(&hook.directory_subject, &command, SandboxKind::None, &[])
-            {
+            if let Err(error) = directory.admit_shell(subject, &command, SandboxKind::None, &[]) {
                 return Some(error.to_string());
             }
-            match directory.command_constrained(&hook.directory_subject) {
+            match directory.command_constrained(subject) {
                 Ok(false) => None,
                 Ok(true) => Some("the command is not a single program".to_owned()),
                 Err(error) => Some(error.to_string()),
             }
         }
         ParsedCommand::Run { program, arguments } => {
-            match directory.admit_execution(
-                &hook.directory_subject,
-                &program,
-                &arguments,
-                SandboxKind::None,
-                &[],
-            ) {
+            match directory.admit_execution(subject, &program, &arguments, SandboxKind::None, &[])
+            {
                 Ok(()) => None,
                 Err(error) => Some(error.to_string()),
             }

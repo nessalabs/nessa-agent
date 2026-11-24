@@ -87,6 +87,7 @@ pub struct ProposedToolCall<'a> {
     name: &'a str,
     arguments_json: &'a str,
     initiation: &'a Initiation,
+    caller: &'a str,
 }
 
 impl<'a> ProposedToolCall<'a> {
@@ -94,13 +95,20 @@ impl<'a> ProposedToolCall<'a> {
         tool_id: &'a ToolCallId,
         input: &'a ToolReviewInput,
         initiation: &'a Initiation,
+        caller: &'a str,
     ) -> Self {
         Self {
             tool_id,
             name: input.name.as_str(),
             arguments_json: input.arguments_json.as_str(),
             initiation,
+            caller,
         }
+    }
+
+    /// Principal who submitted the turn, from the saved invocation.
+    pub fn caller(&self) -> &'a str {
+        self.caller
     }
 
     /// Who started the turn this call belongs to, as its saved record says.
