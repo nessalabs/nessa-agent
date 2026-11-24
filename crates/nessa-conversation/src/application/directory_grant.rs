@@ -619,7 +619,7 @@ impl DirectoryAccess {
 
     /// Share one directory with one subject.
     pub fn share(&self, request: ShareDirectory) -> Result<SharedDirectory, DirectoryRefusal> {
-        self.reconcile()?;
+        let owed = self.reconcile().err();
         let canonical = self.files.canonicalize(&request.path)?;
         encoded_grant(
             &request.environment,
@@ -637,10 +637,13 @@ impl DirectoryAccess {
                 "marker-size",
                 DirectoryRefusal::MarkerSize,
             ),
-            MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes),
+            MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes, owed),
             MarkerBytes::Absent => {
                 if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
                     return self.mismatch(&resource, "marker-missing", &request.initiator);
+                }
+                if let Some(error) = owed {
+                    return Err(error);
                 }
                 self.share_new(request, canonical)
             }
@@ -1019,10 +1022,14 @@ impl DirectoryAccess {
         request: ShareDirectory,
         canonical: String,
         bytes: [u8; BINDING_LEN],
+        owed: Option<DirectoryRefusal>,
     ) -> Result<SharedDirectory, DirectoryRefusal> {
         if let Some(resource) = self.store.resource_at(&request.environment, &canonical)? {
             if resource.binding != bytes {
                 return self.mismatch(&resource, "marker-different", &request.initiator);
+            }
+            if let Some(error) = owed {
+                return Err(error);
             }
             self.flush_pending(&resource.resource_id)?;
             return self.insert_subject(request, resource);
@@ -1040,6 +1047,9 @@ impl DirectoryAccess {
                 at_ms: now_ms(),
             });
             return Err(DirectoryRefusal::BindingCopied { audit_recorded });
+        }
+        if let Some(error) = owed {
+            return Err(error);
         }
         let resource = StoredDirectoryResource {
             resource_id: new_id(),

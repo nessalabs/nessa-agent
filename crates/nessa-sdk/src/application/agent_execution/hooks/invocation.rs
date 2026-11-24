@@ -73,6 +73,8 @@ pub struct InvocationContext<'a> {
     pub request: &'a ExecutionRequest,
     /// Principal who submitted this turn, from the saved invocation.
     pub caller: &'a str,
+    /// Who the saved turn says started it.
+    pub initiation: &'a crate::domain::agent_execution::executions::Initiation,
     /// Read-only suffix of this invocation's retained observations.
     ///
     /// Empty before the provider emits anything. At settlement it is the same
@@ -349,6 +351,7 @@ impl InvocationHooks {
         session_id: &ExecutionSessionId,
         request: &ExecutionRequest,
         caller: &str,
+        initiation: &Initiation,
         evaluation: &EvaluationSuffix,
     ) -> Result<(), AgentError> {
         for (index, handler) in self.handlers.iter().enumerate() {
@@ -357,6 +360,7 @@ impl InvocationHooks {
                 session_id,
                 request,
                 caller,
+                initiation,
                 observations,
             };
             if let Err(error) = invoke(|| handler.before_invocation(&context)) {
@@ -434,6 +438,7 @@ impl InvocationHooks {
         session_id: &ExecutionSessionId,
         request: &ExecutionRequest,
         caller: &str,
+        initiation: &Initiation,
         evaluation: &EvaluationSuffix,
         result: Result<ExecutionOutcome, AgentError>,
     ) -> Result<ExecutionOutcome, AgentError> {
@@ -448,6 +453,7 @@ impl InvocationHooks {
                     session_id,
                     request,
                     caller,
+                    initiation,
                     observations,
                 };
                 invoke(|| handler.after_invocation(&context, &result))

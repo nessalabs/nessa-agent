@@ -1891,7 +1891,7 @@ impl Agent {
         {
             Ok((evaluation, initiation, caller)) => evaluation
                 .map_or(Ok(()), |evaluation| {
-                    hooks.before(&session_id, &input, &caller, &evaluation)
+                    hooks.before(&session_id, &input, &caller, &initiation, &evaluation)
                 })
                 .map(|()| (initiation, caller)),
             Err(error) => Err(AgentError::Storage(error)),
@@ -1990,7 +1990,7 @@ impl Agent {
                     }),
                 };
                 return self
-                    .settle_after_hooks(&hooks, &session_id, &input, index, settled)
+                    .settle_after_hooks(&hooks, &session_id, &input, &initiation, index, settled)
                     .await;
             }
         };
@@ -2558,7 +2558,7 @@ impl Agent {
         // The after hook sees the same bounded window a permission-review hook saw.
         // The suffix is copied first so the evidence lock is not held across the callback.
         let hooked = self
-            .settle_after_hooks(&hooks, &session_id, &input, index, result)
+            .settle_after_hooks(&hooks, &session_id, &input, &initiation, index, result)
             .await;
         self.inner.manager.settle_submission(index, hooked).await
     }
@@ -2568,6 +2568,7 @@ impl Agent {
         hooks: &InvocationHooks,
         session_id: &ExecutionSessionId,
         input: &ExecutionRequest,
+        initiation: &Initiation,
         index: usize,
         result: Result<ExecutionOutcome, AgentError>,
     ) -> Result<ExecutionOutcome, AgentError> {
@@ -2586,7 +2587,7 @@ impl Agent {
             .with_invocation(index, |record| record.actor.principal_id().to_owned())
             .await
             .unwrap_or_default();
-        hooks.after(session_id, input, &caller, &evaluation, result)
+        hooks.after(session_id, input, &caller, initiation, &evaluation, result)
     }
 
     /// Apply a permission-review refusal after the review has been retained.

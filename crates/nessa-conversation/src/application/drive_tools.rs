@@ -261,7 +261,11 @@ impl InvocationHook for DriveToolHook {
         ) {
             return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
         }
-        if let Some(reason) = directory_command(self, call.caller(), call) {
+        if let Some(reason) = directory_command(
+            self,
+            directory_subject(call.caller(), call.initiation()),
+            call,
+        ) {
             return Ok(ToolVerdict::refuse(reason, RefusalOutcome::Continue));
         }
         Ok(ToolVerdict::Allow)
@@ -298,7 +302,9 @@ impl InvocationHook for DriveToolHook {
             if asked.contains(&id) || !reported.insert(id) {
                 continue;
             }
-            if let Err(error) = directory.report_unasked(context.caller, &name) {
+            if let Err(error) = directory
+                .report_unasked(directory_subject(context.caller, context.initiation), &name)
+            {
                 failure.get_or_insert(error);
             }
         }
@@ -306,6 +312,15 @@ impl InvocationHook for DriveToolHook {
             return Err(HookError::Failed(error.to_string()));
         }
         Ok(())
+    }
+}
+
+/// A paired grant is stored under its receiver. The turn's caller is the
+/// principal, which is a different id.
+fn directory_subject<'a>(caller: &'a str, initiation: &'a Initiation) -> &'a str {
+    match initiation.initiator() {
+        Initiator::Grant(grant) => grant.grant(),
+        Initiator::Owner | Initiator::Agent(_) => caller,
     }
 }
 
@@ -467,6 +482,20 @@ mod command_parse {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_paired_grant_is_checked_as_its_receiver() {
+        use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+        let grant = GrantInitiator::new("dev-1", 4).unwrap();
+        assert_eq!(
+            super::directory_subject("principal-x", &Initiation::checked_grant(grant)),
+            "dev-1"
+        );
+        assert_eq!(
+            super::directory_subject("owner-1", &Initiation::owner()),
+            "owner-1"
+        );
     }
 }
 

@@ -638,6 +638,57 @@ fn a_copied_binding_records_the_existing_resource_and_the_offered_path() {
 }
 
 #[test]
+fn a_stuck_audit_does_not_keep_a_missing_marker_grant() {
+    let root = private();
+    let first = root.path().join("first");
+    let second = root.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    fs::write(second.join("note.txt"), b"kept").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = DirectoryAccess::new(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(CedarDirectoryPolicyEvaluator::new().unwrap()),
+        audit.clone(),
+        Arc::new(RandomBinding),
+    );
+    let kept = share_read(&access, first.to_str().unwrap(), "alfa");
+    let revoked = share_read(&access, second.to_str().unwrap(), "beta");
+    *audit.fail.lock().unwrap() = true;
+    assert!(access.read("alfa", ".nessa-binding").is_err());
+    fs::remove_file(second.join(".nessa-binding")).unwrap();
+    match access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: second.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: Some("beta".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap_err()
+    {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&revoked.resource_id)
+        .unwrap()
+        .is_empty());
+    assert!(!store
+        .grants_for_resource(&kept.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn recreating_the_directory_without_the_marker_revokes_the_grant() {
     let root = private();
     let shared = root.path().join("shared");
