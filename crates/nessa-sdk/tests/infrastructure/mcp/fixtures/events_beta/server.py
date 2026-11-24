@@ -168,9 +168,19 @@ def main():
     parser.add_argument("--profile", choices=("replay", "push-only"), default="replay")
     parser.add_argument("--format", choices=("json", "sse"), default="json")
     parser.add_argument("--port", default=0, type=int, help="zero chooses an ephemeral loopback port")
+    parser.add_argument("--ready-json", action="store_true", help="emit a structured test readiness record")
     args = parser.parse_args()
     with Server(args.port, args.profile, args.format) as server:
-        print(f"http://127.0.0.1:{server.server_port}/mcp", flush=True)
+        if args.ready_json:
+            print(
+                json.dumps(
+                    {"fixture": "mcp-events-beta-v1", "profile": args.profile,
+                     "format": args.format, "port": server.server_port}
+                ),
+                flush=True,
+            )
+        else:
+            print(f"http://127.0.0.1:{server.server_port}/mcp", flush=True)
         server.serve_forever()
 
 

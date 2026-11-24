@@ -12,7 +12,12 @@ python3 -B crates/nessa-sdk/tests/infrastructure/mcp/fixtures/events_beta/server
 cargo test --offline --locked -p nessa-conversation --lib events_beta_tests
 ```
 
-The Rust tests launch and reap their own child processes. Replay fixture:
+The Rust tests launch and reap their own child processes. They use
+`/usr/bin/python3` by default, or the absolute interpreter path in
+`NESSA_MCP_EVENTS_TEST_PYTHON` when configured. `--ready-json` prints the
+fixture identity, selected profile/format, and bound loopback port immediately
+after bind. The tests check that record before starting their separate HTTP
+deadline. Replay fixture:
 discover, paginated list, select `ci.build_fínished` with
 `{"project":"paper-kite"}`, bootstrap with null cursor, get the first build
 result, observe a deterministic retention gap, then resume at the replacement
