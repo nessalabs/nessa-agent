@@ -3135,11 +3135,11 @@ describe("writes", () => {
     await archiving
     await flush()
     expect(updates).toEqual([
-      { kind: "session-removed", sessionId: conversationA, revision: 2 },
       {
         kind: "session",
         session: expect.objectContaining({ id: conversationB, preview: "moved" }),
       },
+      { kind: "session-removed", sessionId: conversationA, revision: 2 },
     ])
     expect((await source.index()).sessions.map((session) => session.id)).toEqual([
       conversationB,
