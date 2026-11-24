@@ -23,7 +23,8 @@ use crate::application::agent_execution::executions::{
 };
 use crate::application::agent_execution::hooks::{
     EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
-    PermissionHookThreadGuard, PermissionReviewDecision, ToolVerdict, PRE_TOOL_HOOK_DEADLINE,
+    PermissionHookThreadGuard, PermissionReviewDecision, SettlementView, ToolAudit, ToolVerdict,
+    PRE_TOOL_HOOK_DEADLINE,
 };
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, HookRefusal, PermissionAnswer, PermissionAnswerFailure,
@@ -2581,13 +2582,31 @@ impl Agent {
             .with_invocation_events(index, EvaluationSuffix::capture)
             .await
             .unwrap_or_else(|_| EvaluationSuffix::incomplete());
+        // Tool identities come from the retained events, not the 256-event
+        // suffix. A storage miss is an unread audit, not an empty turn.
+        let tool_audit = self
+            .inner
+            .manager
+            .with_invocation_events(index, ToolAudit::from_events)
+            .await
+            .unwrap_or_else(|_| ToolAudit::unread());
         let caller = self
             .inner
             .manager
             .with_invocation(index, |record| record.actor.principal_id().to_owned())
             .await
             .unwrap_or_default();
-        hooks.after(session_id, input, &caller, initiation, &evaluation, result)
+        hooks.after(
+            session_id,
+            input,
+            &caller,
+            initiation,
+            &SettlementView {
+                evaluation: &evaluation,
+                tool_audit: &tool_audit,
+            },
+            result,
+        )
     }
 
     /// Apply a permission-review refusal after the review has been retained.

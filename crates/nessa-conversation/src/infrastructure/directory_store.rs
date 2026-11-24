@@ -16,6 +16,7 @@ use crate::timer::clock::wall_now;
 
 /// SQLite directory grants. A version other than this build's is refused and not rewritten.
 pub struct SqliteDirectoryStore {
+    path: std::path::PathBuf,
     connection: Mutex<nessa_local_database::rusqlite::Connection>,
     /// The grant subscription's wake, when this store shares the conversation
     /// store's grant database. A receiver log append notifies it after commit.
@@ -28,6 +29,7 @@ impl SqliteDirectoryStore {
         let connection =
             nessa_local_database::open(path, &Schema::new(include_str!("store/grants.sql"))?)?;
         Ok(Self {
+            path: path.to_path_buf(),
             connection: Mutex::new(connection),
             grant_wake: Mutex::new(None),
         })
@@ -45,7 +47,48 @@ impl SqliteDirectoryStore {
     }
 }
 
+#[cfg(unix)]
+struct ShareFileLock {
+    file: std::fs::File,
+}
+
+#[cfg(unix)]
+impl Drop for ShareFileLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
 impl DirectoryStore for SqliteDirectoryStore {
+    fn share_lock(&self) -> Result<Box<dyn Send>, DirectoryRefusal> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let path = self.path.with_extension("share-lock");
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|error| DirectoryRefusal::Io(error.kind()))?;
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                return Err(DirectoryRefusal::Io(
+                    std::io::Error::last_os_error().kind(),
+                ));
+            }
+            Ok(Box::new(ShareFileLock { file }))
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Box::new(()))
+        }
+    }
+
     fn insert_resource(
         &self,
         resource: &StoredDirectoryResource,

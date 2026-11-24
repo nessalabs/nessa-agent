@@ -316,6 +316,11 @@ pub trait DirectoryStore: Send + Sync {
         &self,
         binding: &[u8; BINDING_LEN],
     ) -> Result<Option<StoredDirectoryResource>, DirectoryRefusal>;
+    /// A lock every `DirectoryAccess` on this database shares. The in-process
+    /// lease does not exclude another instance. The default holds nothing.
+    fn share_lock(&self) -> Result<Box<dyn Send>, DirectoryRefusal> {
+        Ok(Box::new(()))
+    }
     /// Insert one grant.
     fn insert_grant(
         &self,
@@ -632,6 +637,7 @@ impl DirectoryAccess {
             &request.rules,
         )
         .map_err(DirectoryRefusal::Shape)?;
+        let _shared = self.store.share_lock()?;
         let _lease = self.lease(&request.environment, &canonical);
         self.finish_cleanup_held(&request.environment, &canonical)?;
         match self.files.read_marker(&canonical)? {
@@ -1347,6 +1353,7 @@ impl DirectoryAccess {
     }
 
     fn finish_cleanup(&self, environment: &str, canonical: &str) -> Result<(), DirectoryRefusal> {
+        let _shared = self.store.share_lock()?;
         let _lease = self.lease(environment, canonical);
         self.finish_cleanup_held(environment, canonical)
     }
@@ -1386,6 +1393,13 @@ impl DirectoryAccess {
         already_unlinked: bool,
         already_audited: bool,
     ) -> Result<(), DirectoryRefusal> {
+        // D-cleanup-keep: a committed resource stores this binding. The file
+        // is that resource's marker, including when another instance adopted
+        // it after this attempt created it. Leave the file and drop the cleanup.
+        if self.store.resource_by_binding(binding)?.is_some() {
+            self.store.clear_cleanup(environment, canonical)?;
+            return Ok(());
+        }
         let unlinked = already_unlinked
             || self
                 .files

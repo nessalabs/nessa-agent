@@ -25,7 +25,7 @@ mod observations;
 
 pub(crate) use observations::EvaluationSuffix;
 pub use observations::{
-    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall,
+    InvocationObservationWindow, ObservationKind, PhrasePresence, ProposedToolCall, ToolAudit,
 };
 
 mod invocation;
@@ -35,7 +35,8 @@ pub use invocation::{
     ToolVerdict,
 };
 pub(crate) use invocation::{
-    HookFailureKind, PermissionHookThreadGuard, PermissionReviewDecision, PRE_TOOL_HOOK_DEADLINE,
+    HookFailureKind, PermissionHookThreadGuard, PermissionReviewDecision, SettlementView,
+    PRE_TOOL_HOOK_DEADLINE,
 };
 
 mod callbacks;

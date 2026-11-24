@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 
-use super::observations::{EvaluationSuffix, InvocationObservationWindow, ProposedToolCall};
+use super::observations::{
+    EvaluationSuffix, InvocationObservationWindow, ProposedToolCall, ToolAudit,
+};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::permissions::cap_hook_reason;
@@ -79,7 +81,11 @@ pub struct InvocationContext<'a> {
     ///
     /// Empty before the provider emits anything. At settlement it is the same
     /// window a permission-review callback receives. Every event kind is visible.
+    /// It is not the invocation history: a turn longer than 256 events or 64 KiB
+    /// omits the prefix. Tool admission evidence is [`Self::tool_audit`].
     pub observations: InvocationObservationWindow<'a>,
+    /// Every retained tool call, including ones outside [`Self::observations`].
+    pub tool_audit: &'a ToolAudit,
 }
 
 /// Callback failure reported without replacing the underlying execution evidence.
@@ -296,6 +302,14 @@ pub trait InvocationHook: Send + Sync {
     }
 }
 
+/// The evaluation suffix and the complete tool-identity audit for one settlement.
+pub(crate) struct SettlementView<'a> {
+    /// The bounded observation window a permission-review hook also sees.
+    pub evaluation: &'a EvaluationSuffix,
+    /// Every retained tool call. Not limited to [`Self::evaluation`].
+    pub tool_audit: &'a ToolAudit,
+}
+
 /// Fixed registration order, shared by clones. Empty means no extensions.
 #[derive(Clone, Default)]
 pub struct InvocationHooks {
@@ -356,12 +370,14 @@ impl InvocationHooks {
     ) -> Result<(), AgentError> {
         for (index, handler) in self.handlers.iter().enumerate() {
             let observations = evaluation.window();
+            let tool_audit = ToolAudit::empty();
             let context = InvocationContext {
                 session_id,
                 request,
                 caller,
                 initiation,
                 observations,
+                tool_audit: &tool_audit,
             };
             if let Err(error) = invoke(|| handler.before_invocation(&context)) {
                 return Err(
@@ -439,7 +455,7 @@ impl InvocationHooks {
         request: &ExecutionRequest,
         caller: &str,
         initiation: &Initiation,
-        evaluation: &EvaluationSuffix,
+        settlement: &SettlementView<'_>,
         result: Result<ExecutionOutcome, AgentError>,
     ) -> Result<ExecutionOutcome, AgentError> {
         let result = result.map_err(AgentError::bounded);
@@ -448,13 +464,14 @@ impl InvocationHooks {
             .iter()
             .enumerate()
             .filter_map(|(index, handler)| {
-                let observations = evaluation.window();
+                let observations = settlement.evaluation.window();
                 let context = InvocationContext {
                     session_id,
                     request,
                     caller,
                     initiation,
                     observations,
+                    tool_audit: settlement.tool_audit,
                 };
                 invoke(|| handler.after_invocation(&context, &result))
                     .err()

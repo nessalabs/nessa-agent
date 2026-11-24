@@ -2477,6 +2477,61 @@ fn a_refused_read_keeps_its_reason_when_the_audit_is_not_recorded() {
 }
 
 #[test]
+fn a_cleanup_keeps_a_marker_a_committed_resource_already_stores() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [29; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let canonical = std::fs::canonicalize(&shared).unwrap();
+    store
+        .record_cleanup(
+            "local",
+            canonical.to_str().unwrap(),
+            &[29; BINDING_LEN],
+            "owner",
+        )
+        .unwrap();
+    access.reconcile().unwrap();
+    assert_eq!(fs::read(shared.join(".nessa-binding")).unwrap().len(), 32);
+    assert_eq!(access.read("peer", "note.txt").unwrap(), b"hello");
+    assert!(store
+        .cleanup("local", canonical.to_str().unwrap())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_share_lock_is_held_across_directory_access_instances() {
+    let store_dir = private();
+    let path = store_dir.path().join("grants.sqlite3");
+    let first = Arc::new(SqliteDirectoryStore::open(&path).unwrap());
+    let second = Arc::new(SqliteDirectoryStore::open(&path).unwrap());
+    let held = first.share_lock().unwrap();
+    let started = std::time::Instant::now();
+    let waiting = std::thread::spawn(move || {
+        let _other = second.share_lock().unwrap();
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !waiting.is_finished(),
+        "the second instance took the lock while the first still held it"
+    );
+    drop(held);
+    waiting.join().unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+}
+
+#[test]
 fn a_socket_marker_revokes_the_grant_and_restoring_the_file_does_not() {
     let root = private();
     let shared = root.path().join("shared");

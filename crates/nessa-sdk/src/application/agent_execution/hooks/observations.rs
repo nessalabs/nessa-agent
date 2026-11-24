@@ -648,6 +648,99 @@ impl EvaluationSuffix {
     }
 }
 
+/// Every tool call retained for one invocation, apart from the evaluation suffix.
+///
+/// The suffix is at most 256 events and 64 KiB, so a later settlement that
+/// reads only that window drops earlier tool calls. This list walks the
+/// retained events and keeps each tool's identity and whether a permission
+/// review named it. It does not copy tool payloads. More tool calls than the
+/// invocation may retain is incomplete: the calls that fit are kept, and the
+/// caller must not report the audit as finished.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolAudit {
+    calls: Vec<AuditedTool>,
+    incomplete: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuditedTool {
+    id: String,
+    name: String,
+    asked: bool,
+}
+
+impl ToolAudit {
+    /// No calls, and the list is complete.
+    pub fn empty() -> Self {
+        Self {
+            calls: Vec::new(),
+            incomplete: false,
+        }
+    }
+
+    /// The retained history could not be read. Reporting no calls would hide that.
+    pub fn unread() -> Self {
+        Self {
+            calls: Vec::new(),
+            incomplete: true,
+        }
+    }
+
+    /// Tool identities in `events`, in first-seen order.
+    ///
+    /// A later update of the same tool does not add another call. A permission
+    /// review marks that tool asked, including a review that the evaluation
+    /// suffix no longer holds.
+    pub fn from_events(events: &[ExecutionEvent]) -> Self {
+        let mut asked = std::collections::HashSet::new();
+        let mut calls = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut incomplete = false;
+        for event in events {
+            match event.update() {
+                ExecutionUpdate::PermissionRequested { tool_id, .. } => {
+                    asked.insert(tool_id.as_str().to_owned());
+                }
+                ExecutionUpdate::Tool(tool) => {
+                    let id = tool.id().as_str();
+                    if !seen.insert(id.to_owned()) {
+                        continue;
+                    }
+                    if calls.len() == crate::application::agent_execution::executions::limits::MAX_RETAINED_OUTPUT_EVENTS
+                    {
+                        incomplete = true;
+                        break;
+                    }
+                    let name = tool.title().clone().unwrap_or_else(|| "tool".to_owned());
+                    calls.push(AuditedTool {
+                        id: id.to_owned(),
+                        name,
+                        asked: false,
+                    });
+                }
+                _ => {}
+            }
+        }
+        for call in &mut calls {
+            call.asked = asked.contains(&call.id);
+        }
+        Self { calls, incomplete }
+    }
+
+    /// The retained list stopped before every tool call was named.
+    pub fn incomplete(&self) -> bool {
+        self.incomplete
+    }
+
+    /// Tool calls no permission review named, in first-seen order.
+    pub fn unasked(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.calls
+            .iter()
+            .filter(|call| !call.asked)
+            .map(|call| (call.id.as_str(), call.name.as_str()))
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../../tests/application/agent_execution/hooks/window.rs"]
 mod window;

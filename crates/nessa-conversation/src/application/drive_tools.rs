@@ -50,7 +50,6 @@ use super::ConversationFuture;
 use crate::domain::{SandboxKind, ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
 use nessa_sdk::application::agent_execution::hooks::{
     HookError, InvocationContext, InvocationHook, InvocationObservationWindow, ProposedToolCall,
     ToolVerdict,
@@ -282,31 +281,16 @@ impl InvocationHook for DriveToolHook {
         let Some(directory) = self.directory.get() else {
             return Ok(());
         };
-        let mut asked = std::collections::HashSet::new();
-        let mut calls = Vec::new();
-        for event in context.observations.iter() {
-            match event.update() {
-                ExecutionUpdate::PermissionRequested { tool_id, .. } => {
-                    asked.insert(tool_id.clone());
-                }
-                ExecutionUpdate::Tool(tool) => {
-                    let name = tool.title().clone().unwrap_or_else(|| "tool".to_owned());
-                    calls.push((tool.id().clone(), name));
-                }
-                _ => {}
-            }
-        }
-        let mut reported = std::collections::HashSet::new();
         let mut failure = None;
-        for (id, name) in calls {
-            if asked.contains(&id) || !reported.insert(id) {
-                continue;
-            }
+        for (_, name) in context.tool_audit.unasked() {
             if let Err(error) = directory
-                .report_unasked(directory_subject(context.caller, context.initiation), &name)
+                .report_unasked(directory_subject(context.caller, context.initiation), name)
             {
                 failure.get_or_insert(error);
             }
+        }
+        if context.tool_audit.incomplete() {
+            failure.get_or_insert(super::directory_grant::DirectoryRefusal::Audit);
         }
         if let Some(error) = failure {
             return Err(HookError::Failed(error.to_string()));

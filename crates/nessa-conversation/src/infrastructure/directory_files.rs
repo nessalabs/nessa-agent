@@ -665,7 +665,23 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
             audit_recorded: true,
         });
     }
+    // A socket or device fails open before there is an fd to classify.
+    // The same refusal as a FIFO the open did return.
+    if entry_is_special(dir, &name) {
+        return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
+    }
     Err(io(error))
+}
+
+fn entry_is_special(dir: RawFd, name: &std::ffi::CStr) -> bool {
+    let mut info: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+        return false;
+    }
+    let kind = mode_bits(info.st_mode) & mode_bits(libc::S_IFMT);
+    kind != mode_bits(libc::S_IFREG)
+        && kind != mode_bits(libc::S_IFDIR)
+        && kind != mode_bits(libc::S_IFLNK)
 }
 
 fn is_symlink(dir: RawFd, name: &std::ffi::CStr) -> bool {
@@ -761,6 +777,29 @@ mod marker_identity {
             crate::application::MarkerBytes::Unusable
         ));
         assert!(marker.exists());
+    }
+
+    #[test]
+    fn a_socket_inside_the_directory_is_refused_without_blocking() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let path = shared.to_str().unwrap();
+        LocalDirectoryFiles
+            .create_marker(path, &[4; BINDING_LEN])
+            .unwrap();
+        let socket = shared.join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let session = LocalDirectoryFiles.open_session(path).unwrap();
+        session.marker().unwrap();
+        let started = std::time::Instant::now();
+        let error = session.walk("socket").unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
+        ));
+        assert!(socket.exists());
     }
 
     #[test]

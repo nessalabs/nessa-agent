@@ -1,4 +1,6 @@
-use super::{EvaluationSuffix, InvocationObservationWindow, ObservationKind, PhrasePresence};
+use super::{
+    EvaluationSuffix, InvocationObservationWindow, ObservationKind, PhrasePresence, ToolAudit,
+};
 use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use crate::domain::agent_execution::executions::{
     ExecutionId, MessageChunk, MessageId, MessageKind, MESSAGE_CLONES,
@@ -528,4 +530,17 @@ fn a_provider_tool_id_cannot_hide_an_event_from_the_hook() {
         2,
         "a tool event whose provider id starts with NUL is invisible to hooks"
     );
+}
+
+#[test]
+fn a_tool_audit_keeps_calls_the_evaluation_suffix_drops() {
+    let events: Vec<_> = (0..300)
+        .map(|index| tool(&format!("call-{index}")))
+        .collect();
+    let suffix = EvaluationSuffix::capture(&events);
+    assert!(suffix.window().iter().count() < 300);
+    let audit = ToolAudit::from_events(&events);
+    assert!(!audit.incomplete());
+    assert_eq!(audit.unasked().count(), 300);
+    assert_eq!(audit.unasked().next(), Some(("call-0", "tool")));
 }
