@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 mod dto;
 use super::status::DevicePairingStatus;
+use crate::product::passive_read::{decode_scope, wire_scope};
 use dto::{WireConsent, WirePublic, WireReply, WireRequest, WireStatus};
 use nessa_auth::domain::{
     pairing::{
@@ -13,7 +14,8 @@ use nessa_auth::domain::{
     },
     CredentialId, ResourceId,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use nessa_sync::replication::domain::Scope;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     borrow::Cow,
     error::Error,
@@ -43,6 +45,29 @@ impl Display for NativeWireError {
     }
 }
 impl Error for NativeWireError {}
+/// Bounded record operations selected for this connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordCarrierMode {
+    /// Bind and read an advisory Head, without selecting Page.
+    Head,
+    /// Bind and read one bounded Page, including its advisory Head.
+    Page,
+}
+
+/// Untrusted first-envelope selectors for the native v1 record carrier.
+#[derive(Debug)]
+pub struct RecordCarrierOpen {
+    /// Issued credential identifier; the proved device key must own it.
+    pub credential: CredentialId,
+    /// Product receiver access epoch requested by this peer, not an origin epoch.
+    pub access_epoch: u64,
+    /// Selected scope, not evidence of physical source identity.
+    pub scope: Scope,
+    /// Advisory Head only or bounded Page.
+    pub mode: RecordCarrierMode,
+}
+
 /// Decoded requests remain untrusted input until the runtime admission owner acts.
 #[derive(Debug)]
 pub enum NativePairingRequest {
@@ -75,6 +100,8 @@ pub enum NativePairingRequest {
     /// Select the protected product session on this connection. Only a first
     /// envelope selects it; it carries no credential and grants nothing.
     OpenProduct,
+    /// Select the bounded record carrier on this proved native connection.
+    OpenRecordCarrierV1(RecordCarrierOpen),
     /// Select the environment phase on this connection: the dialing gateway
     /// serves leases to this one over it. Only a first envelope selects it;
     /// it carries no credential, and whether the proved key may serve is the
@@ -194,6 +221,8 @@ pub enum NativePairingReply {
     },
     /// Redacted refusal; it does not authorize a pin/cache change.
     Refused,
+    /// The v1 carrier was selected; exact physical binding still follows.
+    RecordCarrierV1Accepted,
     /// The environment phase was admitted: lease frames follow, the serving
     /// side's hello first.
     Serving,
@@ -221,6 +250,25 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
             })
         }
         WireRequest::OpenProduct {} => Ok(NativePairingRequest::OpenProduct),
+        WireRequest::OpenRecordCarrierV1 {
+            credential,
+            access_epoch,
+            scope,
+            mode,
+        } => {
+            if access_epoch == 0 {
+                return Err(NativeWireError::Invalid);
+            }
+            Ok(NativePairingRequest::OpenRecordCarrierV1(
+                RecordCarrierOpen {
+                    credential: CredentialId::new(credential.into_owned())
+                        .map_err(|_| NativeWireError::Invalid)?,
+                    access_epoch,
+                    scope: decode_scope(&scope).map_err(|_| NativeWireError::Invalid)?,
+                    mode,
+                },
+            ))
+        }
         WireRequest::OpenEnvironment {} => Ok(NativePairingRequest::OpenEnvironment),
         WireRequest::OpenDiscovery { public, credential } => {
             Ok(NativePairingRequest::OpenDiscovery {
@@ -255,6 +303,17 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
             }
         }
         NativePairingRequest::OpenProduct => WireRequest::OpenProduct {},
+        NativePairingRequest::OpenRecordCarrierV1(opening) => {
+            if opening.access_epoch == 0 {
+                return Err(NativeWireError::Invalid);
+            }
+            WireRequest::OpenRecordCarrierV1 {
+                credential: Cow::Borrowed(opening.credential.as_str()),
+                access_epoch: opening.access_epoch,
+                scope: wire_scope(&opening.scope),
+                mode: opening.mode,
+            }
+        }
         NativePairingRequest::OpenEnvironment => WireRequest::OpenEnvironment {},
         NativePairingRequest::OpenDiscovery { public, credential } => WireRequest::OpenDiscovery {
             public: WirePublic::from_domain(*public),
@@ -345,6 +404,10 @@ fn with_status(
 pub fn encode_refused() -> Result<Vec<u8>, NativeWireError> {
     encode(&WireReply::Refused {})
 }
+/// Encode explicit selection of the v1 carrier. Physical binding still follows.
+pub fn encode_record_carrier_accepted() -> Result<Vec<u8>, NativeWireError> {
+    encode(&WireReply::RecordCarrierV1Accepted {})
+}
 /// Encode the admission of an environment phase.
 pub fn encode_serving() -> Result<Vec<u8>, NativeWireError> {
     encode(&WireReply::Serving {})
@@ -371,6 +434,7 @@ pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError>
             status: status.into_domain()?,
         }),
         WireReply::Refused {} => Ok(NativePairingReply::Refused),
+        WireReply::RecordCarrierV1Accepted {} => Ok(NativePairingReply::RecordCarrierV1Accepted),
         WireReply::Serving {} => Ok(NativePairingReply::Serving),
     }
 }

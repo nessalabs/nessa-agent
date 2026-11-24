@@ -3,7 +3,9 @@
 The lab uses the workspace's single Sync Engine pin
 `341c9b844257403bb297f27d7ed9aecbe93e4406` (Sync Engine #121) and the same typed
 scope as an ordinary Product read. A supplied scope is a selector, not a grant.
-No real app mounts the lab or selects this transport.
+The typed native v1 carrier is compiled but unmounted in ordinary gateway
+composition; no client switches to it. The private fixture uses the same
+mount seam, not another selector.
 
 The existing `read_only_online` fixture already starts a gateway with the
 real listener, relay, credential registry, receiver authority, Cedar and SDK
@@ -14,10 +16,19 @@ do not pre-approve a new credential or take a second listener.
 | State | Input/decision | Next state and effect | Required lab evidence |
 | --- | --- | --- | --- |
 | Dial selected before connection | Direct or forced local relay | Verify the existing native TLS key and exact gateway pin; both routes use the same connection owner. | Split direct and relay-only legs; same enrolled device and source identity. |
-| Native TLS established | Explicit test-composed Head selector | Handle one bounded native opening, retain its original TLS and existing wake/permit owner, then give bytes exclusively to the selected codec. The ordinary product selector stays unchanged. | Disabled fixture route refuses; the default paired product read remains unchanged. |
+| Native TLS established | Explicit `openRecordCarrierV1` envelope | Handle one bounded native opening, retain its original TLS and existing wake/permit owner, then give bytes exclusively to the selected codec. The ordinary product selector stays unchanged. | Disabled fixture route refuses; the default paired product read remains unchanged. |
 | Probe opening | Named issued credential, checked on the just-proved key by the current product verifier and `AuthenticateSession` | Capture existing authenticated context. No scope, source or subscription grant comes from the selector. | Enrolled credential admits; revoked credential or missing current grant refuses the normal read. |
 | One selected scope | Current `AdmitPassiveRead(RecordHead)` then one bounded `ReadRecords(Head)` | Obtain the physical identity from the existing record source, correlate exact receiver, access epoch, conversation and scope. Bind/Head consult the same authorization owner before acquisition and release. | Exact semantic head matches the existing authorized product read; no cache/checkpoint effects. |
 | Head returned, unsupported, refused, timeout or closed | Result accepted or failed | Close this probe. Never reopen on the product protocol or reacquire a new credential. | Receipt or typed terminal result within the fixture deadline; no fallback dial. |
+
+On direct or joined relay, the first `openRecordCarrierV1` envelope selects
+one exact conversation scope and explicit `head` or `page` mode. The existing
+native framing replies `recordCarrierV1Accepted` only after current enrollment
+and requested Product operation admission. It is not a source identity
+receipt; NSR1 Bind still checks the real physical scope. A refused or disabled
+selection gets only the existing redacted `refused`, and closes. An older peer
+or an unsupported version never starts NSR1 or falls back to Product. The
+tunneled carrier remains unsupported.
 
 The lab preselects a conversation and obtains its exact scope via the
 existing authorized discovery path. Record discovery is not a claimed
@@ -50,16 +61,15 @@ it. Both routes refuse when the selector is not installed; the ordinary
 product path still reads successfully. The real credential store revokes
 the same device. On direct and joined local relay, pinned enrollment status
 returns the exact correlated terminal cause `CredentialRevoked`. The
-separate probe then closes before NSR1 with EOF or a connection reset, not a
-typed NSR1 refusal from an authenticated session. No reply byte or timeout
-qualifies. This test does not qualify revocation mid-frame.
+separate probe receives the redacted native selection refusal and then closes
+without an NSR1 byte. A timeout is not accepted as evidence. This test does not qualify revocation mid-frame.
 
 ## Explicit two-page restart fixture
 
-The Page fixture sets `page: true` on the existing lab opening. Omission
-or `false` keeps HEAD-only mode. The lab is mounted only by the test fixture
-and uses the one finite native TLS connection, one exact conversation scope,
-and one Page allowance per connection. Opening proves the original enrolled
+The Page fixture selects `mode: "page"` on the typed v1 opening; the Head
+fixture explicitly selects `mode: "head"`. Both use one finite native TLS
+connection, one exact conversation scope, and (in Page mode) one Page
+allowance per connection. Opening proves the original enrolled
 TLS device; current credential, receiver, access epoch and grant checks use
 the ordinary Page authority. Limits come from the existing Product record
 ceilings; this receipt requests one record per page. The binary session does

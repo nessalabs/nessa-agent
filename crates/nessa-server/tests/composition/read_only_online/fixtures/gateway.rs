@@ -466,7 +466,7 @@ async fn gateway_child() {
         mode.as_str(),
         "record-head-probe" | "record-head-probe-revoked"
     ) {
-        prepared.with_record_head_probe()
+        prepared.with_record_carrier()
     } else {
         prepared
     };

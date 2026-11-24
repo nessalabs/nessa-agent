@@ -1,4 +1,5 @@
-use super::{NativePairingStatus, NativeWireError};
+use super::{NativePairingStatus, NativeWireError, RecordCarrierMode};
+use crate::product::generated::RecordScope;
 use nessa_auth::domain::{
     pairing::{
         AttemptFailure, AttemptId, AttemptOutcome, ConsentClass, ConsentIntentId, DisclosedConsent,
@@ -138,6 +139,14 @@ pub(super) enum WireRequest<'a> {
         digest: [u8; 32],
     },
     OpenProduct {},
+    #[serde(rename = "openRecordCarrierV1")]
+    OpenRecordCarrierV1 {
+        credential: Cow<'a, str>,
+        #[serde(rename = "accessEpoch")]
+        access_epoch: u64,
+        scope: RecordScope,
+        mode: RecordCarrierMode,
+    },
     OpenEnvironment {},
     /// Identify existing discovery enrollment; the credential ID is not a bearer secret.
     /// This grants nothing; pairing still requires the one-use code.
@@ -166,6 +175,8 @@ pub(super) enum WireReply<'a> {
         status: WireStatus<'a>,
     },
     Refused {},
+    #[serde(rename = "recordCarrierV1Accepted")]
+    RecordCarrierV1Accepted {},
     Serving {},
 }
 #[derive(Serialize, Deserialize)]

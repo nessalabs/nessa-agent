@@ -126,8 +126,7 @@ pub(super) struct PreparedNative {
     /// and `bind` binds `address`. A test that reserved the port hands the
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
-    #[cfg(test)]
-    record_head_probe: bool,
+    record_carrier: bool,
     /// The web tunnel, when one is on.
     #[cfg(unix)]
     tunnel: Option<super::tunnel::PreparedTunnel>,
@@ -161,10 +160,10 @@ impl PreparedNative {
         self
     }
 
-    /// Install the explicit enrolled Head lab only in this test composition.
+    /// Enable the normally unmounted record carrier in the private fixture.
     #[cfg(test)]
-    pub(super) fn with_record_head_probe(mut self) -> Self {
-        self.record_head_probe = true;
+    pub(super) fn with_record_carrier(mut self) -> Self {
+        self.record_carrier = true;
         self
     }
 
@@ -280,8 +279,7 @@ pub(super) async fn prepare(
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
-            #[cfg(test)]
-            record_head_probe: false,
+            record_carrier: false,
             #[cfg(unix)]
             tunnel: None,
         },
@@ -383,8 +381,7 @@ pub(super) async fn bind(
         relay,
         advertised_address,
         bound_socket,
-        #[cfg(test)]
-        record_head_probe,
+        record_carrier,
         #[cfg(unix)]
         tunnel,
     } = prepared;
@@ -428,9 +425,8 @@ pub(super) async fn bind(
             store: registry.clone(),
             clock: wall.clone(),
         }));
-    #[cfg(test)]
-    let connections = if record_head_probe {
-        connections.with_record_head_probe(sessions)
+    let connections = if record_carrier {
+        connections.with_record_carrier(sessions)
     } else {
         connections
     };

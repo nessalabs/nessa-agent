@@ -1,26 +1,25 @@
-//! Test-support-only bridge from one proved native device to bounded record reads.
+//! Explicit native record carrier using the existing Product read owner.
 use super::dispatch::use_case;
 use crate::conversation::application::{
     PassiveRead, RecordReadError, RecordReadLease, RecordReadOperation, RecordReadValue,
 };
 use crate::product::state::ProductRouteState;
-use nessa_auth::{
-    adapters::pairing::NativeTransport,
-    application::{
-        ports::{AccessError, CredentialEvidence, CredentialVerifier},
-        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession},
-    },
+use nessa_auth::application::{
+    ports::{AccessError, CredentialEvidence, CredentialVerifier},
+    session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession},
+};
+use nessa_device_pairing::infrastructure::{
+    NativeConnectionError, NativeConnectionFailure, PendingRecordCarrier,
 };
 use nessa_protocol::{
-    conversation::{domain::ConversationId, read_scope::ReadRefusal},
-    pairing::socket::DeadlineStream,
-    product::{
-        generated::{
-            product_method::{CONVERSATION_RECORDS_HEAD, CONVERSATION_RECORDS_PAGE},
-            RecordScope, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
-            MAX_RECORD_PAGE_RECORDS,
-        },
-        passive_read::decode_scope,
+    conversation::{
+        domain::ConversationId,
+        read_scope::{validate_passive_read_selector, ReadRefusal},
+    },
+    pairing::wire::{RecordCarrierMode, RecordCarrierOpen},
+    product::generated::{
+        product_method::{CONVERSATION_RECORDS_HEAD, CONVERSATION_RECORDS_PAGE},
+        MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
     },
 };
 use nessa_sdk::infrastructure::session_storage::physical_record_schema;
@@ -32,52 +31,49 @@ use nessa_sync::replication::{
         SessionLimits,
     },
 };
-use serde::Deserialize;
 use std::{cell::Cell, io::ErrorKind, sync::Arc, time::Duration};
 use tokio::{runtime::Handle, sync::OwnedSemaphorePermit};
 
 const AUTH_BUDGET: Duration = Duration::from_secs(3);
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Opening {
-    credential: String,
-    receiver: String,
-    epoch: u64,
-    scope: RecordScope,
-    #[serde(default)]
-    page: bool,
-}
-
 pub(in crate::product) fn serve(
     runtime: &Handle,
     state: &ProductRouteState,
     verifier: &dyn CredentialVerifier,
-    mut transport: NativeTransport<DeadlineStream>,
-    opening: &[u8],
-) -> Result<(), ErrorKind> {
-    let opening: Opening = serde_json::from_slice(opening).map_err(|_| ErrorKind::InvalidData)?;
-    let evidence = CredentialEvidence::new(opening.credential.into_bytes())
-        .map_err(|_| ErrorKind::PermissionDenied)?;
-    let session = runtime
-        .block_on(async {
-            tokio::time::timeout(
-                AUTH_BUDGET,
-                AuthenticateSession {
-                    policy: state.policy.as_ref(),
-                    verifier,
-                    access: state.access.as_ref(),
-                    clock: state.clock.as_ref(),
-                }
-                .execute(&evidence, &state.audience),
-            )
-            .await
-        })
-        .map_err(|_| ErrorKind::TimedOut)?
-        .map_err(|_| ErrorKind::PermissionDenied)?;
-    let scope = decode_scope(&opening.scope).map_err(|_| ErrorKind::InvalidData)?;
-    let conversation =
-        ConversationId::new(scope.stream().as_str()).map_err(|_| ErrorKind::InvalidData)?;
+    selection: PendingRecordCarrier<'_>,
+    opening: RecordCarrierOpen,
+) -> Result<(), NativeConnectionError> {
+    let RecordCarrierOpen {
+        credential,
+        scope,
+        access_epoch: epoch,
+        mode,
+    } = opening;
+    let receiver = scope.receiver().as_str();
+    let Ok(conversation) = ConversationId::new(scope.stream().as_str()) else {
+        return selection.refuse();
+    };
+    if validate_passive_read_selector(receiver, epoch, &scope).is_err() {
+        return selection.refuse();
+    }
+    let Ok(evidence) = CredentialEvidence::new(credential.as_str().as_bytes().to_vec()) else {
+        return selection.refuse();
+    };
+    let Ok(Ok(session)) = runtime.block_on(async {
+        tokio::time::timeout(
+            AUTH_BUDGET,
+            AuthenticateSession {
+                policy: state.policy.as_ref(),
+                verifier,
+                access: state.access.as_ref(),
+                clock: state.clock.as_ref(),
+            }
+            .execute(&evidence, &state.audience),
+        )
+        .await
+    }) else {
+        return selection.refuse();
+    };
     let taken = Cell::new(false);
     let uncertain = Cell::new(false);
     let probe = Probe {
@@ -85,18 +81,27 @@ pub(in crate::product) fn serve(
         state,
         session: &session,
         conversation: &conversation,
-        receiver: &opening.receiver,
-        epoch: opening.epoch,
+        receiver,
+        epoch,
         scope: &scope,
         taken: &taken,
-        page: opening.page,
+        page: mode == RecordCarrierMode::Page,
         uncertain: &uncertain,
     };
+    let mut operations = probe;
+    if operations.authorize_operation(&scope, RecordOperation::Head)
+        != Access::Allowed(scope.clone())
+        || (probe.page
+            && operations.authorize_operation(&scope, RecordOperation::Page)
+                != Access::Allowed(scope.clone()))
+    {
+        return selection.refuse();
+    }
+    let mut transport = selection.accept()?;
     // The bounded Bind already checks Head policy before the physical read
     // and before release. Its source matches the selector to the physical
     // identity; the selector is not itself an origin assertion.
     let mut scope_policy = probe;
-    let mut operations = probe;
     serve_operation_capability_record_session(
         &mut transport,
         1,
@@ -113,7 +118,7 @@ pub(in crate::product) fn serve(
             })
         },
     )
-    .map_err(|_| ErrorKind::InvalidData)
+    .map_err(|_| NativeConnectionFailure::Io(ErrorKind::InvalidData).into())
 }
 
 #[derive(Clone, Copy)]
