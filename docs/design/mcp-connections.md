@@ -10,6 +10,63 @@ The proposed remote HTTP and OAuth extension is owned by
 tables and fixture/implementation plan remain proposed; this guide describes the
 implemented connection contract below.
 
+## Experimental direct MCP Events beta polling
+
+The SDK also offers an explicit, caller-driven poll for one event on an already
+admitted remote HTTP server. This is a separate path from the harness connection
+above: it targets MCP 2026-07-28, does not allocate an MCP session, and is not
+called by the gateway, agent, workflow, or desktop. The host must own the
+operation admission and supply the existing configured remote and grant.
+Authorization at the MCP server and permission to act on an event remain
+separate requirements.
+
+```mermaid
+sequenceDiagram
+    participant Caller as SDK caller
+    participant SDK as Nessa SDK
+    participant Peer as Configured MCP server
+    Caller->>SDK: Open selected event and arguments
+    SDK->>Peer: Discover, then list eligible event types
+    Peer-->>SDK: Advertised Events and poll descriptor
+    SDK-->>Caller: Return the poll handle
+    Caller->>SDK: Poll once
+    SDK->>Peer: Send named poll with current cursor
+    Peer-->>SDK: Return one complete result
+    SDK-->>Caller: Return the batch, or refuse without advancing
+```
+
+| State or ordering | Owner and evidence |
+| --- | --- |
+| Admission precedes discovery; a configured server/URL and grant must still match, and the worst-case JSON request must fit even after a cursor arrives. | `a_different_configured_endpoint_or_existing_revocation_never_sends`, `exact_argument_budget_preserves_room_for_maximally_escaped_cursor`. |
+| Discovery must advertise the pinned revision and Events; list must select an unannotated poll-capable descriptor. | `unsupported_servers_and_routed_arguments_never_send_poll`, `real_gateway_http_exchange_does_not_select_push_only_events`. |
+| One caller-held handle sends one poll at a time. Only the exact complete response under current admission advances the in-memory cursor. A replay-capable first poll supplies no events, a missing cursor means no replay, and a gap is returned without automatic recovery. | The mutable poll handle, `actual_sdk_bootstraps_then_returns_one_scoped_occurrence_and_gap`, `omitted_cursor_poll_is_supported_without_replay`, `replay_bootstrap_refuses_nonempty_batch_without_advancing_cursor`, and the independent loopback fixture through the gateway HTTP adapter. |
+| Closure, configuration replacement, or bearer generation change fences acceptance. A request already sent might still reach the peer. HTTP 403 is reported to the authorization owner under a checked admission; 401 does not retry. A timed-out or dropped wait sends no automatic retry and commits no cursor for an unaccepted result. | `a_held_reply_cannot_publish_after_revoke_or_config_replacement`, `old_poll_handle_refuses_a_changed_bearer_generation_before_next_send`, `scope_refusal_records_challenge_without_replay_or_late_diagnostic`. |
+
+The handle has one replay-position owner. A missing cursor is identical to JSON
+`null`; a cursor appearing or disappearing after classification is valid wire
+that this subset refuses as a mode change. Reopen explicitly to start again;
+a refused result leaves the previous position unchanged.
+The pure `wire_cursor_classifies_once_then_advances_or_refuses` table test
+covers these transitions, and
+`refused_mode_change_does_not_discard_the_established_wire_cursor` checks both
+wire encodings and the next request.
+
+| Prior position | Accepted complete reply | Next position and outcome |
+| --- | --- | --- |
+| Unclassified | No cursor, with or without occurrences | NonReplay; no gap. |
+| Unclassified | Cursor with an empty batch | Replay with the new cursor; no prior checkpoint can have a gap. |
+| Unclassified | Cursor with occurrences | InvalidReply; no change. |
+| NonReplay | No cursor | NonReplay; ignore truncation without a checkpoint. |
+| Replay | Cursor | Replay with the replacement cursor; return the truncation flag as a gap. |
+| NonReplay or Replay | Reply would switch modes | ReplayModeChanged; preserve the prior position. |
+
+The caller chooses poll timing, decides whether/how to trust and use each payload,
+and owns any deduplication. This slice does not persist the cursor, handle
+schema-annotated routing arguments, automatically reconnect, use push or
+webhooks, or enable Events in the application. The fixture README under SDK MCP
+tests gives local reproduction commands. This SDK-only path does not change a
+mapped user journey or the existing desktop or MCP App state charts.
+
 ## What is built
 
 ```text

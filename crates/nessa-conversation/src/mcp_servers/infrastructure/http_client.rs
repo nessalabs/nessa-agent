@@ -240,3 +240,7 @@ mod tests {
         assert_eq!(response.bytes(16).await.unwrap(), b"{}");
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../../tests/mcp_servers/events_beta_http.rs"]
+mod events_beta_tests;

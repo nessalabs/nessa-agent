@@ -1,5 +1,6 @@
 use super::authorization::{NoAuthorization, RemoteAuthorization};
 use super::connection::Connection;
+use super::events::{ExperimentalEventsError, ExperimentalEventsPoll};
 use super::http::{HttpSession, SessionClaims};
 use super::http_exchange::HttpExchange;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
@@ -15,7 +16,7 @@ use crate::infrastructure::acp::sessions::{
     MAX_MCP_SERVERS,
 };
 use crate::infrastructure::clock::{within, Clock};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -164,6 +165,29 @@ pub(super) struct Inner {
     /// while `stopping` is unset, and `stop` sets it and takes them under the
     /// same lock, so no session opens after a stop has looked.
     pub(super) live: Mutex<Live>,
+}
+
+// Captures this configuration epoch and dependencies; replacing any of them
+// requires a fresh explicit open. This carries no credentials or session ID.
+pub(super) struct EventsAdmission {
+    pub(super) remote: RemoteMcpServer,
+    configured: Arc<BTreeMap<String, RemoteMcpServer>>,
+    pub(super) exchange: Arc<dyn HttpExchange>,
+    pub(super) authorization: Arc<dyn RemoteAuthorization>,
+    pub(super) clock: Arc<dyn Clock>,
+}
+
+fn configured_remote_as(
+    remotes: &BTreeMap<String, RemoteMcpServer>,
+    admitted: &RemoteMcpServer,
+) -> Result<RemoteMcpServer, McpError> {
+    let current = remotes
+        .get(admitted.name())
+        .ok_or(McpError::NotConfigured)?;
+    if current.id() != admitted.id() || current.url() != admitted.url() {
+        return Err(McpError::ConfigurationChanged);
+    }
+    Ok(current.clone())
 }
 
 /// Whose a session is: the SDK session (a conversation's) its harness was
@@ -454,8 +478,16 @@ impl McpServers {
         http: Arc<dyn HttpExchange>,
         authorization: Arc<dyn RemoteAuthorization>,
     ) {
-        *self.inner.http.lock().expect("http exchange") = Some(http);
-        self.set_authorization(authorization);
+        let (old_http, old_authorization) = {
+            let mut installed_http = self.inner.http.lock().expect("http exchange");
+            let mut installed_authorization =
+                self.inner.authorization.lock().expect("authorization");
+            (
+                installed_http.replace(http),
+                std::mem::replace(&mut *installed_authorization, authorization),
+            )
+        };
+        drop((old_http, old_authorization));
     }
 
     /// The authorization owner later remote openings ask. Replacing it does
@@ -618,15 +650,121 @@ impl McpServers {
         admitted: &RemoteMcpServer,
         owner: McpOwner,
     ) -> Result<McpSession, McpError> {
-        let current = self
-            .configured_remotes()
-            .into_iter()
-            .find(|remote| remote.name() == admitted.name())
-            .ok_or(McpError::NotConfigured)?;
-        if current.id() != admitted.id() || current.url() != admitted.url() {
+        let current = configured_remote_as(
+            &self.inner.remotes.read().expect("configured servers"),
+            admitted,
+        )?;
+        self.open_remote(current, Some(owner)).await
+    }
+
+    /// Explicitly discover and select one poll-capable Events Beta event.
+    ///
+    /// `admitted` is the host-selected configured remote; `owner` is its
+    /// existing grant for this call. `name` is the exact advertised event
+    /// name and `arguments` are fixed inputs for this handle. Names and the
+    /// worst-case encoded request are bounded before discovery. Descriptors
+    /// with schema-annotated argument routing are not supported.
+    ///
+    /// The caller can drive this handle directly, without changing a legacy
+    /// session or enabling timers or workflow dispatch. The handle owns only
+    /// in-memory poll position. Keep payloads untrusted and go through the
+    /// host's usual authorization before taking any action.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed configuration, authorization, capability, limit, or
+    /// wire refusal. Dropping the opening future does not retry a sent request.
+    ///
+    /// ```no_run
+    /// use nessa_sdk::infrastructure::mcp::{
+    ///     ExperimentalEventsError, McpOwner, McpServers, RemoteMcpServer,
+    /// };
+    /// use serde_json::Map;
+    ///
+    /// async fn poll_once(
+    ///     hosts: &McpServers,
+    ///     admitted: &RemoteMcpServer,
+    ///     owner: McpOwner,
+    /// ) -> Result<(), ExperimentalEventsError> {
+    ///     let mut handle = hosts.open_remote_events_experimental_as(
+    ///         admitted, owner, "counter.changed".into(), Map::new(),
+    ///     ).await?;
+    ///     let batch = handle.poll().await?;
+    ///     if batch.gap {
+    ///         // Let the application decide whether to refresh authoritative state.
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn open_remote_events_experimental_as(
+        &self,
+        admitted: &RemoteMcpServer,
+        owner: McpOwner,
+        name: String,
+        arguments: Map<String, Value>,
+    ) -> Result<ExperimentalEventsPoll, ExperimentalEventsError> {
+        ExperimentalEventsPoll::open(self.clone(), admitted, owner, name, arguments).await
+    }
+
+    pub(super) fn events_admit(
+        &self,
+        admitted: &RemoteMcpServer,
+        owner: &McpOwner,
+    ) -> Result<EventsAdmission, McpError> {
+        let configured = self
+            .inner
+            .remotes
+            .read()
+            .expect("configured servers")
+            .clone();
+        let remote = configured_remote_as(&configured, admitted)?;
+        let (exchange, authorization) = {
+            let installed_http = self.inner.http.lock().expect("http exchange");
+            let installed_authorization = self.inner.authorization.lock().expect("authorization");
+            (
+                installed_http.clone().ok_or(McpError::Unreachable)?,
+                installed_authorization.clone(),
+            )
+        };
+        let admission = EventsAdmission {
+            remote,
+            configured,
+            exchange,
+            authorization,
+            clock: self.inner.clock.clone(),
+        };
+        self.events_check(&admission, owner)?;
+        Ok(admission)
+    }
+
+    pub(super) fn events_check(
+        &self,
+        admission: &EventsAdmission,
+        owner: &McpOwner,
+    ) -> Result<(), McpError> {
+        // Order with replacement and stop on live, and with grant revocation on
+        // the grant lock. No network operation runs under these locks.
+        let _live = self.inner.live.lock().expect("live sessions");
+        if *self.inner.stopping.borrow() {
+            return Err(McpError::Stopped);
+        }
+        let grant = owner.grant.state.lock().expect("grant");
+        if grant.revoked {
+            return Err(McpError::Closed);
+        }
+        let installed_http = self.inner.http.lock().expect("http exchange");
+        let installed_authorization = self.inner.authorization.lock().expect("authorization");
+        if !Arc::ptr_eq(
+            &admission.configured,
+            &self.inner.remotes.read().expect("configured servers"),
+        ) || !installed_http
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &admission.exchange))
+            || !Arc::ptr_eq(&admission.authorization, &installed_authorization)
+        {
             return Err(McpError::ConfigurationChanged);
         }
-        self.open_remote(current, Some(owner)).await
+        Ok(())
     }
 
     async fn open_remote(
