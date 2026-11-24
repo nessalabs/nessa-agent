@@ -4525,7 +4525,6 @@ pub struct CloudBoxSummary {
     pub name: String,
     pub cloud: Cloud,
     pub vm: String,
-    pub gateway_id: String,
     pub url: String,
     pub state: CloudBoxState,
     pub created_at_ms: u64,
@@ -4534,6 +4533,7 @@ pub struct CloudBoxSummary {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudBoxCreateParams {
+    pub box_id: String,
     pub name: String,
     pub cloud: Cloud,
 }
@@ -4563,7 +4563,6 @@ pub struct CloudBoxCreateResult {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudBoxWakeResult {
     pub box_id: String,
-    pub gateway_id: String,
     pub url: String,
 }
 #[derive(Deserialize, Serialize)]

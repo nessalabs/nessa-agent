@@ -2,67 +2,115 @@
 # Reference bootstrap helper installed at /opt/nessa/bin/nessa-gateway-bootstrap
 # inside persistent cloud gateway VM images (ADR 1417 / #1420).
 #
-# Contract:
+# Every fact it prints comes from the VM's own running nessa-server, asked
+# through `nessa call` with the owner credential; it keeps no files of its own.
+#
 #   nessa-gateway-bootstrap create
-#     Ensures headless nessa-server is running and prints a single JSON line:
-#     {"gateway_id":"<id>","url":"wss://<host>","credential":"<one-time-token>"}
+#     Starts nessa-server if it is not running and prints one JSON line:
+#     {"url":"wss://<host>","credential":"<token>"}
+#     url is the web tunnel `server.reach` reports. credential is a new token
+#     the server issues (`nessa auth token`), never the owner token itself.
+#     Run again on the same VM, it issues another one.
 #
 #   nessa-gateway-bootstrap status
-#     Ensures headless nessa-server is running after VM wake and prints:
-#     {"gateway_id":"<id>","url":"wss://<host>"}
+#     Starts nessa-server after a wake and prints {"url":"wss://<host>"}.
 #
 #   nessa-gateway-bootstrap busy
-#     Checks whether any turns or terminals are currently active and prints:
-#     {"busy":true|false}
+#     Prints {"busy":true|false}: true while any conversation is running or any
+#     terminal is open. A list the server cannot give in full, or any failure
+#     to ask, is busy (fail closed, G5). A server that is not running is idle
+#     only where systemd says its unit is stopped.
+#
+# The gateway's identity is not printed: whoever connects learns it from the
+# gateway's own handshake.
 set -euo pipefail
 
 cmd="${1:-status}"
-state_dir="${NESSA_STATE_DIR:-/var/lib/nessa}"
-gateway_id_file="${state_dir}/gateway-id"
-url_file="${state_dir}/endpoint-url"
-token_file="${state_dir}/owner.token"
-active_work_file="${state_dir}/active-work.json"
+nessa="${NESSA_BIN:-$(command -v nessa || printf '/opt/nessa/bin/nessa')}"
+export NESSA_STAGE="${NESSA_STAGE:-prod}"
+export NESSA_DATA_DIR="${NESSA_DATA_DIR:-/var/lib/nessa}"
+host="${NESSA_HOST:-127.0.0.1}"
+port="${NESSA_PORT:-18789}"
+owner_token="${NESSA_OWNER_TOKEN_FILE:-${NESSA_DATA_DIR}/owner.token}"
+wait_seconds="${NESSA_BOOTSTRAP_WAIT_SECONDS:-90}"
+unit="nessa-server.service"
+
+has_systemd() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+healthy() {
+  curl -fsS --max-time 5 "http://${host}:${port}/health" >/dev/null 2>&1
+}
+
+call() {
+  local method="$1" params="${2:-}"
+  [[ -n "${params}" ]] || params='{}'
+  "${nessa}" call "${method}" --params "${params}" --credential-file "${owner_token}"
+}
 
 ensure_running() {
-  systemctl is-active --quiet nessa-server.service || systemctl start nessa-server.service
-
-  for _ in $(seq 1 30); do
-    if [[ -s "${gateway_id_file}" && -s "${url_file}" ]]; then
-      break
-    fi
+  if ! healthy && has_systemd; then
+    systemctl start "${unit}"
+  fi
+  for _ in $(seq 1 "${wait_seconds}"); do
+    healthy && return 0
     sleep 1
   done
+  echo "nessa-server did not become healthy on ${host}:${port}" >&2
+  exit 1
+}
 
-  gateway_id="$(tr -d '\r\n' < "${gateway_id_file}")"
-  url="$(tr -d '\r\n' < "${url_file}")"
+# The tunnel address the server reports, as the wss:// URL a client opens.
+reach_url() {
+  local tunnel=""
+  for _ in $(seq 1 "${wait_seconds}"); do
+    tunnel="$(call server.reach | jq -r '.tunnel // empty' 2>/dev/null || true)"
+    [[ -n "${tunnel}" ]] && break
+    sleep 1
+  done
+  if [[ "${tunnel}" != https://* ]]; then
+    echo "server.reach reported no https:// tunnel (got '${tunnel}')" >&2
+    exit 1
+  fi
+  printf 'wss://%s' "${tunnel#https://}"
 }
 
 case "${cmd}" in
   create)
     ensure_running
-    credential="$(tr -d '\r\n' < "${token_file}")"
-    jq -cn \
-      --arg gateway_id "${gateway_id}" \
-      --arg url "${url}" \
-      --arg credential "${credential}" \
-      '{gateway_id: $gateway_id, url: $url, credential: $credential}'
+    url="$(reach_url)"
+    credential="$("${nessa}" auth token --credential-file "${owner_token}" | tr -d '\r\n')"
+    if [[ -z "${credential}" ]]; then
+      echo "nessa auth token issued no credential" >&2
+      exit 1
+    fi
+    jq -cn --arg url "${url}" --arg credential "${credential}" \
+      '{url: $url, credential: $credential}'
     ;;
   status)
     ensure_running
-    jq -cn \
-      --arg gateway_id "${gateway_id}" \
-      --arg url "${url}" \
-      '{gateway_id: $gateway_id, url: $url}'
+    jq -cn --arg url "$(reach_url)" '{url: $url}'
     ;;
   busy)
-    # If the gateway service is not running, no turns or terminals are active.
-    if command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet nessa-server.service; then
-      printf '{"busy":false}\n'
+    if ! healthy; then
+      if has_systemd && ! systemctl is-active --quiet "${unit}"; then
+        printf '{"busy":false}\n'
+      else
+        printf '{"busy":true}\n'
+      fi
       exit 0
     fi
-    # When running, require explicit authoritative evidence that busy == false;
-    # missing, empty, or unreadable activity files fail closed as busy:true (G5).
-    if [[ -s "${active_work_file}" ]] && out="$(jq -ce '{busy: (if .busy == false then false else true end)}' "${active_work_file}" 2>/dev/null)"; then
+    if open="$(call conversation.list '{"archived":false}')" \
+      && archived="$(call conversation.list '{"archived":true}')" \
+      && terminals="$(call terminal.list)" \
+      && out="$(jq -cn --argjson open "${open}" --argjson archived "${archived}" \
+        --argjson terminals "${terminals}" \
+        '{busy: (
+            ([$open, $archived] | any(.complete != true))
+            or ([$open.conversations[], $archived.conversations[]] | any(.running == true))
+            or ($terminals.terminals | any(.state != "exited"))
+          )}')"; then
       printf '%s\n' "${out}"
     else
       printf '{"busy":true}\n'

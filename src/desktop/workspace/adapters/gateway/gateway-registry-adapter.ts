@@ -76,15 +76,21 @@ export type RemoteClientConnector = (params: {
 
 /** Process-boundary port for persistent Cloud Box VM lifecycle orchestration (#1420). */
 export interface CloudBoxesLifecyclePort {
-  create(input: CreateCloudBoxInput): Promise<{
+  /**
+   * Create, or finish creating, the box the caller named by `boxId`. The same
+   * `boxId` asked again resumes that creation on the gateway, so a lost answer
+   * or a failed enrollment is retried, never answered with a second VM.
+   * Rejects with an error whose `refusal` names a gateway refusal code, or
+   * none for a transport failure or a timeout.
+   */
+  create(input: CreateCloudBoxInput & { readonly boxId: string }): Promise<{
     readonly boxId: string
     readonly name: string
     readonly cloud: "boat" | "agent37"
-    readonly gatewayId: string
     readonly url: string
     readonly credential: string
   }>
-  wake(boxId: string): Promise<{ readonly gatewayId: string; readonly url: string }>
+  wake(boxId: string): Promise<{ readonly url: string }>
   sleep(boxId: string): Promise<void>
   delete(boxId: string): Promise<void>
 }
@@ -138,6 +144,29 @@ function defaultConnectRemote(params: {
     surface: { kind: "desktop", instance: crypto.randomUUID() },
     client: { id: "nessa-desktop-remote", version: "0.1.0", platform: "browser" },
   }) as unknown as Promise<RemoteClient>
+}
+
+/** How many times `createCloudBox` asks for the same box before giving up. */
+export const CLOUD_BOX_CREATE_ATTEMPTS = 3
+
+/** Gateway refusals that asking again with the same box id cannot change. */
+const FINAL_CLOUD_BOX_REFUSALS: ReadonlySet<string> = new Set([
+  "invalid_request",
+  "vault_locked",
+  "cloud_not_configured",
+  "cloud_box_already_exists",
+  "cloud_box_not_active",
+  "cloud_box_admission_refused",
+  "cloud_box_bootstrap_failed",
+  "cloud_box_provider_failed",
+])
+
+function isFinalCloudBoxRefusal(error: unknown): boolean {
+  const refusal =
+    typeof error === "object" && error !== null && "refusal" in error
+      ? (error as { refusal?: unknown }).refusal
+      : undefined
+  return typeof refusal === "string" && FINAL_CLOUD_BOX_REFUSALS.has(refusal)
 }
 
 function isAuthError(error: unknown): boolean {
@@ -475,21 +504,6 @@ export function createGatewayRegistry(
         )
       }
 
-      if (
-        input.expectedGatewayId !== undefined &&
-        verifiedGatewayId !== input.expectedGatewayId
-      ) {
-        try {
-          void client.close()
-        } catch {
-          // Ignore close failure on rejected handshake.
-        }
-        throw new GatewayRegistryError(
-          "connect-failed",
-          "Connected gateway reported a different gatewayId than expected.",
-        )
-      }
-
       if (registryDisposed) {
         try {
           void client.close()
@@ -605,13 +619,9 @@ export function createGatewayRegistry(
       notifySnapshots()
       const performWake = async (): Promise<void> => {
         if (canWakeCloudBox && boxId && options.cloudBoxes) {
+          // Which gateway answers at the woken address is checked by the
+          // reconnect's handshake against this entry's gatewayId.
           const woken = await options.cloudBoxes.wake(boxId)
-          if (woken.gatewayId !== gatewayId) {
-            throw new GatewayRegistryError(
-              "connect-failed",
-              "Woken Cloud Box reported a different gatewayId.",
-            )
-          }
           if (entry.disposed) return
           const normalized = normalizeGatewayUrl(woken.url)
           if (!normalized) {
@@ -671,29 +681,42 @@ export function createGatewayRegistry(
                   "Cloud Box name is required.",
                 )
               }
-              const created = await cloudBoxes.create({
-                name,
-                cloud: input.cloud,
-              })
-              try {
-                return await registry.add({
-                  label: created.name,
-                  url: created.url,
-                  credential: created.credential,
-                  expectedGatewayId: created.gatewayId,
-                  cloudBox: { boxId: created.boxId, cloud: created.cloud },
-                })
-              } catch (enrollError) {
+              // The box is named here, so every attempt below is the same
+              // creation on the gateway: a lost answer, a failed audit or a
+              // failed enrollment is finished by asking again, and only a box
+              // that still cannot be enrolled is deleted.
+              const boxId = newId()
+              let lastError: unknown
+              for (let attempt = 0; attempt < CLOUD_BOX_CREATE_ATTEMPTS; attempt++) {
+                if (registryDisposed) break
+                let created: Awaited<ReturnType<CloudBoxesLifecyclePort["create"]>>
                 try {
-                  await cloudBoxes.delete(created.boxId)
-                } catch {
-                  throw new GatewayRegistryError(
-                    "offline",
-                    `Cloud Box ${created.boxId} could not be enrolled and rollback deletion failed; remove it manually.`,
-                  )
+                  created = await cloudBoxes.create({ boxId, name, cloud: input.cloud })
+                } catch (error) {
+                  if (isFinalCloudBoxRefusal(error)) throw error
+                  lastError = error
+                  continue
                 }
-                throw enrollError
+                try {
+                  return await registry.add({
+                    label: created.name,
+                    url: created.url,
+                    credential: created.credential,
+                    cloudBox: { boxId, cloud: created.cloud },
+                  })
+                } catch (enrollError) {
+                  lastError = enrollError
+                }
               }
+              try {
+                await cloudBoxes.delete(boxId)
+              } catch {
+                throw new GatewayRegistryError(
+                  "offline",
+                  `Cloud Box ${boxId} could not be enrolled and rollback deletion failed; remove it manually.`,
+                )
+              }
+              throw lastError
             },
 
             async sleepCloudBox(gatewayId: string): Promise<void> {

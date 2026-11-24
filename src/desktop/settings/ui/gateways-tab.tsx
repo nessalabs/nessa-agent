@@ -4,7 +4,8 @@
  * Lists the local host gateway alongside every registered remote `nessa-server`
  * gateway (both self-hosted and managed Cloud Box VMs) with live connection
  * status, wake/sleep/reconnect/delete/remove actions, an "Add remote gateway"
- * form (G7), and a "Create Cloud Box" form (#1420).
+ * form (G7), and a "Create Cloud Box" form (#1420), hidden until a gateway
+ * VM image exists (#1427).
  */
 import {
   createContext,
@@ -21,6 +22,13 @@ import {
 } from "../../workspace"
 import { DesktopIcon } from "../../ui/icons"
 import { Group, ItemRow, RowAction } from "./settings-controls"
+
+/**
+ * Creating a Cloud Box runs the gateway bootstrap helper inside the new VM,
+ * and no image we provision ships it yet (#1427): every create would roll
+ * back. The form stays hidden until that image is pinned.
+ */
+const CLOUD_BOX_CREATE_AVAILABLE: boolean = false
 
 const GatewayRegistryContext = createContext<GatewayRegistryPort | undefined>(undefined)
 
@@ -235,7 +243,7 @@ export function GatewaysTab() {
         })}
       </Group>
 
-      {registry.createCloudBox && (
+      {CLOUD_BOX_CREATE_AVAILABLE && registry.createCloudBox && (
         <Group
           title="Create Cloud Box"
           note={

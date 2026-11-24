@@ -18,10 +18,14 @@ import {
 export type CloudBoxesApi = {
   /** List all active (running or sleeping) persistent cloud gateway VMs. */
   list(): Promise<readonly CloudBoxSummary[]>
-  /** Provision and bootstrap a new persistent cloud gateway VM. Returns the
-   * box summary and its one-time enrollment credential. */
+  /** Provision and bootstrap the persistent cloud gateway VM named by
+   * `params.boxId`, a UUID the caller chooses. Asking again with the same
+   * `boxId` resumes that creation instead of making a second VM, so a caller
+   * whose answer was lost, or whose enrollment failed, asks again. Returns
+   * the box summary and an enrollment credential its gateway issued. */
   create(params: CloudBoxCreateParams): Promise<CloudBoxCreateResult>
-  /** Wake a sleeping cloud gateway VM and return its verified endpoint URL. */
+  /** Wake a sleeping cloud gateway VM and return its current endpoint URL.
+   * Which gateway answers there is checked from its own handshake. */
   wake(boxId: string): Promise<CloudBoxWakeResult>
   /** Stop an idle cloud gateway VM without losing its persistent disk. */
   sleep(boxId: string): Promise<CloudBoxSummary>
@@ -89,7 +93,6 @@ function parseCloudBoxSummary(value: unknown): CloudBoxSummary {
     name: readOwnString(obj, "name"),
     cloud,
     vm: readOwnString(obj, "vm"),
-    gatewayId: readOwnString(obj, "gatewayId"),
     url: readOwnString(obj, "url"),
     state: state as CloudBoxState,
     createdAtMs: readOwnNumber(obj, "createdAtMs"),
@@ -196,7 +199,6 @@ export function createCloudApi(session: RpcRequester): CloudApi {
           const obj = raw as Record<string, unknown>
           return {
             boxId: readOwnString(obj, "boxId"),
-            gatewayId: readOwnString(obj, "gatewayId"),
             url: readOwnString(obj, "url"),
           }
         },

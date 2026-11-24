@@ -4045,8 +4045,6 @@ export interface CloudBoxSummary {
   cloud: Cloud
   /** Provider-assigned VM identifier. */
   vm: string
-  /** Stable gateway ID reported by the headless nessa-server inside the VM. */
-  gatewayId: string
   /** Current wss:// endpoint URL for connecting to the cloud box gateway. */
   url: string
   /** Current lifecycle state of the cloud box VM. */
@@ -4056,8 +4054,10 @@ export interface CloudBoxSummary {
   /** Unix epoch timestamp in milliseconds of the latest state transition. */
   updatedAtMs: number
 }
-/** Create and bootstrap a persistent cloud gateway VM. */
+/** Create and bootstrap a persistent cloud gateway VM, or finish the creation of the one the caller already named. */
 export interface CloudBoxCreateParams {
+  /** UUID the caller chose for this cloud box. Asking again with the same boxId resumes the same creation (a lost answer, a failed enrollment) instead of making a second VM; a box already admitted answers with a fresh credential. */
+  boxId: string
   /** Display name for the new persistent cloud gateway VM. */
   name: string
   /** Connected cloud provider on which to create the VM. */
@@ -4084,15 +4084,13 @@ export interface CloudBoxesListResult {
 export interface CloudBoxCreateResult {
   /** Summary of the newly created cloud gateway VM. */
   cloudBox: CloudBoxSummary
-  /** One-time enrollment credential returned so the caller can pair immediately. */
+  /** Enrollment credential the box's gateway issued for this answer, so the caller can pair immediately. Never the gateway's owner token. */
   credential: string
 }
-/** Verified endpoint returned after waking a persistent cloud gateway VM. */
+/** Endpoint returned after waking a persistent cloud gateway VM; which gateway answers there is checked from its own handshake. */
 export interface CloudBoxWakeResult {
   /** UUID of the woken cloud box. */
   boxId: string
-  /** Verified gateway ID reported by the woken VM. */
-  gatewayId: string
   /** Current wss:// endpoint URL, refreshed if rotated on wake. */
   url: string
 }

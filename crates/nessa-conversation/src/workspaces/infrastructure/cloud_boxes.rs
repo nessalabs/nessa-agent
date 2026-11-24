@@ -32,14 +32,16 @@ use zeroize::Zeroizing;
 /// Maximum size of one cloud box receipt history file (64 KiB).
 const MAX_HISTORY_BYTES: u64 = 64 * 1024;
 
-/// Bootstrap command installed in gateway cloud images that starts headless
-/// `nessa-server` and prints JSON enrollment metadata on stdout.
+/// Bootstrap command in gateway cloud images: starts headless `nessa-server`
+/// and prints `{url, credential}`, the address the server's own `server.reach`
+/// reports and a fresh credential the server issues. Run again on an admitted
+/// box, it issues another credential.
 const BOOTSTRAP_CREATE_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap create";
-/// Status command installed in gateway cloud images that ensures headless
-/// `nessa-server` is running after wake and prints its current JSON endpoint.
+/// Status command: starts `nessa-server` after a wake and prints `{url}`, as
+/// the server's `server.reach` reports it.
 const BOOTSTRAP_STATUS_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap status";
-/// Active-work probe installed in gateway cloud images that reports whether
-/// the running gateway currently has active turns or open terminals (G5).
+/// Busy probe: asks the running server whether any conversation is running or
+/// any terminal is open, and prints `{busy}`; anything it cannot read is busy.
 const BOOTSTRAP_BUSY_CMD: &str = "/opt/nessa/bin/nessa-gateway-bootstrap busy";
 
 #[derive(Serialize, Deserialize)]
@@ -149,7 +151,6 @@ enum StoredCloudBoxRecord {
         vm: String,
         image: String,
         admission: StoredAdmitted,
-        gateway_id: String,
         url: String,
         state: StoredState,
         created_at_ms: u64,
@@ -190,7 +191,6 @@ impl From<&CloudBoxRecord> for StoredCloudBoxRecord {
                 vm,
                 image,
                 admission,
-                gateway_id,
                 url,
                 state,
                 created_at_ms,
@@ -202,7 +202,6 @@ impl From<&CloudBoxRecord> for StoredCloudBoxRecord {
                 vm: vm.clone(),
                 image: image.clone(),
                 admission: StoredAdmitted::from(admission),
-                gateway_id: gateway_id.clone(),
                 url: url.as_str().to_owned(),
                 state: StoredState::from(*state),
                 created_at_ms: *created_at_ms,
@@ -261,7 +260,6 @@ impl TryFrom<StoredCloudBoxRecord> for CloudBoxRecord {
                 vm,
                 image,
                 admission,
-                gateway_id,
                 url,
                 state,
                 created_at_ms,
@@ -273,7 +271,6 @@ impl TryFrom<StoredCloudBoxRecord> for CloudBoxRecord {
                 vm,
                 image,
                 admission: Admitted::try_from(admission)?,
-                gateway_id,
                 url: CloudBoxUrl::new(url)?,
                 state: CloudBoxState::from(state),
                 created_at_ms,
@@ -455,7 +452,7 @@ impl CloudBoxStore for FileCloudBoxStore {
 /// updates never exhaust `MAX_HISTORY_BYTES`, while preserving the full
 /// ADR 1160 provenance chain:
 /// 1. The initial `Provisioning` intent record (index 0).
-/// 2. The first `Active` record that established `(cloud, vm, admission, gateway_id)`.
+/// 2. The first `Active` record that established `(cloud, vm, admission)`.
 /// 3. The latest record (current `Active` state or terminal `Refused`/`Deleted`).
 fn compact_history(history: &[CloudBoxRecord]) -> Vec<CloudBoxRecord> {
     if history.len() <= 3 {
@@ -485,16 +482,16 @@ where
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BootstrapCreateOutput {
-    gateway_id: String,
     url: String,
     #[serde(deserialize_with = "deserialize_zeroizing")]
     credential: Zeroizing<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BootstrapStatusOutput {
-    gateway_id: String,
     url: String,
 }
 
@@ -554,6 +551,45 @@ impl WorkspaceCloudBoxProvider {
                 "vm={vm}; cause={primary}; cleanup={cleanup_error:?}"
             )),
         }
+    }
+}
+
+impl WorkspaceCloudBoxProvider {
+    /// Connect to an admitted box's VM (which wakes it) and run one bootstrap
+    /// command there.
+    async fn run_in_box(
+        &self,
+        connection: &CloudConnection,
+        vm: &str,
+        admission: &Admitted,
+        key: &str,
+        command: &str,
+    ) -> Result<String, CloudBoxError> {
+        let account = connection.account();
+        let spec = connection.new_vm(self.pinned_image, VmLifetime::Unlimited);
+        let runtime = self
+            .provider
+            .connect(&account, &spec, key, vm, admission)
+            .await
+            .map_err(map_provider_failure)?;
+        runtime
+            .run(command.to_owned(), None)
+            .await
+            .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))
+    }
+}
+
+/// The endpoint and credential a bootstrap `create` printed, refused when
+/// either is missing or the address is not a `wss://` one.
+fn enrollment_of(
+    parsed: BootstrapCreateOutput,
+) -> Result<(CloudBoxEndpoint, Zeroizing<String>), CloudBoxError> {
+    let credential = Zeroizing::new(parsed.credential.trim().to_owned());
+    match CloudBoxUrl::new(parsed.url) {
+        Ok(url) if !credential.is_empty() => Ok((CloudBoxEndpoint { url }, credential)),
+        _ => Err(CloudBoxError::BootstrapFailed(
+            "gateway bootstrap returned incomplete enrollment metadata".into(),
+        )),
     }
 }
 
@@ -627,20 +663,11 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
                 }
             };
 
-            let gateway_id = parsed.gateway_id.trim().to_owned();
-            let credential = Zeroizing::new(parsed.credential.trim().to_owned());
-            let url = match CloudBoxUrl::new(parsed.url) {
-                Ok(url) if !gateway_id.is_empty() && !credential.is_empty() => url,
-                _ => {
+            let (endpoint, credential) = match enrollment_of(parsed) {
+                Ok(enrolled) => enrolled,
+                Err(error) => {
                     return Err(self
-                        .rollback_or_uncertain(
-                            &account,
-                            &receipt.vm,
-                            &receipt.admission,
-                            CloudBoxError::BootstrapFailed(
-                                "gateway bootstrap returned incomplete enrollment metadata".into(),
-                            ),
-                        )
+                        .rollback_or_uncertain(&account, &receipt.vm, &receipt.admission, error)
                         .await);
                 }
             };
@@ -649,7 +676,7 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
                 vm: receipt.vm,
                 image: spec.image,
                 admission: receipt.admission,
-                endpoint: CloudBoxEndpoint { gateway_id, url },
+                endpoint,
                 credential,
             })
         })
@@ -662,28 +689,38 @@ impl CloudBoxProvider for WorkspaceCloudBoxProvider {
         admission: &'a Admitted,
     ) -> BoxFuture<'a, Result<CloudBoxEndpoint, CloudBoxError>> {
         Box::pin(async move {
-            let account = connection.account();
-            let spec = connection.new_vm(self.pinned_image, VmLifetime::Unlimited);
-            let runtime = self
-                .provider
-                .connect(&account, &spec, "box-wake", vm, admission)
-                .await
-                .map_err(map_provider_failure)?;
-            let raw = runtime
-                .run(BOOTSTRAP_STATUS_CMD.to_owned(), None)
-                .await
-                .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))?;
+            let raw = self
+                .run_in_box(connection, vm, admission, "box-wake", BOOTSTRAP_STATUS_CMD)
+                .await?;
             let line = last_json_line(&raw)?;
             let parsed: BootstrapStatusOutput = serde_json::from_str(line)
                 .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))?;
-            let gateway_id = parsed.gateway_id.trim().to_owned();
-            if gateway_id.is_empty() {
-                return Err(CloudBoxError::BootstrapFailed(
-                    "gateway status returned an empty gateway_id".into(),
-                ));
-            }
-            let url = CloudBoxUrl::new(parsed.url)?;
-            Ok(CloudBoxEndpoint { gateway_id, url })
+            Ok(CloudBoxEndpoint {
+                url: CloudBoxUrl::new(parsed.url)?,
+            })
+        })
+    }
+
+    fn enroll_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
+    ) -> BoxFuture<'a, Result<(CloudBoxEndpoint, Zeroizing<String>), CloudBoxError>> {
+        Box::pin(async move {
+            let raw = Zeroizing::new(
+                self.run_in_box(
+                    connection,
+                    vm,
+                    admission,
+                    "box-enroll",
+                    BOOTSTRAP_CREATE_CMD,
+                )
+                .await?,
+            );
+            let parsed: BootstrapCreateOutput = serde_json::from_str(last_json_line(&raw)?)
+                .map_err(|error| CloudBoxError::BootstrapFailed(error.to_string()))?;
+            enrollment_of(parsed)
         })
     }
 
@@ -958,7 +995,6 @@ mod tests {
                     admission: Admitted::Agent37(
                         TemplateRelease::new("v1".into(), Some(1), None).unwrap(),
                     ),
-                    gateway_id: "gw-1".into(),
                     url: CloudBoxUrl::new("wss://box.example.com").unwrap(),
                     state: CloudBoxState::Running,
                     created_at_ms: 100,
@@ -970,10 +1006,7 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].len(), 2);
-        assert_eq!(
-            listed[0].last().unwrap().as_summary().unwrap().gateway_id,
-            "gw-1"
-        );
+        assert_eq!(listed[0].last().unwrap().as_summary().unwrap().vm, "vm-1");
 
         audit
             .record(CloudBoxAuditEvent {
@@ -998,8 +1031,7 @@ mod tests {
         let id = CloudBoxId::parse("11111111-2222-3333-4444-555555555555").unwrap();
         let inner = Arc::new(FakeWorkspaceProvider {
             runtime_output: Mutex::new(
-                r#"{"gateway_id":"gw-99","url":"wss://gw99.example.com","credential":"tok-99"}"#
-                    .into(),
+                r#"{"url":"wss://gw99.example.com","credential":"tok-99"}"#.into(),
             ),
             refusal: Mutex::new(None),
             removed: Mutex::new(Vec::new()),
@@ -1008,17 +1040,42 @@ mod tests {
         let adapter = WorkspaceCloudBoxProvider::new(inner.clone(), None);
         let provisioned = adapter.create_box(&connection, &id).await.unwrap();
         assert_eq!(provisioned.vm, "vm-99");
-        assert_eq!(provisioned.endpoint.gateway_id, "gw-99");
+        assert_eq!(provisioned.endpoint.url.as_str(), "wss://gw99.example.com/");
         assert_eq!(provisioned.credential.as_str(), "tok-99");
 
         // Wake returns refreshed endpoint.
-        *inner.runtime_output.lock().unwrap() =
-            r#"{"gateway_id":"gw-99","url":"wss://gw99-new.example.com"}"#.into();
+        *inner.runtime_output.lock().unwrap() = r#"{"url":"wss://gw99-new.example.com"}"#.into();
         let woken = adapter
             .wake_box(&connection, "vm-99", &provisioned.admission)
             .await
             .unwrap();
         assert_eq!(woken.url.as_str(), "wss://gw99-new.example.com/");
+
+        // Enrolling an admitted box again returns the fresh credential its
+        // gateway issued; output that still names a gateway id (the old
+        // contract) or lacks a credential is refused.
+        *inner.runtime_output.lock().unwrap() =
+            r#"{"url":"wss://gw99-new.example.com","credential":"tok-100"}"#.into();
+        let (endpoint, credential) = adapter
+            .enroll_box(&connection, "vm-99", &provisioned.admission)
+            .await
+            .unwrap();
+        assert_eq!(endpoint.url.as_str(), "wss://gw99-new.example.com/");
+        assert_eq!(credential.as_str(), "tok-100");
+        for bad in [
+            r#"{"gateway_id":"gw-99","url":"wss://gw99.example.com","credential":"tok"}"#,
+            r#"{"url":"wss://gw99.example.com","credential":"  "}"#,
+            r#"{"url":"ws://gw99.example.com","credential":"tok"}"#,
+        ] {
+            *inner.runtime_output.lock().unwrap() = bad.into();
+            assert!(matches!(
+                adapter
+                    .enroll_box(&connection, "vm-99", &provisioned.admission)
+                    .await
+                    .unwrap_err(),
+                CloudBoxError::BootstrapFailed(_) | CloudBoxError::InvalidUrl
+            ));
+        }
 
         // Active work checker reads busy JSON.
         let checker = ProviderActiveWorkChecker::new(vec![(Cloud::Boat, inner.clone(), None)]);
@@ -1083,7 +1140,6 @@ mod tests {
                         cloud: Cloud::Agent37,
                         vm: "vm-persistent".into(),
                         admission: admission.clone(),
-                        gateway_id: "gw-persistent".into(),
                         url: CloudBoxUrl::new(format!("wss://box-{step}.example.com")).unwrap(),
                         state,
                         image: "nessa-gateway:v1".into(),
@@ -1105,7 +1161,6 @@ mod tests {
         assert_eq!(latest.name.as_str(), "Box #299");
         assert_eq!(latest.state, CloudBoxState::Sleeping);
         assert_eq!(latest.vm, "vm-persistent");
-        assert_eq!(latest.gateway_id, "gw-persistent");
         CloudBoxRecord::validate_history(&history).unwrap();
 
         let file_len = fs::metadata(

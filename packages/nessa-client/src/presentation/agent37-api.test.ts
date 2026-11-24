@@ -65,7 +65,6 @@ describe("agent37 api", () => {
       name: "Cloud Box",
       cloud: "agent37",
       vm: "vm-1",
-      gatewayId: "gw-1",
       url: "wss://box.example.com/",
       state: "running",
       createdAtMs: 100,
@@ -83,7 +82,6 @@ describe("agent37 api", () => {
           case "cloud.boxes.wake":
             return {
               boxId: sample.boxId,
-              gatewayId: "gw-1",
               url: "wss://rotated.example.com/",
             }
           case "cloud.boxes.sleep":
@@ -99,13 +97,18 @@ describe("agent37 api", () => {
     } as never)
 
     expect(await cloud.boxes.list()).toEqual([sample])
-    expect(await cloud.boxes.create({ name: "Cloud Box", cloud: "agent37" })).toEqual({
+    expect(
+      await cloud.boxes.create({
+        boxId: sample.boxId,
+        name: "Cloud Box",
+        cloud: "agent37",
+      }),
+    ).toEqual({
       cloudBox: sample,
       credential: "enroll-once",
     })
     expect(await cloud.boxes.wake(sample.boxId)).toEqual({
       boxId: sample.boxId,
-      gatewayId: "gw-1",
       url: "wss://rotated.example.com/",
     })
     await expect(cloud.boxes.sleep(sample.boxId)).rejects.toMatchObject({

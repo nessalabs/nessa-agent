@@ -53,8 +53,11 @@ pub(super) async fn dispatch(
                 let Ok(name) = CloudBoxName::new(params.name) else {
                     return failure(&frame.id, "invalid_request");
                 };
-                let box_id = CloudBoxId::parse(uuid::Uuid::new_v4().to_string())
-                    .expect("uuid v4 is always a valid CloudBoxId");
+                // The caller names the box, so asking again after a lost
+                // answer resumes the same creation instead of making a second VM.
+                let Ok(box_id) = CloudBoxId::parse(&params.box_id) else {
+                    return failure(&frame.id, "invalid_request");
+                };
                 let cloud = from_wire_cloud(params.cloud);
                 match service.create(box_id, name, cloud, initiator).await {
                     Ok(enrolled) => success(
@@ -79,7 +82,6 @@ pub(super) async fn dispatch(
                         &frame.id,
                         &CloudBoxWakeResult {
                             box_id: box_id.as_str().to_owned(),
-                            gateway_id: endpoint.gateway_id,
                             url: endpoint.url.as_str().to_owned(),
                         },
                     ),
@@ -181,7 +183,6 @@ fn wire_summary(summary: CloudBoxSummary) -> WireCloudBoxSummary {
         name: summary.name.as_str().to_owned(),
         cloud: to_wire_cloud(summary.cloud),
         vm: summary.vm,
-        gateway_id: summary.gateway_id,
         url: summary.url.as_str().to_owned(),
         state: to_wire_state(summary.state),
         created_at_ms: summary.created_at_ms,

@@ -329,7 +329,6 @@ export function createDesktopDependencies(
                 boxId: created.cloudBox.boxId,
                 name: created.cloudBox.name,
                 cloud: created.cloudBox.cloud,
-                gatewayId: created.cloudBox.gatewayId,
                 url: created.cloudBox.url,
                 credential: created.credential,
               }
@@ -337,7 +336,7 @@ export function createDesktopDependencies(
             wake: async (boxId) => {
               const client = await source.connected()
               const woken = await client.cloud.boxes.wake(boxId)
-              return { gatewayId: woken.gatewayId, url: woken.url }
+              return { url: woken.url }
             },
             sleep: async (boxId) => {
               const client = await source.connected()

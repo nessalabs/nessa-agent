@@ -166,10 +166,11 @@ pub enum CloudBoxState {
     Deleted,
 }
 
-/// Verified remote gateway reachability endpoint returned on create or wake.
+/// Where the gateway inside a cloud box can be reached, as the VM's own
+/// `nessa-server` reports it on create or wake. The gateway's identity is not
+/// part of it: a client learns that from the gateway's own handshake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloudBoxEndpoint {
-    pub gateway_id: String,
     pub url: CloudBoxUrl,
 }
 
@@ -180,7 +181,6 @@ pub struct CloudBoxSummary {
     pub name: CloudBoxName,
     pub cloud: Cloud,
     pub vm: String,
-    pub gateway_id: String,
     pub url: CloudBoxUrl,
     pub state: CloudBoxState,
     pub created_at_ms: u64,
@@ -213,7 +213,6 @@ pub enum CloudBoxRecord {
         vm: String,
         image: String,
         admission: Admitted,
-        gateway_id: String,
         url: CloudBoxUrl,
         state: CloudBoxState,
         created_at_ms: u64,
@@ -248,7 +247,7 @@ impl CloudBoxRecord {
     /// Validate an append-only receipt history for one cloud box:
     /// - Must be non-empty and start with `Provisioning`.
     /// - Every record must share the same `box_id` and `cloud`.
-    /// - Once `Active`, `vm` and `gateway_id` cannot silently relocate.
+    /// - Once `Active`, `vm` cannot silently relocate.
     /// - `Refused` and `Deleted` are terminal (no records may follow them).
     pub fn validate_history(history: &[Self]) -> Result<(), CloudBoxError> {
         let Some(Self::Provisioning {
@@ -263,7 +262,6 @@ impl CloudBoxRecord {
         };
 
         let mut pinned_vm: Option<&str> = None;
-        let mut pinned_gateway: Option<&str> = None;
         let mut terminal = false;
 
         for record in history.iter().skip(1) {
@@ -287,7 +285,6 @@ impl CloudBoxRecord {
                     cloud,
                     vm,
                     admission,
-                    gateway_id,
                     state,
                     ..
                 } => {
@@ -305,9 +302,9 @@ impl CloudBoxRecord {
                             "cloud box admission proof does not match its cloud provider".into(),
                         ));
                     }
-                    if vm.trim().is_empty() || gateway_id.trim().is_empty() {
+                    if vm.trim().is_empty() {
                         return Err(CloudBoxError::ReceiptUnavailable(
-                            "active receipt requires non-empty vm and gateway_id".into(),
+                            "active receipt requires a non-empty vm".into(),
                         ));
                     }
                     if !matches!(state, CloudBoxState::Running | CloudBoxState::Sleeping) {
@@ -323,15 +320,6 @@ impl CloudBoxRecord {
                         }
                     } else {
                         pinned_vm = Some(vm.as_str());
-                    }
-                    if let Some(prev_gw) = pinned_gateway {
-                        if prev_gw != gateway_id.as_str() {
-                            return Err(CloudBoxError::ReceiptUnavailable(
-                                "cloud box gateway_id cannot change after admission".into(),
-                            ));
-                        }
-                    } else {
-                        pinned_gateway = Some(gateway_id.as_str());
                     }
                 }
                 Self::Refused { cloud, .. } => {
@@ -358,7 +346,6 @@ impl CloudBoxRecord {
                 name,
                 cloud,
                 vm,
-                gateway_id,
                 url,
                 state,
                 created_at_ms,
@@ -369,7 +356,6 @@ impl CloudBoxRecord {
                 name: name.clone(),
                 cloud: *cloud,
                 vm: vm.clone(),
-                gateway_id: gateway_id.clone(),
                 url: url.clone(),
                 state: *state,
                 created_at_ms: *created_at_ms,
@@ -443,7 +429,6 @@ mod tests {
             vm: "vm-1".into(),
             image: "img-1".into(),
             admission: admission.clone(),
-            gateway_id: "gw-1".into(),
             url: url1,
             state: CloudBoxState::Running,
             created_at_ms: 10,
@@ -456,7 +441,6 @@ mod tests {
             vm: "vm-1".into(),
             image: "img-1".into(),
             admission: admission.clone(),
-            gateway_id: "gw-1".into(),
             url: url2.clone(),
             state: CloudBoxState::Sleeping,
             created_at_ms: 10,
@@ -477,7 +461,6 @@ mod tests {
             vm: "vm-2".into(),
             image: "img-1".into(),
             admission,
-            gateway_id: "gw-1".into(),
             url: url2,
             state: CloudBoxState::Sleeping,
             created_at_ms: 10,

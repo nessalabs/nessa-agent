@@ -9924,10 +9924,6 @@
           "description": "Cloud provider hosting this persistent gateway VM."
         },
         "vm": { "type": "string", "description": "Provider-assigned VM identifier." },
-        "gatewayId": {
-          "type": "string",
-          "description": "Stable gateway ID reported by the headless nessa-server inside the VM."
-        },
         "url": {
           "type": "string",
           "description": "Current wss:// endpoint URL for connecting to the cloud box gateway."
@@ -9952,7 +9948,6 @@
         "name",
         "cloud",
         "vm",
-        "gatewayId",
         "url",
         "state",
         "createdAtMs",
@@ -9964,6 +9959,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "boxId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "UUID the caller chose for this cloud box. Asking again with the same boxId resumes the same creation (a lost answer, a failed enrollment) instead of making a second VM; a box already admitted answers with a fresh credential."
+        },
         "name": {
           "type": "string",
           "minLength": 1,
@@ -9975,8 +9975,8 @@
           "description": "Connected cloud provider on which to create the VM."
         }
       },
-      "required": ["name", "cloud"],
-      "description": "Create and bootstrap a persistent cloud gateway VM."
+      "required": ["boxId", "name", "cloud"],
+      "description": "Create and bootstrap a persistent cloud gateway VM, or finish the creation of the one the caller already named."
     },
     "CloudBoxIdParams": {
       "type": "object",
@@ -10033,7 +10033,7 @@
         },
         "credential": {
           "type": "string",
-          "description": "One-time enrollment credential returned so the caller can pair immediately."
+          "description": "Enrollment credential the box's gateway issued for this answer, so the caller can pair immediately. Never the gateway's owner token."
         }
       },
       "required": ["cloudBox", "credential"],
@@ -10044,17 +10044,13 @@
       "additionalProperties": false,
       "properties": {
         "boxId": { "type": "string", "description": "UUID of the woken cloud box." },
-        "gatewayId": {
-          "type": "string",
-          "description": "Verified gateway ID reported by the woken VM."
-        },
         "url": {
           "type": "string",
           "description": "Current wss:// endpoint URL, refreshed if rotated on wake."
         }
       },
-      "required": ["boxId", "gatewayId", "url"],
-      "description": "Verified endpoint returned after waking a persistent cloud gateway VM."
+      "required": ["boxId", "url"],
+      "description": "Endpoint returned after waking a persistent cloud gateway VM; which gateway answers there is checked from its own handshake."
     },
     "CloudBoxResult": {
       "type": "object",
