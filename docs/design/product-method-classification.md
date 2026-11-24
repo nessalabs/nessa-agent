@@ -163,6 +163,10 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.archive` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `conversation.unarchive` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `conversation.rename` | `conversation` | Control | Controls | Request(CatalogueWrite) |
+| `conversation.decisions` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.decisionSettings` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.setDecisionSettings` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
+| `conversation.pauseAutoPick` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.delete` | `conversation` | Ordinary | Deletions | Request(CatalogueWrite) |
 | `conversation.reorder` | `conversation` | Control | Controls | Request(CatalogueWrite) |
 | `artifact.read` | `attachment::dispatch_read` | Ordinary | ArtifactReads | ManifestThenArtifactRead |
@@ -211,6 +215,9 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `peer.follow` | `peers` | Ordinary | Requests | Manifest |
 | `channel.create` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
 | `channel.list` | `channel` | Ordinary | Requests | Request(CatalogueWrite) |
+| `grants.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowGrants |
+| `grants.page` | `subscription` | Ordinary | ConnectionOwned | FollowGrants |
+| `grants.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | FollowGrants |
 | `conversation.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowConversation |
 | `conversation.subscribeList` | `subscription` | Ordinary | ConnectionOwned | FollowList |
 | `conversation.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeConversation |
@@ -220,7 +227,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.permissionRules` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.revokePermissionRule` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 
-Catalogue membership checked against all **71** current manifest methods.
+Catalogue membership checked against all **74** current manifest methods.
 
 ## Verification plan
 

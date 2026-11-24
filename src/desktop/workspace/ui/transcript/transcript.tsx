@@ -33,6 +33,7 @@ import { ApprovalCard } from "./approval-card"
 import { LiveRow } from "./live-row"
 import { Message } from "./message"
 import { QuestionCard } from "./question-card"
+import { OwnerAsk } from "./owner-ask"
 import { type Message as MessageValue } from "../../model/transcript"
 import { TranscriptHeading } from "./transcript-heading"
 import { useTranscriptViewPreference } from "../../adapters/storage/transcript-view-preference"
@@ -491,6 +492,7 @@ export const Transcript = memo(function Transcript({
               question={question}
             />
           ))}
+          <OwnerAsk sessionId={sessionId} />
           {/* One card for each review, in the order the source lists them:
             each loads, retries and is answered on its own. */}
           {model

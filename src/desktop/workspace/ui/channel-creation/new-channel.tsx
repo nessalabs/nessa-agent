@@ -15,11 +15,14 @@
  * Mounted once by the shell; it draws nothing while the flow is closed.
  */
 import {
+  createContext,
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react"
 import { Button } from "@nessa-ui/react/button"
@@ -35,7 +38,12 @@ import {
   findComposerModel,
 } from "../../../ui/catalogue-model-picker"
 import { DesktopIcon } from "../../../ui/icons"
-import { BoatTokenForm, useBoatConnection } from "../../../settings/ui/boat-row"
+import {
+  BoatTokenForm,
+  useBoatConnection,
+  type BoatConnection,
+} from "../../../settings/ui/boat-row"
+import { Agent37Row } from "../../../settings/ui/agent37-row"
 import type { ChannelCreation } from "../../application/workspace-state"
 import {
   addChannelResources,
@@ -76,6 +84,13 @@ import {
 import type { ModelRef } from "../../model/workspace-index"
 import { channelPlaceWords } from "../channel-place-words"
 import { useComputers } from "../channel-settings/computers"
+import {
+  cloudChoices,
+  cloudProvider,
+  isCloud,
+  type Cloud,
+} from "../../../clouds/model/clouds"
+import { useCloudStates, type CloudStates } from "../../../clouds/ui/cloud-states"
 import "./new-channel.css"
 
 /** The question each step asks. */
@@ -131,7 +146,13 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const steps = channelStepsFor(pickable)
   const { draft, asking, creating, failure } = flow
   const landing = flow.landing.length > 0
-  const ready = canCreate(draft) && !creating && !landing
+  const clouds = useChannelClouds()
+  const waiting = cloudsWaiting(draft, clouds.states)
+  const ready = canCreate(draft) && !creating && !landing && waiting.length === 0
+  // The chord is heard by a listener set up once: it reads this, so a draft
+  // placed on a cloud not yet connected is not made.
+  const readyNow = useRef(ready)
+  readyNow.current = ready
   // Watched the whole time the flow is open, so a drop's paths are heard
   // even after the question moves on; only the files question is lit.
   const dropping = useDrops(!creating) && asking === "resources"
@@ -151,7 +172,7 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
       } else if (isCreateChord(event)) {
         event.preventDefault()
         event.stopPropagation()
-        void dispatch(createChannel())
+        if (readyNow.current) void dispatch(createChannel())
       }
     }
     window.addEventListener("keydown", onKeyDown, true)
@@ -175,140 +196,153 @@ function NewChannel({ flow }: { flow: ChannelCreation }) {
   const failedAtCreate = failure && failureStep(failure) === null ? failure : null
 
   return (
-    <section
-      ref={layer}
-      className="new-channel"
-      aria-label="New channel"
-      data-dropping={dropping || undefined}
-    >
-      <div className="new-channel-scroll">
-        <div className="new-channel-column">
-          <PageHeader
-            className="new-channel-head"
-            title="New channel"
-            level={2}
-            actions={
-              <Button
-                className="new-channel-close"
-                variant="plain"
-                size="icon-sm"
-                shape="pill"
-                aria-label="Cancel new channel"
-                onClick={() => dispatch(closeChannelCreation())}
-              >
-                <DesktopIcon name="close" />
-              </Button>
-            }
-          />
-          {steps.map((step) =>
-            step === asking ? (
-              <Asked key={step} step={step} flow={flow} failure={failedHere} />
-            ) : flow.answered.includes(step) ? (
-              <AnsweredLine key={step} step={step} draft={draft} disabled={creating} />
-            ) : null,
-          )}
-        </div>
-      </div>
-      <form
-        className="new-channel-composer"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (ready) void dispatch(createChannel())
-        }}
+    <ChannelClouds.Provider value={clouds}>
+      <section
+        ref={layer}
+        className="new-channel"
+        aria-label="New channel"
+        data-dropping={dropping || undefined}
       >
-        {failedAtCreate ? (
-          <StatusLabel tone="warning" role="status" className="new-channel-notice">
-            {failureText(failedAtCreate)}
-          </StatusLabel>
-        ) : asking === "name" && !nameFits(draft.name) ? (
-          <StatusLabel tone="warning" role="status" className="new-channel-notice">
-            Names can be up to {channelRules.maxNameChars} characters.
-          </StatusLabel>
-        ) : asking === "notes" && !notesFit(draft.notes) ? (
-          <StatusLabel tone="warning" role="status" className="new-channel-notice">
-            Notes can be up to {channelRules.maxNotesBytes / 1024} KB.
-          </StatusLabel>
-        ) : null}
-        <div className="new-channel-composer-row">
-          {typed(asking) ? (
-            <textarea
-              ref={field}
-              aria-label={asking === "name" ? "Channel name" : "Channel notes"}
-              className="new-channel-field"
-              data-step={asking}
-              rows={1}
-              placeholder={composerHints[asking]}
-              value={asking === "name" ? draft.name : draft.notes}
-              readOnly={creating}
-              onChange={(event) =>
-                dispatch(
-                  draftChannel({
-                    change:
-                      asking === "name"
-                        ? { name: event.target.value.replace(/\n/g, " ") }
-                        : { notes: event.target.value },
-                  }),
-                )
+        <div className="new-channel-scroll">
+          <div className="new-channel-column">
+            <PageHeader
+              className="new-channel-head"
+              title="New channel"
+              level={2}
+              actions={
+                <Button
+                  className="new-channel-close"
+                  variant="plain"
+                  size="icon-sm"
+                  shape="pill"
+                  aria-label="Cancel new channel"
+                  onClick={() => dispatch(closeChannelCreation())}
+                >
+                  <DesktopIcon name="close" />
+                </Button>
               }
-              onKeyDown={(event) => {
-                // Return answers; Shift-Return is a new line in the notes.
-                if (
-                  event.key !== "Enter" ||
-                  event.shiftKey ||
-                  event.metaKey ||
-                  event.ctrlKey ||
-                  event.nativeEvent.isComposing
-                )
-                  return
-                event.preventDefault()
-                if (!event.repeat) dispatch(answerChannelStep())
-              }}
             />
-          ) : (
-            <span
-              className="new-channel-hint"
-              // Return goes on from anywhere in the layer that is not a field.
-              aria-hidden="true"
+            {steps.map((step) =>
+              step === asking ? (
+                <Asked key={step} step={step} flow={flow} failure={failedHere} />
+              ) : flow.answered.includes(step) ? (
+                <AnsweredLine key={step} step={step} draft={draft} disabled={creating} />
+              ) : null,
+            )}
+          </div>
+        </div>
+        <form
+          className="new-channel-composer"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (ready) void dispatch(createChannel())
+          }}
+        >
+          {failedAtCreate ? (
+            <StatusLabel tone="warning" role="status" className="new-channel-notice">
+              {failureText(failedAtCreate)}
+            </StatusLabel>
+          ) : asking === "name" && !nameFits(draft.name) ? (
+            <StatusLabel tone="warning" role="status" className="new-channel-notice">
+              Names can be up to {channelRules.maxNameChars} characters.
+            </StatusLabel>
+          ) : asking === "notes" && !notesFit(draft.notes) ? (
+            <StatusLabel tone="warning" role="status" className="new-channel-notice">
+              Notes can be up to {channelRules.maxNotesBytes / 1024} KB.
+            </StatusLabel>
+          ) : waiting.length > 0 && asking !== "placement" ? (
+            <StatusLabel
+              tone="warning"
+              role="status"
+              className="new-channel-notice"
+              data-new-channel-cloud-waiting=""
             >
-              {landing
-                ? "Adding what you dropped…"
-                : asking
-                  ? composerHints[asking]
-                  : `Ready to make #${draft.name.trim()}`}
+              Connect {cloudNames(waiting)} to create this channel.
+            </StatusLabel>
+          ) : null}
+          <div className="new-channel-composer-row">
+            {typed(asking) ? (
+              <textarea
+                ref={field}
+                aria-label={asking === "name" ? "Channel name" : "Channel notes"}
+                className="new-channel-field"
+                data-step={asking}
+                rows={1}
+                placeholder={composerHints[asking]}
+                value={asking === "name" ? draft.name : draft.notes}
+                readOnly={creating}
+                onChange={(event) =>
+                  dispatch(
+                    draftChannel({
+                      change:
+                        asking === "name"
+                          ? { name: event.target.value.replace(/\n/g, " ") }
+                          : { notes: event.target.value },
+                    }),
+                  )
+                }
+                onKeyDown={(event) => {
+                  // Return answers; Shift-Return is a new line in the notes.
+                  if (
+                    event.key !== "Enter" ||
+                    event.shiftKey ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.nativeEvent.isComposing
+                  )
+                    return
+                  event.preventDefault()
+                  if (!event.repeat) dispatch(answerChannelStep())
+                }}
+              />
+            ) : (
+              <span
+                className="new-channel-hint"
+                // Return goes on from anywhere in the layer that is not a field.
+                aria-hidden="true"
+              >
+                {landing
+                  ? "Adding what you dropped…"
+                  : asking === "placement" && waiting.length > 0
+                    ? `Connect ${cloudNames(waiting)} above, then press ↩`
+                    : asking
+                      ? composerHints[asking]
+                      : `Ready to make #${draft.name.trim()}`}
+              </span>
+            )}
+            <span className="new-channel-count" aria-label="Questions answered">
+              {flow.answered.filter((step) => steps.includes(step)).length}/{steps.length}
             </span>
-          )}
-          <span className="new-channel-count" aria-label="Questions answered">
-            {flow.answered.filter((step) => steps.includes(step)).length}/{steps.length}
-          </span>
-          {creating ? (
-            <LoadingText className="new-channel-creating">Creating</LoadingText>
-          ) : (
-            <Button
-              type="submit"
-              className="new-channel-create"
-              variant="inverse"
-              size="30"
-              shape="pill"
-              disabled={!ready}
-            >
-              Create channel
-              <Kbd className="new-channel-kbd">{createChord}</Kbd>
-            </Button>
-          )}
-        </div>
-      </form>
-      {dropping ? (
-        <div className="new-channel-drop" aria-hidden="true">
-          <span className="new-channel-drop-label">
-            <DesktopIcon name="folderAdd" />
-            Drop to add to the channel
-          </span>
-        </div>
-      ) : null}
-      <span className="sr-only" aria-live="polite">
-        {dropping ? "Drop files or folders to add them to the channel" : ""}
-      </span>
-    </section>
+            {creating ? (
+              <LoadingText className="new-channel-creating">Creating</LoadingText>
+            ) : (
+              <Button
+                type="submit"
+                className="new-channel-create"
+                variant="inverse"
+                size="30"
+                shape="pill"
+                disabled={!ready}
+              >
+                Create channel
+                <Kbd className="new-channel-kbd">{createChord}</Kbd>
+              </Button>
+            )}
+          </div>
+        </form>
+        {dropping ? (
+          <div className="new-channel-drop" aria-hidden="true">
+            <span className="new-channel-drop-label">
+              <DesktopIcon name="folderAdd" />
+              Drop to add to the channel
+            </span>
+          </div>
+        ) : null}
+        <span className="sr-only" aria-live="polite">
+          {dropping ? "Drop files or folders to add them to the channel" : ""}
+        </span>
+      </section>
+    </ChannelClouds.Provider>
   )
 }
 
@@ -410,8 +444,9 @@ function Answer({ step, draft }: { step: ChannelStep; draft: ChannelDraft }) {
     case "placement":
       return (
         <span>
-          Main agent: <em>{channelPlaceWords(draft.coordinatorPlacement)}</em> · New
-          threads: <em>{channelPlaceWords(draft.threadPlacement)}</em>
+          Coordinator: <em>{draft.coordinator ? "on" : "off"}</em> · Main agent:{" "}
+          <em>{channelPlaceWords(draft.coordinatorPlacement)}</em> · New threads:{" "}
+          <em>{channelPlaceWords(draft.threadPlacement)}</em>
         </span>
       )
     case "folder":
@@ -560,7 +595,6 @@ function ModelAnswer({ flow }: { flow: ChannelCreation }) {
         <CatalogueModelPicker
           value={flow.draft.model}
           onChange={(model) => dispatch(draftChannel({ change: { model } }))}
-          side="bottom"
           className="new-channel-model"
         />
         <Button
@@ -640,11 +674,18 @@ function ResourcesAnswer({ flow }: { flow: ChannelCreation }) {
 
 function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
   const dispatch = useWorkspaceDispatch()
-  const onKeyDown = useReturnAnswers()
-  // Boat is offered only once it is connected: a channel placed there before
-  // would refuse every message. Connecting it is offered right here.
-  const boat = useBoatConnection()
-  const boatReady = boat.status?.state === "connected"
+  const answer = useReturnAnswers()
+  // Every cloud is offered; one not connected says so, and once chosen asks
+  // to be connected right here. Until it is, Return stays on this question
+  // and Create waits (`cloudsWaiting`).
+  const clouds = useContext(ChannelClouds)
+  const offered = cloudChoices((id) => clouds?.states[id] === "connected", "with-state")
+  const chosen = chosenClouds(flow.draft)
+  const waiting = clouds ? cloudsWaiting(flow.draft, clouds.states) : []
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (waiting.length > 0 && event.key === "Enter") return
+    answer(event)
+  }
   const computers = useComputers()
   return (
     <div
@@ -653,6 +694,25 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
+      {/* A coordinator starts threads and keeps you up to date; it can be
+      turned on or off later in the channel's settings. */}
+      <label>
+        Coordinator
+        <select
+          aria-label="Coordinator"
+          data-new-channel-coordinator=""
+          value={flow.draft.coordinator ? "on" : "off"}
+          disabled={flow.creating}
+          onChange={(event) =>
+            dispatch(
+              draftChannel({ change: { coordinator: event.target.value === "on" } }),
+            )
+          }
+        >
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
       {(
         [
           ["coordinatorPlacement", "Main agent"],
@@ -669,7 +729,7 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
               const value = event.target.value
               if (
                 value === "local" ||
-                value === "boat" ||
+                isCloud(value) ||
                 value === "pool" ||
                 computers.some((computer) => computer.environment === value)
               )
@@ -677,9 +737,11 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
             }}
           >
             <option value="local">Local</option>
-            <option value="boat" disabled={!boatReady}>
-              {boatReady ? "Boat" : "Boat (not connected)"}
-            </option>
+            {offered.map((cloud) => (
+              <option key={cloud.id} value={cloud.id}>
+                {cloud.label}
+              </option>
+            ))}
             <option value="pool">Any computer</option>
             {computers.map((computer) => (
               <option key={computer.environment} value={computer.environment}>
@@ -689,18 +751,84 @@ function PlacementAnswer({ flow }: { flow: ChannelCreation }) {
           </select>
         </label>
       ))}
-      <p>
-        Boat runs Claude or Codex in a cloud workspace using your connected subscriptions.
-        Keep your Nessa gateway online; local folders need an approved connection. New
-        channels use your default Boat VM lifetime; change it in channel settings to
-        override.
-      </p>
-      {boatReady || boat.unread ? null : (
-        <div className="settings-boat" data-boat-connect>
-          <BoatTokenForm connection={boat} />
-          {boat.error && <p role="alert">{boat.error}</p>}
-        </div>
+      {/* Said only once a cloud is chosen: everything local needs no word.
+      A VM's lifetime is changed later, in the channel's settings. */}
+      {chosen.length > 0 && (
+        <p data-new-channel-placement-note="">Each cloud thread gets its own VM.</p>
       )}
+      {clouds &&
+        waiting.map((id) => <CloudConnect key={id} cloud={id} clouds={clouds} />)}
+    </div>
+  )
+}
+
+/**
+ * The clouds the flow offers, read once for the whole flow: the placement
+ * question offers and connects them, and Create waits on them.
+ */
+interface ChannelCloudsState {
+  readonly states: CloudStates
+  readonly boat: BoatConnection
+  /** Hears Agent37's state as its row reads it, so the flow reads again. */
+  readonly agent37: (state: string) => void
+}
+
+const ChannelClouds = createContext<ChannelCloudsState | undefined>(undefined)
+
+function useChannelClouds(): ChannelCloudsState {
+  const boat = useBoatConnection()
+  const [agent37, setAgent37] = useState<string>()
+  const states = useCloudStates(`${boat.status?.state}:${agent37}`)
+  return { states, boat, agent37: setAgent37 }
+}
+
+/** The clouds the draft places its main agent or its new threads on, each once. */
+function chosenClouds(draft: ChannelDraft): readonly Cloud[] {
+  const places = [draft.coordinatorPlacement, draft.threadPlacement].filter(isCloud)
+  return [...new Set(places)]
+}
+
+/**
+ * The chosen clouds not connected yet: a channel placed on one would have
+ * every message there refused, so it is connected before the channel is made.
+ */
+function cloudsWaiting(draft: ChannelDraft, states: CloudStates): readonly Cloud[] {
+  return chosenClouds(draft).filter((id) => states[id] !== "connected")
+}
+
+function cloudNames(ids: readonly Cloud[]): string {
+  return ids.map((id) => cloudProvider(id).name).join(" and ")
+}
+
+/**
+ * How each cloud is connected in the flow, shown only once it is chosen and
+ * not connected. A cloud added to `clouds.ts` fails the build until it has
+ * one here.
+ */
+const cloudConnects: {
+  readonly [id in Cloud]: (props: { clouds: ChannelCloudsState }) => ReactNode
+} = {
+  boat: ({ clouds }) =>
+    clouds.boat.unread ? (
+      <p role="alert">{clouds.boat.error || "Boat status could not be read."}</p>
+    ) : (
+      <>
+        <BoatTokenForm connection={clouds.boat} />
+        {clouds.boat.error && <p role="alert">{clouds.boat.error}</p>}
+      </>
+    ),
+  agent37: ({ clouds }) => <Agent37Row onChange={clouds.agent37} />,
+}
+
+function CloudConnect({ cloud, clouds }: { cloud: Cloud; clouds: ChannelCloudsState }) {
+  const Connect = cloudConnects[cloud]
+  return (
+    <div
+      className="settings-boat"
+      data-cloud-connect={cloud}
+      data-boat-connect={cloud === "boat" ? "" : undefined}
+    >
+      <Connect clouds={clouds} />
     </div>
   )
 }

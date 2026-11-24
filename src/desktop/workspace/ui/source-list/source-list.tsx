@@ -13,9 +13,11 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import {
   selectChannelIdsIn,
   selectChannelMaking,
+  selectGateway,
   selectSectionCollapsed,
   selectSections,
 } from "../../adapters/store/selectors"
+import { gatewayStatusLabel } from "../../model/gateway-id"
 import { useBesideKey } from "../session-actions"
 import { contextMenuFromKey } from "../../adapters/dom/context-menu-key"
 import { IdentityFooter } from "../chrome/identity-footer"
@@ -147,6 +149,7 @@ export const SourceList = memo(function SourceList({
               key={section.id}
               sectionId={section.id}
               name={section.name}
+              gatewayId={section.gatewayId}
               variant={variant}
             />
           ))}
@@ -189,10 +192,12 @@ function TreeTop() {
 const SourceSection = memo(function SourceSection({
   sectionId,
   name,
+  gatewayId,
   variant,
 }: {
   sectionId: string
   name: string
+  gatewayId?: string
   variant: "channels" | "tree"
 }) {
   const dispatch = useWorkspaceDispatch()
@@ -201,6 +206,13 @@ const SourceSection = memo(function SourceSection({
   )
   const channelIds = useWorkspaceSelector((state) => selectChannelIdsIn(state, sectionId))
   const { creatable } = useWorkspaceSelector(selectChannelMaking)
+  const gateway = useWorkspaceSelector((state) =>
+    gatewayId ? selectGateway(state, gatewayId) : undefined,
+  )
+  const statusNote =
+    gateway && !gateway.isLocal && gateway.status !== "connected"
+      ? gatewayStatusLabel(gateway.status)
+      : null
   return (
     <section className="workspace-section" data-collapsed={collapsed || undefined}>
       <div className="workspace-section-head">
@@ -213,6 +225,11 @@ const SourceSection = memo(function SourceSection({
           onClick={() => dispatch(toggleSection({ sectionId }))}
         >
           <span>{name}</span>
+          {statusNote ? (
+            <span className="workspace-section-status" data-status={gateway?.status}>
+              {statusNote}
+            </span>
+          ) : null}
           <DesktopIcon name="chevronRight" />
         </button>
         {creatable ? (
@@ -221,8 +238,13 @@ const SourceSection = memo(function SourceSection({
             icon="add"
             label={`Add channel to ${name}`}
             tone="faint"
-            {...tooltip(`Add channel to ${name}`)}
-            onClick={() => dispatch(openChannelCreation())}
+            {...tooltip(
+              statusNote
+                ? `${name} is ${statusNote.toLowerCase()}`
+                : `Add channel to ${name}`,
+            )}
+            disabled={statusNote !== null}
+            onClick={() => dispatch(openChannelCreation(gatewayId))}
           />
         ) : variant === "channels" ? (
           // This window cannot make channels; the control shows where it would be.

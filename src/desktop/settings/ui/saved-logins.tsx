@@ -5,6 +5,11 @@
  * its login; a paired computer's page in Devices has its own "Use my saved
  * logins here" switch. A login is never shown again: the rows say only
  * whether one is saved.
+ *
+ * Codex's row also lists its ChatGPT accounts, when the gateway keeps them:
+ * "Continue with ChatGPT" starts a sign-in, the row links to it in the
+ * browser, and reads again every `pollMs` until it ends. One account is in
+ * use; another can be chosen, signed in again, or removed.
  */
 import {
   createContext,
@@ -12,18 +17,21 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
 import type { LoginAgent } from "@nessa/client"
-import type {
-  SavedLogins,
-  SavedLoginsGateway,
-  SavedLoginsOutcome,
+import {
+  chatgptEndSentence,
+  type ChatgptView,
+  type SavedLogins,
+  type SavedLoginsGateway,
+  type SavedLoginsOutcome,
 } from "../adapters/saved-logins-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
-import { ItemRow, RowAction, SettingGroup, Toggle } from "./settings-controls"
+import { ItemRow, RowAction, RowLink, SettingGroup, Toggle } from "./settings-controls"
 
 const SavedLoginsContext = createContext<SavedLoginsGateway | undefined>(undefined)
 
@@ -39,10 +47,15 @@ export function SavedLoginsProvider({
   )
 }
 
+/** How often the logins are read while a ChatGPT sign-in waits for the browser. */
+export const CHATGPT_POLL_MS = 2000
+
 /** The saved logins as last read, the change in flight, and why the last one was refused. */
-function useSavedLogins() {
+function useSavedLogins(pollMs = CHATGPT_POLL_MS) {
   const gateway = useContext(SavedLoginsContext)
   const ensure = useVaultUnlock()
+  const vaultSettled = useVaultSettled()
+  const reads = useRef(0)
   const [logins, setLogins] = useState<SavedLogins | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -55,11 +68,40 @@ function useSavedLogins() {
   useEffect(() => {
     if (!gateway) return
     let current = true
-    void gateway.read().then((outcome) => current && take(outcome))
+    const revision = ++reads.current
+    void gateway.read().then((outcome) => {
+      if (current && revision === reads.current) take(outcome)
+    })
     return () => {
       current = false
     }
-  }, [gateway, take])
+  }, [gateway, take, vaultSettled])
+  // While a ChatGPT sign-in waits for the browser, how it ends is read again.
+  // Polls are serialized so a slow gateway read cannot be starved by the next tick.
+  const waiting = logins?.chatgpt?.signIn.kind === "waiting"
+  useEffect(() => {
+    if (!gateway || !waiting) return
+    let current = true
+    let timer: number | undefined
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        const revision = ++reads.current
+        void gateway
+          .read()
+          .then((outcome) => {
+            if (current && revision === reads.current) take(outcome)
+          })
+          .finally(() => {
+            if (current) schedule()
+          })
+      }, pollMs)
+    }
+    schedule()
+    return () => {
+      current = false
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [gateway, waiting, take, pollMs])
   /**
    * Unlocks first, then does `work`. What is shown may be unread (a locked
    * vault refused the read on mount): then it is read again once unlocked,
@@ -72,6 +114,7 @@ function useSavedLogins() {
     ) => Promise<SavedLoginsOutcome>,
   ): Promise<boolean> => {
     if (!gateway || busy) return false
+    reads.current += 1
     setBusy(true)
     try {
       if (!(await ensure())) {
@@ -83,16 +126,22 @@ function useSavedLogins() {
         const read = await gateway.read()
         if (read.kind === "read") {
           current = read.logins
+          reads.current += 1
           setLogins(read.logins)
         }
       }
+      reads.current += 1
       const outcome = await work(gateway, current)
+      reads.current += 1
       take(outcome)
       if (outcome.kind === "refused") {
         // A refusal can follow a change that was made (its record could
         // not be kept): show how things stand, keeping why.
         const after = await gateway.read()
-        if (after.kind === "read") setLogins(after.logins)
+        if (after.kind === "read") {
+          reads.current += 1
+          setLogins(after.logins)
+        }
       }
       return outcome.kind === "read"
     } finally {
@@ -119,13 +168,13 @@ const agents: readonly {
 ]
 
 /** Settings › Connections › Accounts › Saved logins: one row per agent. */
-export function SavedLoginsGroup() {
-  const state = useSavedLogins()
+export function SavedLoginsGroup({ pollMs }: { pollMs?: number } = {}) {
+  const state = useSavedLogins(pollMs)
   return (
     <SettingGroup
       id="saved-logins"
       pending={!state.gateway}
-      note="Agents on your SSH hosts and Boat workspaces sign in with these, and on a paired computer once you turn it on in Devices. A computer's own login wins."
+      note="Agents on your SSH hosts and cloud workspaces (Boat, Agent37) sign in with these, and on a paired computer once you turn it on in Devices. A computer's own login wins."
     >
       {agents.map((agent) => (
         <SavedLoginRow key={agent.id} agent={agent} state={state} />
@@ -212,8 +261,136 @@ function SavedLoginRow({
             </button>
           </div>
         </form>
+        {agent.id === "codex" && state.logins?.chatgpt && (
+          <ChatgptAccounts chatgpt={state.logins.chatgpt} state={state} />
+        )}
       </div>
     </ItemRow>
+  )
+}
+
+/**
+ * Codex's ChatGPT accounts under its row: the one in use, the others to
+ * choose, and the sign-in. Codex on other computers uses the account in
+ * use in place of the key above; with none in use, the key.
+ */
+function ChatgptAccounts({
+  chatgpt,
+  state,
+}: {
+  chatgpt: ChatgptView
+  state: ReturnType<typeof useSavedLogins>
+}) {
+  const { busy, act } = state
+  const { signIn, accounts } = chatgpt
+  const ended =
+    signIn.kind === "idle" && signIn.last ? chatgptEndSentence(signIn.last) : undefined
+  const anyInUse = accounts.some((account) => account.inUse)
+  return (
+    <div className="settings-chatgpt" data-chatgpt-accounts={accounts.length}>
+      <p>
+        Or use your ChatGPT plan: Codex on your SSH hosts and cloud workspaces then runs
+        on the account in use instead of the key.
+      </p>
+      {accounts.length > 0 && (
+        <ul className="settings-chatgpt-accounts">
+          {accounts.map((account) => (
+            <li
+              key={account.id}
+              data-chatgpt-account={account.email || account.id}
+              data-chatgpt-in-use={account.inUse ? "" : undefined}
+            >
+              <span className="settings-chatgpt-email">
+                {account.email || "ChatGPT account"}
+              </span>
+              <span className="settings-chatgpt-state" role="status">
+                {account.needsSignIn
+                  ? "Needs signing in again"
+                  : account.inUse
+                    ? "In use"
+                    : ""}
+              </span>
+              <span className="settings-chatgpt-actions">
+                {account.needsSignIn ? (
+                  <RowAction
+                    disabled={busy || signIn.kind === "waiting"}
+                    onClick={() =>
+                      void act((gateway) => gateway.chatgptSignIn(account.id))
+                    }
+                    data-chatgpt-sign-in-again={account.id}
+                  >
+                    Sign in again
+                  </RowAction>
+                ) : account.inUse ? (
+                  <RowAction
+                    disabled={busy}
+                    onClick={() => void act((gateway) => gateway.chatgptUse(null))}
+                    data-chatgpt-stop-using={account.id}
+                  >
+                    Use the key
+                  </RowAction>
+                ) : (
+                  <RowAction
+                    disabled={busy}
+                    onClick={() => void act((gateway) => gateway.chatgptUse(account.id))}
+                    data-chatgpt-use={account.id}
+                  >
+                    Use
+                  </RowAction>
+                )}
+                <RowAction
+                  disabled={busy}
+                  onClick={() => void act((gateway) => gateway.chatgptRemove(account.id))}
+                  data-chatgpt-remove={account.id}
+                >
+                  Remove
+                </RowAction>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {signIn.kind === "waiting" ? (
+        <div className="settings-chatgpt-waiting" data-chatgpt-sign-in="waiting">
+          <p role="status">Finish signing in to ChatGPT in your browser.</p>
+          <div className="settings-boat-fields">
+            <RowLink href={signIn.authorizeUrl} data-chatgpt-open>
+              Open ChatGPT
+            </RowLink>
+            <RowAction
+              disabled={busy}
+              onClick={() => void act((gateway) => gateway.chatgptCancel())}
+              data-chatgpt-cancel
+            >
+              Cancel
+            </RowAction>
+          </div>
+        </div>
+      ) : (
+        <div className="settings-boat-fields" data-chatgpt-sign-in="idle">
+          <RowAction
+            disabled={busy}
+            onClick={() => void act((gateway) => gateway.chatgptSignIn())}
+            data-chatgpt-continue
+          >
+            {accounts.length > 0
+              ? "Add another ChatGPT account"
+              : "Continue with ChatGPT"}
+          </RowAction>
+          {accounts.length > 0 && !anyInUse && (
+            <span className="settings-chatgpt-note">Codex uses the key above.</span>
+          )}
+        </div>
+      )}
+      {ended && (
+        <p
+          role="status"
+          data-chatgpt-ended={signIn.kind === "idle" ? signIn.last : undefined}
+        >
+          {ended}
+        </p>
+      )}
+    </div>
   )
 }
 

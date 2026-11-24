@@ -1,5 +1,5 @@
 //! Validated connection values and durable allocation facts. No IO or clocks.
-use super::{AdmissionRejection, EnvironmentIdentity};
+use super::{AdmissionRejection, Admitted, Agent37Account, Agent37Connection};
 use nessa_vault::domain::Secret;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,13 +64,56 @@ impl VmSpec {
     /// admitted with, whatever the saved connection says now.
     pub fn of_receipt(
         image: String,
-        admission: &EnvironmentIdentity,
+        admission: &Admitted,
         auto_stop: crate::domain::VmLifetime,
     ) -> Self {
         Self {
             image,
-            environment: admission.name().into(),
+            environment: admission.environment().into(),
             auto_stop,
+        }
+    }
+}
+
+pub use crate::domain::Cloud;
+
+/// Who Nessa is on the cloud a connection names.
+#[derive(Clone)]
+pub enum CloudAccount {
+    Boat(BoatAccount),
+    Agent37(Agent37Account),
+}
+
+/// A saved cloud connection: its account, and what new VMs are made from.
+#[derive(Clone)]
+pub enum CloudConnection {
+    Boat(BoatConnection),
+    Agent37(Agent37Connection),
+}
+impl CloudConnection {
+    pub fn cloud(&self) -> Cloud {
+        match self {
+            Self::Boat(_) => Cloud::Boat,
+            Self::Agent37(_) => Cloud::Agent37,
+        }
+    }
+    pub fn account(&self) -> CloudAccount {
+        match self {
+            Self::Boat(connection) => CloudAccount::Boat(connection.account.clone()),
+            Self::Agent37(connection) => CloudAccount::Agent37(connection.account.clone()),
+        }
+    }
+    /// The spec a new VM is made with. On Boat, `pinned` (the image this
+    /// build pins) or else the saved image, in the saved environment; on
+    /// Agent37, the saved template release, which is its own pin.
+    pub fn new_vm(&self, pinned: Option<&str>, auto_stop: crate::domain::VmLifetime) -> VmSpec {
+        match self {
+            Self::Boat(connection) => connection.new_vm(pinned, auto_stop),
+            Self::Agent37(connection) => VmSpec {
+                image: connection.template.clone(),
+                environment: connection.template.clone(),
+                auto_stop,
+            },
         }
     }
 }
@@ -159,14 +202,14 @@ pub enum Assignment {
         thread: String,
         vm: String,
         image: String,
-        admission: EnvironmentIdentity,
+        admission: Admitted,
     },
     /// No authority may ever be granted after a recorded admission refusal.
     Refused {
         thread: String,
         vm: String,
         image: String,
-        admission: EnvironmentIdentity,
+        admission: Admitted,
         rejection: AdmissionRejection,
         disposition: RefusalDisposition,
     },

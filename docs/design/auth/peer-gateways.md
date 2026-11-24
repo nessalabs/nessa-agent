@@ -1303,9 +1303,11 @@ take the set does not stop a read.
 
 `peer.follow` is the follower's rule for that peer: which granted
 conversations to replicate, and how many bytes of the local replica to keep.
-Nothing is stored until the person chooses, and the poller then replicates
-the intersection of that rule and the grants. A granted chat with no rule
-can still be opened, and that open does not write the replica. Changing the
+Nothing is stored until the person chooses. An Active peer then follows
+`grants.subscribe` for that receiver and `conversation.subscribe` for each
+chat the rule names, up to the connection's conversation cap. The poll
+interval does not wake `catalogueHead`. A granted chat with no rule can
+still be opened, and that open does not write the replica. Changing the
 set or the byte ceiling drops the replica. Naming a conversation the peer
 did not grant does not grant it, the peer is not dialed, and the rule is
 not sent. Forgetting the peer removes the rule with the record.
@@ -1327,15 +1329,17 @@ sequenceDiagram
     A-->>P: Active {receiver, epoch}: the client saves the credential into the record
     P->>U: what is held before and after the status, if it changed (approved / ended)
     P->>A: openProduct with B's own key and the issued credential (read budget starts)
-    P->>A: catalogueHead (unchanged, and a finished walk noted there: done)
-    P->>A: catalogue manifest pass and resolve
-    P->>C: what A grants, by its owner's catalogue stream
-    P->>A: recordsHead for each cached conversation the follow rule names, while the budget lasts
+    P->>A: grants.subscribe for B's receiver
+    A-->>P: grants.changed, the grants B's rule keeps
+    P->>C: that replica, cursor stored with the complete frame
+    P->>A: conversation.subscribe for each chat the rule names, within the connection cap
+    P->>A: recordsHead once for each of those chats, so the first copy is in the cache
     A-->>P: wrong_owner: no longer granted
-    P->>C: withdraw it (entry and transcript)
+    P->>C: withdraw it (grant row and transcript)
     P->>A: record pages for the rest (cache full: heads only, to withdraw)
+    Note over P,A: the grant and chat subscriptions stay open; later grants.changed and conversation views are applied, and a revoke removes the transcript with the grant
     C-->>P: ResetRequired or damaged: empty the cache, read once more
-    A-->>P: openProduct refused (redacted)
+    A-->>P: openProduct refused, or the grant subscription ends: resume after the interval from the stored cursors
     P->>A: pinned status again, only Terminal ends the enrollment
     O->>P: peer.forget or peer.relay of this peer, while its cycle holds its turn
     P->>P: that peer's cycle stopped: its sockets shut, its stop flag asked every 50 ms, waits woken, its turn given back
@@ -1343,7 +1347,7 @@ sequenceDiagram
     O->>P: peer.enroll while reads run
     P-->>O: the record set, if no enroll, forget, or relay holds it; no read is stopped
     P->>U: each change as it is made (status, reset, conversations withdrawn): queued, in turn order
-    P->>P: give back the turn, keep the read slot
+    P->>P: give back the turn when the cycle stops or the grant subscription ends; the read slot was freed at the first snapshot
     P->>U: log each record at AUDIT_DEADLINE
     P->>P: keep the read slot until those records leave the queue, or the poller stops
     P->>P: free the read slot

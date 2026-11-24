@@ -6,7 +6,10 @@ import {
   browserNoticeAccess,
   browserReviewNotifier,
   hostReviewNotices,
+  mergedNotices,
   reviewToOpen,
+  reviewWaitsIn,
+  waitingAsk,
   waitingReviewNotices,
   waitingReviews,
   type HostNotices,
@@ -231,5 +234,45 @@ describe("browserNoticeAccess", () => {
     FakeNotification.permission = "granted"
     await expect(browserNoticeAccess.read()).resolves.toBe("allowed")
     vi.unstubAllGlobals()
+  })
+})
+
+describe("an agent's ask as a notice", () => {
+  const ask = {
+    askId: "0123456789abcdef0123456789abcdef",
+    question: "Ship the Safari fix?",
+  }
+
+  it("says the question, names the conversation, and opens it while it waits", async () => {
+    const sent: string[] = []
+    const host: HostNotices = {
+      sync: (notices) => {
+        for (const notice of notices)
+          sent.push(
+            `${notice.executionId} ${notice.permissionId}: ${notice.title} / ${notice.body}`,
+          )
+        return Promise.resolve()
+      },
+    }
+    const notices = mergedNotices(hostReviewNotices(host).apply)
+    notices.asks([waitingAsk("c-1", ask, " Safari export ")])
+    await Promise.resolve()
+    expect(sent).toEqual([`${ask.askId} owner-ask: Ship the Safari fix? / Safari export`])
+    expect(reviewWaitsIn("c-1")).toBe(true)
+  })
+
+  it("keeps the reviews and the asks apart, each replacing only its own", () => {
+    const told: WaitingReview[][] = []
+    const notices = mergedNotices((set) => told.push([...set]))
+    notices.reviews([review("p1")])
+    notices.asks([waitingAsk("c-1", ask, null)])
+    notices.reviews([])
+    expect(told.map((set) => set.map((notice) => notice.permissionId))).toEqual([
+      ["p1"],
+      ["p1", "owner-ask"],
+      ["owner-ask"],
+    ])
+    notices.asks([])
+    expect(told.at(-1)).toEqual([])
   })
 })

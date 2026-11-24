@@ -1,9 +1,22 @@
 {
   "session.authenticate": "Opens the session. A signed-in call cannot send it; the gateway answers already_authenticated.",
   "attachment.write": "One piece of an upload's bytes for a surface that cannot reach PUT /attachments. The action is attachment.begin; the bytes are not a JSON call.",
+  "grants.subscribe": "Follows this receiver's grants by a stream of events after the acknowledgement. One call would drop the stream.",
+  "grants.page": "Continues one grant snapshot on the subscription that opened it. One call would drop the stream.",
+  "grants.unsubscribe": "Stops the grant subscription on this connection. It names a subscription the stream minted.",
   "conversation.subscribe": "Follows one conversation by a stream of events after the acknowledgement. One call would drop the stream.",
   "conversation.subscribeList": "Follows the conversation list by a stream of events after the acknowledgement. One call would drop the stream.",
   "conversation.subscribeEvents": "Follows one conversation's events by a stream after the acknowledgement. One call would drop the stream.",
   "agents.subscribe": "Follows the agent catalog by a stream of events after the acknowledgement. One call would drop the stream.",
-  "workspace.answer": "A window's answer to a workspace.command the gateway sent it on that same connection. Only the window that was asked can give it."
+  "workspace.answer": "A window's answer to a workspace.command the gateway sent it on that same connection. Only the window that was asked can give it.",
+  "terminal.open": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.list": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.attach": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.focus": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.fit": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.detach": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.input": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.history": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.close": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.rename": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
 }

@@ -89,6 +89,77 @@ it("slides a carried element by its own difference, wherever the browser draws a
   await act(async () => root.unmount())
 })
 
+it("holds a pane's pinned name where it stands while its pane moves under it", async () => {
+  const played = new Map<
+    string,
+    { frames: Keyframe[]; options: KeyframeAnimationOptions }
+  >()
+  const animate = Element.prototype.animate
+  Element.prototype.animate = function (this: Element, keyframes, options) {
+    const id = (this as HTMLElement).dataset.flipId
+    if (id)
+      played.set(id, {
+        frames: keyframes as Keyframe[],
+        options: options as KeyframeAnimationOptions,
+      })
+    return animate.call(this, keyframes, options)
+  }
+  // A flight shorter than a column's slide, so the name can only match its pane's.
+  const style = globalThis.getComputedStyle
+  globalThis.getComputedStyle = () =>
+    ({
+      getPropertyValue: (name: string) =>
+        name === "--desktop-flight" ? "200ms" : name === "--desktop-slow" ? "300ms" : "",
+    }) as CSSStyleDeclaration
+  let open = () => {}
+  function Pane() {
+    const root = useRef<HTMLDivElement>(null)
+    const [railOpen, setRailOpen] = useState(false)
+    open = () => setRailOpen(true)
+    return (
+      <FlipScope shape={String(railOpen)} root={root}>
+        <div ref={root}>
+          {/* The rail opens: the pane moves 64px right, its name, past the
+              window's controls, stays where it is. */}
+          <article data-flip="pane" data-flip-id="a" data-left={railOpen ? 64 : 0}>
+            <header>
+              <div data-flip="slide" data-flip-id="name:a" data-left={230} />
+            </header>
+          </article>
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Pane />))
+    await act(async () => open())
+    // Its pane flies in from 64px left; the name answers it with 64px right: still.
+    expect(begun.find(({ id }) => id === "name:a")).toEqual({ id: "name:a", shift: 64 })
+    // On the pane's clock and its samples, so the two cancel frame for frame.
+    const name = played.get("name:a")
+    const pane = played.get("a")
+    if (!name || !pane) throw new Error("the pane or its name did not fly")
+    expect(name.options).toMatchObject({ duration: 200, easing: "linear" })
+    expect(pane.options).toMatchObject({ duration: 200, easing: "linear" })
+    // Not a column's slide: `holdStill` must not undo it alone.
+    expect(name.options.id).toBeUndefined()
+    const x = (frame: Keyframe, pattern: RegExp) =>
+      Number(pattern.exec(String(frame.transform))?.[1])
+    expect(name.frames).toHaveLength(pane.frames.length)
+    name.frames.forEach((frame, i) =>
+      expect(
+        x(frame, /translateX\((-?[\d.e]+)px\)/) +
+          x(pane.frames[i], /translate\((-?[\d.e]+)px/),
+      ).toBeCloseTo(0, 6),
+    )
+  } finally {
+    Element.prototype.animate = animate
+    globalThis.getComputedStyle = style
+    await act(async () => root.unmount())
+  }
+})
+
 it("reads where every pane landed before any flight starts, so the page lays out once", async () => {
   const log: ("read" | "write")[] = []
   const animate = Element.prototype.animate

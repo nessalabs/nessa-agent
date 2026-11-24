@@ -32,6 +32,16 @@ export async function pickChoice(page, scope, value) {
 /** The menu's button in `scope` can be pressed: the last choice has landed. */
 const choiceReady = (scope) => () => scope.locator("[data-choice-trigger]").isEnabled()
 
+/**
+ * Auto-stop is an amount and a unit's menu: type `amount` into the field in
+ * `scope` and enter it with ↩, as a person does.
+ */
+async function enterAmount(scope, amount) {
+  const field = scope.locator("[data-boat-runtime-amount]")
+  await field.fill(String(amount))
+  await field.press("Enter")
+}
+
 export async function channelRuntimeSettings(run, channel, failures) {
   const { page, client } = run
   const before = await client.boat.runtimeSettings()
@@ -122,7 +132,11 @@ export async function channelRuntimeSettings(run, channel, failures) {
       await dialog.waitFor({ state: "hidden", timeout: 5_000 })
     }
     const global = page.locator(css.boatRuntimeSettings)
-    await pickChoice(page, global, "14400")
+    // Any length: a unit picked from Never starts at one of it, then the
+    // amount is typed (4 hours).
+    await pickChoice(page, global, "hours")
+    await waitFor(choiceReady(global), 10_000)
+    await enterAmount(global, 4)
     const defaultSaved = await waitFor(
       async () =>
         (await client.boat.runtimeSettings()).defaultLifetime.seconds === 14_400,
@@ -301,6 +315,40 @@ export async function channelRuntimeSettings(run, channel, failures) {
     if (run.evidence)
       await page.screenshot({
         path: join(run.evidence, `boat-channel-${channel.channelId}.png`),
+      })
+    // Any length for a channel: 2 days, kept as days, then a unit change
+    // keeps the amount (2 days → 2 minutes). A refused amount saves nothing.
+    await choose("days")
+    await waitFor(choiceReady(control), 10_000)
+    await enterAmount(control, 2)
+    const override = async () =>
+      (await client.boat.runtimeSettings({ channelId: channel.channelId }))
+        .channelOverride?.seconds
+    if (!(await waitFor(async () => (await override()) === 172_800, 10_000)))
+      failures.push(`typing 2 days saved ${await override()} seconds, not 172800`)
+    await waitFor(choiceReady(control), 10_000)
+    const amount = control.locator("[data-boat-runtime-amount]")
+    for (const refused of ["0", "1.5", "50000"]) {
+      await enterAmount(control, refused)
+      if ((await amount.getAttribute("aria-invalid")) !== "true")
+        failures.push(`auto-stop of ${refused} days was not marked as refused`)
+      if ((await override()) !== 172_800)
+        failures.push(`auto-stop of ${refused} days changed the saved length`)
+    }
+    // Entering the saved amount again clears the refusal and saves nothing.
+    await enterAmount(control, 2)
+    if ((await amount.getAttribute("aria-invalid")) === "true")
+      failures.push("entering the saved amount again left it marked as refused")
+    await choose("minutes")
+    if (!(await waitFor(async () => (await override()) === 120, 10_000)))
+      failures.push(
+        `changing the unit to minutes saved ${await override()} seconds, not 120`,
+      )
+    await waitFor(choiceReady(control), 10_000)
+    receipts.length = await client.boat.runtimeSettings({ channelId: channel.channelId })
+    if (run.evidence)
+      await page.screenshot({
+        path: join(run.evidence, `boat-channel-length-${channel.channelId}.png`),
       })
     await choose("default")
     if (

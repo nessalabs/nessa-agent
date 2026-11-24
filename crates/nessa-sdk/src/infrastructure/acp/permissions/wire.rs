@@ -120,14 +120,17 @@ pub(crate) fn admit(
         if harness_persistent {
             persistent_ids.push(id.clone());
         }
-        admitted.push(
-            PermissionOption::new(
-                id,
-                label,
-                PermissionDecision::new(effect, PermissionScope::request()),
-            )
-            .map_err(|error| protocol(&error.to_string()))?,
-        );
+        let option = PermissionOption::new(
+            id,
+            label,
+            PermissionDecision::new(effect, PermissionScope::request()),
+        )
+        .map_err(|error| protocol(&error.to_string()))?;
+        admitted.push(if harness_persistent {
+            option.kept_by_the_harness()
+        } else {
+            option
+        });
     }
     if remember {
         let allow_once = has_once(&admitted, &persistent_ids, PermissionEffect::Allow);

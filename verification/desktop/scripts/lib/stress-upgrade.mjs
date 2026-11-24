@@ -13,10 +13,17 @@
  *
  *   version 9   the build before closed threads were kept: no
  *               `closed_threads`, when it is empty and a switch is kept
+ *   version 10  the build before agents could ask their owner: no
+ *               `summaries.ask`, when a closed thread is kept
+ *   version 11  the build before decisions were kept: no `owner_decisions`
+ *               and no `decision_settings`, when an ask waits in
+ *               `summaries.ask` (the newer build brings it in again)
  *
- * Each needs `closed_threads` empty, which version 10 added: a file with a
- * closed thread in it is left as it is, the newest build's. Those before 9
- * also need `agent_switches` empty, which version 9 added.
+ * Each needs `owner_decisions` and `decision_settings` empty, which version
+ * 12 added: a file with a row in either is left as it is, the newest
+ * build's. Those before 11 also need no ask waiting in `summaries.ask`,
+ * those before 10 `closed_threads` empty, which version 10 added, and those
+ * before 9 `agent_switches` empty, which version 9 added.
  *
  * The gateway must be stopped: this writes the file it holds.
  */
@@ -57,10 +64,24 @@ export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
-    if (rows("closed_threads") > 0)
+    if (rows("owner_decisions") + rows("decision_settings") > 0)
       return database.prepare("PRAGMA user_version").get().user_version
+    const closed = rows("closed_threads")
     const switches = rows("agent_switches")
     database.exec("BEGIN IMMEDIATE")
+    database.exec("DROP TABLE owner_decisions")
+    database.exec("DROP TABLE decision_settings")
+    if (rows("summaries WHERE ask IS NOT NULL") > 0) {
+      database.exec("PRAGMA user_version = 11")
+      database.exec("COMMIT")
+      return 11
+    }
+    database.exec("ALTER TABLE summaries DROP COLUMN ask")
+    if (closed > 0) {
+      database.exec("PRAGMA user_version = 10")
+      database.exec("COMMIT")
+      return 10
+    }
     database.exec("DROP TABLE closed_threads")
     if (switches > 0) {
       database.exec("PRAGMA user_version = 9")

@@ -359,7 +359,7 @@
     }
 
     /*
-     * Nothing typed or attached, no turn to stop and no notice to read: the
+     * Nothing typed or attached and no turn to stop: the
      * composer folds to a circle in the dock's corner, its model's mark on
      * it. A press (or Tab) focuses the pane, and the whole composer grows
      * back out of the circle.
@@ -367,10 +367,7 @@
     .split-panes-grid[data-split-multi]
       .workspace-pane:not([data-focused])
       .workspace-dock
-      .desktop-composer[data-empty]:not(
-        [data-running],
-        :has(> .desktop-composer-notice)
-      ) {
+      .desktop-composer[data-empty]:not([data-running]) {
       width: 36px;
       height: 36px;
       margin-left: auto;
@@ -381,7 +378,7 @@
     .split-panes-grid[data-split-multi]
       .workspace-pane:not([data-focused])
       .workspace-dock
-      .desktop-composer[data-empty]:not([data-running], :has(> .desktop-composer-notice))
+      .desktop-composer[data-empty]:not([data-running])
       > :not(.desktop-composer-wake) {
       display: none;
     }
@@ -389,7 +386,7 @@
     .split-panes-grid[data-split-multi]
       .workspace-pane:not([data-focused])
       .workspace-dock
-      .desktop-composer[data-empty]:not([data-running], :has(> .desktop-composer-notice))
+      .desktop-composer[data-empty]:not([data-running])
       > .desktop-composer-wake {
       display: flex;
     }
@@ -433,8 +430,8 @@
  * line of its own above them rather than lie under them.
  */
 @container (max-width: 200px) {
-  .workspace-pane .desktop-chip-model::after {
-    content: none;
+  .workspace-pane .desktop-chip-model > span:not([aria-hidden]) {
+    display: none;
   }
 }
 

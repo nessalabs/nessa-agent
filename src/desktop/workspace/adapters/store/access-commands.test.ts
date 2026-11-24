@@ -17,7 +17,7 @@ import {
   sendMessage,
 } from "./commands"
 import { selectAccess, selectAccessNotice } from "./selectors"
-import { accessRefusalCopy } from "../../ui/panes/composer-access"
+import { accessRefusalCopy, steppedAccessCopy } from "../../ui/panes/composer-access"
 
 async function ready(source = fakeSource()) {
   const store = testStore(source)
@@ -58,7 +58,7 @@ describe("choosing access", () => {
     })
   })
 
-  it("shows the change on its way, and asks for one change at a time", async () => {
+  it("shows the change on its way, and asks the latest pick once it settles", async () => {
     const { store, source } = await ready()
     source.hold("setAccess")
     const first = store.dispatch(
@@ -66,13 +66,57 @@ describe("choosing access", () => {
     )
     await settle()
     expect(selectAccess(store.getState(), "a")).toBe("full")
+    // One change at a time: the later picks wait behind it, the latest standing.
+    for (const mode of ["ask", "auto"] as const)
+      expect(
+        await store.dispatch(chooseAccess({ sessionId: "a", mode, initiator: "person" })),
+      ).toBe("queued")
+    expect(selectAccess(store.getState(), "a")).toBe("auto")
+    expect(source.calls.filter((call) => call[0] === "setAccess")).toHaveLength(1)
+    await source.release("setAccess")
+    expect(await first).toBe("taken")
+    await settle()
+    expect(
+      source.calls.filter((call) => call[0] === "setAccess").map((call) => call[2]),
+    ).toEqual(["full", "auto"])
+    expect(selectAccess(store.getState(), "a")).toBe("auto")
+  })
+
+  it("asks a pick made during a change the source then refuses", async () => {
+    const { store, source } = await ready()
+    source.hold("setAccess")
+    source.refuse("setAccess", "unavailable")
+    const first = store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+    )
+    await settle()
     expect(
       await store.dispatch(
         chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
       ),
-    ).toBe("changing")
+    ).toBe("queued")
+    await source.release("setAccess")
+    // Its own outcome is the refusal; the newer pick goes next all the same.
+    await first
+    await settle()
+    expect(
+      source.calls.filter((call) => call[0] === "setAccess").map((call) => call[2]),
+    ).toEqual(["full", "auto"])
+  })
+
+  it("drops a queued pick when the change on its way is picked again", async () => {
+    const { store, source } = await ready()
+    source.hold("setAccess")
+    const first = store.dispatch(
+      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+    )
+    await settle()
+    for (const mode of ["auto", "full"] as const)
+      await store.dispatch(chooseAccess({ sessionId: "a", mode, initiator: "person" }))
+    expect(selectAccess(store.getState(), "a")).toBe("full")
     await source.release("setAccess")
     expect(await first).toBe("taken")
+    await settle()
     expect(source.calls.filter((call) => call[0] === "setAccess")).toHaveLength(1)
   })
 
@@ -117,6 +161,15 @@ describe("a refused change, in words", () => {
       "Access didn’t change. This isn’t available for this session.",
     )
   })
+
+  it("names both modes when a model change moved the chat to Ask", () => {
+    expect(steppedAccessCopy("auto")).toBe(
+      "Access is now Ask for approval. This model doesn’t offer Auto approval here.",
+    )
+    expect(steppedAccessCopy("full")).toBe(
+      "Access is now Ask for approval. This model doesn’t offer Full access here.",
+    )
+  })
 })
 
 /** The source says a's conversation anew, at its next revision: at work, or not. */
@@ -133,7 +186,7 @@ function sayConversation(source: FakeSource, working: boolean): Transcript {
 }
 
 describe("access chosen while the agent is at work", () => {
-  it("is held as pending, and asked of the source once the turn ends", async () => {
+  it("is asked of the source at once, so the turn's next tool call is decided at it", async () => {
     const { store, source } = await ready()
     sayConversation(source, true)
     await settle()
@@ -141,86 +194,85 @@ describe("access chosen while the agent is at work", () => {
       await store.dispatch(
         chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
       ),
-    ).toBe("pending")
-    expect(source.calls.some((call) => call[0] === "setAccess")).toBe(false)
+    ).toBe("taken")
+    expect(source.calls.filter((call) => call[0] === "setAccess")).toEqual([
+      ["setAccess", "a", "full", "person"],
+    ])
     expect(selectAccess(store.getState(), "a")).toBe("full")
-    expect(selectAccessNotice(store.getState(), "a")?.state).toBe("pending")
-    // Another pick during the turn replaces it: the newest choice is the one sent.
-    await store.dispatch(
-      chooseAccess({ sessionId: "a", mode: "auto", initiator: "person" }),
-    )
-    sayConversation(source, true)
-    await settle()
-    expect(source.calls.some((call) => call[0] === "setAccess")).toBe(false)
+    // Nothing to say: the change is made, not held.
+    expect(selectAccessNotice(store.getState(), "a")).toBeUndefined()
+    // The turn ends: nothing is asked again.
     sayConversation(source, false)
     await settle(10)
-    expect(source.calls.filter((call) => call[0] === "setAccess")).toEqual([
-      ["setAccess", "a", "auto", "person"],
-    ])
-    expect(selectAccess(store.getState(), "a")).toBe("auto")
-    expect(store.getState().workspace.accessChoices.a).toBeUndefined()
+    expect(source.calls.filter((call) => call[0] === "setAccess")).toHaveLength(1)
   })
 
-  it("waits for the next turn to end when that turn began before a pending pick was sent", async () => {
+  for (const code of ["turn_running", "approval_mode_not_applied"])
+    it(`waits for the turn to end when the turn could not take it (${code})`, async () => {
+      const source = fakeSource()
+      const setAccess = source.setAccess.bind(source)
+      let asked = 0
+      source.setAccess = (...args) => {
+        asked++
+        // A message queued behind the running turn: the agent cannot change under it.
+        return asked === 1
+          ? Promise.reject(
+              new WorkspaceSourceError("unavailable", undefined, {
+                message: "Not while this turn runs",
+                code,
+              }),
+            )
+          : setAccess(...args)
+      }
+      const { store } = await ready(source)
+      sayConversation(source, true)
+      await settle()
+      expect(
+        await store.dispatch(
+          chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+        ),
+      ).toBe("pending")
+      expect(asked).toBe(1)
+      // Still the person's pick, shown and not refused, held for the turn's end.
+      expect(selectAccess(store.getState(), "a")).toBe("full")
+      expect(selectAccessNotice(store.getState(), "a")).toMatchObject({
+        state: "pending",
+        after: expect.any(Number),
+      })
+      // Not sent again while that turn is at work.
+      store.dispatch(setComposerText({ sessionId: "a", text: "x" }))
+      sayConversation(source, true)
+      await settle(10)
+      expect(asked).toBe(1)
+      sayConversation(source, false)
+      await settle(10)
+      expect(asked).toBe(2)
+      expect(selectAccess(store.getState(), "a")).toBe("full")
+      expect(store.getState().workspace.accessChoices.a).toBeUndefined()
+    })
+
+  it("says an access the model does not offer at once, mid-turn too", async () => {
     const source = fakeSource()
-    const setAccess = source.setAccess.bind(source)
-    let asked = 0
-    source.setAccess = (...args) => {
-      asked++
-      // A message sent as the turn ended reached the gateway first.
-      return asked === 1
-        ? Promise.reject(
-            new WorkspaceSourceError("unavailable", undefined, {
-              message: "A turn is running",
-              code: "turn_running",
-            }),
-          )
-        : setAccess(...args)
-    }
+    source.setAccess = () =>
+      Promise.reject(
+        new WorkspaceSourceError("not-supported", undefined, {
+          message: "This model does not offer that access",
+          code: "approval_mode_unavailable",
+        }),
+      )
     const { store } = await ready(source)
     sayConversation(source, true)
     await settle()
-    await store.dispatch(
-      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
-    )
-    sayConversation(source, false)
-    await settle(10)
-    expect(asked).toBe(1)
-    // Still the person's pick, and not refused: it waits, and is not sent again yet.
-    expect(selectAccessNotice(store.getState(), "a")?.state).toBe("pending")
-    store.dispatch(setComposerText({ sessionId: "a", text: "x" }))
-    await settle(10)
-    expect(asked).toBe(1)
-    sayConversation(source, true)
-    await settle(10)
-    expect(asked).toBe(1)
-    sayConversation(source, false)
-    await settle(10)
-    expect(asked).toBe(2)
-    expect(selectAccess(store.getState(), "a")).toBe("full")
-    expect(store.getState().workspace.accessChoices.a).toBeUndefined()
-  })
-
-  it("lets a pending choice go when the person picks what the source runs", async () => {
-    const { store, source } = await ready()
-    sayConversation(source, true)
-    await settle()
-    await store.dispatch(
-      chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
-    )
-    source.transcripts.set("a", {
-      ...(source.transcripts.get("a") as Transcript),
-      access: { mode: "ask", modes: ["ask", "full"] },
+    expect(
+      await store.dispatch(
+        chooseAccess({ sessionId: "a", mode: "full", initiator: "person" }),
+      ),
+    ).toBe("refused")
+    expect(selectAccess(store.getState(), "a")).toBe("ask")
+    expect(selectAccessNotice(store.getState(), "a")).toMatchObject({
+      state: "refused",
+      code: "approval_mode_unavailable",
     })
-    sayConversation(source, true)
-    await settle()
-    await store.dispatch(
-      chooseAccess({ sessionId: "a", mode: "ask", initiator: "person" }),
-    )
-    expect(store.getState().workspace.accessChoices.a).toBeUndefined()
-    sayConversation(source, false)
-    await settle(10)
-    expect(source.calls.some((call) => call[0] === "setAccess")).toBe(false)
   })
 
   it("says a refusal until the next conversation with no turn at work", async () => {
@@ -255,7 +307,7 @@ describe("access chosen while the agent is at work", () => {
 })
 
 describe("a new session's access", () => {
-  it("keeps a pick made after the first message carried another, and applies it once the turn ends", async () => {
+  it("keeps a pick made after the first message carried another, and applies it while the turn runs", async () => {
     const { store, source } = await ready()
     const draftId = store.dispatch(newSession())
     if (!draftId) throw new Error("no draft")
@@ -288,14 +340,8 @@ describe("a new session's access", () => {
     await source.release("send")
     await first
     await settle(10)
-    expect(store.getState().workspace.transcripts[draftId]?.access?.mode).toBe("full")
-    expect(selectAccess(store.getState(), draftId)).toBe("ask")
-    expect(selectAccessNotice(store.getState(), draftId)?.state).toBe("pending")
-    expect(source.calls.some((call) => call[0] === "setAccess")).toBe(false)
-    const idle: Transcript = { ...running, activity: null, revision: 2 }
-    source.transcripts.set(draftId, idle)
-    source.emit({ kind: "transcript", transcript: idle })
-    await settle(10)
+    // The conversation began at the captured Full; the newer Ask is asked
+    // of it at once, while its first turn is still at work.
     expect(source.calls.filter((call) => call[0] === "setAccess")).toEqual([
       ["setAccess", draftId, "ask", "person"],
     ])

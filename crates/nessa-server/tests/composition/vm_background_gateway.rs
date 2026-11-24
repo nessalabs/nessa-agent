@@ -3,16 +3,24 @@
 //! the fake provider; released binaries cannot select it.
 use crate::conversation::{
     application::{
-        ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
-        EnvironmentFuture, EnvironmentLease, ThreadEnvironments,
+        ChannelStore, ConversationError, ConversationLimits, Environment, EnvironmentDeclaration,
+        EnvironmentFuture, EnvironmentLease, SetupStep, SetupSteps, ThreadEnvironments,
     },
     infrastructure::{
-        in_process_environment,
+        channel_cloud, in_process_environment,
         ssh_environment::{Build, BuildSource, HostInstaller},
     },
 };
-use crate::workspaces::{application::*, domain::*, infrastructure::FileAssignments};
-use crate::{cli::entrypoint::LocalProvisioning, composition::CompositionRoot, core::Launch};
+use crate::workspaces::{
+    application::*,
+    domain::*,
+    infrastructure::{FileAssignments, FileCloudChoice},
+};
+use crate::{
+    cli::entrypoint::{LocalProvisioning, ServerOptions},
+    composition::CompositionRoot,
+    core::Launch,
+};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::providers::AgentProvider,
@@ -56,9 +64,21 @@ fn folder(thread: &str) -> PathBuf {
     FIXTURE.get().unwrap().root.join(thread)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[test]
 #[ignore = "long-lived gateway owned by the desktop VM stress driver"]
-async fn serve() {
+fn serve() {
+    // As bootstrap does: terminals are prepared before any async runtime
+    // starts, since pty-runtime forks to stage its helper image.
+    crate::terminal::prepare();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(serve_gateway());
+}
+
+async fn serve_gateway() {
     let idle = std::env::var("NESSA_VM_STRESS_IDLE_SECONDS")
         .unwrap()
         .parse::<u64>()
@@ -78,31 +98,48 @@ async fn serve() {
     // The driver reads this gateway's log as it reads the real one's, so it
     // logs the same lines under the same filter.
     crate::core::logging::init();
-    CompositionRoot::serve(LocalProvisioning::Manual, &Launch::Standalone)
-        .await
-        .unwrap();
+    CompositionRoot::serve(
+        ServerOptions::new(LocalProvisioning::Manual),
+        &Launch::Standalone,
+    )
+    .await
+    .unwrap();
 }
 
 pub(super) fn service(default: Arc<Workspaces>) -> Arc<Workspaces> {
     let Some(fixture) = FIXTURE.get() else {
         return default;
     };
-    Arc::new(Workspaces::new(
-        Arc::new(Config),
-        Arc::new(FakeProvider),
-        Arc::new(FileAssignments(fixture.root.join("assignments"))),
-        Arc::new(Audit),
-        default.runtime_settings.clone(),
-    ))
+    Arc::new(
+        Workspaces::new(
+            Arc::new(Config),
+            Arc::new(FakeProvider(Cloud::Boat)),
+            Arc::new(FileAssignments(fixture.root.join("assignments"))),
+            Arc::new(Audit),
+            default.runtime_settings.clone(),
+        )
+        // A connected Agent37 beside Boat: the driver picks the cloud for
+        // new VMs in Settings, and reads which one made each VM from the
+        // events.
+        .with_cloud(
+            Cloud::Agent37,
+            Arc::new(Agent37Config),
+            Arc::new(FakeProvider(Cloud::Agent37)),
+            Arc::new(FileAssignments(fixture.root.join("agent37-assignments"))),
+            Arc::new(FileCloudChoice(fixture.root.join("cloud"))),
+        ),
+    )
 }
 pub(super) fn environments(
     default: Arc<dyn ThreadEnvironments>,
     service: Arc<Workspaces>,
+    channels: Arc<dyn ChannelStore>,
+    setup: Option<Arc<SetupSteps>>,
 ) -> Arc<dyn ThreadEnvironments> {
     if FIXTURE.get().is_none() {
         return default;
     }
-    Arc::new(FakeEnvironments(service))
+    Arc::new(FakeEnvironments(service, channels, setup))
 }
 pub(super) fn limits(default: ConversationLimits) -> ConversationLimits {
     FIXTURE.get().map_or(default, |fixture| ConversationLimits {
@@ -133,17 +170,40 @@ impl BuildSource for CliBuild {
 struct Config;
 #[async_trait::async_trait]
 impl Settings for Config {
-    async fn read(&self) -> Result<BoatConnection, Failure> {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
         BoatConnection::new(
             "fixture-token".into(),
             "nessa".into(),
             "fixture-image".into(),
         )
+        .map(CloudConnection::Boat)
     }
     fn generation(&self) -> Result<u64, Failure> {
         Ok(1)
     }
-    async fn save(&self, _: u64, _: BoatConnection) -> Result<(), Failure> {
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
+        unreachable!()
+    }
+    async fn clear(&self) -> Result<(), Failure> {
+        unreachable!()
+    }
+}
+struct Agent37Config;
+#[async_trait::async_trait]
+impl Settings for Agent37Config {
+    async fn read(&self) -> Result<CloudConnection, Failure> {
+        Agent37Connection::new(
+            "sk_live_fixture".into(),
+            b"fixture-private".to_vec(),
+            "ssh-ed25519 AAAAfixture".into(),
+            "nessa-runtime@1".into(),
+        )
+        .map(CloudConnection::Agent37)
+    }
+    fn generation(&self) -> Result<u64, Failure> {
+        Ok(1)
+    }
+    async fn save(&self, _: u64, _: CloudConnection) -> Result<(), Failure> {
         unreachable!()
     }
     async fn clear(&self) -> Result<(), Failure> {
@@ -171,27 +231,33 @@ impl RecoveryAudit for Audit {
         Ok(())
     }
 }
-struct FakeProvider;
+/// One cloud's VMs, which are folders beside each other: each says which
+/// cloud made it in the events.
+struct FakeProvider(Cloud);
 #[async_trait::async_trait]
 impl Provider for FakeProvider {
-    async fn validate(&self, _: &BoatAccount, _: &VmSpec) -> Result<(), Failure> {
+    async fn validate(&self, _: &CloudAccount, _: &VmSpec) -> Result<(), Failure> {
         Ok(())
     }
     async fn create(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
     ) -> Result<WorkspaceReceipt, Failure> {
         // Like Boat, a creation is keyed by its thread: asking again for a
         // VM that already exists answers with that VM and makes nothing new.
-        let made = folder(thread).join(".boat-created");
+        // Each cloud keeps its own marker, so a thread asked of the wrong
+        // cloud is made there anew and the events show it.
+        let made = folder(thread).join(format!(".{}-created", self.0.as_str()));
         if made.exists() {
-            event("create_replayed", thread);
+            record(
+                serde_json::json!({"kind":"create_replayed","thread":thread,"cloud":self.0.as_str()}),
+            );
         } else {
             std::fs::create_dir_all(folder(thread)).map_err(|_| Failure::Storage)?;
             std::fs::write(&made, b"").map_err(|_| Failure::Storage)?;
-            event("created", thread);
+            record(serde_json::json!({"kind":"created","thread":thread,"cloud":self.0.as_str()}));
         }
         // The driver makes Boat's answer get lost after the VM was made by
         // leaving this file beside the threads' folders.
@@ -202,42 +268,50 @@ impl Provider for FakeProvider {
         }
         Ok(WorkspaceReceipt {
             vm: thread.into(),
-            admission: EnvironmentIdentity::new(
-                "11111111-1111-4111-8111-111111111111".into(),
-                "nessa".into(),
-                "22222222-2222-4222-8222-222222222222".into(),
-                2,
-            )
-            .unwrap(),
+            admission: match self.0 {
+                Cloud::Boat => Admitted::Boat(
+                    EnvironmentIdentity::new(
+                        "11111111-1111-4111-8111-111111111111".into(),
+                        "nessa".into(),
+                        "22222222-2222-4222-8222-222222222222".into(),
+                        2,
+                    )
+                    .unwrap(),
+                ),
+                Cloud::Agent37 => Admitted::Agent37(
+                    TemplateRelease::new(
+                        "nessa-runtime@1".into(),
+                        Some(1),
+                        Some(format!("sha256:{}", "a".repeat(64))),
+                    )
+                    .unwrap(),
+                ),
+            },
             refusal: None,
             disposition: RefusalDisposition::RetainTarget,
         })
     }
     async fn connect(
         &self,
-        _: &BoatAccount,
+        _: &CloudAccount,
         _: &VmSpec,
         thread: &str,
         _: &str,
-        _: &EnvironmentIdentity,
+        _: &Admitted,
     ) -> Result<Arc<dyn WorkspaceRuntime>, Failure> {
         // The driver makes Boat fail a thread's next opening by leaving
         // this file in its folder.
         if std::fs::remove_file(folder(thread).join("fail-next-open")).is_ok() {
             return Err(Failure::Provider);
         }
+        record(serde_json::json!({"kind":"connected","thread":thread,"cloud":self.0.as_str()}));
         Ok(Arc::new(FakeVm(thread.into())))
     }
-    async fn remove(
-        &self,
-        _: &BoatAccount,
-        _: &str,
-        _: &EnvironmentIdentity,
-    ) -> Result<(), Failure> {
+    async fn remove(&self, _: &CloudAccount, _: &str, _: &Admitted) -> Result<(), Failure> {
         unreachable!()
     }
-    async fn stop(&self, _: &BoatAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
-        event("rested", vm);
+    async fn stop(&self, _: &CloudAccount, vm: &str, _: RestCause) -> Result<(), Failure> {
+        record(serde_json::json!({"kind":"rested","thread":vm,"cloud":self.0.as_str()}));
         Ok(())
     }
 }
@@ -286,10 +360,19 @@ impl WorkspaceRuntime for FakeVm {
         })
     }
 }
-struct FakeEnvironments(Arc<Workspaces>);
+struct FakeEnvironments(
+    Arc<Workspaces>,
+    Arc<dyn ChannelStore>,
+    Option<Arc<SetupSteps>>,
+);
 impl ThreadEnvironments for FakeEnvironments {
     fn environment(&self, id: &ConversationId) -> Result<Arc<dyn Environment>, ConversationError> {
-        Ok(Arc::new(FakeLease(self.0.clone(), id.clone())))
+        Ok(Arc::new(FakeLease(
+            self.0.clone(),
+            id.clone(),
+            self.1.clone(),
+            self.2.clone(),
+        )))
     }
     fn available(&self) -> EnvironmentFuture<'_, bool> {
         Box::pin(async { true })
@@ -304,7 +387,20 @@ impl ThreadEnvironments for FakeEnvironments {
         })
     }
 }
-struct FakeLease(Arc<Workspaces>, ConversationId);
+struct FakeLease(
+    Arc<Workspaces>,
+    ConversationId,
+    Arc<dyn ChannelStore>,
+    Option<Arc<SetupSteps>>,
+);
+impl FakeLease {
+    /// Says which setup step the machine is on, as the real connector does.
+    fn step(&self, step: SetupStep) {
+        if let Some(steps) = &self.3 {
+            steps.step(&self.1, step);
+        }
+    }
+}
 impl Environment for FakeLease {
     fn declaration(&self) -> EnvironmentDeclaration {
         let mut d = in_process_environment().declaration();
@@ -318,10 +414,28 @@ impl Environment for FakeLease {
         binding: Arc<dyn AgentProvider>,
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
+            // The channel's cloud, read as the real gateway reads it.
+            let (channel, cloud) = channel_cloud(self.2.as_ref(), &self.1).await?;
+            let thread = self.1.to_string();
+            self.step(if self.0.has_vm(&thread).await {
+                SetupStep::Waking
+            } else {
+                SetupStep::Creating
+            });
+            // The driver makes a thread's next opening take this many
+            // milliseconds, so a person sees each step, by leaving this file
+            // beside the threads' folders.
+            let root = &FIXTURE.get().unwrap().root;
+            let slow = root.join(format!("slow-next-open-{thread}"));
+            if let Ok(ms) = std::fs::read_to_string(&slow) {
+                let _ = std::fs::remove_file(&slow);
+                tokio::time::sleep(Duration::from_millis(ms.trim().parse().unwrap_or(0))).await;
+            }
             self.0
-                .open(self.1.clone(), true, None)
+                .open(self.1.clone(), true, channel, cloud)
                 .await
                 .map_err(|_| LeaseRefusal::EnvironmentUnreachable)?;
+            self.step(SetupStep::Connecting);
             let mut opened = in_process_environment().open(lease, grant, binding).await?;
             opened.workspace = Some(folder(&self.1.to_string()).to_str().unwrap().into());
             Ok(opened)

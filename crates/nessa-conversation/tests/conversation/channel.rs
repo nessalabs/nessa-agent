@@ -167,6 +167,7 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         defaults: made.defaults().clone(),
         notes: made.notes().clone(),
         resources: made.resources().clone(),
+        coordinator_on: true,
     };
     assert!(made.made_of(&asked));
     // Moved since it was made, a retry of its creation is still the same channel.

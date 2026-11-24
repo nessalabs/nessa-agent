@@ -1,3 +1,5 @@
+use crate::conversation::view::{OwnerAsk, OwnerDecisionOutcome};
+
 /// What a conversation is called in a list of conversations.
 ///
 /// Derived from the first message a person sends, and then kept: a later
@@ -112,6 +114,26 @@ pub struct ConversationSummary {
     preview: Option<ConversationPreview>,
     updated_at_ms: u64,
     archived: bool,
+    /// What an agent asked the owner and is waiting on. It lives on the
+    /// summary so that the one write that records the owner's next message
+    /// also takes it down, and so that it goes wherever the summary goes:
+    /// listed, archived, erased.
+    ask: Option<OwnerAsk>,
+    /// The ask this change took off the summary, and why: answered by the
+    /// message it records, or replaced by the ask it records. Not stored on
+    /// the summary: the write that records this change keeps it in the
+    /// conversation's decisions, in the same transaction.
+    settled: Option<SettledAsk>,
+    /// This change puts its ask back to waiting: the answer auto-pick
+    /// recorded for it could not be sent ([`Self::reopening`]). Not stored.
+    reopened: bool,
+}
+
+/// An ask that stopped waiting, and how.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettledAsk {
+    pub ask: OwnerAsk,
+    pub outcome: OwnerDecisionOutcome,
 }
 /// The latest time a conversation's times may hold, in Unix milliseconds:
 /// the largest integer a JSON number carries exactly, which is what a list
@@ -140,7 +162,20 @@ impl ConversationSummary {
             preview,
             updated_at_ms,
             archived,
+            ask: None,
+            settled: None,
+            reopened: false,
         })
+    }
+    /// This summary with `ask` waiting on it, as read back from storage.
+    #[must_use]
+    pub fn with_ask(self, ask: Option<OwnerAsk>) -> Self {
+        Self {
+            ask,
+            settled: None,
+            reopened: false,
+            ..self
+        }
     }
     /// After a person's message was accepted. The title is taken only if the
     /// conversation has none yet; the preview is the message, or
@@ -170,6 +205,64 @@ impl ConversationSummary {
             ),
             updated_at_ms: later(previous, at_ms),
             archived: false,
+            ask: previous.and_then(|summary| summary.ask.clone()),
+            settled: None,
+            reopened: false,
+        }
+    }
+    /// The same summary once a message saying `text` that answers ask
+    /// `ask_id` is recorded on it: that ask goes, settled as answered by the
+    /// message, and one asked since it stays
+    /// (`an_ask_goes_only_with_the_message_that_answers_it`). `auto` when
+    /// auto-pick sent it for the owner.
+    #[must_use]
+    pub fn answering(mut self, ask_id: Option<&str>, text: &str, auto: bool) -> Self {
+        if ask_id.is_some() && self.ask.as_ref().map(|ask| ask.ask_id.as_str()) == ask_id {
+            if let Some(ask) = self.ask.take() {
+                let mut outcome = OwnerDecisionOutcome::answered(&ask, text, self.updated_at_ms);
+                if let OwnerDecisionOutcome::Decided {
+                    auto: picked,
+                    choice,
+                    ..
+                } = &mut outcome
+                {
+                    *picked = auto;
+                    // Auto-pick sends the recommended choice and nothing else.
+                    if auto {
+                        *choice = Some(ask.recommended);
+                    }
+                }
+                self.settled = Some(SettledAsk { ask, outcome });
+            }
+        }
+        self
+    }
+    /// After an agent asked the owner `ask`, in place of any earlier ask.
+    /// It is something new for the owner, so like a message it moves the
+    /// conversation to the top of the list and out of the archive, where
+    /// nobody would see it (`an_ask_lifts_its_conversation_to_the_top_of_the_list`).
+    ///
+    /// An earlier ask still waiting is settled as replaced by this one
+    /// (`a_newer_ask_settles_the_one_it_replaces`).
+    pub fn after_asking(previous: Option<&Self>, ask: OwnerAsk) -> Self {
+        let settled = previous
+            .and_then(|summary| summary.ask.clone())
+            .filter(|earlier| earlier.ask_id != ask.ask_id)
+            .map(|earlier| SettledAsk {
+                ask: earlier,
+                outcome: OwnerDecisionOutcome::Replaced {
+                    by: ask.ask_id.clone(),
+                    at_ms: ask.asked_at_ms,
+                },
+            });
+        Self {
+            title: previous.and_then(|summary| summary.title.clone()),
+            preview: previous.and_then(|summary| summary.preview.clone()),
+            updated_at_ms: later(previous, ask.asked_at_ms),
+            archived: false,
+            ask: Some(ask),
+            settled,
+            reopened: false,
         }
     }
     /// After the agent replied, or `None` when the reply said nothing a
@@ -183,6 +276,9 @@ impl ConversationSummary {
             preview: Some(ConversationPreview::from_text(reply)?),
             updated_at_ms: later(previous, at_ms),
             archived: previous.is_some_and(|summary| summary.archived),
+            ask: previous.and_then(|summary| summary.ask.clone()),
+            settled: None,
+            reopened: false,
         })
     }
     /// After somebody archived the conversation, or unarchived it. Nothing
@@ -195,6 +291,8 @@ impl ConversationSummary {
     pub fn after_archiving(&self, archived: bool) -> Self {
         Self {
             archived,
+            settled: None,
+            reopened: false,
             ..self.clone()
         }
     }
@@ -207,6 +305,8 @@ impl ConversationSummary {
     pub fn after_renaming(&self, title: ConversationTitle) -> Self {
         Self {
             title: Some(title),
+            settled: None,
+            reopened: false,
             ..self.clone()
         }
     }
@@ -219,6 +319,10 @@ impl ConversationSummary {
             preview: source.preview.clone(),
             updated_at_ms: at_ms.min(LATEST_TIME_MS),
             archived: false,
+            // Asked of the source's owner, in the source.
+            ask: None,
+            settled: None,
+            reopened: false,
         }
     }
     pub fn title(&self) -> Option<&ConversationTitle> {
@@ -234,6 +338,38 @@ impl ConversationSummary {
     /// in it since.
     pub fn archived(&self) -> bool {
         self.archived
+    }
+    /// What an agent asked the owner and is still waiting on.
+    pub fn ask(&self) -> Option<&OwnerAsk> {
+        self.ask.as_ref()
+    }
+    /// After auto-pick recorded its answer to `ask` and could not send it:
+    /// `ask` waits again on `previous` (the summary as it is, or as it was
+    /// before the pick), and its decision with it. `None` when something
+    /// else was asked since, which then waits instead.
+    pub fn reopening(previous: Option<&Self>, ask: OwnerAsk) -> Option<Self> {
+        let previous = previous?;
+        if previous
+            .ask
+            .as_ref()
+            .is_some_and(|waiting| waiting.ask_id != ask.ask_id)
+        {
+            return None;
+        }
+        Some(Self {
+            ask: Some(ask),
+            settled: None,
+            reopened: true,
+            ..previous.clone()
+        })
+    }
+    /// Whether this change puts its ask back to waiting ([`Self::reopening`]).
+    pub fn reopened(&self) -> bool {
+        self.reopened
+    }
+    /// The ask this change settled, for the conversation's decisions.
+    pub fn settled(&self) -> Option<&SettledAsk> {
+        self.settled.as_ref()
     }
 }
 

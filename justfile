@@ -3,7 +3,8 @@
 #
 #   just          list recipes
 #   just start    desktop app + local nessa server (dev; `just start prod` for another stage)
-#   just dev      desktop app in dev mode (falls back to the browser UI)
+#   just dev      the same as `just start`: gateway, then the app (browser UI with no display)
+#   just app      desktop app only, for a gateway already running (`just server`)
 #   just server   local nessa server only
 #   just web      UI in a browser only; window controls no-op
 #   just release prod fast  testing-shaped prod release (macOS .app / Linux .deb / Windows nsis)
@@ -37,9 +38,14 @@ default:
 server:
     pnpm server:run
 
-# Desktop app + local nessa server (always restarts the dev port so code changes
-# load). It restarts a dev server this checkout started and nothing else — see
+# It restarts a dev server this checkout started and nothing else — see
 # scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
+# When the stage port is held by something that is not ours (another app, or a
+# gateway service of another instance), this run says so and moves its gateway
+# to the next free port; one sharing this namespace, or a `NESSA_PORT` set by
+# hand, is refused instead.
+#
+# Desktop app + local nessa server (restarts the dev gateway so code changes load).
 [unix]
 [positional-arguments]
 start stage="":
@@ -71,13 +77,15 @@ start stage="":
     # installed cannot succeed — its service holds the port — and preflight
     # would otherwise have written to the installed app's own namespace on the
     # way to that refusal. Nothing is repaired until there is somewhere to run.
-    node scripts/free-gateway-port.mjs "${stage}"
+    #
+    # The port it prints is the one this run uses, exported so the server, the
+    # health probe below and the browser proxy all read the same socket. The
+    # desktop window needs nothing more: it follows the endpoint the server
+    # publishes. Before, a port held by a launchd service ended the run here,
+    # and agents reached for `just dev` instead, which had no gateway at all.
+    port="$(node scripts/free-gateway-port.mjs --move "${stage}")"
+    export NESSA_PORT="${port}"
     node scripts/preflight.mjs "${stage}"
-    # No argument on purpose, now that the stage is exported above: with one,
-    # this answers the stage's own port and `NESSA_PORT` is ignored, which
-    # started the server on one socket and polled another. Without one it reads
-    # the same environment the server will, override included.
-    port="$(node scripts/gateway-port.mjs)"
     server_pid=""
     app_pid=""
     # The app goes first, then the gateway it talks to: the other order leaves a
@@ -129,7 +137,7 @@ start stage="":
     # recipe blocking until the app exits, exactly as the foreground call did,
     # and the trap fires either way round: quitting the app stops the gateway,
     # and stopping this run stops the app.
-    just dev &
+    just app &
     app_pid=$!
     wait "${app_pid}"
 
@@ -137,9 +145,20 @@ start stage="":
 web:
     pnpm dev
 
-# Desktop app in dev mode (`tauri dev`).
+# A window alone shows "Not connected", and that kept being mistaken for a
+# broken build; `just app` is the window alone, for a gateway already running.
+# `exec`, so a signal to this recipe reaches `start` and its cleanup rather than
+# stopping at a shell between the two and orphaning the gateway and app.
+#
+# Gateway, then the desktop app (the same as `just start`).
+[unix]
+[positional-arguments]
+dev stage="":
+    @exec just start "$@"
+
+# Desktop app only, no gateway (`tauri dev`). Pair it with `just server`.
 [linux]
-dev:
+app:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -n "${CI:-}" || ( -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ) ]]; then
@@ -157,15 +176,21 @@ dev:
     fi
     exec bash scripts/run-dev-app.sh
 
-# Desktop app in dev mode (`tauri dev`).
+# Desktop app only, no gateway (`tauri dev`). Pair it with `just server`.
 [macos]
-dev:
+app:
     bash scripts/run-dev-app.sh
 
 # Desktop app in dev mode (`tauri dev`). cmd has no traps, so the app is not
 # taken down with this command the way it is on Unix; quit it from the tray.
+# There is no `start` here yet, so run `just server` in another terminal.
 [windows]
 dev:
+    pnpm app
+
+# Desktop app only, no gateway (`tauri dev`). Pair it with `just server`.
+[windows]
+app:
     pnpm app
 
 # Shipping bundle by default; macOS builds seal and verify the completed bundle.

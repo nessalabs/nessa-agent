@@ -403,6 +403,7 @@ fn bench_evaluations(count: usize, cedar: &CedarConversationAccessPolicy) {
             organization: &organization,
             owner: &owner,
             deleted: false,
+            created_by: None,
         },
         held: Some(Capabilities::read()),
         request: RequestShape::default(),

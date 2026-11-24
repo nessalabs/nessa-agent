@@ -1,10 +1,11 @@
 import { modelChanging, modelRequesting } from "../../adapters/store/model-commands"
 import { useRememberedValue } from "../../adapters/store/remembered-session"
 import { entry } from "../../application/workspace-state"
-import { WorkspaceSendFailure } from "../send-failure"
+import { WorkspaceSendRecovery } from "../send-failure"
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
+import { modelPickerNote } from "./composer-model"
 import {
   changeModel as requestModel,
   sendMessage,
@@ -114,6 +115,7 @@ export const PaneHome = memo(function PaneHome({
   const { text, onTextChange } = useComposerText(sessionId)
   const access = useComposerAccess(sessionId)
   const images = useComposerImages(sessionId)
+  const voice = useComposerVoice(sessionId)
 
   return (
     <Home
@@ -124,6 +126,10 @@ export const PaneHome = memo(function PaneHome({
       images={images}
       text={text}
       onTextChange={onTextChange}
+      // Talk starts the chat by voice: the call's first send starts it, and
+      // the call goes on in the conversation that then takes this home's place.
+      voice={voice}
+      voiceDock={<ConversationVoice sessionId={sessionId} />}
       // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
       composerClassName="workspace-dock"
     />
@@ -199,35 +205,10 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
     modelChanging(state.workspace, sessionId),
   )
   const modelBusy = useRememberedValue(sessionId, modelBusyLive)
-  const choiceCode =
-    modelChoice &&
-    (modelChoice.state === "refused" || modelChoice.state === "recovery_required")
-      ? modelChoice.code
-      : undefined
-  const modelNotice =
-    choiceCode === "conversation_configuration_changed"
-      ? "This chat can't be reopened."
-      : // The source settles its own pending change; sending waits for it.
-        modelControl?.pending?.status === "recovery_required"
-        ? "The model change is not confirmed yet. You can send once it settles."
-        : modelChoice?.state === "recovery_required" ||
-            modelChoice?.state === "acknowledged"
-          ? "The model change is not confirmed. Send again to check and try."
-          : modelBusy
-            ? "Changing model…"
-            : modelChoice?.state === "refused"
-              ? modelChoice.code === "model_change_not_applied"
-                ? "Model didn’t change. Choose again to try."
-                : "The model change wasn’t made. Choose again to try."
-              : modelControl?.effect === "nextTurn"
-                ? "Model applies to the next turn."
-                : modelControl?.effect === "subsequentResponses"
-                  ? "Model applies to subsequent responses."
-                  : undefined
-
+  const modelNote = modelPickerNote(modelChoice, modelControl, modelBusy)
   return (
     <>
-      <WorkspaceSendFailure sessionId={sessionId} />
+      <WorkspaceSendRecovery sessionId={sessionId} />
       <Composer
         text={text}
         onTextChange={onTextChange}
@@ -236,7 +217,7 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         model={model}
         onModelChange={changeModel}
         modelDisabled={modelRequest}
-        modelNotice={modelNotice}
+        modelNote={modelNote}
         onSend={modelBusy ? undefined : send}
         onStop={stop}
         voice={voice}

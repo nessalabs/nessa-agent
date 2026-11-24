@@ -52,7 +52,7 @@ use super::{
         AdmissionRefused, CommandAnswer, Granted, HostLink, Liveness, Opening, Published,
         StartError,
     },
-    logins::SavedLogins,
+    logins::{HandedLogin, SavedLogins},
     peer::ServingCredentials,
     transfer::{FrameBytes, SftpBytes},
 };
@@ -67,8 +67,7 @@ use crate::timer::clock;
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::lease::{
-    self, Cleanup, CommandEnd, GrantRefusal, Login, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL,
-    SILENCE_LIMIT,
+    self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -682,7 +681,7 @@ impl Environment for SshEnvironment {
             let place = self.inner.budget_place(Work::Lease)?;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
             let released = Arc::new(std::sync::OnceLock::new());
-            let login = Arc::new(std::sync::OnceLock::new());
+            let login: HandedCell = Arc::new(std::sync::Mutex::new(None));
             let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
                 released: released.clone(),
                 link: link.clone(),
@@ -718,7 +717,29 @@ impl Environment for SshEnvironment {
                     }
                     _ => None,
                 };
-                let _ = login.set(saved);
+                // Renewed on the machine only when a token was handed; one
+                // that could not be is asked for again by parking (row L6).
+                let renews = saved
+                    .as_ref()
+                    .is_some_and(|handed| handed.login.is_some() && handed.renew_by_ms.is_some());
+                *login
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = saved;
+                if let (true, Some(logins), Some(agent)) = (
+                    renews,
+                    self.inner.logins.clone(),
+                    AgentId::parse(work.agent()),
+                ) {
+                    tokio::spawn(renew_login(Renewal {
+                        logins,
+                        environment: self.inner.environment(),
+                        agent,
+                        lease: lease.as_str().into(),
+                        link: link.clone(),
+                        login: login.clone(),
+                        gone: gone.clone(),
+                    }));
+                }
             }
             let workspace = Some(link.workspace().to_string_lossy().into_owned());
             Ok(EnvironmentLease {
@@ -731,6 +752,7 @@ impl Environment for SshEnvironment {
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
+                    login,
                     gone,
                     ending,
                     published: std::sync::Mutex::new(Some(published)),
@@ -1031,6 +1053,9 @@ struct SshHold {
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
+    /// The login handed to the lease's harnesses, the same cell its host
+    /// starts them with: read for when it must be renewed.
+    login: HandedCell,
     /// Closed once the lease is no longer routed on its connection: taken
     /// at its grant, so a loss before anyone asks is still seen.
     gone: watch::Receiver<()>,
@@ -1048,6 +1073,14 @@ impl LeaseHold for SshHold {
         binding: Arc<dyn AgentProvider>,
     ) -> Result<Arc<dyn AgentProvider>, AgentError> {
         binding.on_host(self.host.clone())
+    }
+
+    fn renew_by(&self) -> Option<u64> {
+        self.login
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|handed| handed.renew_by_ms)
     }
 
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
@@ -1164,8 +1197,115 @@ struct LeaseHost {
     link: Arc<HostLink>,
     lease: String,
     /// The saved login each harness under the lease is started with, set
-    /// once at its grant; unset or `None` starts it with none.
-    login: Arc<std::sync::OnceLock<Option<Login>>>,
+    /// at its grant and replaced by each renewal; `None` starts it with none.
+    login: HandedCell,
+}
+
+/// The login handed to a lease, shared by its host, its hold and its
+/// renewal.
+type HandedCell = Arc<std::sync::Mutex<Option<HandedLogin>>>;
+
+/// What a lease's login renewal needs.
+struct Renewal {
+    logins: Arc<dyn SavedLogins>,
+    environment: nessa_sdk::domain::agent_execution::leases::EnvironmentRef,
+    agent: AgentId,
+    lease: String,
+    link: Arc<HostLink>,
+    login: HandedCell,
+    gone: watch::Receiver<()>,
+}
+
+/// How long a failed renewal waits before asking again.
+const RENEW_RETRY: Duration = Duration::from_secs(60);
+/// How long before `renew_by` a renewal asks, at most half the time left,
+/// so one that succeeds has replaced it before the parking sweep reads it.
+const RENEW_AHEAD: Duration = Duration::from_secs(120);
+
+/// Keep a lease's expiring login fresh while the lease is routed
+/// (`docs/design/chatgpt-sign-in.md`, rows L1 to L4): at its `renew_by`, ask
+/// for the login again and send it to the host, which hands it to the
+/// harnesses already running; the cell then holds it, so a harness started
+/// later gets it too and the parking sweep reads its new `renew_by`. A login
+/// that no longer expires (the account was put aside for the key) ends the
+/// renewals. A failure is asked again after [`RENEW_RETRY`]; past
+/// `renew_by` the idle agent is parked meanwhile.
+async fn renew_login(mut renewal: Renewal) {
+    loop {
+        let Some((by, account)) = renewal
+            .login
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|handed| Some((handed.renew_by_ms?, handed.account.clone())))
+        else {
+            return;
+        };
+        let now = clock::wall_now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+            });
+        // Never more than half the time left ahead, so a token that lasts
+        // only minutes is not renewed over and over at once.
+        let left = by.saturating_sub(now);
+        let ahead = u64::try_from(RENEW_AHEAD.as_millis())
+            .unwrap_or(u64::MAX)
+            .min(left / 2);
+        let wait = Duration::from_millis(left - ahead);
+        tokio::select! {
+            _ = renewal.gone.changed() => return,
+            () = clock::sleep(wait) => {}
+        }
+        let fresh = renewal
+            .logins
+            .login(&renewal.environment, renewal.agent, &renewal.lease)
+            .await;
+        let renewed = match fresh {
+            // Another account, or the key, now (row L3): the harnesses keep
+            // their token until a restart starts them on what is in use.
+            Some(handed) if handed.login.is_some() && handed.account != account => return,
+            Some(HandedLogin {
+                login: Some(login),
+                renew_by_ms: Some(next),
+                account,
+            }) if next > by => {
+                if renewal.link.renew(&renewal.lease, login.clone()).await {
+                    *renewal
+                        .login
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(HandedLogin {
+                        login: Some(login),
+                        renew_by_ms: Some(next),
+                        account,
+                    });
+                    true
+                } else {
+                    // Not queued: the lease is ending or its connection gone.
+                    return;
+                }
+            }
+            // Nothing to hand this lease any more: the policy refuses it,
+            // or the key is in use with none saved. Nothing will change that
+            // while the harnesses run.
+            None => return,
+            // The same token again (OpenAI's `earliest_refresh_at` not yet
+            // passed), or nothing now (row L2): asked again after a while.
+            _ => false,
+        };
+        if !renewed {
+            tracing::warn!(
+                lease = renewal.lease,
+                "a lease's login could not be renewed; asking again"
+            );
+        }
+        // Never asked again sooner, even when the gateway names a time close
+        // by, so one lease cannot keep the gateway refreshing.
+        tokio::select! {
+            _ = renewal.gone.changed() => return,
+            () = clock::sleep(RENEW_RETRY) => {}
+        }
+    }
 }
 
 impl HarnessHost for LeaseHost {
@@ -1198,7 +1338,11 @@ impl HarnessHost for LeaseHost {
             .start(
                 &self.lease,
                 environment,
-                self.login.get().cloned().flatten(),
+                self.login
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                    .and_then(|handed| handed.login.clone()),
             )
             .map_err(|error| match error {
                 StartError::Closed => AgentError::Closed,

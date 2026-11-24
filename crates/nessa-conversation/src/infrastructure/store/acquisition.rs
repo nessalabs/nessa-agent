@@ -48,6 +48,9 @@ pub(super) fn conversation(prefix: &str) -> String {
     ].join(", ")
 }
 
+/// The most a stored ask may hold, as `summaries.ask` is checked to.
+const ASK_MAX_BYTES: usize = 8192;
+
 pub(super) fn summary(prefix: &str) -> String {
     [
         text(
@@ -62,6 +65,7 @@ pub(super) fn summary(prefix: &str) -> String {
         ),
         format!("{prefix}updated_at_ms"),
         format!("{prefix}archived"),
+        text(&format!("{prefix}ask"), ASK_MAX_BYTES, true),
     ]
     .join(", ")
 }

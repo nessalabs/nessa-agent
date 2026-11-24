@@ -15,17 +15,30 @@ import {
 export interface Section {
   readonly id: string
   readonly name: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
 }
 
 export interface Channel {
   readonly id: string
   readonly name: string
   readonly sectionId: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
   /** Only its members see it; drawn with a lock. */
   readonly private: boolean
   readonly topic: string
-  /** The channel’s current main chat, replaced after confirmed erasure. */
+  /**
+   * The channel’s current main chat, replaced after confirmed erasure.
+   * Kept while its coordinator is off, so the channel can leave it out of
+   * what it opens at and still say where it runs.
+   */
   readonly coordinatorConversationId?: string
+  /**
+   * Whether its coordinator is on, where it can be switched (a made
+   * channel). Off keeps its chat and threads; on again opens the same chat.
+   */
+  readonly coordinatorOn?: boolean
   /** Where its main agent runs ({@link ChannelPlace}). */
   readonly coordinatorPlacement?: ChannelPlace
   /**
@@ -54,9 +67,51 @@ export interface ModelRef {
   readonly modelId: string
 }
 
+/** One choice an {@link OwnerAsk} offers, and what happens if it is picked. */
+export interface OwnerAskChoice {
+  readonly label: string
+  readonly consequence: string
+  /** How hard it is to take back, when the agent said. */
+  readonly undo?: "easy" | "costly" | "no"
+  /** How much work it is, when the agent said. */
+  readonly effort?: "small" | "medium" | "large"
+  /** Up to two lines for it, and against it. */
+  readonly pros?: readonly string[]
+  readonly cons?: readonly string[]
+}
+
+/**
+ * A decision an agent asked the person: a short question, two to four
+ * choices, and the one the agent recommends with why. Answered by the
+ * person's next message in the session, a choice's label or anything else.
+ */
+export interface OwnerAsk {
+  /** New for every ask: a later ask in the same session is a new one. */
+  readonly askId: string
+  readonly question: string
+  readonly choices: readonly OwnerAskChoice[]
+  /** Index into `choices` of the one the agent recommends. */
+  readonly recommended: number
+  readonly reason: string
+  /** One line under the question with what it is about. */
+  readonly summary?: string
+  /** Whether the agent let the recommended choice be picked for the person. */
+  readonly autoPick?: "allowed" | "never"
+  /**
+   * Set when the agent asked to raise the session's access: the red card,
+   * whose first choice is Approve and whose words are Nessa's.
+   */
+  readonly access?: {
+    readonly mode: "auto" | "full"
+    readonly grants: readonly string[]
+  }
+}
+
 export interface SessionSummary {
   readonly id: string
   readonly channelId: string
+  /** Owning gateway ID when populated by a multi-gateway registry. */
+  readonly gatewayId?: string
   readonly title: string
   /** The model the session runs on; its provider decides the agent. */
   readonly model: ModelRef
@@ -79,6 +134,11 @@ export interface SessionSummary {
   readonly now?: string
   readonly pinned: boolean
   readonly unread: boolean
+  /**
+   * The decision an agent in it asked the person (`ask_owner`), while they
+   * have not written in it since: the session waits on them.
+   */
+  readonly ask?: OwnerAsk
   /** The source's count of changes to this summary; see `revision.ts`. */
   readonly revision: number
 }

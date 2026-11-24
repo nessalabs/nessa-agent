@@ -30,6 +30,7 @@
   "x-subscriptionLimits": {
     "conversationTargets": 8,
     "listTargets": 2,
+    "grantTargets": 1,
     "deliveryTimeoutMs": 10000
   },
   "x-channelRules": {
@@ -218,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 127,
+          "maxItems": 156,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1789,6 +1790,58 @@
       },
       "required": ["server", "tool"]
     },
+    "ConversationSetup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One opening of a conversation's cloud machine: each step it took, while it runs and once it ended.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["running", "ready", "failed"],
+          "description": "running: a step is under way. ready: the agent started. failed: the machine or the agent did not start; the send or turn that waited says why."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The message whose send this opening served, when a send started it. Absent for an opening nothing sent."
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/ConversationSetupStep" },
+          "description": "The steps in the order they began. Only the last can still be under way."
+        }
+      },
+      "required": ["state", "steps"]
+    },
+    "ConversationSetupStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One step of getting a cloud machine ready.",
+      "properties": {
+        "step": {
+          "type": "string",
+          "enum": ["creating", "waking", "installing", "connecting", "starting"],
+          "description": "creating: a new machine is being made. waking: a resting machine is being started. installing: this build of Nessa is being put on it. connecting: the gateway is reaching it. starting: the agent is being started there."
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds on the gateway's clock when the step began; measure against the view's serverNowMs."
+        },
+        "endedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Unix milliseconds on the gateway's clock when the step ended. Absent while it runs."
+        }
+      },
+      "required": ["step", "startedAtMs"]
+    },
     "ConversationView": {
       "type": "object",
       "additionalProperties": false,
@@ -1880,6 +1933,12 @@
         "runtime": {
           "$ref": "#/$defs/ConversationRuntime",
           "description": "Configured provider, model and working directory for this conversation."
+        },
+        "setup": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/ConversationSetup" },
+          "description": "Getting a cloud machine ready for this conversation's agent, as this gateway saw it since it started, oldest first: the opening under way, if any, and the last one that finished. Held in memory only, so absent after a restart and for a conversation that runs on no cloud machine."
         },
         "lease": {
           "$ref": "#/$defs/ConversationLease",
@@ -2250,6 +2309,223 @@
       "required": [],
       "description": "Which of the caller's conversations to list: those not archived, unless archived ones are asked for."
     },
+    "OwnerAsk": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A decision an agent asked its conversation's owner to make: one short question, two to four choices that each say what happens if picked, and the one the agent recommends with why. A client shows it as a card whose choice sends the label as the person's own message, and may post a notice for it.",
+      "properties": {
+        "askId": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "New for every ask: a notice or tab is for one ask, and a second ask in the same conversation is a new one."
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "x-utf8MaxBytes": 160,
+          "description": "The question, one line of at most 20 words."
+        },
+        "choices": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/OwnerAskChoice" },
+          "description": "The choices, in the order the agent gave them; labels differ."
+        },
+        "recommended": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Index into choices of the one the agent recommends."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "Why the agent recommends it, in one line."
+        },
+        "askedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it was asked, in Unix milliseconds."
+        },
+        "access": {
+          "$ref": "#/$defs/OwnerAskAccess",
+          "description": "Present when the ask is an agent's request to raise the chat's access (request_access). The question and the choices are Nessa's own: Approve, which a client carries out as the person's own conversation.setApprovalMode to mode before sending the label, and Not now, the recommended one. A client draws it as the red access card, and nothing may pick for the person."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "One line under the question with what the card is about."
+        },
+        "autoPick": {
+          "type": "string",
+          "enum": ["allowed", "never"],
+          "description": "Whether the recommended choice may be picked for the person when nobody answers in time. Only allowed when that choice's undo is easy; absent is never."
+        }
+      },
+      "required": ["askId", "question", "choices", "recommended", "reason", "askedAtMs"]
+    },
+    "OwnerAskAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The access an agent asked to raise a chat to, and what approving allows.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["auto", "full"],
+          "description": "The approval mode approving sets."
+        },
+        "grants": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "x-utf8MaxBytes": 200
+          },
+          "description": "What approving allows, one plain line each, in Nessa's words; shown once the person approves."
+        }
+      },
+      "required": ["mode", "grants"]
+    },
+    "OwnerAskChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One choice an ask offers.",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "x-utf8MaxBytes": 40,
+          "description": "What the choice is called; picking it sends this as the person's message."
+        },
+        "consequence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "x-utf8MaxBytes": 200,
+          "description": "What happens if the person picks it, in one line."
+        },
+        "undo": {
+          "type": "string",
+          "enum": ["easy", "costly", "no"],
+          "description": "How hard the choice is to take back."
+        },
+        "effort": {
+          "type": "string",
+          "enum": ["small", "medium", "large"],
+          "description": "How much work the choice is."
+        },
+        "pros": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-utf8MaxBytes": 120
+          },
+          "description": "Up to two lines for it."
+        },
+        "cons": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "x-utf8MaxBytes": 120
+          },
+          "description": "Up to two lines against it."
+        }
+      },
+      "required": ["label", "consequence"]
+    },
+    "OwnerDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question an agent asked its conversation's owner with ask_owner, and what became of it: still waiting (no outcome), answered by the owner's next message, or replaced by a newer ask before anyone answered.",
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/OwnerAsk",
+          "description": "What the agent asked, as it asked it."
+        },
+        "outcome": {
+          "$ref": "#/$defs/OwnerDecisionOutcome",
+          "description": "How it stopped waiting; absent while it waits."
+        },
+        "autoPickPaused": {
+          "type": "boolean",
+          "const": true,
+          "description": "While it waits: the owner paused its auto-pick (conversation.pauseAutoPick). Absent otherwise."
+        },
+        "autoPickDueAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "While it waits: when auto-pick sends the recommended choice for the owner, in Unix milliseconds. Absent when it will not: the agent did not allow it, the owner turned auto-pick off, or paused it."
+        }
+      },
+      "required": ["ask"]
+    },
+    "OwnerDecisionState": {
+      "type": "string",
+      "enum": ["decided", "replaced"],
+      "description": "How an ask stopped waiting: decided by the owner's message, or replaced by a newer ask before anyone answered."
+    },
+    "OwnerDecisionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How an ask stopped waiting. A decided one carries the owner's message as text, and choice when that message names one; a replaced one carries by.",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/OwnerDecisionState",
+          "description": "Decided or replaced."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Decided: the owner's message, trimmed and cut on a character boundary to 1024 bytes. The whole message is in the conversation."
+        },
+        "choice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Decided: index into the ask's choices of the one the message names, its label or its label then \". \" and a note. Absent when the message is the owner's own words."
+        },
+        "by": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "Replaced: the askId of the ask that took its place."
+        },
+        "auto": {
+          "type": "boolean",
+          "const": true,
+          "description": "Decided: auto-pick sent the recommended choice for the owner, because nobody answered in time. Absent when the owner answered."
+        },
+        "atMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it stopped waiting, in Unix milliseconds."
+        }
+      },
+      "required": ["state", "atMs"]
+    },
     "ConversationSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -2302,6 +2578,10 @@
           "maxLength": 13,
           "pattern": "^ch_[a-z2-7]{10}$",
           "description": "The channel the conversation was created in, one channel.list returns. Absent for a conversation in the default channel."
+        },
+        "ask": {
+          "$ref": "#/$defs/OwnerAsk",
+          "description": "The question an agent in the conversation asked its owner with ask_owner, waiting for an answer. A person's next message in the conversation is the answer and removes it; a later ask replaces it. Absent when nothing is asked."
         }
       },
       "required": [
@@ -3012,6 +3292,97 @@
         }
       },
       "required": ["conversationId", "requestId", "title"]
+    },
+    "ConversationDecisionsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read what a conversation's agents asked its owner with ask_owner, and what became of each: the owner's alone, as the ask on a list row is.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        }
+      },
+      "required": ["conversationId"]
+    },
+    "ConversationPauseAutoPickParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pause, or resume, auto-pick on one waiting decision: the owner's alone. A paused one waits for the owner however long it takes.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "askId": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The waiting ask."
+        },
+        "paused": {
+          "type": "boolean",
+          "description": "True pauses it, false resumes it, counting from when it was asked."
+        }
+      },
+      "required": ["conversationId", "askId", "paused"]
+    },
+    "ConversationPauseAutoPickResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether it changed: false when the ask is no longer waiting, or was already so.",
+      "properties": {
+        "applied": {
+          "type": "boolean",
+          "description": "True when the pause or resume was kept."
+        }
+      },
+      "required": ["applied"]
+    },
+    "ConversationDecisionSettingsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read how the caller's decisions behave.",
+      "properties": {}
+    },
+    "DecisionSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How the caller's decisions behave, kept on the gateway for them: whether an ask the agent allowed it on (autoPick allowed, recommended choice easy to undo) is answered with its recommended choice after autoPickAfterSeconds with no answer. Until set: on, after 300 seconds.",
+      "properties": {
+        "autoPick": {
+          "type": "boolean",
+          "description": "Whether the recommended choice is picked when nobody answers in time."
+        },
+        "autoPickAfterSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "description": "How long an ask waits for an answer first, from when it was asked."
+        }
+      },
+      "required": ["autoPick", "autoPickAfterSeconds"]
+    },
+    "ConversationDecisionsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A conversation's decisions, newest first: at most 100, an older one going when a newer one is asked.",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/OwnerDecision" },
+          "description": "Newest first, by when each was asked."
+        }
+      },
+      "required": ["decisions"]
     },
     "ConversationDeleteParams": {
       "type": "object",
@@ -4635,6 +5006,7 @@
         "approval_mode_uncertain",
         "model_change_not_applied",
         "model_change_uncertain",
+        "agent_sign_in_required",
         "approval_request_conflict",
         "turn_running",
         "conversations_not_configured",
@@ -4692,7 +5064,7 @@
         "unavailable_after_save",
         "channel_not_found"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. agent_sign_in_required means the agent could not start because it is not signed in where the conversation runs (the provider answered that it needs authentication): nothing was sent to it, and signing it in there (a saved login, for a VM or SSH host) is what changes the answer; a switchAgent refused so leaves the conversation on its agent. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming an SSH destination config.json does not name, or a conversation created on one it no longer names; nothing ran. environment_unavailable is an SSH environment that could not be reached, is serving another connection, or cannot run this conversation's agent: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once the environment is reachable. environment_version_mismatch is an SSH environment whose copy of this build, where the gateway installs it, says it speaks another lease protocol: nothing was sent to it. environment_platform_unsupported is an SSH environment with no copy of this build that runs on a system or processor this build has no copy for: the gateway installs its own executable, or on another platform the release build of it pinned for that platform, which a development build has none of; nothing was installed or sent. Run the conversation on a host like the gateway's, or from a release. environment_install_failed is an SSH environment with no copy of this build where installing one failed: the release build for its platform could not be downloaded or was not the one pinned, or what arrived did not match what was sent, did not run there, or could not be stored, and nothing was sent; the gateway's environment audit says which, and the same command tries the install again. linked_file_unreachable is a message linking a file by its path on this machine, sent to a conversation that runs on an SSH host: the host cannot read this machine's files and would read whatever it has at that path, so nothing was recorded or sent; send the message without it, or attach an image, whose bytes travel with it. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged."
     },
     "ConversationAnswerOption": {
       "type": "object",
@@ -7467,15 +7839,137 @@
       "required": ["subscriptionId", "reason"],
       "description": "The subscription's one terminal frame. Nothing of it follows."
     },
+    "GrantStreamCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "incarnation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "This receiver's grant log incarnation. A different one replaces the set. The empty log's incarnation is none."
+        },
+        "position": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "Decimal position in this receiver's grant log. Compare positions only within one incarnation."
+        }
+      },
+      "required": ["incarnation", "position"],
+      "description": "Where in this receiver's grant log a frame was read."
+    },
+    "GrantsSubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/GrantStreamCursor",
+          "description": "The cursor of the last complete grant frame this client applied. No record behind it in the same incarnation is sent."
+        }
+      },
+      "required": [],
+      "description": "Follow this receiver's grants. The reply comes after the first read, then grants.changed until grants.subscriptionEnded or grants.unsubscribe. One per connection."
+    },
+    "GrantsPageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "description": "The snapshot the incomplete frame named."
+        },
+        "after": {
+          "$ref": "#/$defs/GrantStreamCursor",
+          "description": "The same after the subscription was opened with. An incomplete frame does not advance it."
+        }
+      },
+      "required": ["subscriptionId", "snapshotId"],
+      "description": "Continue one incomplete grant snapshot. A grant change since that snapshot replaces it."
+    },
+    "GrantsUnsubscribeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" }
+      },
+      "required": ["subscriptionId"],
+      "description": "Stop the grant subscription on this connection. A frame already being written may arrive before the reply; none arrives after it."
+    },
+    "GrantFrameEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "absent": {
+          "type": "boolean",
+          "description": "True when this commit removed the grant. A tombstone. The stored capabilities are absent."
+        },
+        "capabilities": {
+          "type": "string",
+          "enum": ["read", "read+comment", "read+comment+drive"],
+          "description": "The capabilities that commit stored. Absent on a tombstone."
+        },
+        "policyRevision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "maxLength": 20,
+          "description": "The grant epoch that commit stored."
+        }
+      },
+      "required": ["conversationId", "absent"],
+      "description": "One grant commit for this receiver: added, revoked, or its epoch changed."
+    },
+    "GrantsChanged": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subscriptionId": { "$ref": "#/$defs/ConversationSubscriptionId" },
+        "cursor": { "$ref": "#/$defs/GrantStreamCursor" },
+        "complete": {
+          "type": "boolean",
+          "description": "False when this frame is a prefix cut on a grant boundary. It does not advance after."
+        },
+        "replaces": {
+          "type": "boolean",
+          "description": "True when this frame, with the pages of its snapshot, replaces the set. False when it continues the log."
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20,
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "description": "Set on an incomplete frame. grants.page names it, with the same after."
+        },
+        "grants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GrantFrameEntry" },
+          "description": "The commits in this frame, in log order. A complete snapshot's pages together are the set."
+        }
+      },
+      "required": ["subscriptionId", "cursor", "complete", "replaces", "grants"],
+      "description": "This receiver's grant commits since after, or a replacement of the set. Apply a complete frame. Stage an incomplete one."
+    },
     "ConversationSubscriptionErrorCode": {
       "type": "string",
       "enum": [
         "subscription_capacity",
         "subscription_duplicate",
         "unknown_subscription",
-        "cursor_ahead"
+        "cursor_ahead",
+        "incarnation_changed",
+        "grant_log_floor"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. incarnation_changed: after names another grant-log incarnation. grant_log_floor: after is older than the oldest retained grant-log record."
     },
     "ConversationMessageDelivery": {
       "type": "string",
@@ -8452,8 +8946,8 @@
     },
     "WorkspacePaneKind": {
       "type": "string",
-      "enum": ["conversation", "draft", "widget"],
-      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here."
+      "enum": ["conversation", "draft", "widget", "terminal"],
+      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), a widget, or one of the person's terminals (named by nothing: agents never read a terminal). Other kinds, such as an open file, are added here."
     },
     "WorkspacePaneItem": {
       "type": "object",
@@ -8660,18 +9154,22 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "coordinatorConversationId": {
           "type": ["string", "null"],
-          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation; New thread uses another identity."
+          "description": "Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation while coordinatorOn; New thread uses another identity."
+        },
+        "coordinatorOn": {
+          "type": "boolean",
+          "description": "Whether the channel's coordinator is on; false for the default channel. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator)."
         }
       },
       "required": [
@@ -8685,7 +9183,8 @@
         "createdAtMs",
         "coordinatorPlacement",
         "threadPlacement",
-        "coordinatorConversationId"
+        "coordinatorConversationId",
+        "coordinatorOn"
       ]
     },
     "ChannelCreateParams": {
@@ -8754,14 +9253,18 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel coordinator should run, independently of worker threads. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where new worker-thread workspaces run. Boat allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with Boat as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where new worker-thread workspaces run. A cloud allocates one VM per thread. Pool runs each thread on a paired computer, the first in the pool's order that is not busy, with the cloud chosen for new thread VMs as overflow (devices.pool). One named computer runs every new thread there. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+        },
+        "coordinator": {
+          "type": "boolean",
+          "description": "Whether the channel starts with a coordinator; omitted is true. It can be switched later (channel.setCoordinator), so a retry is not told apart by it."
         }
       },
       "required": ["requestId", "name", "agent", "model"]
@@ -8797,17 +9300,50 @@
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where the channel's main agent runs from now on. One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where the channel's main agent runs from now on. One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         },
         "threadPlacement": {
           "type": "string",
           "minLength": 1,
           "maxLength": 253,
           "x-utf8MaxBytes": 253,
-          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). One word: local (this gateway's machine), boat (a cloud VM of each conversation's own), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
+          "description": "Where threads made in the channel from now on run: pool runs each on a paired computer (devices.pool). One word: local (this gateway's machine), a cloud by its name, boat or agent37 (a cloud VM of each conversation's own, made on that cloud), pool (any paired computer, devices.pool, a cloud VM as overflow), or one computer by the name agents.list gives it in environments: an SSH destination the gateway serves, or a paired computer's peer: name."
         }
       },
       "required": ["requestId", "channelId", "coordinatorPlacement", "threadPlacement"]
+    },
+    "ChannelSetCoordinatorParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn a made channel's coordinator on or off (channel.setCoordinator). Off keeps its main conversation and its threads; the channel is no longer opened at it. On again, the same conversation is its coordinator. The default channel has none and is refused forbidden, as is a channel the caller may not change.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 13,
+          "maxLength": 13,
+          "pattern": "^ch_[a-z2-7]{10}$",
+          "description": "The made channel to change."
+        },
+        "on": {
+          "type": "boolean",
+          "description": "Whether its coordinator is on from now."
+        }
+      },
+      "required": ["requestId", "channelId", "on"]
+    },
+    "ChannelSetCoordinatorResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The channel as channel.setCoordinator left it.",
+      "properties": { "channel": { "$ref": "#/$defs/Channel" } },
+      "required": ["channel"]
     },
     "ChannelSetPlacementResult": {
       "type": "object",
@@ -9286,6 +9822,86 @@
       "required": ["state"],
       "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
     },
+    "Agent37SaveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "description": "Agent37 workspace API key (sk_live_...). Never returned or logged."
+        }
+      },
+      "required": ["key"],
+      "description": "Connect a user-owned Agent37 workspace. The gateway makes this install's SSH key, registers it with the workspace, checks the release's pinned runtime template, then encrypts the key, the SSH key and the template in the unlocked vault."
+    },
+    "Agent37ErrorCode": {
+      "description": "Typed Agent37 connection refusals. Not configured: no workspace is saved. Unavailable: the key was refused, the wallet or instance limit does not allow it, or the release's runtime template is not published there. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "agent37_not_configured",
+        "invalid_request",
+        "agent37_storage_unavailable",
+        "agent37_resource_missing",
+        "agent37_unreachable",
+        "agent37_unavailable",
+        "agent37_provisioning_uncertain",
+        "agent37_cleanup_uncertain"
+      ]
+    },
+    "Agent37Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["locked", "disconnected", "connected"],
+          "description": "Locked when the vault cannot be read, disconnected when no workspace is saved, or connected after validation and encrypted persistence."
+        },
+        "template": {
+          "type": "string",
+          "description": "The pinned runtime template release new VMs are made from; present only while connected."
+        }
+      },
+      "required": ["state"],
+      "description": "Secret-free saved Agent37 connection state. Connected means validation succeeded when saved."
+    },
+    "Cloud": {
+      "type": "string",
+      "enum": ["boat", "agent37"],
+      "description": "A cloud that makes thread VMs."
+    },
+    "CloudChooseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "cloud": { "$ref": "#/$defs/Cloud" } },
+      "required": ["cloud"],
+      "description": "Make new thread VMs on this cloud, which must be connected. A thread whose VM exists stays on the cloud it was made on."
+    },
+    "CloudErrorCode": {
+      "description": "Typed refusals of the cloud choice. Not configured: the cloud chosen has no saved connection. Storage unavailable: the choice, or its record, could not be read or kept; nothing changed.",
+      "type": "string",
+      "enum": [
+        "vault_locked",
+        "cloud_not_configured",
+        "invalid_request",
+        "cloud_storage_unavailable"
+      ]
+    },
+    "CloudChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cloud": {
+          "$ref": "#/$defs/Cloud",
+          "description": "The cloud chosen for new thread VMs."
+        }
+      },
+      "required": ["cloud"],
+      "description": "The cloud new thread VMs are made on."
+    },
     "VmLifetimeMode": {
       "type": "string",
       "enum": ["never", "after"],
@@ -9523,7 +10139,7 @@
     "LoginsStatus": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and Boat workspaces always may be; this gateway's own machine never is.",
+      "description": "Result of every logins method: which agents have a saved login, and which paired machines are switched on to be handed them when an agent starts there. SSH hosts and cloud workspaces (Boat, Agent37) always may be; this gateway's own machine never is.",
       "properties": {
         "logins": {
           "type": "array",
@@ -9537,6 +10153,10 @@
           "maxItems": 256,
           "items": { "type": "string", "pattern": "^peer:[0-9a-f]{64}$" },
           "description": "The paired machines whose switch is on, by environment name, in name order."
+        },
+        "chatgpt": {
+          "$ref": "#/$defs/ChatgptLogins",
+          "description": "The ChatGPT accounts Codex can use on other machines in place of its API key, and the sign-in. Absent when this gateway keeps none (ChatGPT sign-in is off this run)."
         }
       },
       "required": ["logins", "devicesOn"]
@@ -9553,7 +10173,7 @@
         "login": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 4096,
+          "maxLength": 16384,
           "pattern": "^[!-~]+$",
           "description": "The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces."
         }
@@ -9586,6 +10206,138 @@
       },
       "required": ["environment", "on"]
     },
+    "ChatgptAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One ChatGPT account kept for Codex. Its tokens are never returned.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The account, as the other ChatGPT methods name it."
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 320,
+          "description": "The email the account signed in with, as OpenAI's ID token gave it; empty when it gave none."
+        },
+        "inUse": {
+          "type": "boolean",
+          "description": "Whether Codex on other machines is handed this account's token. At most one account is."
+        },
+        "needsSignIn": {
+          "type": "boolean",
+          "description": "Whether OpenAI refused to refresh it, so it must be signed in again before it is used."
+        }
+      },
+      "required": ["id", "email", "inUse", "needsSignIn"]
+    },
+    "ChatgptSignInEnd": {
+      "type": "string",
+      "enum": [
+        "signed_in",
+        "declined",
+        "incomplete",
+        "wrong_account",
+        "exchange_failed",
+        "invalid_identity",
+        "plan_not_enabled",
+        "too_many_accounts",
+        "not_saved",
+        "timed_out",
+        "cancelled",
+        "replaced",
+        "listen_failed"
+      ],
+      "description": "How a ChatGPT sign-in ended. signed_in: the account is kept. declined: it was declined in the browser. incomplete: the browser came back without what a sign-in gives. wrong_account: signing an account in again came back as another account. exchange_failed: OpenAI did not give tokens for the sign-in. invalid_identity: OpenAI's ID token did not verify. plan_not_enabled: the account's plan did not grant use of ChatGPT tokens. too_many_accounts: as many accounts as are kept already are. not_saved: the tokens could not be kept in the vault. timed_out: the browser did not come back in time. cancelled: it was cancelled. replaced: another sign-in started in its place. listen_failed: this computer could not listen for the browser's return."
+    },
+    "ChatgptSignIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the ChatGPT sign-in stands: waiting for the browser to come back from authorizeUrl, or idle with how the last one this run ended.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["idle", "waiting"],
+          "description": "Whether a sign-in waits for the browser."
+        },
+        "attempt": {
+          "type": "string",
+          "format": "uuid",
+          "description": "While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it."
+        },
+        "authorizeUrl": {
+          "type": "string",
+          "maxLength": 8192,
+          "description": "While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to."
+        },
+        "accountId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "While waiting: the account signing in again; absent for a new account."
+        },
+        "last": {
+          "$ref": "#/$defs/ChatgptSignInEnd",
+          "description": "While idle: how the last sign-in this run ended, if one did."
+        }
+      },
+      "required": ["state"]
+    },
+    "ChatgptLogins": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The ChatGPT accounts kept for Codex, and the sign-in.",
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/ChatgptAccount" },
+          "description": "The accounts, in the order they were first signed in."
+        },
+        "signIn": { "$ref": "#/$defs/ChatgptSignIn", "description": "The sign-in." },
+        "started": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile."
+        }
+      },
+      "required": ["accounts", "signIn"]
+    },
+    "LoginsChatgptSignInParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced.",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The account to sign in again; absent for a new account."
+        }
+      },
+      "required": []
+    },
+    "LoginsChatgptUseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Choose the ChatGPT account Codex on other machines uses (logins.chatgptUse), or none, so its API key is used again. Applies to agents opened after it.",
+      "properties": {
+        "accountId": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "The account, or null for none."
+        }
+      },
+      "required": ["accountId"]
+    },
+    "LoginsChatgptRemoveParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Forget a ChatGPT account (logins.chatgptRemove), revoking its refresh token at OpenAI when it can. Agents already open keep the token they opened with until it is renewed.",
+      "properties": {
+        "accountId": { "type": "string", "format": "uuid", "description": "The account." }
+      },
+      "required": ["accountId"]
+    },
     "LoginsErrorCode": {
       "type": "string",
       "enum": [
@@ -9594,9 +10346,11 @@
         "logins_audit_unavailable",
         "logins_change_unrecorded",
         "logins_too_many_devices",
+        "logins_unknown_account",
+        "logins_chatgpt_not_configured",
         "vault_locked"
       ],
-      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. vault_locked: unlock Nessa first."
+      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. logins_unknown_account: no ChatGPT account has that id. logins_chatgpt_not_configured: ChatGPT sign-in is off this run. vault_locked: unlock Nessa first."
     },
     "VoiceStatus": {
       "type": "object",
@@ -9704,6 +10458,519 @@
         "vault_locked"
       ],
       "description": "Why the gateway refused a voice method. voice_not_configured: this gateway has no voice provider. voice_key_missing: no key is saved. voice_key_rejected: the provider refused the saved key. voice_unreachable: the provider could not be reached or answered something unreadable. voice_storage_unavailable: the vault could not save or delete the key; what was saved still is. voice_audit_unavailable: the change could not be recorded, so nothing changed and no call started. vault_locked: unlock Nessa first."
+    },
+    "ReplyStyleRole": {
+      "type": "string",
+      "enum": ["coordinator", "thread"],
+      "description": "Which agents a style is for: a channel's coordinator, or every other conversation (a thread)."
+    },
+    "ReplyStyleMode": {
+      "type": "string",
+      "enum": ["plain", "off", "custom"],
+      "description": "plain: Nessa's own plain style for the role. off: no style instructions; the agent talks as its harness does. custom: the person's own text."
+    },
+    "ReplyStyleChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "#/$defs/ReplyStyleMode", "description": "Which style." },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The person's own style, as the agent is told it. Present only in custom mode."
+        }
+      },
+      "description": "One reply style."
+    },
+    "ReplyStyleRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "coordinator": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "The coordinator's own choice; omitted inherits."
+        },
+        "thread": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "Threads' own choice; omitted inherits."
+        }
+      },
+      "description": "One level's own choices, one per role. A role left out follows the level above."
+    },
+    "ReplyStyleReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted reads the Nessa level. The synthetic default channel follows the Nessa level."
+        }
+      },
+      "description": "Read how agents talk: the caller's Nessa-level choices and, for a channel, its own."
+    },
+    "ReplyStyleSelection": {
+      "type": "string",
+      "enum": ["default", "plain", "off", "custom"],
+      "description": "default: remove this level's choice, so it follows the level above (Nessa's plain style above the Nessa level). plain, off, custom: keep that choice."
+    },
+    "ReplyStyleSetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "mode"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stored channel identity; omitted saves the Nessa level."
+        },
+        "role": {
+          "$ref": "#/$defs/ReplyStyleRole",
+          "description": "Whose style changes."
+        },
+        "mode": {
+          "$ref": "#/$defs/ReplyStyleSelection",
+          "description": "The choice; custom requires text."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The person's own style. Leading and trailing space is removed and nothing may be left. Present only in custom mode."
+        }
+      },
+      "description": "Save how one role's agents talk, at the Nessa level or for one channel. Reaches conversations created after it: a conversation keeps the style it started with, because changing its prompt would start a fresh session that has forgotten it. Recorded in the settings audit."
+    },
+    "ReplyStyles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nessa", "effective"],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The stored channel read or saved; omitted for the Nessa level."
+        },
+        "nessa": {
+          "$ref": "#/$defs/ReplyStyleRoles",
+          "description": "The caller's Nessa-level choices."
+        },
+        "channel": {
+          "$ref": "#/$defs/ReplyStyleRoles",
+          "description": "The channel's own choices; omitted for the Nessa level."
+        },
+        "effective": {
+          "$ref": "#/$defs/ReplyStyleEffective",
+          "description": "The style each role's new conversations start with here."
+        }
+      },
+      "description": "How agents talk, as one read: each level's own choices and what each role gets."
+    },
+    "ReplyStyleEffective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinator", "thread"],
+      "properties": {
+        "coordinator": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "What a new coordinator here is told."
+        },
+        "thread": {
+          "$ref": "#/$defs/ReplyStyleChoice",
+          "description": "What a new thread here is told."
+        }
+      },
+      "description": "The style each role's new conversations start with."
+    },
+    "TerminalId": {
+      "type": "string",
+      "minLength": 34,
+      "maxLength": 34,
+      "pattern": "^t_[0-9a-f]{32}$",
+      "description": "The gateway's id for one terminal."
+    },
+    "TerminalViewId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "The window's id for one view of a terminal (a pane, or a Run block's output). Unique within this connection."
+    },
+    "TerminalOpenParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Start a terminal for the person (terminal.open). channelId: a shell in that channel's folder and place (⌘J); conversationId with command: runs the command where that conversation's agent works (Run). Neither: a shell in the default channel. The gateway resolves the folder; a request never names one.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier; a retry answers the terminal the first call started."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The channel the shell starts in; omitted is the default channel."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation whose agent's folder a Run starts in."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "x-utf8MaxBytes": 8192,
+          "description": "What Run runs, given to the person's login shell with -c."
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "description": "Columns that fill the view."
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Rows that fill the view."
+        }
+      },
+      "required": ["requestId", "cols", "rows"]
+    },
+    "TerminalSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One of the person's terminals.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/TerminalId",
+          "description": "The terminal's id."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The shell's name, or the first line of what Run runs."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["shell", "run"],
+          "description": "shell: opened with ⌘J. run: started by Run in a reply."
+        },
+        "channelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The channel it belongs to; omitted is the default channel."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The conversation whose Run started it."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The terminal.open request that started it, so the window can match a Run block to its terminal."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Where it started, on the machine it runs on."
+        },
+        "shell": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "The shell program."
+        },
+        "runsOn": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The machine: here is the gateway's own, boat or agent37 for a cloud VM, or an SSH host name."
+        },
+        "startedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it started, in milliseconds since the Unix epoch."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["running", "exited"],
+          "description": "running until the program ends, then exited."
+        },
+        "exitStatus": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "description": "The exit code once exited; omitted when it was ended by a signal or is running."
+        },
+        "endedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When it ended, in milliseconds since the Unix epoch; only once exited."
+        },
+        "programStatus": {
+          "$ref": "#/$defs/TerminalProgramStatus",
+          "description": "Most urgent active OSC 7501 program status record (or detected agent app) for this terminal."
+        }
+      },
+      "required": [
+        "terminalId",
+        "title",
+        "kind",
+        "requestId",
+        "folder",
+        "shell",
+        "runsOn",
+        "startedAtMs",
+        "state"
+      ]
+    },
+    "TerminalProgramStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Active program status for a terminal, from OSC 7501 (Program Status Protocol, rev 0.4).",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["idle", "working", "done", "blocked", "error"],
+          "description": "The program's reported state."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["permission", "question", "auth"],
+          "description": "With blocked: what the program waits on the person for."
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Progress percentage (0 to 100) when working or blocked."
+        },
+        "app": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Stable machine-readable program name (for example claude-code or codex)."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192,
+          "x-utf8MaxBytes": 192,
+          "description": "Short human-readable label for the active status record."
+        },
+        "msg": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "x-utf8MaxBytes": 2048,
+          "description": "Single-line human-readable status message."
+        },
+        "updatedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When this program status last changed, in milliseconds since the Unix epoch."
+        }
+      },
+      "required": ["state", "updatedAtMs"]
+    },
+    "TerminalOpenResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The terminal terminal.open started, or the one this requestId already started.",
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/TerminalSummary",
+          "description": "The terminal that opened, or the one the same requestId opened before."
+        }
+      },
+      "required": ["terminal"]
+    },
+    "TerminalListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The person's terminals on this gateway, oldest first. After this answer the connection is sent terminal.listed whenever the list changes.",
+      "properties": {
+        "terminals": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalSummary" },
+          "description": "The person's terminals, oldest first."
+        }
+      },
+      "required": ["terminals"]
+    },
+    "TerminalListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The person's terminals, whole, after a change (terminal.listed). Sent to a connection that has called terminal.list.",
+      "properties": {
+        "terminals": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalSummary" },
+          "description": "The whole list after the change, oldest first."
+        }
+      },
+      "required": ["terminals"]
+    },
+    "TerminalViewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Show a terminal in a view (terminal.attach), or make the view the size owner (terminal.focus), or report its new fit (terminal.fit). Attach sends a checkpoint of the screen then live terminal.output. Focus resizes the terminal to the view's fit when it differs; fit resizes it only when this view owns the size.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000,
+          "description": "Columns that fill the view."
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Rows that fill the view."
+        }
+      },
+      "required": ["terminalId", "viewId", "cols", "rows"]
+    },
+    "TerminalDetachParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stop showing a terminal in a view (terminal.detach). The terminal keeps running; if this view owned the size, the size is kept.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        }
+      },
+      "required": ["terminalId", "viewId"]
+    },
+    "TerminalInputParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bytes the person typed or pasted, for the terminal's program (terminal.input).",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 43692,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "description": "The bytes, base64."
+        }
+      },
+      "required": ["terminalId", "data"]
+    },
+    "TerminalHistoryParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read retained rows for one view (terminal.history); the rows arrive as a history terminal.output for that view. Reading moves no other view.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The first history row to read, counted from the oldest kept."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "How many rows to read."
+        }
+      },
+      "required": ["terminalId", "viewId", "start", "count"]
+    },
+    "TerminalCloseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "End a terminal and remove it from the list (terminal.close): its program is hung up, then killed after 5 s.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." }
+      },
+      "required": ["terminalId"]
+    },
+    "TerminalRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Give a terminal the person's own name (terminal.rename); every window's list shows it. Kept while the terminal runs.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "The new name: 1 to 80 characters, no control characters, not only spaces."
+        }
+      },
+      "required": ["terminalId", "title"]
+    },
+    "TerminalOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator.",
+      "properties": {
+        "terminalId": { "$ref": "#/$defs/TerminalId", "description": "The terminal." },
+        "viewId": {
+          "$ref": "#/$defs/TerminalViewId",
+          "description": "The view, chosen by the window, unique per connection."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 60000,
+          "x-utf8MaxBytes": 60000,
+          "description": "The protocol message as JSON text."
+        }
+      },
+      "required": ["terminalId", "viewId", "message"]
     }
   }
 }

@@ -168,6 +168,36 @@ pub trait HarnessLauncher: Send + Sync {
         login: Option<&Login>,
         publish_point: Option<&str>,
     ) -> Result<HarnessProcess, AgentError>;
+
+    /// [`Self::launch`] for a harness under `lease`, which a login that
+    /// is renewed later is kept for ([`Self::renew_login`]).
+    ///
+    /// # Errors
+    /// As [`Self::launch`].
+    fn launch_for_lease(
+        &self,
+        lease: &str,
+        agent: &str,
+        environment: &BTreeMap<String, String>,
+        login: Option<&Login>,
+        publish_point: Option<&str>,
+    ) -> Result<HarnessProcess, AgentError> {
+        let _ = lease;
+        self.launch(agent, environment, login, publish_point)
+    }
+
+    /// Hand `lease`'s running harnesses of `agent` a renewed `login`;
+    /// whether they will read it. A host that cannot renew one answers
+    /// `false`, and its harnesses keep the login they started with.
+    fn renew_login(&self, lease: &str, agent: &str, login: &Login) -> bool {
+        let _ = (lease, agent, login);
+        false
+    }
+
+    /// `lease` has ended: forget what was kept for it.
+    fn lease_ended(&self, lease: &str) {
+        let _ = lease;
+    }
 }
 
 /// How the host runs a command lease's command: in its workspace, as the
@@ -893,6 +923,7 @@ impl Served {
                 environment,
                 login,
             } => self.start(lease, channel, &environment, login),
+            ToEnvironment::Renew { lease, login } => self.renew(&lease, &login),
             ToEnvironment::Input {
                 lease,
                 channel,
@@ -1471,7 +1502,8 @@ impl Served {
                 (held.agent.clone(), point)
             })
             .unwrap_or_default();
-        let process = match self.launcher.launch(
+        let process = match self.launcher.launch_for_lease(
+            &lease,
             &agent,
             environment,
             login.as_ref(),
@@ -1512,6 +1544,28 @@ impl Served {
                     control,
                     output,
                 },
+            );
+        }
+    }
+
+    /// A renewed login for a lease's harnesses: only under a lease granted
+    /// `takes_login`, and handed to the launcher, which uses it only where
+    /// a harness started with one it can replace. Nothing answers it.
+    fn renew(&mut self, lease: &str, login: &Login) {
+        let Some(held) = self.leases.get(lease) else {
+            return self.dropped(Some(lease), None, "renew");
+        };
+        if !held.takes_login {
+            tracing::warn!(
+                lease,
+                "a renewed login for a lease whose grant takes none; ignored"
+            );
+            return;
+        }
+        if !self.launcher.renew_login(lease, &held.agent, login) {
+            tracing::warn!(
+                lease,
+                "a renewed login was not kept for the lease's harnesses"
             );
         }
     }
@@ -1706,6 +1760,9 @@ impl Served {
     /// `Account`. Unless what made it end was `recorded`, its cleanup is
     /// uncertain.
     fn end(&mut self, lease: String, mut held: Held, cause: EndCause, recorded: bool) {
+        // Its harnesses are being stopped: no login kept for them is read
+        // again.
+        self.launcher.lease_ended(&lease);
         // Nothing more is published under it, and nothing it staged is read
         // again: the gateway ended or revoked it, is gone, or it expired.
         // Only the gateway's own end says what it made of a file still in

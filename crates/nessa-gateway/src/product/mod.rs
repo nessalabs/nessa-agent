@@ -61,8 +61,10 @@ pub use socket::{RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 pub use state::ConnectedEnvironments;
 pub use state::{InvalidSessionSettings, ProductDependencies, ProductRouteState, SessionSettings};
 
+mod agent37;
 mod boat;
 mod channel;
+mod cloud;
 mod conversation;
 mod device_setup;
 mod github;
@@ -73,6 +75,8 @@ mod native;
 mod pairing;
 mod peers;
 mod pool;
+mod reply_style;
+mod terminal;
 mod voice;
 
 pub use github::GithubRoutes;

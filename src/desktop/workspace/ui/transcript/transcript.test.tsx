@@ -7,7 +7,8 @@ import { WorkspaceSendFailure } from "../send-failure"
 import { act, StrictMode, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { preloadReplyMarkdown } from "@nessa-ui/react/reply-markdown"
 import {
   answerQuestion,
   loadWorkspace,
@@ -102,6 +103,10 @@ const conversation: TranscriptValue = {
 
 /** The host's clipboard, as every test's window supplies it. */
 const clipboardWrite = vi.fn((_text: string) => Promise.resolve())
+
+// Replies parse with a module loaded on first draw; on a loaded machine the
+// first test's assertions can run before it lands, so it loads up front.
+beforeAll(() => preloadReplyMarkdown())
 
 async function shown(
   source = fakeSource(),
@@ -285,12 +290,12 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-code")?.textContent).toBe("cargo update")
     expect(host.querySelectorAll(".workspace-list-items li")).toHaveLength(2)
     const failed = host.querySelector("[data-send-failure]")
-    expect(failed?.querySelector("span")?.textContent).toBe("Error sending")
+    expect(failed?.querySelector("span > span")?.textContent).toBe("Error sending")
     expect(
       [...(failed?.querySelectorAll("button") ?? [])]
         .filter((b) => b.textContent)
         .map((b) => b.textContent),
-    ).toEqual(["Send Again", "Discard"])
+    ).toEqual(["Discard", "Send Again"])
   })
 
   it("shows a failed turn's status and diagnostic apart from a message that was not sent", async () => {

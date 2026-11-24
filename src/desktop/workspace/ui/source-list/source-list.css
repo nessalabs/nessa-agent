@@ -527,3 +527,15 @@
 .workspace-sidebar .workspace-shimmer {
   --shimmer-rest: var(--desktop-muted);
 }
+
+.workspace-section-status {
+  margin-left: 6px;
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+  color: var(--desktop-faint);
+}
+
+.workspace-section-status[data-status="auth-refused"],
+.workspace-section-status[data-status="refused"] {
+  color: var(--desktop-danger, var(--desktop-muted));
+}

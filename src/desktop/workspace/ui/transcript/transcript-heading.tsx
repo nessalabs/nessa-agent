@@ -23,12 +23,20 @@ export function placeNote(
   lease: TranscriptLease | undefined,
   placement: Placement | undefined,
 ): string | undefined {
-  if (lease && lease.state !== "unreadable" && lease.environment !== undefined)
+  if (lease && lease.state !== "unreadable" && lease.environment !== undefined) {
+    // A cloud VM's lease does not say which cloud; its channel's place does.
+    if (
+      lease.environment === "boat" &&
+      placement !== undefined &&
+      channelPlaceKind(placement) === "cloud"
+    )
+      return `${channelPlaceWords(placement)} workspace`
     return conversationLeasePlace(lease)
+  }
   if (placement === undefined) return undefined
   switch (channelPlaceKind(placement)) {
-    case "boat":
-      return conversationLeasePlace({ environment: "boat" })
+    case "cloud":
+      return `${channelPlaceWords(placement)} workspace`
     case "local":
       return conversationLeasePlace({ environment: "here" })
     default:

@@ -1,3 +1,4 @@
+import type { TerminalEntry } from "../../model/terminal"
 import type { ModelChoice } from "../../model/model-choice"
 import type { FailureDiagnostic } from "../../model/failure"
 /**
@@ -79,6 +80,25 @@ const workspaceSlice = createSlice({
       panes.focusPane(state, payload.pane),
     openSession: (state, { payload }: Payload<{ sessionId: string; pane?: PaneKey }>) =>
       panes.openSession(state, payload),
+    openTerminal: (state, { payload }: Payload<{ terminalId: string; pane?: PaneKey }>) =>
+      panes.openTerminal(state, payload),
+    terminalsListed: (
+      state,
+      { payload }: Payload<{ terminals: Readonly<Record<string, TerminalEntry>> }>,
+    ) => panes.terminalsListed(state, payload.terminals),
+    gatewaysUpdated: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        gateways: readonly import("../../model/gateway-id").GatewaySnapshot[]
+      }>,
+    ) => ({
+      ...state,
+      gateways: Object.fromEntries(
+        payload.gateways.map((gateway) => [gateway.gatewayId, gateway]),
+      ),
+    }),
     openedBeside: (
       state,
       {
@@ -91,6 +111,18 @@ const workspaceSlice = createSlice({
         replace?: boolean
       }>,
     ) => panes.openBeside(state, payload),
+    openedTerminalBeside: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        terminalId: string
+        target?: PaneKey
+        side?: Side
+        room: PaneRoom | undefined
+        replace?: boolean
+      }>,
+    ) => panes.openTerminalBeside(state, payload),
     sessionDropped: (
       state,
       {
@@ -179,6 +211,8 @@ const workspaceSlice = createSlice({
       navigation.revealSession(state, payload),
     toggleSection: (state, { payload }: Payload<{ sectionId: string }>) =>
       navigation.toggleSection(state, payload),
+    toggleChatContextSection: (state, { payload }: Payload<{ sectionId: string }>) =>
+      navigation.toggleChatContextSection(state, payload),
     toggleChannel: (state, { payload }: Payload<{ channelId: string; open?: boolean }>) =>
       navigation.toggleChannel(state, payload),
     toggleShowAll: (state, { payload }: Payload<{ channelId: string }>) =>
@@ -276,6 +310,7 @@ const workspaceSlice = createSlice({
     ) => {
       if (!Object.hasOwn(state.sessions, payload.sessionId)) return
       state.modelChoices[payload.sessionId] = payload.choice
+      delete state.steppedAccess[payload.sessionId]
     },
     modelChoiceSettled: (
       state,
@@ -305,6 +340,14 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; model: ModelRef }>,
     ) => sessions.stagedModelSettled(state, payload),
+    /** A model change stepped the session's access down to Ask from `from`. */
+    accessStepped: (
+      state,
+      { payload }: Payload<{ sessionId: string; from: AccessMode }>,
+    ) => {
+      if (Object.hasOwn(state.sessions, payload.sessionId))
+        state.steppedAccess[payload.sessionId] = payload.from
+    },
     accessChosen: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
@@ -313,14 +356,14 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
     ) => access.accessCaptured(state, payload),
-    accessPending: (
-      state,
-      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
-    ) => access.accessPending(state, payload),
     accessChanging: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
     ) => access.accessChanging(state, payload),
+    accessQueued: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessQueued(state, payload),
     accessTaken: (state, { payload }: Payload<{ sessionId: string; mode: AccessMode }>) =>
       access.accessTaken(state, payload),
     accessRefused: (
@@ -423,7 +466,7 @@ const workspaceSlice = createSlice({
     // Making a channel
     channelCreationOpened: (
       state,
-      { payload }: Payload<{ opening: string; model: ModelRef }>,
+      { payload }: Payload<{ opening: string; model: ModelRef; gatewayId?: string }>,
     ) => channelCreation.channelCreationOpened(state, payload),
     channelCreationClosed: (state, { payload }: Payload<{ opening: string }>) =>
       channelCreation.channelCreationClosed(state, payload),
@@ -482,20 +525,24 @@ const workspaceSlice = createSlice({
     ) => channelCreation.channelMade(state, payload),
     // A channel's settings changed: the index keeps its section and the rest
     // of what the window knows of it, and takes where its agents run now.
+    // A changed channel as its source answered it: where it runs, and its
+    // coordinator, on (with its main chat) or off (with none).
     channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
       ...state,
-      channels: state.channels.map((each) =>
-        each.id === payload.channel.id
-          ? {
-              ...each,
-              coordinatorPlacement: payload.channel.coordinatorPlacement,
-              threadPlacement: payload.channel.threadPlacement,
-              ...(payload.channel.coordinatorConversationId
-                ? { coordinatorConversationId: payload.channel.coordinatorConversationId }
-                : {}),
-            }
-          : each,
-      ),
+      channels: state.channels.map((each) => {
+        if (each.id !== payload.channel.id) return each
+        const { coordinatorConversationId: _held, ...rest } = each
+        const main = payload.channel.coordinatorConversationId ?? _held
+        return {
+          ...rest,
+          coordinatorPlacement: payload.channel.coordinatorPlacement,
+          threadPlacement: payload.channel.threadPlacement,
+          ...(payload.channel.coordinatorOn === undefined
+            ? {}
+            : { coordinatorOn: payload.channel.coordinatorOn }),
+          ...(main ? { coordinatorConversationId: main } : {}),
+        }
+      }),
     }),
   },
 })
@@ -541,7 +588,9 @@ const goesSomewhere: ReadonlySet<string> = new Set(
   [
     workspaceActions.focusPane,
     workspaceActions.openSession,
+    workspaceActions.openTerminal,
     workspaceActions.openedBeside,
+    workspaceActions.openedTerminalBeside,
     workspaceActions.sessionDropped,
     workspaceActions.draftCreated,
     workspaceActions.widgetOpened,

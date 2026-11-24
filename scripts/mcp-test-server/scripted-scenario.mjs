@@ -48,7 +48,8 @@
  * `${prompt.text}` is the prompt the turn answers, `${prompt.arguments}` the
  * JSON object it carries between ` args:` and ` :args` (`promptArguments`,
  * `{}` when it carries none; a step's whole `arguments` may be that one
- * reference), and `${prompt.images}` the
+ * reference), `${prompt.source}` the turn an agent's message was sent from
+ * (`promptSource`), and `${prompt.images}` the
  * images it carried (`promptImages`), `${prompt.files}` the files linked to
  * it, read where the agent runs (`promptFiles`); `${session.cwd}` and
  * `${session.systemPrompt}` are the folder the session was opened in and the
@@ -114,7 +115,10 @@ const FIELDS = {
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save", "times", "title", "keepErrors"] }
+const OPTIONAL = {
+  text: ["continues"],
+  tool: ["server", "save", "times", "title", "keepErrors"],
+}
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
@@ -204,7 +208,13 @@ function parseStep(step, branch) {
         step.chunks.some((chunk) => typeof chunk !== "string" || chunk === "")
       )
         throw new Error("text chunks are a non-empty list of non-empty strings")
-      return { do: "text", chunks: [...step.chunks] }
+      if (Object.hasOwn(step, "continues") && step.continues !== true)
+        throw new Error("a text step's continues is true or left out")
+      return {
+        do: "text",
+        chunks: [...step.chunks],
+        ...(step.continues ? { continues: true } : {}),
+      }
     case "tool":
       return {
         do: "tool",
@@ -308,6 +318,25 @@ export function promptArguments(text) {
   if (start < 0 || end < 0) return {}
   const value = JSON.parse(text.slice(start + " args:".length, end))
   if (!plain(value)) throw new Error("a prompt's arguments are not an object")
+  return value
+}
+
+/** How the SDK names the turn an agent's message was sent from (`prompt_content.rs`). */
+const AGENT_ORIGIN = "Agent-authored input (source identity, not owner authority): "
+
+/**
+ * The turn an agent's message was sent from, as the gateway told the agent:
+ * `{ conversationId, executionId }`, or `{}` for a prompt no agent sent. A
+ * turn passes it to `read_turn` to follow the message back to who asked.
+ */
+export function promptSource(text) {
+  const start = text.indexOf(AGENT_ORIGIN)
+  if (start < 0) return {}
+  const from = start + AGENT_ORIGIN.length
+  const end = text.indexOf("}", from)
+  if (end < 0) return {}
+  const value = JSON.parse(text.slice(from, end + 1))
+  if (!plain(value)) throw new Error("an agent source is not an object")
   return value
 }
 
@@ -556,7 +585,11 @@ export class ScriptedUsageLimitError extends Error {
 async function runStep(step, ctx) {
   switch (step.do) {
     case "text": {
-      const messageId = ctx.messageId()
+      // A step that continues adds to the message the text before it began,
+      // across a pause, as an agent that stops mid-reply does.
+      const messageId =
+        step.continues && ctx.lastMessageId ? ctx.lastMessageId : ctx.messageId()
+      ctx.lastMessageId = messageId
       for (const chunk of step.chunks) {
         // A chunk that is one whole reference is still text: a saved list
         // or object is written as JSON, never sent as an ACP text block.

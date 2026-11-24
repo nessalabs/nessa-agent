@@ -22,6 +22,12 @@ export const STRESS = {
   listPermission: "stress compact version review",
   listPreview: "stress list preview",
   reviews: "stress reviews",
+  /**
+   * A turn of {@link RAISE_REVIEWS} reviews in a row, raised to Full while
+   * the first one waits: that one is allowed by the raise, and none after it
+   * is asked.
+   */
+  raise: "stress raise access",
   large: "stress large review",
   wait: "stress wait",
   pause: "stress pause",
@@ -35,6 +41,8 @@ export const STRESS = {
   ownedSeed: "stress owned seed",
   await: "stress await",
   close: "stress close",
+  provenance: "stress provenance",
+  originChild: "stress origin child",
   watch: "stress watch",
   long: "stress long",
   oversized: "stress oversized",
@@ -52,6 +60,8 @@ export const STRESS = {
   closePane: "stress close-pane",
   panelTabs: "stress panel tabs",
   table: "stress table",
+  /** A reply with shell fences the person runs (`run` step). */
+  runBlock: "stress run block",
   paste: "stress paste",
   attach: "stress attach",
   trace: "stress trace",
@@ -61,6 +71,41 @@ export const STRESS = {
   channel: "stress channel",
   restore: "stress restore",
   huddle: "stress huddle",
+  /** The agent asks its owner one decision (`ask_owner`, {@link ASK}). */
+  ask: "stress ask owner",
+  /** The person's answer to {@link ASK}: each choice's label holds it. */
+  answer: "stress answer",
+  /** The agent asks to raise the chat's access (`request_access`, {@link ACCESS}). */
+  requestAccess: "stress request access",
+  /**
+   * The person's answer to {@link ACCESS}: the card's Approve, Nessa's own
+   * label, sent once the access is raised.
+   */
+  approved: "Approve",
+}
+
+/** What the `requestAccess` turn asks for, and why. */
+export const ACCESS = {
+  access: "auto",
+  reason: "The stress toolchain installs outside the project.",
+}
+
+/**
+ * The decision the `ask` turn asks its owner. Its labels hold
+ * `STRESS.answer`, so a tapped choice, sent as the person's message, is
+ * answered by its own turn.
+ */
+export const ASK = {
+  question: "Ship the stress fix today?",
+  choices: [
+    { label: `${STRESS.answer} ship`, consequence: "The fix goes out this afternoon." },
+    {
+      label: `${STRESS.answer} wait`,
+      consequence: "It waits for Monday's full test run.",
+    },
+  ],
+  recommended: 0,
+  reason: "Every check passed on the branch.",
 }
 
 /**
@@ -87,6 +132,7 @@ export const SAYS = {
   allowed: "Allowed.",
   denied: "Denied.",
   reviewed: "All reviews answered.",
+  raised: "Finished at the raised access.",
   waiting: "Working until stopped.",
   pausing: "Pausing.",
   resumed: "Finished after the pause.",
@@ -95,6 +141,9 @@ export const SAYS = {
   delegated: "Delegated to ",
   awaited: "Awaited ",
   closed: "Closing this thread: ",
+  provenance: "Provenance: ",
+  origin: "Asked by ",
+  earlier: " | before that: ",
   report: "Report received.",
   owned: "Owned execution: ",
   backgroundStarted: "Background task started.",
@@ -109,6 +158,7 @@ export const SAYS = {
   control: "Controlled: ",
   panelTabs: "Panel tabs: ",
   table: "Tables: ",
+  runBlock: "Runnable: ",
   paste: "Images: ",
   attach: "Attached: ",
   trace: "Traced: ",
@@ -118,6 +168,12 @@ export const SAYS = {
   carried: "Carried on by ",
   channel: "Working in: ",
   restored: "Restored history: ",
+  asked: "Asked the owner: ",
+  answered: "Answered: ",
+  requested: "Requested access: ",
+  approvedAccess: "The person answered the access request: ",
+  /** Then the session's own permission mode the turn ran at. */
+  ranAt: ", ran at ",
   channelPrompt: "System prompt: ",
   huddle: "Talk board: ",
 }
@@ -142,20 +198,64 @@ export const TABLE_LINES = [
 ]
 
 /**
+ * The fences a `run` turn answers with: one that prints and ends, its word
+ * made by the shell's own arithmetic so only a run (not the source) shows
+ * it, and a console fence whose `$ ` line waits to be stopped.
+ */
+export const RUN_FENCES = [
+  "```bash",
+  "echo stress-run-$((6 * 7))",
+  "```",
+  "",
+  "```console",
+  "$ sleep 30",
+  "(it waits)",
+  "```",
+]
+
+/** What the `run` turn's first fence prints when run. */
+export const RUN_PRINTS = "stress-run-42"
+
+/** The `run` turn's first fence's command, shown after the prompt when run. */
+export const RUN_COMMAND = "echo stress-run-$((6 * 7))"
+
+/** How long a `table` turn holds between its tables and the rest of its answer. */
+export const TABLE_HOLD_MS = 3000
+
+/**
  * The code and the diagram a `table` turn streams after its tables, so the
  * window draws a highlighted code block and a Mermaid diagram in the same
  * answer: the window is dark only, and they must be too whatever the OS
- * appearance is (UI audit #29).
+ * appearance is (UI audit #29). The second block's line is wider than a
+ * reply, so it scrolls sideways inside the highlighter's shadow root, and a
+ * swipe over it scrolls it.
  */
 export const CODE_LINES = [
   "```ts",
   "const seatsLeft = 42",
   "```",
   "",
+  "```text",
+  "/home/node/.claude/projects/-home-node--nessa-workspaces-ab660baf/ebaaed71-0b9e-4c3e-9d25-2c8f3a3b1e77.jsonl  185 lines  292 KB  07:42:29Z to 23:16:48Z",
+  "```",
+  "",
   "```mermaid",
   "flowchart LR",
   "  A[Seats] --> B[Sold]",
   "```",
+]
+
+/**
+ * The maths a `table` turn streams last, inline and as a display block:
+ * Words reads the TeX as the reply streams, and the window draws it with
+ * KaTeX, so no dollar sign is left showing.
+ */
+export const MATH_LINES = [
+  "Euler: $e^{i\\pi} + 1 = 0$, and $x^2$ stays in the line.",
+  "",
+  "$$",
+  "\\int_0^1 x \\, dx = \\frac{1}{2}",
+  "$$",
 ]
 
 /**
@@ -224,6 +324,9 @@ export const GITHUB_FINGERPRINTS = `node -e '${[
   'try{g=/^password=(.*)$/m.exec(x("git",["credential","fill"],{input:"protocol=https\\nhost=github.com\\n\\n",env:{...process.env,GIT_TERMINAL_PROMPT:"0",GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},stdio:["pipe","pipe","ignore"],timeout:10000}).toString())?.[1]}catch{}',
   'process.stdout.write("token="+p(process.env.GH_TOKEN)+" git="+p(g))',
 ].join(";")}'`
+
+/** How many reviews the `raise` turn asks in a row. */
+export const RAISE_REVIEWS = 3
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -435,6 +538,21 @@ export function stressScenario({
         ],
       },
       {
+        when: STRESS.runBlock,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.runBlock,
+              "${prompt.text}",
+              "\n\n",
+              ...RUN_FENCES.map((line) => `${line}\n`),
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
         when: STRESS.table,
         steps: [
           {
@@ -444,8 +562,19 @@ export function stressScenario({
               "${prompt.text}",
               "\n\n",
               ...TABLE_LINES.map((line) => `${line}\n`),
+            ],
+          },
+          // The tables are finished while the rest is still to come, for the
+          // window to be watched leaving them alone.
+          { do: "pause", ms: TABLE_HOLD_MS },
+          {
+            do: "text",
+            continues: true,
+            chunks: [
               "\n",
               ...CODE_LINES.map((line) => `${line}\n`),
+              "\n",
+              ...MATH_LINES.map((line) => `${line}\n`),
             ],
           },
           { do: "end" },
@@ -563,6 +692,20 @@ export function stressScenario({
       {
         when: STRESS.reviews,
         steps: [...many, { do: "text", chunks: [SAYS.reviewed] }, { do: "end" }],
+      },
+      {
+        when: STRESS.raise,
+        steps: [
+          ...Array.from({ length: RAISE_REVIEWS }, (_, index) =>
+            review(
+              `Raise ${index + 1} of ${RAISE_REVIEWS}`,
+              { index },
+              `Raised ${index + 1}.`,
+            ),
+          ),
+          { do: "text", chunks: [SAYS.raised] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.large,
@@ -758,6 +901,63 @@ export function stressScenario({
           { do: "end" },
         ],
       },
+      // Asks its owner one decision and ends its turn: the answer comes as
+      // the person's next message, which its own turn answers.
+      {
+        when: STRESS.ask,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "ask_owner",
+            arguments: ASK,
+            save: "asked",
+          },
+          { do: "text", chunks: [SAYS.asked, "${asked.askId}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.answer,
+        steps: [{ do: "text", chunks: [SAYS.answered, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        when: STRESS.requestAccess,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "request_access",
+            arguments: ACCESS,
+            save: "requested",
+          },
+          {
+            do: "text",
+            chunks: [
+              SAYS.requested,
+              "${requested.askId}",
+              SAYS.ranAt,
+              "${configuration.mode}",
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.approved,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.approvedAccess,
+              "${prompt.text}",
+              SAYS.ranAt,
+              "${configuration.mode}",
+            ],
+          },
+          { do: "end" },
+        ],
+      },
       // Closes its own thread, as an agent whose work is done is told to:
       // the agent stops once this turn ends, and the next message opens it.
       {
@@ -771,6 +971,98 @@ export function stressScenario({
             save: "closed",
           },
           { do: "text", chunks: [SAYS.closed, "${closed}"] },
+          { do: "end" },
+        ],
+      },
+      // A person asks a parent, which hands the work to a thread it creates
+      // and waits for it. The thread follows the message back with read_turn
+      // to the person's own words and says them. The parent then cannot close
+      // a thread it did not create (the prompt names one), and closes its own.
+      {
+        when: STRESS.provenance,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: { threadId: "${thread.threadId}", message: STRESS.originChild },
+            save: "sent",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "subscribe",
+            arguments: {
+              threadId: "${thread.threadId}",
+              executionId: "${sent.executionId}",
+            },
+            save: "waited",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: "${prompt.arguments}",
+            save: "refused",
+            keepErrors: true,
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "close_thread",
+            arguments: { threadId: "${thread.threadId}" },
+            save: "closed",
+          },
+          {
+            do: "text",
+            chunks: [
+              SAYS.provenance,
+              "${thread.threadId}",
+              " | ",
+              "${refused.error}",
+              " | ",
+              "${closed.closing}",
+              " | ",
+              "${waited.turn.reply}",
+            ],
+          },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.originChild,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "read_turn",
+            arguments: {
+              threadId: "${prompt.source.conversationId}",
+              executionId: "${prompt.source.executionId}",
+              earlier: 3,
+            },
+            save: "chain",
+          },
+          {
+            do: "text",
+            chunks: [
+              SAYS.origin,
+              "${chain.startedBy}",
+              " on ",
+              "${chain.turns.0.device}",
+              ": ",
+              "${chain.turns.0.said}",
+              SAYS.earlier,
+              "${chain.earlier}",
+            ],
+          },
           { do: "end" },
         ],
       },

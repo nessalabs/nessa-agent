@@ -35,6 +35,8 @@ import {
   type ListSubscriptionHandlers,
   type Subscription,
   type SubscriptionEnd,
+  type TerminalApi,
+  type TerminalSummary,
   type ViewSubscriptionHandlers,
   type WorkspaceAnswerParams,
   type WorkspaceWindow,
@@ -43,6 +45,7 @@ import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
 import type { WindowPublishClient } from "./window-publisher"
 import type { WindowCommandClient } from "./window-commands"
+import type { TerminalClient } from "./terminal-gateway"
 
 /**
  * The fake's client: the source's, sharing's conversation methods (which
@@ -53,12 +56,24 @@ import type { WindowCommandClient } from "./window-commands"
  */
 export type FakeGatewayClient = {
   readonly boat: import("@nessa/client").BoatApi
+  readonly agent37: import("@nessa/client").Agent37Api
+  readonly cloud: import("@nessa/client").CloudApi
+  readonly replyStyle: import("@nessa/client").ReplyStyleApi
 } & GatewayClient &
   WindowPublishClient &
-  WindowCommandClient & {
+  WindowCommandClient &
+  TerminalClient & {
     readonly conversation: GatewayClient["conversation"] &
       SharingClient["conversation"] &
-      Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
+      Pick<
+        ConversationApi,
+        | "permissionRules"
+        | "revokePermissionRule"
+        | "decisions"
+        | "pauseAutoPick"
+        | "decisionSettings"
+        | "setDecisionSettings"
+      >
   }
 
 /** The default channel, as the gateway lists it first. */
@@ -71,6 +86,7 @@ const defaultChannel: WireChannel = {
   model: null,
   approvalMode: "ask",
   coordinatorConversationId: null,
+  coordinatorOn: false,
   coordinatorPlacement: "local",
   threadPlacement: "local",
   createdAtMs: 0,
@@ -114,6 +130,10 @@ type Method =
   | "delete"
   | "permissionRules"
   | "revokePermissionRule"
+  | "decisions"
+  | "pauseAutoPick"
+  | "decisionSettings"
+  | "setDecisionSettings"
   | "listChannels"
   | "createChannel"
 
@@ -151,6 +171,10 @@ export const fakeCallMethods = {
   delete: "conversation.delete",
   permissionRules: "conversation.permissionRules",
   revokePermissionRule: "conversation.revokePermissionRule",
+  decisions: "conversation.decisions",
+  pauseAutoPick: "conversation.pauseAutoPick",
+  decisionSettings: "conversation.decisionSettings",
+  setDecisionSettings: "conversation.setDecisionSettings",
   listChannels: "channel.list",
   createChannel: "channel.create",
 } as const satisfies Record<
@@ -539,6 +563,11 @@ export function fakeGateway(
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
   const eventListeners = new Map<string, Set<(payload: unknown) => void>>()
+  const publish = (event: string, payload: unknown) => {
+    const handlers = eventListeners.get(event)
+    if (!handlers) return
+    for (const handler of [...handlers]) handler(payload)
+  }
   const positions = new Map<string, number>()
   const subscriptions = new Map<string, Live>()
   // View subscribes on their way, which the gateway counts against its limit.
@@ -547,6 +576,7 @@ export function fakeGateway(
   let state: ConnectionState = { status: "connected" }
   let closed = false
   let ids = 0
+  let decisionSettings = { autoPick: true, autoPickAfterSeconds: 300 }
   const fake = {
     complete: true,
     listLimit: null as number | null,
@@ -686,6 +716,21 @@ export function fakeGateway(
         throw new Error("Boat sign-in is unavailable in this fixture")
       },
       disconnect: async () => ({ state: "disconnected" as const }),
+    },
+    agent37: {
+      status: async () => ({ state: "disconnected" as const }),
+      save: async () => {
+        throw new Error("Agent37 provisioning is unavailable in this fixture")
+      },
+      disconnect: async () => ({ state: "disconnected" as const }),
+    },
+    replyStyle: fakeReplyStyle(),
+    cloud: {
+      read: async () => ({ cloud: "boat" as const }),
+      choose: async (cloud) => {
+        if (cloud !== "boat") throw new Error("Agent37 is not connected in this fixture")
+        return { cloud }
+      },
     },
     conversation: {
       share: notShared,
@@ -939,6 +984,19 @@ export function fakeGateway(
           requestId: "revoke",
           applied: false,
         })) as never,
+      // Nothing asked in any fake conversation.
+      decisions: (...args) =>
+        answer("decisions", args, () => ({ decisions: [] })) as never,
+      // Nothing waits, so there is nothing to pause.
+      pauseAutoPick: (...args) => answer("pauseAutoPick", args, () => false) as never,
+      // Kept as the gateway keeps them: the default until set.
+      decisionSettings: () =>
+        answer("decisionSettings", [], () => ({ ...decisionSettings })) as never,
+      setDecisionSettings: (...args) =>
+        answer("setDecisionSettings", args, () => {
+          decisionSettings = { ...args[0] }
+          return { ...decisionSettings }
+        }) as never,
     },
     channels: {
       list: () =>
@@ -960,6 +1018,7 @@ export function fakeGateway(
             model: params.model,
             approvalMode: params.approvalMode ?? "ask",
             coordinatorConversationId: null,
+            coordinatorOn: params.coordinator ?? true,
             coordinatorPlacement: params.coordinatorPlacement ?? "local",
             threadPlacement: params.threadPlacement ?? "local",
             createdAtMs: channels.length + 1,
@@ -968,6 +1027,7 @@ export function fakeGateway(
           return channel
         }) as never,
     },
+    terminals: fakeTerminals((event, payload) => publish(event, payload)),
     workspace: {
       publish: (_windowId, revision, window) => {
         const held = windows.at(-1)?.revision ?? -1
@@ -1130,12 +1190,163 @@ export function fakeGateway(
       if (next.status !== "connected") endAll(undefined, { reason: "disconnected" })
       for (const observer of [...observers]) observer(next)
     },
-    publishEvent(event: string, payload: unknown) {
-      const handlers = eventListeners.get(event)
-      if (!handlers) return
-      for (const handler of [...handlers]) handler(payload)
-    },
+    publishEvent: publish,
     closed: () => closed,
     count: (method: Method) => calls.filter((call) => call.method === method).length,
   })
+}
+
+/**
+ * How agents talk, kept in memory as the gateway keeps it: each level's own
+ * choice per role, and what a role gets where nothing is chosen.
+ */
+function fakeReplyStyle(): import("@nessa/client").ReplyStyleApi {
+  type Roles = import("@nessa/client").ReplyStyleRoles
+  type Choice = import("@nessa/client").ReplyStyleChoice
+  const levels = new Map<string, Roles>()
+  const own = (level: string): Roles => levels.get(level) ?? {}
+  const plain: Choice = { mode: "plain" }
+  const read = (channelId?: string) => {
+    const nessa = own("")
+    const channel = channelId === undefined ? undefined : own(channelId)
+    const effective = (role: "coordinator" | "thread") =>
+      channel?.[role] ?? nessa[role] ?? plain
+    return {
+      ...(channelId === undefined ? {} : { channelId, channel: channel ?? {} }),
+      nessa,
+      effective: { coordinator: effective("coordinator"), thread: effective("thread") },
+    }
+  }
+  return {
+    read: async (channelId) => read(channelId),
+    set: async (role, choice, channelId) => {
+      const level = channelId ?? ""
+      const next: Roles = { ...own(level) }
+      if (choice === undefined) delete next[role]
+      else next[role] = choice
+      levels.set(level, next)
+      return read(channelId)
+    },
+  }
+}
+
+/**
+ * Terminals as the gateway keeps them, with a pretend shell: an attached view
+ * is sent a prompt, what is typed is echoed, and Enter answers a line. It
+ * speaks the runtime's protocol, so a view draws it as it draws a real one.
+ */
+function fakeTerminals(publish: (event: string, payload: unknown) => void): TerminalApi {
+  const terminals: TerminalSummary[] = []
+  const screens = new Map<
+    string,
+    { lines: string[]; typed: string; views: Map<string, number> }
+  >()
+  let next = 0
+  const listed = () => publish("terminal.listed", { terminals: [...terminals] })
+  const paint = (terminalId: string, viewId: string, cols: number, rows: number) => {
+    const screen = screens.get(terminalId)
+    if (!screen) return
+    const all = [...screen.lines, `$ ${screen.typed}`].slice(-rows)
+    const send = (message: unknown) =>
+      publish("terminal.output", {
+        terminalId,
+        viewId,
+        message: JSON.stringify({ v: 1, ...(message as object) }),
+      })
+    send({ type: "ready", cols, rows })
+    send({
+      type: "frame",
+      seq: 1,
+      cursor: { col: `$ ${screen.typed}`.length, row: all.length - 1, visible: true },
+      rows: Array.from({ length: rows }, (_, y) => ({
+        y,
+        cells: [...(all[y] ?? "")].map((char) => [char, 1, 0]),
+      })),
+      total: all.length,
+    })
+  }
+  const repaint = (terminalId: string) => {
+    for (const [viewId, size] of screens.get(terminalId)?.views ?? [])
+      paint(terminalId, viewId, size >> 16, size & 0xffff)
+  }
+  return {
+    open: (params) => {
+      const known = terminals.find((terminal) => terminal.requestId === params.requestId)
+      if (known) return Promise.resolve(known)
+      next += 1
+      const terminal: TerminalSummary = {
+        terminalId: `t_${next.toString(16).padStart(32, "0")}`,
+        title: params.command ? (params.command.split("\n")[0] ?? "").trim() : "zsh",
+        kind: params.command ? "run" : "shell",
+        ...(params.channelId ? { channelId: params.channelId } : {}),
+        ...(params.conversationId ? { conversationId: params.conversationId } : {}),
+        requestId: params.requestId,
+        folder: "/Users/you/project",
+        shell: "/bin/zsh",
+        runsOn: "here",
+        startedAtMs: Date.now(),
+        state: "running",
+      }
+      terminals.push(terminal)
+      screens.set(terminal.terminalId, {
+        lines: params.command ? [`$ ${params.command}`] : ["Last login on ttys001"],
+        typed: "",
+        views: new Map(),
+      })
+      listed()
+      return Promise.resolve(terminal)
+    },
+    list: () => Promise.resolve([...terminals]),
+    attach: ({ terminalId, viewId, cols, rows }) => {
+      const screen = screens.get(terminalId)
+      if (!screen)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      screen.views.set(viewId, (cols << 16) | rows)
+      paint(terminalId, viewId, cols, rows)
+      return Promise.resolve()
+    },
+    focus: () => Promise.resolve(),
+    fit: ({ terminalId, viewId, cols, rows }) => {
+      screens.get(terminalId)?.views.set(viewId, (cols << 16) | rows)
+      paint(terminalId, viewId, cols, rows)
+      return Promise.resolve()
+    },
+    detach: (terminalId, viewId) => {
+      screens.get(terminalId)?.views.delete(viewId)
+      return Promise.resolve()
+    },
+    input: (terminalId, bytes) => {
+      const screen = screens.get(terminalId)
+      if (!screen)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      for (const char of new TextDecoder().decode(bytes)) {
+        if (char === "\r") {
+          screen.lines.push(`$ ${screen.typed}`, `ran: ${screen.typed}`)
+          screen.typed = ""
+        } else if (char === "\x7f") screen.typed = screen.typed.slice(0, -1)
+        else if (char >= " ") screen.typed += char
+      }
+      repaint(terminalId)
+      return Promise.resolve()
+    },
+    history: () => Promise.resolve(),
+    close: (terminalId) => {
+      const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
+      if (at < 0)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      terminals.splice(at, 1)
+      screens.delete(terminalId)
+      listed()
+      return Promise.resolve()
+    },
+    rename: (terminalId, title) => {
+      const at = terminals.findIndex((terminal) => terminal.terminalId === terminalId)
+      const found = terminals[at]
+      if (!found)
+        return Promise.reject(new NessaRpcError("terminal_not_found", "No such terminal"))
+      terminals[at] = { ...found, title }
+      listed()
+      return Promise.resolve()
+    },
+  }
 }

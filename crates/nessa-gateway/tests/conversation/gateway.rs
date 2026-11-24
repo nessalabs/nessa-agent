@@ -857,6 +857,152 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
     }
 
     #[tokio::test]
+    async fn decisions_list_what_was_asked_and_what_became_of_it_to_the_owner_alone() {
+        use nessa_protocol::conversation::view::{AskUndo, AutoPick, OwnerAsk, OwnerAskChoice};
+        let (service, _, _, _) = chat_fixture();
+        let asks = service.clone();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-00000000000d";
+        let decisions = || json!({"conversationId":id});
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
+        let none = chat_request(&state, &owner, "conversation.decisions", decisions()).await;
+        assert_eq!(none.payload, Some(json!({"decisions": []})));
+        let conversation =
+            nessa_protocol::conversation::domain::ConversationId::new(id).unwrap();
+        asks.ask_owner(
+            &conversation,
+            OwnerAsk {
+                ask_id: "0123456789abcdef0123456789abcdef".into(),
+                question: "Ship it?".into(),
+                choices: vec![
+                    OwnerAskChoice {
+                        label: "Ship".into(),
+                        consequence: "It goes out today.".into(),
+                        undo: Some(AskUndo::Easy),
+                        effort: None,
+                        pros: Vec::new(),
+                        cons: Vec::new(),
+                    },
+                    OwnerAskChoice {
+                        label: "Wait".into(),
+                        consequence: "It waits for Monday.".into(),
+                        undo: None,
+                        effort: None,
+                        pros: Vec::new(),
+                        cons: Vec::new(),
+                    },
+                ],
+                recommended: 0,
+                reason: "Every check passed.".into(),
+                asked_at_ms: 0,
+                access: None,
+                summary: None,
+                auto_pick: Some(AutoPick::Allowed),
+            },
+        )
+        .await
+        .unwrap();
+        let waiting = chat_request(&state, &owner, "conversation.decisions", decisions())
+            .await
+            .payload
+            .unwrap();
+        assert_eq!(waiting["decisions"].as_array().unwrap().len(), 1);
+        assert_eq!(waiting["decisions"][0]["ask"]["question"], "Ship it?");
+        assert!(waiting["decisions"][0].get("outcome").is_none());
+        // Allowed, it is picked after the owner's five minutes, unless paused.
+        let asked_at = waiting["decisions"][0]["ask"]["askedAtMs"].as_u64().unwrap();
+        assert_eq!(waiting["decisions"][0]["autoPickDueAtMs"], asked_at + 300_000);
+        assert_eq!(waiting["decisions"][0]["ask"]["autoPick"], "allowed");
+        assert_eq!(waiting["decisions"][0]["ask"]["choices"][0]["undo"], "easy");
+        let pause = |paused: bool| {
+            json!({"conversationId":id,"askId":"0123456789abcdef0123456789abcdef","paused":paused})
+        };
+        let paused = chat_request(&state, &owner, "conversation.pauseAutoPick", pause(true)).await;
+        assert_eq!(paused.payload, Some(json!({"applied": true})));
+        let held = chat_request(&state, &owner, "conversation.decisions", decisions())
+            .await
+            .payload
+            .unwrap();
+        assert_eq!(held["decisions"][0]["autoPickPaused"], true);
+        assert!(held["decisions"][0].get("autoPickDueAtMs").is_none());
+        let other = chat_session(&state, "other").await;
+        let refused = chat_request(&state, &other, "conversation.pauseAutoPick", pause(false)).await;
+        assert_eq!(refused.error.unwrap().code, "conversation_not_found");
+        let malformed = chat_request(
+            &state,
+            &owner,
+            "conversation.pauseAutoPick",
+            json!({"conversationId":id,"askId":"0123456789abcdef0123456789abcdef"}),
+        )
+        .await;
+        assert_eq!(malformed.error.unwrap().code, "invalid_request");
+        let resumed = chat_request(&state, &owner, "conversation.pauseAutoPick", pause(false)).await;
+        assert_eq!(resumed.payload, Some(json!({"applied": true})));
+        let send = json!({"conversationId":id,"requestId":"send-1","executionId":"send-1","text":"Wait. Monday is fine.","attachments":[],"files":[]});
+        assert!(chat_request(&state, &owner, "conversation.send", send).await.ok);
+        let decided = chat_request(&state, &owner, "conversation.decisions", decisions())
+            .await
+            .payload
+            .unwrap();
+        let outcome = &decided["decisions"][0]["outcome"];
+        assert_eq!(outcome["state"], "decided");
+        assert_eq!(outcome["text"], "Wait. Monday is fine.");
+        assert_eq!(outcome["choice"], 1);
+        assert!(outcome.get("by").is_none());
+        assert!(outcome.get("auto").is_none());
+        assert!(decided["decisions"][0].get("autoPickDueAtMs").is_none());
+        // Answered, there is nothing left to pause.
+        let late = chat_request(&state, &owner, "conversation.pauseAutoPick", pause(true)).await;
+        assert_eq!(late.payload, Some(json!({"applied": false})));
+        // Somebody else is told nothing about it.
+        let refused = chat_request(&state, &other, "conversation.decisions", decisions()).await;
+        assert_eq!(refused.error.unwrap().code, "conversation_not_found");
+    }
+
+    #[tokio::test]
+    async fn decision_settings_are_each_persons_own_and_hold_to_their_bounds() {
+        let (service, _, _, _) = chat_fixture();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let other = chat_session(&state, "other").await;
+        let read = |session| chat_request(&state, session, "conversation.decisionSettings", json!({}));
+        let default = json!({"autoPick": true, "autoPickAfterSeconds": 300});
+        assert_eq!(read(&owner).await.payload, Some(default.clone()));
+        let hour = json!({"autoPick": false, "autoPickAfterSeconds": 3600});
+        let set = chat_request(&state, &owner, "conversation.setDecisionSettings", hour.clone()).await;
+        assert_eq!(set.payload, Some(hour.clone()));
+        assert_eq!(read(&owner).await.payload, Some(hour.clone()));
+        // Somebody else's are still the default.
+        assert_eq!(read(&other).await.payload, Some(default));
+        for refused in [
+            json!({"autoPick": true, "autoPickAfterSeconds": 59}),
+            json!({"autoPick": true, "autoPickAfterSeconds": 86_401}),
+            json!({"autoPick": true, "autoPickAfterSeconds": 4_294_967_356_u64}),
+            json!({"autoPick": true}),
+            json!({"autoPick": "yes", "autoPickAfterSeconds": 300}),
+            json!({"autoPick": true, "autoPickAfterSeconds": 300, "extra": 1}),
+        ] {
+            let reply =
+                chat_request(&state, &owner, "conversation.setDecisionSettings", refused.clone())
+                    .await;
+            assert_eq!(reply.error.unwrap().code, "invalid_request", "{refused}");
+        }
+        assert_eq!(read(&owner).await.payload, Some(hour));
+        let extra = chat_request(&state, &owner, "conversation.decisionSettings", json!({"x": 1})).await;
+        assert_eq!(extra.error.unwrap().code, "invalid_request");
+    }
+
+    #[tokio::test]
     async fn rename_answers_as_a_mutation_and_refuses_a_title_the_domain_would_not_hold() {
         let (service, _, _, _) = chat_fixture();
         let state = chat_state().with_conversations(Arc::new(service));

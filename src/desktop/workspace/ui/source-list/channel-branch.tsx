@@ -20,16 +20,18 @@ import {
   selectChannel,
   selectChannelActivity,
   selectChannelExpanded,
+  selectChannelShells,
   selectFocusedChannel,
   selectShowAll,
 } from "../../adapters/store/selectors"
 import { useBesideKey } from "../session-actions"
 import { branchCap, statusLabels } from "../../model/session-groups"
-import { IconButton } from "../../../ui/icon-button"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { WorkingWords } from "../chrome/working-words"
 import { ThreadRow } from "./thread-row"
 import "./channel-branch.css"
+import { NewInChannelButton } from "../terminals/new-menu"
+import { TerminalBranchRows } from "../terminals/terminal-rows"
 import { tooltip } from "../../../ui/tooltip"
 
 /**
@@ -107,12 +109,7 @@ export const ChannelBranch = memo(function ChannelBranch({
       trailing={
         <>
           <ChannelSettingsButton channelId={channel.id} name={channel.name} />
-          <IconButton
-            icon="add"
-            label={label}
-            tabIndex={-1}
-            onClick={() => dispatch(newSession({ channelId: channel.id }))}
-          />
+          <NewInChannelButton channelId={channel.id} label={label} tabIndex={-1} />
         </>
       }
       showTrailingOnHover
@@ -131,12 +128,16 @@ function BranchSessions({ channelId }: { channelId: string }) {
     (state) => selectBranch(state, channelId),
     sameBranch,
   )
+  const hasTerminals = useWorkspaceSelector(
+    (state) => selectChannelShells(state, channelId).length > 0,
+  )
   const showAll = useWorkspaceSelector((state) => selectShowAll(state, channelId))
   return (
     <ul className="workspace-branch-sessions workspace-rise">
       {branch.ids.map((sessionId) => (
         <ThreadRow key={sessionId} sessionId={sessionId} channelId={channelId} />
       ))}
+      <TerminalBranchRows channelId={channelId} />
       {branch.hidden > 0 || (showAll && branch.total > branchCap) ? (
         <SidebarMenuItem
           size="xs"
@@ -148,7 +149,7 @@ function BranchSessions({ channelId }: { channelId: string }) {
           {showAll ? "Show fewer" : `Show all ${branch.total}`}
         </SidebarMenuItem>
       ) : null}
-      {branch.total === 0 ? (
+      {branch.total === 0 && !hasTerminals ? (
         <SidebarMenuItem
           size="xs"
           className="workspace-more"

@@ -111,6 +111,7 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.SubmissionUnresolved]: "other",
   [ConversationErrorCode.StalePermission]: "other",
   [ConversationErrorCode.AgentStartupDeadline]: "other",
+  [ConversationErrorCode.AgentSignInRequired]: "other",
   [ConversationErrorCode.AgentOperationFailed]: "other",
   [ConversationErrorCode.ImageInputUnsupported]: "other",
   [ConversationErrorCode.AttachmentNotFound]: "other",

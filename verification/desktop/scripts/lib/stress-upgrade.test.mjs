@@ -45,6 +45,16 @@ function current(fill = "") {
   return { directory, path }
 }
 
+const askColumn = (path) => {
+  const database = new DatabaseSync(path, { readOnly: true })
+  const has = database
+    .prepare("SELECT name FROM pragma_table_info('summaries')")
+    .all()
+    .some((row) => row.name === "ask")
+  database.close()
+  return has
+}
+
 const tables = (path) => {
   const database = new DatabaseSync(path, { readOnly: true })
   const names = database
@@ -59,13 +69,16 @@ test("a file with nothing in the newer tables goes back to version 6", (t) => {
   const { directory, path } = current()
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   assert.equal(metadataFile(directory), path)
-  assert.equal(schemaVersion(path), 10)
+  assert.equal(schemaVersion(path), 12)
   assert.equal(asOlderBuild(path), 6)
   assert.equal(schemaVersion(path), 6)
+  assert.ok(!askColumn(path))
   assert.ok(!tables(path).includes("closed_threads"))
   assert.ok(!tables(path).includes("agent_switches"))
   assert.ok(!tables(path).includes("unfinished_turns"))
   assert.ok(!tables(path).includes("model_requests"))
+  assert.ok(!tables(path).includes("owner_decisions"))
+  assert.ok(!tables(path).includes("decision_settings"))
   assert.ok(tables(path).includes("conversations"))
 })
 
@@ -102,7 +115,7 @@ test("a file with an agent switch goes back to version 9", (t) => {
   assert.ok(!tables(path).includes("closed_threads"))
 })
 
-test("a file with a closed thread is left as the newest build's", (t) => {
+test("a file with a closed thread goes back to version 10", (t) => {
   const { directory, path } = current(
     "INSERT INTO closed_threads (conversation_id) VALUES ('c1');",
   )
@@ -110,7 +123,39 @@ test("a file with a closed thread is left as the newest build's", (t) => {
   assert.equal(asOlderBuild(path), 10)
   assert.equal(schemaVersion(path), 10)
   assert.ok(tables(path).includes("closed_threads"))
+  assert.ok(!askColumn(path))
 })
+
+test("a file with a waiting ask and no decisions goes back to version 11", (t) => {
+  const { directory, path } = current(
+    `INSERT INTO summaries (conversation_id, updated_at_ms, archived, ask)
+      VALUES ('c1', 1, 0, '{"askId":"a"}');`,
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  assert.equal(asOlderBuild(path), 11)
+  assert.equal(schemaVersion(path), 11)
+  assert.ok(askColumn(path))
+  assert.ok(!tables(path).includes("owner_decisions"))
+  assert.ok(!tables(path).includes("decision_settings"))
+  assert.ok(tables(path).includes("closed_threads"))
+})
+
+for (const [kept, fill] of [
+  [
+    "a decision",
+    `INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask)
+      VALUES ('c1', 'a', 1, '{"askId":"a"}');`,
+  ],
+  ["decision settings", `INSERT INTO decision_settings VALUES ('org', 'alice', 0, 600);`],
+])
+  test(`a file with ${kept} is left as the newest build's`, (t) => {
+    const { directory, path } = current(fill)
+    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    assert.equal(asOlderBuild(path), 12)
+    assert.equal(schemaVersion(path), 12)
+    assert.ok(tables(path).includes("owner_decisions"))
+    assert.ok(tables(path).includes("decision_settings"))
+  })
 
 test("place records turn back into an older build's placement and binding files", () => {
   const conversations = mkdtempSync(join(tmpdir(), "stress-places-"))

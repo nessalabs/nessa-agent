@@ -4,6 +4,7 @@ import { channelPlaceWords } from "./channel-place-words"
 it("reads each place as a person would, and a computer by its best name", () => {
   expect(channelPlaceWords("local")).toBe("Local")
   expect(channelPlaceWords("boat")).toBe("Boat")
+  expect(channelPlaceWords("agent37")).toBe("Agent37")
   expect(channelPlaceWords("pool")).toBe("Any computer")
   expect(channelPlaceWords("devbox")).toBe("devbox")
   // A paired computer by the start of its key, or by the name the caller has.

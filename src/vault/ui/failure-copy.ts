@@ -29,4 +29,9 @@ export const vaultFailureCopy: Record<VaultFailure, string> = {
     "The change and its audit record were not confirmed. Unlock with the new passphrase first; if it fails, try the old passphrase. Nessa will not retry the change automatically.",
   vault_changed_audit_unavailable:
     "Your passphrase changed, but Nessa could not record the outcome. Your vault is locked; unlock with the new passphrase.",
+  biometric_unavailable: "Touch ID isn't available right now. Enter your passphrase.",
+  biometric_cancelled: "Enter your passphrase to unlock.",
+  biometric_changed:
+    "Your fingerprints changed, so Touch ID was turned off. Enter your passphrase to turn it on again.",
+  biometric_missing: "Touch ID isn't set up. Enter your passphrase.",
 }

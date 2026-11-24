@@ -26,6 +26,17 @@ const MARKS: Readonly<Partial<Record<AgentId, { path: string; fill: string }>>> 
     }),
   })
 
+/**
+ * The drawing of an agent's mark and the colour its provider draws it in —
+ * `currentColor` where the provider's own file says so — for a host that
+ * draws the mark itself, in a colour of its choosing. None where no mark ships.
+ */
+export function agentMarkDrawing(
+  id: AgentId,
+): { readonly path: string; readonly fill: string } | undefined {
+  return MARKS[id]
+}
+
 /** The provider's mark for an agent, sized by its container's font size.
  *
  * Hidden from the accessibility tree either way: the agent's name is rendered

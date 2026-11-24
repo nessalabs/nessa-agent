@@ -34,6 +34,7 @@ place:
 | Does this machine take logins from this gateway? | The machine's owner | `grants.json` `acceptLogins` (`nessa env grant --logins`); SSH takes them without an entry |
 | May the gateway hand this machine logins? | Cedar, over facts | `logins/infrastructure/cedar/policies.cedar` |
 | Is a login saved for this agent? | The vault | entries `login.claude`, `login.codex`, `login.opencode` |
+| Which ChatGPT account does Codex use, and its tokens? | The vault | entry `login.codex.chatgpt` ([chatgpt-sign-in.md](./chatgpt-sign-in.md)) |
 
 The Cedar policy permits SSH hosts and Boat workspaces (this gateway signs
 in as their account and can already set anything a harness there runs
@@ -102,15 +103,20 @@ sequenceDiagram
 - `ToEnvironment::Start.login` is the value only; its variable is fixed by
   `lease::login_variables(agent)`, so a gateway cannot name a variable.
 - Product methods `logins.status`, `logins.save`, `logins.remove`,
-  `logins.setDevice`, grant `credential.manage`. No answer ever holds a
+  `logins.setDevice`, and the ChatGPT ones (`logins.chatgptSignIn`,
+  `chatgptCancel`, `chatgptUse`, `chatgptRemove`), grant `credential.manage`. No answer ever holds a
   login; the client refuses one that does.
 
-Codex and OpenCode take an API key. A ChatGPT-account sign-in file for
-Codex is not carried.
+OpenCode takes an API key. Codex takes an API key, or, while a ChatGPT
+account is in use, a short-lived ChatGPT access token in its place: the
+gateway keeps the account's refresh token, and the machine gets the access
+token as a file it is renewed in while the lease runs
+([chatgpt-sign-in.md](./chatgpt-sign-in.md)). A ChatGPT sign-in file
+(`auth.json`) is still never carried.
 
 ## Checked by
 
 Unit tests under `crates/nessa-gateway/tests/logins`, `env_serve`,
 `conversation/ssh_environment.rs` and `product/socket/logins.rs`; the
-conversation stress step `login` (a real `nessa env dial` worker started
+conversation stress steps `chatgpt` and `login` (a real `nessa env dial` worker started
 signed out, off then on, its launches recorded).

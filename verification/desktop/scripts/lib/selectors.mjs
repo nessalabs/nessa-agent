@@ -73,7 +73,8 @@ export const css = {
   titleText: ".workspace-pane-title", // class: a pane's title, in a pane or in the drag's copy of it
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
-  sendFailure: "[data-send-failure]", // compact composer recovery, separate from transcript turns
+  sendFailure: "[data-send-failure]", // the overview reply pill's card for a message that did not go
+  unsent: "[data-unsent].workspace-unsent", // the row under a chat's message that did not go
   transcript: ".workspace-transcript", // class
   message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user, agent or note
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
@@ -100,13 +101,14 @@ export const css = {
   dragShield: ".split-panes-shield", // class: holds the pointer while carrying
   lifted: "[data-drag-lifted]",
   dragging: "[data-workspace][data-drag-carrying], [data-workspace][data-drag-card]",
-  dropAnnouncer: '[data-workspace] [role="status"][aria-live="polite"]',
+  dropAnnouncer: "[data-workspace] .split-panes-announcer", // class: the drag's live region (`split-panes/adapters/dom/drag.ts`)
 
   // Widgets (ADR 326) and the sample plugin that shows them (src/desktop/widgets/fixture/)
   widgetCard: "[data-widget-inline]", // a widget's card in a message; its value says what it draws
   widgetCardRow: '[data-widget-inline="row"]', // an Open row while the app is live in its panel
   panel: "#workspace-panel", // the right panel: each chat's own; inert while hidden
   chatPanelTabs: ".workspace-panel-tabs", // class: the panel's tabs, one per widget open for the chat in front
+  widgetTab: '.workspace-panel-tabs [role="tab"]', // a widget's tab in the right panel
   panelWidget: "[data-panel-widget]", // the panel's tab in front: a widget's trail, Open in Window and body
   panelWidgetHead: ".workspace-panel-widget-head", // class: that tab's trail and Open in Window
   widgetBody: "[data-widget-body]", // a widget's body in the panel or the window, where its caret lands
@@ -132,7 +134,9 @@ export const css = {
   subagentDetail: "[data-subagent-detail]", // the open child's conversation
   subagentScroll: "[data-subagent-scroll]", // the conversation's scroller
   subagentMessages: "[data-subagent-messages]", // the messages that scroller follows
-  subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its pane header
+  subagentStack: "[data-subagent-stack]", // the conversation's subagents, in its Chat context
+  chatContextButton: "[data-chat-context-button]", // a pane header's Chat context button
+  chatContext: "[data-chat-context]", // Chat context, the column on a chat pane's right
   avatarFace: '[data-slot="random-avatar-paint"]', // one face; aria-label is its name
   avatarMore: '[data-slot="avatar-stack-more"]', // the count of faces the stack does not show
 
@@ -261,25 +265,29 @@ export const css = {
   peekAsk: ".agents-peek-ask", // class: the request in full, after the story
   overviewPeekScroll: ".agents-overview-peek .agents-peek-scroll", // class: what the peek beside the list says, scrolling above its reply pill
 
-  // The composer's thinking control (src/desktop/ui/thinking-control.tsx): a chip
-  // opening a popover holding a slider; the levels are read from
-  // the page, never named here (their owner is src/desktop/model/composer-options.ts)
+  // The model and thinking picker (nessa_ui ModelLevelPicker, composed in
+  // src/desktop/ui/catalogue-model-picker.tsx): a chip naming the model and its
+  // level, opening a modal with search, Fast, a provider rail and the models;
+  // each row's levels are bars. The levels are read from the page, never named
+  // here (their owner is src/desktop/model/composer-options.ts)
   composerForm: ".desktop-composer", // class: a composer, whose place must not move
-  thinkingChip: 'button[aria-haspopup="dialog"][aria-label^="Thinking level"]',
-  thinkingPopover: '[role="dialog"][aria-label="Thinking"]',
-  modelChip: '[data-slot="model-picker-trigger"]', // the composer's model picker
-  modelPicker: '[data-slot="model-picker-content"]', // its list, a model each role="option"
-  modelOption: '.desktop-model-picker [role="option"]', // class: a model in the picker
-  modelProviderTab: '.desktop-model-picker [role="tab"]', // class: a provider's tab in the picker
+  modelChip: '[data-slot="model-level-picker-trigger"]', // the composer's model chip, and a new channel's
+  modelChipLevel: '[data-slot="model-level-picker-trigger-level"]', // the level the chip names
+  modelPicker: '[data-slot="model-level-picker"]', // the open picker, role="dialog"
+  modelSearch: '[data-slot="model-level-picker-search"] input',
+  modelOption: '[data-slot="model-level-picker-row"]', // a model, role="option"; data-provider, data-model
+  modelOptionLabel: '[data-slot="model-level-picker-row-label"]',
+  modelRail: '[data-slot="model-level-picker-rail-item"]', // Starred, All models, then each provider; data-filter
+  modelProviderTab: '[data-slot="model-level-picker-rail-item"]', // a provider's place in the rail, as the old tabs were
+  modelBar: '[data-slot="model-level-picker-bar"]', // a level's bar in a row; data-level, data-lit
+  modelStar: '[data-slot="model-level-picker-star"]', // a row's star, aria-pressed
+  modelPickerFast: '[data-slot="model-level-picker-fast"]', // Fast beside search
+  composerFast: ".desktop-composer-fast", // class: Fast beside the composer's model chip
   // The line where a conversation's agent ran on in a new session
   // (src/desktop/workspace/ui/transcript/message.tsx); data-handoff is switch or fork
   handoffLine: '[data-role="handoff"]',
   threadReport: '[data-role="thread-report"]',
   chatPill: "[data-chat-pill]",
-  thinkingSlider: '[role="dialog"][aria-label="Thinking"] [role="slider"]',
-  thinkingTrack: ".desktop-thinking-slider", // class: the slider's pointer room; data-ultra when the model has Ultra
-  thinkingFast: '[role="dialog"][aria-label="Thinking"] button[aria-label="Fast mode"]',
-  thinkingLeaving: ".desktop-thinking-words[data-leaving]", // class: the words that were shown
 
   // Column heads (src/desktop/ui/column-header.tsx): data-title / data-placement are "inline" | "below"
   columnBar: ".desktop-column-bar", // class
@@ -492,6 +500,7 @@ export const storage = {
   greeting: "nessa.desktop.greeting",
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
   overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
+  starredModels: "nessa.desktop.starred-models", // the model picker's stars, as JSON (`starred-models-preference.ts`)
 }
 
 /** The number each overview filter choice shows and answers to (`choiceKey`). */
@@ -508,6 +517,7 @@ export const overviewFilterKeys = {
 export const preferenceEvents = {
   layout: "nessa:workspace-layout",
   greeting: "nessa:desktop-greeting",
+  starredModels: "nessa:desktop-starred-models",
 }
 
 /** The workspace layouts the scripts cover (`src/desktop/model/workspace-layout.ts`). */
@@ -551,8 +561,10 @@ export const keys = {
   end: "End",
   toggleSidebar: "Meta+KeyB",
   toggleSessionList: "Meta+Alt+KeyS",
+  togglePanel: "Meta+Alt+KeyB",
   newSession: "Meta+KeyN",
   newSessionBeside: "Meta+Shift+KeyN",
+  newTerminal: "Meta+KeyJ",
   splitRight: "Meta+KeyD",
   closePane: "Meta+KeyW",
   openBeside: "Meta+Backslash",
@@ -713,14 +725,13 @@ export const names = {
   storySessionId: "retry-budget",
   denyOnce: "Deny",
   /**
-   * Models the thinking check switches between, by what the SDK catalogue
+   * Models the model picker check switches between, by what the SDK catalogue
    * (`catalogueFile`) publishes for them; the check confirms each there before
-   * judging the page. No catalogue model publishes a level past Max today, so
-   * none is named for Ultra: the check holds that none draws it.
+   * judging the page.
    */
   modelWithFast: "Claude Opus 5",
   modelWithoutFast: "Claude Sonnet 5",
-  /** Reasons, with no effort level recorded: the thinking chip is disabled. */
+  /** Reasons, with no effort level recorded: its row has no bars and the chip names no level. */
   modelWithoutLevels: "Claude Haiku 4.5",
   /** Its least level is None, which `modelWithoutFast` does not offer. */
   modelWithLeastLevel: "GPT-5.6 Sol",
@@ -1109,7 +1120,16 @@ export const composerControls = {
   },
   /** The shield's value for each access mode. */
   accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
-  notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
+  /**
+   * Anything in the composer but the draft, its row of controls and the
+   * circle a quiet pane folds it to. The composer says nothing of its own
+   * (`ComposerNote` in `src/desktop/ui/composer.tsx`): this matches nothing.
+   */
+  said: ".desktop-composer > :not(.desktop-composer-body, .desktop-composer-row, .desktop-composer-wake), .desktop-composer [role=status], .desktop-composer [role=alert], .desktop-composer [aria-live]",
+  /** The model picker's tooltip anchor, which says the picker's note (`modelPickerNote`). */
+  pickerNote: '.desktop-tip-anchor:has(> [data-slot="model-level-picker-trigger"])',
+  /** Words of the picker's note for a switch to an agent not signed in where the chat runs (`composer-model.ts`). */
+  signInRequired: "isn’t signed in where this chat runs",
 }
 
 /** Deterministic production-hook/component ordering fixture for #1087. */

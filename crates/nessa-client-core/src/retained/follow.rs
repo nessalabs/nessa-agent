@@ -147,6 +147,11 @@ impl LiveFollow {
         self.open.push(conversation.to_owned());
         LiveChoice::Subscribe { unsubscribe }
     }
+
+    /// Drop `conversation` from the live set so a later open can subscribe it again.
+    pub fn close(&mut self, conversation: &str) {
+        self.open.retain(|id| id != conversation);
+    }
 }
 
 impl Default for LiveFollow {
@@ -223,6 +228,19 @@ mod tests {
             LiveChoice::Subscribe {
                 unsubscribe: Some(ids[2].clone())
             }
+        );
+    }
+
+    #[test]
+    fn closing_a_chat_lets_it_be_opened_again() {
+        let mut live = LiveFollow::new();
+        let conversation = id(1);
+        live.open(&conversation);
+        live.close(&conversation);
+        assert!(live.open_ids().is_empty());
+        assert_eq!(
+            live.open(&conversation),
+            LiveChoice::Subscribe { unsubscribe: None }
         );
     }
 }

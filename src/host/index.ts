@@ -64,6 +64,7 @@ export {
   retryGatewayStartup,
   saveAgentApiKey,
   vaultCommand,
+  vaultBiometrics,
   signInToProvider,
   providerLoginAvailable,
   mintClaudeSignIn,

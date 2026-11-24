@@ -26,6 +26,7 @@ import {
   type PaneLayout,
 } from "../../split-panes/model/pane-layout"
 import { paneItemKey, paneItemOf, sessionItem, type PaneItem } from "../model/pane-item"
+import type { TerminalEntry } from "../model/terminal"
 import { sameWidget, type WidgetRef } from "../../widgets/model/widget-ref"
 import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
@@ -37,7 +38,7 @@ import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import type { ChatPanel } from "../model/chat-panel"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
 import type { DraftImage } from "../model/draft-images"
-import { settledBy, type AccessChoice } from "../model/access"
+import { settledBy, type AccessChoice, type AccessMode } from "../model/access"
 import type {
   ShareDraft,
   ShareGrant,
@@ -72,9 +73,14 @@ export function drawnColumns(chrome: Chrome): { sidebar: boolean; sessionList: b
   return { sidebar: drawn(chrome.sidebar), sessionList: drawn(chrome.sessionList) }
 }
 
-/** What is folded in the sidebar. */
+/** What is folded in the sidebar, and in Chat context. */
 export interface Tree {
   readonly collapsedSections: readonly string[]
+  /**
+   * Chat context's sections folded from their headers, by section id. One
+   * set for every chat, so a section folded in one stays folded in the next.
+   */
+  readonly chatContextFolded: readonly string[]
   /** Channels disclosing their sessions, in the sidebar that shows them inline. */
   readonly expandedChannels: readonly string[]
   /** Channels showing every session rather than the newest few. */
@@ -123,6 +129,8 @@ export interface WorkspaceState {
   readonly channels: readonly Channel[]
   readonly sessions: Readonly<Record<string, SessionSummary>>
   readonly drafts: Readonly<Record<string, Draft>>
+  /** The person's terminals, by id, as the gateway last listed them (`model/terminal.ts`). */
+  readonly terminals: Readonly<Record<string, TerminalEntry>>
   /**
    * The conversations as the source last gave them, by session: every one a
    * pane shows, and a few others (`model/retention.ts`).
@@ -173,6 +181,12 @@ export interface WorkspaceState {
    * through the same model, from this window or another client, does not.
    */
   readonly stagedModels: Readonly<Record<string, ModelRef>>
+  /**
+   * The access a session left when its last model change stepped it down to
+   * Ask, by session: the agent kept a preset the new model does not offer
+   * here. Said beside the composer until the next model or access choice.
+   */
+  readonly steppedAccess: Readonly<Record<string, AccessMode>>
   /**
    * The access the person chose for a session, by session or new session,
    * until the source's conversation says it (`model/access.ts`). The
@@ -287,6 +301,10 @@ export interface WorkspaceState {
     readonly sessionId: string
     readonly change: ShareChange
   } | null
+  /** Registered gateways keyed by `gatewayId`, updated live by `GatewayRegistryPort`. */
+  readonly gateways: Readonly<
+    Record<string, import("../model/gateway-id").GatewaySnapshot>
+  >
 }
 
 /**
@@ -442,6 +460,7 @@ export const initialWorkspace: WorkspaceState = {
   channels: [],
   sessions: {},
   drafts: {},
+  terminals: {},
   transcripts: {},
   heldSession: null,
   conversationRevisions: {},
@@ -451,6 +470,7 @@ export const initialWorkspace: WorkspaceState = {
   answers: {},
   chosenModels: {},
   stagedModels: {},
+  steppedAccess: {},
   modelChoices: {},
   accessChoices: {},
   composerText: {},
@@ -471,7 +491,12 @@ export const initialWorkspace: WorkspaceState = {
   },
   arrangement: null,
   panelOpen: false,
-  tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
+  tree: {
+    collapsedSections: [],
+    chatContextFolded: [],
+    expandedChannels: [],
+    showAllChannels: [],
+  },
   shareable: false,
   share: null,
   channelMaking: { creatable: false, pickable: false, home: null },
@@ -479,6 +504,7 @@ export const initialWorkspace: WorkspaceState = {
   renaming: null,
   deleteAsked: null,
   shareChange: null,
+  gateways: {},
 }
 
 /**
@@ -754,9 +780,13 @@ export function toggled(
   return include ? [...ids, id] : ids.filter((other) => other !== id)
 }
 
-/** The channel of the session in the focused pane, draft or not; none when it shows a widget. */
+/** The channel of the chat or terminal in the focused pane, draft or not; none when it shows a widget. */
 export function focusedChannel(state: WorkspaceState): string | undefined {
   if (!state.panes) return undefined
+  // A terminal belongs to a channel as a chat does: what starts from its pane
+  // starts there.
+  const item = itemIn(focusedPane(state.panes))
+  if (item?.kind === "terminal") return state.terminals[item.terminalId]?.channelId
   const sessionId = sessionIn(focusedPane(state.panes))
   if (sessionId === undefined) return undefined
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
@@ -803,6 +833,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
     stagedModels: without(state.stagedModels, sessionId),
+    steppedAccess: without(state.steppedAccess, sessionId),
     accessChoices: without(state.accessChoices, sessionId),
     modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),

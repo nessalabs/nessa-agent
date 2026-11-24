@@ -28,6 +28,16 @@
  * handshake is still the harness's. A prompt the file does not answer fails
  * the turn.
  *
+ * With `--refusals <directory>`, a check can make this harness refuse what
+ * a real one refuses, without a restart: while `<agent>.session-new` is in
+ * the directory, `session/new` answers ACP's `-32000` Authentication
+ * required, as a signed-out harness does; while `<agent>.session-resume` is
+ * there, `session/resume` fails with a generic `-32603` Internal error, as a
+ * harness that cannot carry its session on answers; while `<agent>.model` is
+ * there, a `session/set_config_option` for the model fails with a generic
+ * `-32603` Internal error and changes nothing, as Claude's harness answered
+ * a model it would not take while a turn ran. Each file is read at the call.
+ *
  * Paired --native-context-directory and --native-context-workspace absolute
  * paths opt one Claude workspace into native-history checks (#1164, C13).
  * New contexts have no saved marker until a prompt is accepted; resume of a
@@ -89,6 +99,7 @@ import {
 } from "./scripted-frames.mjs"
 import {
   promptArguments,
+  promptSource,
   promptFiles,
   promptImages,
   promptText,
@@ -111,6 +122,7 @@ try {
       scenario: { type: "string" },
       "native-context-directory": { type: "string" },
       "native-context-workspace": { type: "string" },
+      refusals: { type: "string" },
     },
     allowPositionals: true,
   })
@@ -123,6 +135,7 @@ const {
     scenario: scenarioPath,
     "native-context-directory": nativeDirectoryArgument,
     "native-context-workspace": nativeWorkspaceArgument,
+    refusals: refusalsDirectory,
   },
   positionals,
 } = parsed
@@ -158,6 +171,17 @@ if (nativeDirectoryArgument !== undefined || nativeWorkspaceArgument !== undefin
   } catch (error) {
     process.stderr.write(`scripted-agent: ${error.message}\n`)
     process.exit(2)
+  }
+}
+
+/** Whether the check asked this harness to refuse `what` (`--refusals`). */
+function refuses(what) {
+  if (!refusalsDirectory) return false
+  try {
+    statSync(join(refusalsDirectory, `${agent}.${what}`))
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -422,6 +446,7 @@ const handlers = {
   initialize: () => initializeResult(agent),
 
   "session/new": async (params) => {
+    if (refuses("session-new")) throw new ScriptedAuthenticationRequired()
     const opened = await openSession(params, randomUUID())
     if (focusedNativeWorkspace(params.cwd))
       nativeEvent("session/new", opened.sessionId, "opened")
@@ -435,6 +460,7 @@ const handlers = {
    * is what continues the work.
    */
   "session/resume": async (params) => {
+    if (refuses("session-resume")) throw new Error("Internal error")
     if (typeof params.sessionId !== "string" || params.sessionId === "")
       throw new Error("session/resume names no session")
     if (sessions.has(params.sessionId))
@@ -451,6 +477,7 @@ const handlers = {
 
   "session/set_config_option": ({ sessionId, configId, value }) => {
     const session = sessionOf(sessionId)
+    if (configId === "model" && refuses("model")) throw new Error("Internal error")
     const values = setOption(agent, session.values, configId, value)
     if (!values) throw new Error(`no config option ${configId}`)
     session.values = values
@@ -607,11 +634,16 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
             ...(JSON.stringify(matched.steps).includes("${prompt.arguments}")
               ? { arguments: promptArguments(text) }
               : {}),
+            ...(JSON.stringify(matched.steps).includes("${prompt.source")
+              ? { source: promptSource(text) }
+              : {}),
             images: promptImages(blocks),
             files: promptFiles(blocks),
           },
         ],
-        ["configuration", { model: session.values.model }],
+        // The model and the native permission mode the session runs this
+        // turn at, as the gateway last set them.
+        ["configuration", { model: session.values.model, mode: session.values.mode }],
         // Asked only by a turn that says them: git is not run for every turn.
         ...(JSON.stringify(matched.steps).includes("${credentials.")
           ? [["credentials", credentialFacts()]]

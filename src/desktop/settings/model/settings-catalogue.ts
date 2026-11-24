@@ -38,6 +38,17 @@ export const settingsCategories = [
     ],
   },
   {
+    id: "chat",
+    label: "Chat settings",
+    tabs: [
+      {
+        id: "decisions",
+        label: "Decisions",
+        keywords: "auto-pick autopick ask questions choices recommended wait",
+      },
+    ],
+  },
+  {
     id: "connections",
     label: "Connections",
     // MCP servers first: Accounts reads the vault, so opening Connections on
@@ -57,6 +68,11 @@ export const settingsCategories = [
         id: "devices",
         label: "Linked devices",
         keywords: "pair phone fingerprint approve revoke native",
+      },
+      {
+        id: "gateways",
+        label: "Gateways",
+        keywords: "remote server cloud box devbox wss connect multi gateway",
       },
     ],
   },
@@ -207,6 +223,20 @@ export const settingsEntries = [
     label: "Shortcuts",
     keywords: "keys hotkeys",
   },
+  // Chat settings › Decisions
+  {
+    id: "auto-pick",
+    tab: "decisions",
+    label: "Auto-pick recommended choice",
+    detail: "Only for easy-to-undo choices.",
+    keywords: "autopick answer default timeout",
+  },
+  {
+    id: "auto-pick-after",
+    tab: "decisions",
+    label: "Pick after",
+    keywords: "wait minutes hours",
+  },
   // Connections › Accounts
   {
     id: "github",
@@ -238,11 +268,34 @@ export const settingsEntries = [
     keywords: "cloud vm compute workspace token chatgpt claude",
   },
   {
+    id: "agent37",
+    tab: "accounts",
+    label: "Agent37",
+    detail: "Cloud workspaces on your own Agent37 account.",
+    keywords: "cloud vm compute workspace key agent37 instance",
+  },
+  {
+    id: "cloud-choice",
+    tab: "accounts",
+    label: "Default cloud",
+    detail:
+      "Where a thread's VM is made when its channel names no cloud. Shown once two clouds are connected.",
+    keywords: "cloud vm boat agent37 default provider workspace choose",
+  },
+  {
     id: "vault-passphrase",
     tab: "accounts",
     label: "Vault passphrase",
     detail: "Protect saved credentials on this gateway.",
     keywords: "change password security encryption unlock",
+  },
+  {
+    id: "vault-touch-id",
+    tab: "accounts",
+    label: "Unlock with Touch ID",
+    detail:
+      "Your fingerprint instead of your passphrase. Turn it on with “Use Touch ID” when you next unlock.",
+    keywords: "fingerprint biometric touch id unlock password passphrase keychain",
   },
   // Connections › MCP servers
   {
@@ -257,6 +310,14 @@ export const settingsEntries = [
     tab: "devices",
     label: "Linked devices",
     keywords: "pair pairing phone fingerprint approve revoke native listener",
+  },
+  // Connections › Gateways
+  {
+    id: "gateways",
+    tab: "gateways",
+    label: "Gateways",
+    detail: "Connect additional remote or cloud nessa-server gateways over wss://.",
+    keywords: "remote server cloud box devbox wss connect multi gateway",
   },
   // Privacy & Permissions › Access
   {

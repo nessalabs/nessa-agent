@@ -30,6 +30,8 @@ export {
   type IssueCredentialResult,
   type ServerApi,
   type WorkspaceApi,
+  type TerminalApi,
+  terminalInputLimit,
   type ChannelApi,
   type AppsApi,
   channelRefusal,
@@ -264,8 +266,12 @@ export {
   type LoginsMethod,
 } from "./application/logins-error.js"
 export {
+  ChatgptSignInEnd,
   LoginAgent,
   LoginsErrorCode,
+  type ChatgptAccount,
+  type ChatgptLogins,
+  type ChatgptSignIn,
   type LoginsStatus,
   type SavedLogin,
 } from "./generated/product.js"
@@ -366,6 +372,12 @@ export type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationSummary,
+  ConversationDecisionsResult,
+  OwnerAsk,
+  OwnerAskChoice,
+  OwnerDecision,
+  OwnerDecisionOutcome,
+  DecisionSettings,
   ConversationLifecycle,
   ConversationLifecyclePhase,
   ConversationStartupFailure,
@@ -522,6 +534,14 @@ export type {
   WorkspaceWidget,
   WorkspaceWindow,
 } from "./generated/product.js"
+export type {
+  TerminalListed,
+  TerminalOpenParams,
+  TerminalOutput,
+  TerminalProgramStatus,
+  TerminalSummary,
+  TerminalViewParams,
+} from "./generated/product.js"
 
 export { type VaultApi } from "./presentation/vault-api.js"
 export { NessaVaultError } from "./application/vault-error.js"
@@ -534,6 +554,7 @@ export {
 } from "./generated/product.js"
 
 export type { DevicesApi } from "./presentation/devices-api.js"
+export type { ReplyStyleApi } from "./presentation/reply-style-api.js"
 export type {
   DeviceDisk,
   DeviceMachine,
@@ -545,10 +566,26 @@ export type {
   DevicesPool,
   PoolPreference,
 } from "./generated/product.js"
+export type {
+  ReplyStyleChoice,
+  ReplyStyleMode,
+  ReplyStyleRole,
+  ReplyStyleRoles,
+  ReplyStyles,
+} from "./generated/product.js"
+export type { Agent37Api } from "./presentation/agent37-api.js"
+export { NessaAgent37Error } from "./presentation/agent37-api.js"
+export type { CloudApi } from "./presentation/cloud-api.js"
+export { NessaCloudError } from "./presentation/cloud-api.js"
 export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,
   type BoatStatus,
+  type Agent37Status,
+  type Agent37SaveParams,
+  type Cloud,
+  type CloudChoice,
+  CloudErrorCode,
   type BoatRuntimeReadParams,
   type BoatRuntimeSetParams,
   type BoatRuntimeSettings,

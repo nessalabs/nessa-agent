@@ -23,6 +23,216 @@ snapshot, independently of the bounded message view: later Injected steering
 children do not hide their running parent. Queued work requires an explicit
 execution identity. A stop does not delete or close the conversation.
 
+`close_thread` with no argument closes the calling thread once its turn ends.
+With `threadId` it closes a thread the caller created with `create_thread`:
+the SDK's ownership record of that spawn (its `parent_session`) is the one
+place that says who created it. That creator is a fact on the thread, and
+Cedar's `owner.close_created` (`conversation.close_created`) decides whether
+the asking turn's thread is it; any other thread is refused with
+`not_your_thread`.
+The close is the same mark either way: a child open now stops once its turn
+ends, and one not open stays parked until a new message opens it.
+
+`read_turn {threadId, executionId}` reads where a saved turn's input came
+from and follows it back. A message from an agent names the turn it was sent
+from (`Agent(source conversation, source execution)` below), and a resumed turn
+names the turn it picks up; `read_turn` follows those links, at most 8, until
+an input nobody relayed. A usage-limit continuation the gateway sent is
+followed back the same way, to the turn it continues. Each turn in the answer
+says its `origin` (`person`, `grant`, `agent`, `resumed`, `continued`, `event`,
+`app`, `internal`) and what it `said`, exactly as saved; `startedBy` names the
+origin the chain starts at.
+
+`ask_owner {question, choices, recommended, reason}` asks the person who
+owns the conversation to make one decision. The question is one line of at
+most 20 words; there are two to four choices, each a short label and one line
+on what happens if picked; `recommended` is the index of the one the agent
+would pick and `reason` says why in one line. Anything longer, a line break,
+two labels alike or a recommendation past the choices is refused before
+admission with a code that says what to fix (`ask_question_too_long`,
+`ask_line_too_long`, `ask_choices`, `ask_recommended`, `ask_not_one_line`),
+so a refused ask writes no audit record.
+
+The ask is kept on the conversation's summary (`summaries.ask`; a later ask
+replaces it) and nowhere else, written as every summary is, under the
+summary lock a delete erases it under. Every list row of that conversation
+the owner reads carries it as `ask`, which is how each window and the
+floating panel learn of it, followed or not; a device the conversation is
+shared with lists the conversation without it. Asking moves the conversation
+to the top of the list and out of the archive, so it is never past the
+list's bound or out of sight. The owner's next message in the conversation
+is the answer, a tapped choice or anything they type. The ask waiting when
+the message is sent is the one it answers, and the summary write that
+records the message also takes the ask down: the list never shows the
+message with the question still up, and one the agent asks after it stays.
+A message refused on its way writes no summary and answers nothing, and
+neither does a message from someone the conversation is shared with, a
+usage-limit continuation or an external event the gateway sends for the
+owner: whether a message is the owner's own is read from the same saved
+facts `read_turn` reads. Known limits: a queued answer the owner later
+removes still took the ask down, and a tapped choice still waiting to send
+when the agent asks again answers the newer ask. Cedar's `owner.ask_owner` (`conversation.ask_owner`) admits
+any turn of the owner's agents on their own live conversation, one another
+agent started included: a coordinator woken by a thread's report is who most
+needs to ask. Asking changes nothing else.
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Tools as nessa-agents
+    participant Meta as metadata summaries.ask
+    participant List as list subscription
+    participant Window as desktop window
+    participant Panel as floating panel
+    participant Host as system notices
+    Agent->>Tools: ask_owner {question, choices, recommended, reason}
+    Tools->>Tools: check bounds (refused before admission)
+    Tools->>Meta: keep ask on the summary (replaces any earlier one; top of list, unarchived)
+    Tools-->>Agent: {asked, askId}: end your turn
+    Note over List: the tool result commits a record and wakes every list
+    List->>Window: row.ask
+    List->>Panel: row.ask
+    Window->>Host: notice titled with the question (review notice path)
+    Panel->>Panel: tab added at the end with a dot, not shown
+    Window->>Window: card with choices in the chat
+    Window->>Meta: owner's message (a tapped label): its summary write takes the ask down
+    List->>Window: row without ask: card and notice go
+```
+
+`request_access {access, reason}` asks the owner to raise the conversation's
+access to `auto` or `full`, for the agent's one-line `reason`. It is an
+`ask_owner` ask that Nessa writes: the question ("Allow full access in this
+chat?"), the choices Approve and Not now, and Not now as the recommended one,
+so nothing that picks for the person ever raises access (an auto-pick reads
+`OwnerAsk::auto_pickable`, which is false for it; no auto-pick ships yet). The ask carries `access`, the
+mode, and the list row adds the three plain lines of what approving allows
+(`RaisedAccess::grants`, the one place those words live). A stored row whose
+question or choices differ from what Nessa writes for its access is refused
+as damaged. A chat already at that access or more is not asked
+(`access_held`); that check reads the saved mode, so a change landing at the
+same moment leaves at most one card too many or too few, and grants nothing.
+It is admitted under its own action, `conversation.request_access`
+(`owner.request_access`), in a turn the owner started only: the card speaks
+in Nessa's words, so an agent nobody asked to work never puts it in front of
+the owner.
+
+Approving is the person's: a client draws the ask as the red access card and,
+on Approve, first sends the owner's own `conversation.setApprovalMode` (the
+same command the composer's access picker sends), and sends Approve as their
+message only once the conversation's view says it runs at that access: the
+end state, not the command's reply, so a change held for a turn's end or
+still on its way sends nothing yet, and an ask that leaves first sends
+nothing at all. The card stays to list what was allowed. Approve waits while
+a turn is at work, since the Approve it sends goes as the person's next
+message. (The composer's own picker changes a running turn's access at once.) The person can
+still type "Approve", so the word is their answer and never the agent's
+access: the agent reads that from its next commands.
+
+Both windows draw the card from one record per chat that one table moves
+(`src/conversation/model/access-approval.ts`, `stepApproval`, a test per
+row). The window keeps the record, not the card
+(`src/conversation/ui/access-approvals.ts`), so a card that leaves the
+screen while the access waits for a turn's end finds it again. Each window states the chat's facts as their owners say them, and each
+look at them is judged whole, the ask first: the ask on the list row, the
+access the conversation runs at, where a change on its way is headed, a turn
+at work, and the view's revision. "At" an access means that access or more
+(Full is more than Auto, Auto than Ask), as the gateway's `held_at` counts
+it: Approve never lowers the chat's access, and a chat already there sends
+no command.
+
+| State | Event | Next |
+| --- | --- | --- |
+| (none) | Approve, chat already at the access | raising, then raised taken, no command |
+| raising | the access command is taken, or held for the turn's end | waiting, at this view, then that same look judged as waiting is |
+| raising | another change is on its way, or it is refused | ended, saying which |
+| raising, waiting, due, ended | the row's ask is not this one (in any look, the raise's own too) | gone, nothing sent |
+| waiting | a change on its way to at least this access, or a turn at work | waiting |
+| waiting | a change on its way to less | ended: didn't change |
+| waiting | runs at this access | due |
+| waiting | access not known, no change named | waiting |
+| waiting | runs at less, in the view of the raise | waiting |
+| waiting | runs at less, in a newer view | ended: didn't change |
+| due | a card starts the answer | answering |
+| answering | anything (the ask leaving is this answer landing) | answering |
+| answering | the answer went / did not | approved / ended: not sent |
+| approved | no ask, or this one, at this access | approved |
+| approved | another ask, or runs at less | gone |
+| ended | Approve again | raising |
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Tools as nessa-agents
+    participant Meta as summaries.ask
+    participant Window as desktop window or panel
+    participant Gateway as conversation.setApprovalMode
+    Agent->>Tools: request_access {access: full, reason}
+    Tools->>Meta: Nessa's ask {question, Approve | Not now, recommended: Not now, access: full}
+    Tools-->>Agent: {asked, askId}: end your turn
+    Meta-->>Window: row.ask with access {mode, grants}
+    Window->>Window: red card: question, reason, Approve, Not now
+    Window->>Gateway: owner's own access change to full
+    Gateway-->>Window: taken
+    Gateway-->>Window: conversation view: access full, nothing changing
+    Window->>Meta: owner's message "Approve" takes the ask down
+    Window->>Window: card lists the three grants
+```
+
+### Setting levels
+
+Every Nessa setting has one level, and the access policy decides from the
+level alone what an agent may do with it (`setting.change`,
+`domain::Setting::level`): the owner on their own surface changes any level
+(`owner.setting_change`), and a turn the owner started changes only one at
+`agent_changes` (`agent.setting_change`), such as a reply style or a model.
+`agent_fills` settings (MCP servers, channel defaults) are saved by the
+owner's Save, `owner_types` ones (keys, tokens, sign-ins) are only ever typed
+by the owner, and `raises_access` ones (access, sharing, linking, permission
+rules, trusted apps) are never an agent's: of these only a chat's access can
+be asked for today, on the red card above. A setting listed in
+`domain::Setting` cannot compile without a level; a new setting method is
+listed there by whoever adds it, as nothing ties the two.
+`application::setting_change` is how a caller asks. No production caller uses it yet: settings shown in the chat
+(the next step) are the first, and until then each setting keeps the guard it
+had. The level is a fact Nessa states about the setting, as a resource's
+owner is: the policy holds the rule for each level, and the one match in
+`Setting::level` keeps a listed setting from shipping without one.
+
+The gateway submits continuations and external events with the person as
+sender, so `read_turn` tells them apart from typed turns by facts each kept by
+one owner and never changed after admission:
+
+| Origin | Saved fact | Owner |
+| --- | --- | --- |
+| `continued` | the turn's execution id is a scheduled row's, which names the turn it continues | scheduled-message store (`continued_from`) |
+| `event` | the turn's surface is `event:<source>` and no credential has that id | event admission (`EVENT_SURFACE_PREFIX`) |
+| `person` / `grant` `device` | the turn's surface is the credential it was sent with; how that credential was issued says what it was issued to: `phone` (owner phone pairing), `computer` (a bearer token on the gateway's computer: the desktop app or command line), `pairedDevice`, `peer`, or `unknown` | credential registry (`CredentialDeviceSource`) |
+
+A credential's proof never changes once issued, so a revoked phone still reads
+as the phone its old turns came from. There is no device name: pairing keeps
+none. It keeps no copy: the
+SDK records are written once at admission and never changed, so the words the
+chain ends at are the owner's own. With `earlier` (at most 3) a chain that
+reaches the person also brings their messages before it in that thread, and
+the thread's first, so the agent can tell what they meant. It decides nothing either. The reading agent
+judges whether those words cover what it is asked to do.
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant A as Parent agent
+    participant G as Gateway
+    participant B as Child agent
+    P->>G: "close it when done" (saved: person, turn 7)
+    G->>A: turn 7
+    A->>G: send_message(child, "please close")
+    G->>B: Agent-authored input {A, turn 7}: "please close"
+    B->>G: read_turn(A, turn 7)
+    G-->>B: [{origin: person, device: phone, said: "close it when done"}], startedBy: person
+    A->>G: close_thread {threadId: child}
+    G-->>A: closing (A created it)
+```
+
 An optional `requestId` makes an intentional command retry recoverable. Creation,
 submission and stop use the existing durable command coordinators. Default
 conversation/execution IDs derive from source identity, request and purpose, so
@@ -182,6 +392,9 @@ the message text.
 | Target access is refused before submission | No target turn or note | An earlier saved target receipt remains the authority for an exact retry |
 | Public input admission, incremental save or full restore receives disagreeing sender and initiation origins | Reject before accepting or appending the input | Prior committed history remains unchanged; encoding must not repair the sender |
 | An agent-authored target turn calls an owner-only agent tool | Cedar sees agent initiation and refuses | The prior owner's authorization is not inherited by the target turn |
+| An agent-authored target turn calls `read_turn` | Cedar's `owner.read_turns` admits it on the owner's live conversations: it only reads | Reading the chain grants nothing; every other agent tool is still refused |
+| An agent-authored target turn calls `ask_owner` | Cedar's `owner.ask_owner` admits it on the owner's live conversations: it only asks | The owner's next message is the answer; asking grants nothing else |
+| A turn calls `request_access` | Cedar's `owner.request_access` admits it only in a turn the owner started; Nessa writes the ask | Only the owner's own `setApprovalMode` raises access; the agent's word never does |
 | An agent-authored target turn lists command hosts or calls `run` | The command policy receives an Agent principal; Cedar refuses host and run questions with `command.agent_host` | No command lease starts; an unpermitted host is not offered, and the policy refusal is logged |
 
 

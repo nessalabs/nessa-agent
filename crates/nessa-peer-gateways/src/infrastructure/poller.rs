@@ -11,7 +11,7 @@
 //!   --> each due peer, up to READS_AT_ONCE:
 //!   take that peer's turn --> re-read its record; gone or revoked --> drop it
 //!   pinned status (NativeEnrollmentClient over its PeerSlot)
-//!     Active   --> the client saves the credential --> RetainedCache::read
+//!     Active   --> the client saves the credential --> RetainedCache::follow_grants
 //!                    Refused                    --> pinned status again
 //!                    ResetRequired, CacheDamaged --> empty the cache, read once more
 //!     Terminal or Unclaimed --> the client removes the cache and marks the
@@ -24,7 +24,10 @@
 //!      the queue, or the poller stops)
 //!   free the read slot
 //! ```
-//! Arrows are calls, in order. No read happens without a fresh Active
+//! A follow that has stored its snapshot frees the place once that wave's
+//! records have left the queue, and keeps the peer's turn. A later withdrawal
+//! takes a place again for that wave only, so a caught-up peer does not leave
+//! the next one due. Arrows are calls, in order. No read happens without a fresh Active
 //! status. Local follow selection may drop a replica before dialing;
 //! remote authorization is removed only after a Terminal status: a refused
 //! `openProduct` is redacted, so a revoked credential and a full pool look
@@ -101,9 +104,12 @@ pub const POLL_BACKOFF_CAP: Duration = Duration::from_secs(15 * 60);
 /// The longest one read of a peer runs before it ends incomplete. Each peer
 /// has this timeout of its own.
 pub const READ_BUDGET: Duration = Duration::from_secs(60);
-/// How many peers are read at once. One more stays due until a read finishes
-/// and frees a place; it is not failed, and it is not skipped. A slow peer
-/// holds only its own place, and only until its own [`READ_BUDGET`].
+/// How many peers are admitted to enqueue at once. One more stays due until
+/// a place is free; it is not failed, and it is not skipped. A slow peer
+/// holds only its own place, and only until its own [`READ_BUDGET`]. A follow
+/// that has stored its snapshot frees the place once that wave's audit
+/// records have left the queue, and takes one again only for a later
+/// withdrawal wave.
 pub const READS_AT_ONCE: usize = 4;
 const _: () = assert!(READS_AT_ONCE >= 1);
 /// The most conversations one read withdraws: sixteen records of
@@ -244,10 +250,12 @@ struct Shared {
 
 struct Poller {
     shared: Arc<Shared>,
-    /// Places for reads running at once. A cycle holds one from the moment
-    /// it starts until its audit records have left the queue, or the poller
-    /// stops, so at most [`READS_AT_ONCE`] cycles are enqueueing together
-    /// (`a_read_slot_stays_until_queued_records_leave`).
+    /// Places for cycles that are enqueueing audit records. A cycle holds one
+    /// from the moment it starts until that wave's records have left the
+    /// queue, or the poller stops, so at most [`READS_AT_ONCE`] cycles are
+    /// enqueueing together
+    /// (`a_read_slot_stays_until_queued_records_leave`). A follow that is
+    /// caught up and idle holds none.
     reads: Arc<Semaphore>,
     due: HashMap<DeviceKey, Due>,
     running: JoinSet<Option<Pace>>,
@@ -333,10 +341,11 @@ impl Poller {
                 continue;
             };
             let shared = Arc::clone(&self.shared);
+            let reads = Arc::clone(&self.reads);
             let key = *key;
             let handle = self
                 .running
-                .spawn(async move { shared.cycle(key, permit).await });
+                .spawn(async move { shared.cycle(key, reads, permit).await });
             self.running_keys.insert(handle.id(), key);
         }
     }
@@ -466,9 +475,77 @@ impl Poller {
     }
 }
 
+/// One cycle's read place. The permit is in the mutex only between steps of
+/// the same cycle; while a wave is enqueueing it is held by that step.
+struct ReadPlace {
+    reads: Arc<Semaphore>,
+    permit: Mutex<Option<OwnedSemaphorePermit>>,
+}
+
 impl Shared {
     fn stopping(&self) -> bool {
         *self.stopped.borrow()
+    }
+    /// Take a read place if this wave does not already hold one. `false` once
+    /// the poller is stopping, this peer's cycle is stopped, or the semaphore
+    /// is closed. The wait does not outlive `peer.forget`, `peer.follow`, or
+    /// `peer.relay` for this peer.
+    async fn hold_place(
+        &self,
+        place: &ReadPlace,
+        permit: &mut Option<OwnedSemaphorePermit>,
+        stopped: &mut watch::Receiver<bool>,
+        cycle: &CycleStop,
+    ) -> bool {
+        if permit.is_some() {
+            return true;
+        }
+        if self.stopping() {
+            return false;
+        }
+        let mut stopped = stopped.clone();
+        tokio::select! {
+            biased;
+            () = until_stopped(&mut stopped) => false,
+            () = cycle.stopped() => false,
+            acquired = place.reads.clone().acquire_owned() => {
+                match acquired {
+                    Ok(held) => {
+                        *permit = Some(held);
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+        }
+    }
+    /// Wait until `changes` have left the audit queue, then free the place.
+    /// An empty wave only frees the place. `false` when this peer's cycle is
+    /// stopped first: the records that are still queued are put back, the
+    /// place stays held, and the caller gives the turn back before waiting
+    /// on them.
+    async fn release_place<'a>(
+        &'a self,
+        changes: &mut Vec<PollerRecord<'a>>,
+        permit: &mut Option<OwnedSemaphorePermit>,
+        stopped: &mut watch::Receiver<bool>,
+        cycle: &CycleStop,
+    ) -> bool {
+        if changes.is_empty() {
+            drop(permit.take());
+            return true;
+        }
+        let pending = self
+            .commands
+            .poller_kept(std::mem::take(changes), stopped, Some(cycle))
+            .await;
+        if pending.is_empty() {
+            drop(permit.take());
+            true
+        } else {
+            changes.extend(pending);
+            false
+        }
     }
     fn now(&self) -> u64 {
         self.commands.clock.elapsed_ms()
@@ -497,14 +574,31 @@ impl Shared {
     /// poller is stopping
     /// (`a_read_slot_stays_until_queued_records_leave`). `None` when the
     /// poller stopped. A failure is this peer's pace; it is not the pass's.
-    async fn cycle(&self, key: DeviceKey, permit: OwnedSemaphorePermit) -> Option<Pace> {
+    async fn cycle(
+        &self,
+        key: DeviceKey,
+        reads: Arc<Semaphore>,
+        permit: OwnedSemaphorePermit,
+    ) -> Option<Pace> {
         let cycle = CycleStop::new();
         let turn = match self.take_turn(key, &cycle).await {
             Some(turn) => turn,
             None => return None,
         };
         let mut changes = Vec::new();
-        let pace = self.held(key, &cycle, &mut changes).await;
+        // Taken out while this cycle is enqueueing, and dropped once that
+        // wave's records have left the queue. A caught-up follow puts it
+        // back only for a later withdrawal wave.
+        let place = Arc::new(ReadPlace {
+            reads,
+            permit: Mutex::new(Some(permit)),
+        });
+        let pace = self.held(key, &cycle, &mut changes, place.clone()).await;
+        let permit = place
+            .permit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         // The turn is given back first: an audit, however slow, never holds
         // it. The read slot stays until the records leave the queue, so
         // another cycle cannot enqueue while they are still queued. The
@@ -515,7 +609,7 @@ impl Shared {
         // no replacement cycle starts, and shutdown can drain the writer.
         drop(turn);
         let mut stopped = self.stopped.clone();
-        self.commands.poller_kept(changes, &mut stopped).await;
+        let _left = self.commands.poller_kept(changes, &mut stopped, None).await;
         drop(permit);
         pace
     }
@@ -527,6 +621,7 @@ impl Shared {
         key: DeviceKey,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
+        place: Arc<ReadPlace>,
     ) -> Option<Pace> {
         // Forgotten, ended or replaced since the listing: what is read is
         // what the record says now, under the turn.
@@ -569,7 +664,14 @@ impl Shared {
                 access_epoch,
             }) => {
                 let mut read = self
-                    .read(&record, &receiver, access_epoch, cycle, changes)
+                    .read(
+                        &record,
+                        &receiver,
+                        access_epoch,
+                        cycle,
+                        changes,
+                        Arc::clone(&place),
+                    )
                     .await;
                 if let Some(cause) = match &read {
                     Some((Err(ReadFailure::ResetRequired), _)) => Some(PollerCause::ResetRequired),
@@ -577,9 +679,24 @@ impl Shared {
                     _ => None,
                 } {
                     // Derived from the peer: emptied and read again from nothing.
+                    // The place is held across the audit of that emptying, including
+                    // when the failed read had already freed it after a snapshot.
+                    let mut permit = place
+                        .permit
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    let mut stopped = self.stopped.clone();
+                    if !self
+                        .hold_place(&place, &mut permit, &mut stopped, cycle)
+                        .await
+                    {
+                        return self.stopped_short();
+                    }
                     self.reset(key, cause, changes).await;
+                    *place.permit.lock().unwrap_or_else(PoisonError::into_inner) = permit;
                     read = self
-                        .read(&record, &receiver, access_epoch, cycle, changes)
+                        .read(&record, &receiver, access_epoch, cycle, changes, place)
                         .await;
                 }
                 match read {
@@ -754,6 +871,7 @@ impl Shared {
         access_epoch: u64,
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
+        place: Arc<ReadPlace>,
     ) -> Option<(Result<ReadReport, ReadFailure>, bool)> {
         let key = *record.key();
         let records = self.commands.records().clone();
@@ -768,6 +886,9 @@ impl Shared {
             cycle.read().clone(),
             self.inputs.policy.read_budget,
         );
+        let commands = self.commands.clone();
+        let (live_tx, mut live_rx) = tokio::sync::mpsc::channel(1);
+        let (audit_tx, mut audit_rx) = tokio::sync::mpsc::unbounded_channel();
         let (work, withdrawn) = spawn_read(move |withdrawn| {
             let fail = |failure| (Err(failure), false);
             let credential = match records.slot(key).load_credential() {
@@ -787,26 +908,18 @@ impl Shared {
             let rule = loaded
                 .map(|follow| follow.rule)
                 .unwrap_or_else(FollowRule::none);
-            if rule.conversations().is_empty() {
-                return (
-                    Ok(ReadReport {
-                        moved: false,
-                        complete: true,
-                        conversations: 0,
-                    }),
-                    false,
-                );
-            }
             let mut cache = match RetainedCache::open_keeping(
                 &records.cache_path(&key),
                 rule.keep_bytes(),
-                wall,
+                wall.clone(),
                 clock,
             ) {
                 Ok(cache) => cache,
                 Err(failure) => return fail(failure),
             };
-            cache.read_followed(
+            let live_tx = live_tx.clone();
+            let audit_tx = audit_tx.clone();
+            cache.follow_grants(
                 ReaderAccess {
                     role: ReaderRole::GrantedPeer,
                     address,
@@ -823,40 +936,170 @@ impl Shared {
                 budget,
                 WITHDRAWN_PER_READ,
                 withdrawn,
+                move |ids| {
+                    let _ = audit_tx.send(ids.to_vec());
+                },
+                move |count| {
+                    commands.set_sync(
+                        key,
+                        Some(PeerSync {
+                            state: SyncState::Synced,
+                            last_synced_ms: Some(wall.unix_milliseconds()),
+                            conversations: Some(count),
+                        }),
+                    );
+                    // The snapshot is in the cache now. `follow_grants` stays
+                    // up after this, so the window cannot wait for the read
+                    // to return before it lists the chat.
+                    commands.note_shared_chats();
+                    let _ = live_tx.try_send(());
+                },
             )
         });
         tokio::pin!(work);
         let mut stopped = self.stopped.clone();
-        let ended = tokio::select! {
-            ended = &mut work => ended,
-            () = until_stopped(&mut stopped) => {
-                // Shut the read's sockets and wait for it.
-                cycle.stop();
-                (&mut work).await
+        // Held while this wave is enqueueing. Dropped once those records have
+        // left the queue, including after the snapshot, so a caught-up follow
+        // does not keep a place the next peer needs. A later withdrawal takes
+        // a place again for that wave only.
+        let mut permit = place
+            .permit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let mut recorded = 0_usize;
+        let mut synced = false;
+        let ended = loop {
+            tokio::select! {
+                ended = &mut work => break ended,
+                batch = audit_rx.recv() => {
+                    let Some(batch) = batch else {
+                        continue;
+                    };
+                    if !self
+                        .keep_batch(
+                            key,
+                            &batch,
+                            &place,
+                            &mut permit,
+                            &mut stopped,
+                            cycle,
+                            changes,
+                            &mut recorded,
+                        )
+                        .await
+                    {
+                        cycle.stop();
+                        break (&mut work).await;
+                    }
+                }
+                Some(()) = live_rx.recv(), if !synced => {
+                    // The snapshot is stored. This wave's records leave the
+                    // queue and the place is freed. The subscription stays up
+                    // on this peer's turn.
+                    synced = true;
+                    if !self
+                        .release_place(changes, &mut permit, &mut stopped, cycle)
+                        .await
+                    {
+                        cycle.stop();
+                        break (&mut work).await;
+                    }
+                }
+                () = until_stopped(&mut stopped) => {
+                    // Shut the read's sockets and wait for it.
+                    cycle.stop();
+                    break (&mut work).await;
+                }
             }
         };
-        let (result, withdrawn, retained) = read_ended(ended, &withdrawn);
-        if !withdrawn.is_empty() {
-            // Read after the fact: each withdrawal removed rows inside the
-            // cache, so the record and whether a cache is there are as the
-            // read left them, before and after alike.
-            let held = self.commands.holding(key).await;
-            for conversations in withdrawn.chunks(WITHDRAWN_PER_RECORD) {
-                changes.push(self.commands.poller_changed(
+        while let Ok(batch) = audit_rx.try_recv() {
+            let _ = self
+                .keep_batch(
                     key,
-                    PollerCause::Withdrawn {
-                        conversations: conversations.to_vec(),
-                    },
-                    held.clone(),
-                    held.clone(),
-                    Ok(()),
-                ));
-            }
+                    &batch,
+                    &place,
+                    &mut permit,
+                    &mut stopped,
+                    cycle,
+                    changes,
+                    &mut recorded,
+                )
+                .await;
+        }
+        let (result, withdrawn, retained) = read_ended(ended, &withdrawn);
+        let pending = withdrawn.get(recorded..).unwrap_or(&[]);
+        if !pending.is_empty() {
+            let _ = self
+                .keep_batch(
+                    key,
+                    pending,
+                    &place,
+                    &mut permit,
+                    &mut stopped,
+                    cycle,
+                    changes,
+                    &mut recorded,
+                )
+                .await;
+        }
+        if let Some(held) = permit {
+            *place.permit.lock().unwrap_or_else(PoisonError::into_inner) = Some(held);
         }
         if self.stopping() {
             return None;
         }
         Some((result, retained))
+    }
+
+    /// Record `batch` and free the place once that wave has left the queue.
+    /// `false` when this peer's cycle or the poller has stopped: the batch is
+    /// still recorded, without waiting for a place, so the turn can be given
+    /// back.
+    #[allow(clippy::too_many_arguments)]
+    async fn keep_batch<'a>(
+        &'a self,
+        key: DeviceKey,
+        batch: &[String],
+        place: &ReadPlace,
+        permit: &mut Option<OwnedSemaphorePermit>,
+        stopped: &mut watch::Receiver<bool>,
+        cycle: &CycleStop,
+        changes: &mut Vec<PollerRecord<'a>>,
+        recorded: &mut usize,
+    ) -> bool {
+        let held = self.hold_place(place, permit, stopped, cycle).await;
+        *recorded += batch.len();
+        self.audit_withdrawn(key, batch, changes).await;
+        if !held {
+            return false;
+        }
+        self.release_place(changes, permit, stopped, cycle).await
+    }
+
+    /// Record withdrawals while the follow is still up. The rows are already
+    /// gone, so before and after name the same holding. A refused record
+    /// leaves the deletion in place. The cycle drains the answers after it
+    /// gives the turn back, and the follow stops after
+    /// [`WITHDRAWN_PER_READ`] so this batch fits the audit queue.
+    async fn audit_withdrawn<'a>(
+        &'a self,
+        key: DeviceKey,
+        conversations: &[String],
+        changes: &mut Vec<PollerRecord<'a>>,
+    ) {
+        let held = self.commands.holding(key).await;
+        for conversations in conversations.chunks(WITHDRAWN_PER_RECORD) {
+            changes.push(self.commands.poller_changed(
+                key,
+                PollerCause::Withdrawn {
+                    conversations: conversations.to_vec(),
+                },
+                held.clone(),
+                held.clone(),
+                Ok(()),
+            ));
+        }
     }
 
     fn read_done(&self, key: DeviceKey, report: ReadReport) -> Pace {

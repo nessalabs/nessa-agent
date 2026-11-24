@@ -24,6 +24,7 @@ import { ClockProvider } from "../../../../clock"
 import {
   focusPane,
   loadWorkspace,
+  newSession,
   openBeside,
   openSession,
   openWidget,
@@ -171,6 +172,20 @@ const tabTitles = () =>
   [...panel().querySelectorAll('.workspace-panel-tabs [role="tab"]')].map((tab) =>
     tab.getAttribute("title"),
   )
+/** The focused pane's Chat context column, when it shows. */
+const paneContext = () => host.querySelector("[data-pane-focused] [data-chat-context]")
+/**
+ * A plugin's part for the chat lives in Chat context (`chat-context.tsx`),
+ * a column in the chat's pane: shown from the pane header's button, then the
+ * sample plugin's own.
+ */
+const openAccessory = async () => {
+  if (!paneContext())
+    await click(host.querySelector("[data-pane-focused] [data-chat-context-button]"))
+  await click(
+    host.querySelector("[data-pane-focused] [data-chat-context] [data-sample-accessory]"),
+  )
+}
 const panelOf = (store: Store, sessionId: string) =>
   store.getState().workspace.panels[sessionId]
 const bodyOf = (scope: Element | null | undefined) =>
@@ -206,7 +221,7 @@ describe("the chat's panel", () => {
   it("holds each widget opened for the chat as a tab, the last in front, each once", async () => {
     const store = await render()
     await openTrail(store)
-    await click(host.querySelector("[data-sample-accessory]"))
+    await openAccessory()
     expect(tabTitles()).toEqual(["Sample trail", "Sample notes"])
     expect(inFront().querySelector('[data-sample-view="notes"]')).not.toBeNull()
     await click(button(host.querySelector("[data-sample-card]"), "Open"))
@@ -218,7 +233,7 @@ describe("the chat's panel", () => {
     const store = await render()
     await openTrail(store)
     await click(inFront().querySelector('[data-sample-step="2"]'))
-    await click(host.querySelector("[data-sample-accessory]"))
+    await openAccessory()
     const tab = (title: string) =>
       present(
         panel().querySelector<HTMLElement>(
@@ -234,7 +249,7 @@ describe("the chat's panel", () => {
   it("closes a tab by its close, the next coming to the front, and says so once none is left", async () => {
     const store = await render()
     await openTrail(store)
-    await click(host.querySelector("[data-sample-accessory]"))
+    await openAccessory()
     await click(
       panel().querySelector(
         '[aria-label^="Close Sample notes"], [title^="Close Sample notes"]',
@@ -251,7 +266,7 @@ describe("the chat's panel", () => {
   it("keeps the caret in the panel as a tab closes, and gives it to the chat once none is left", async () => {
     const store = await render()
     await openTrail(store)
-    await click(host.querySelector("[data-sample-accessory]"))
+    await openAccessory()
     const closeOf = (title: string) =>
       present(
         panel().querySelector<HTMLElement>(`[title^="Close ${title}"]`),
@@ -345,9 +360,16 @@ describe("the chat's panel", () => {
 })
 
 describe("the session's header", () => {
-  it("draws each plugin's accessory for its session, which opens in that session's panel", async () => {
+  it("draws each plugin's accessory for its session in its Chat context, which opens in that session's panel", async () => {
     const store = await render()
-    const accessory = host.querySelector("[data-sample-accessory]")
+    // Not in the header any more: Chat context holds everything about a chat.
+    expect(
+      host.querySelector("[data-pane-focused] header [data-sample-accessory]"),
+    ).toBeNull()
+    await click(host.querySelector("[data-pane-focused] [data-chat-context-button]"))
+    const accessory = host.querySelector(
+      "[data-pane-focused] [data-chat-context] [data-sample-accessory]",
+    )
     expect(accessory?.textContent).toBe("Notes")
     await click(accessory)
     expect(shown(store)).toEqual(["a"])
@@ -363,6 +385,71 @@ describe("the session's header", () => {
     expect(header.querySelector(".workspace-spacer")?.nextElementSibling?.className).toBe(
       "workspace-pane-actions",
     )
+  })
+})
+
+describe("Chat context", () => {
+  it("shows in the chat's own pane from its header's button, and folds each section from its header", async () => {
+    const store = await render()
+    await openTrail(store)
+    const toggle = () =>
+      present(
+        host.querySelector<HTMLElement>("[data-pane-focused] [data-chat-context-button]"),
+        "the Chat context button",
+      )
+    expect(paneContext()).toBeNull()
+    await click(toggle())
+    expect(toggle().getAttribute("aria-pressed")).toBe("true")
+    // In the pane, beside the conversation, never in the window's panel.
+    expect(paneContext()).not.toBeNull()
+    expect(panel().querySelector("[data-chat-context]")).toBeNull()
+    expect(tabTitles()).toEqual(["Sample trail"])
+    const section = (id: string) =>
+      present(paneContext()?.querySelector(`[data-chat-context-section="${id}"]`), id)
+    expect(
+      [...(paneContext()?.querySelectorAll("[data-chat-context-section]") ?? [])].map(
+        (each) => each.getAttribute("data-chat-context-section"),
+      ),
+    ).toEqual(["environment", "context", "outputs"])
+    await click(section("environment").querySelector("button[aria-expanded]"))
+    expect(section("environment").getAttribute("data-open")).toBe("false")
+    expect(section("environment").querySelector(".chat-context-body")).toBeNull()
+    // Hidden and shown again, folded stays folded.
+    await click(toggle())
+    expect(paneContext()).toBeNull()
+    await click(toggle())
+    expect(section("environment").getAttribute("data-open")).toBe("false")
+    await click(section("environment").querySelector("button[aria-expanded]"))
+    expect(section("environment").getAttribute("data-open")).toBe("true")
+  })
+
+  it("shows in the pane whose header was clicked, and only there", async () => {
+    const store = await render()
+    await act(async () => void store.dispatch(openBeside({ sessionId: "b" })))
+    await frames()
+    const first = firstPane(store)
+    await click(
+      host.querySelector(`[data-pane-key="${first}"] [data-chat-context-button]`),
+    )
+    expect(host.querySelectorAll("[data-chat-context]")).toHaveLength(1)
+    expect(
+      host.querySelector(`[data-pane-key="${first}"] [data-chat-context]`),
+    ).not.toBeNull()
+    expect(panelOf(store, "a")).toBeUndefined()
+    expect(panelOf(store, "b")).toBeUndefined()
+  })
+
+  it("is not offered on a new session's home, which has none to show", async () => {
+    const store = await render()
+    expect(
+      host.querySelector("[data-pane-focused] [data-chat-context-button]"),
+    ).not.toBeNull()
+    await act(async () => void store.dispatch(newSession()))
+    await frames()
+    expect(host.querySelector("[data-pane-focused] .workspace-pane-home")).not.toBeNull()
+    expect(
+      host.querySelector("[data-pane-focused] [data-chat-context-button]"),
+    ).toBeNull()
   })
 })
 

@@ -1,6 +1,9 @@
 import { createAppsApi, type AppsApi } from "./apps-api.js"
+import { createAgent37Api, type Agent37Api } from "./agent37-api.js"
 import { createBoatApi, type BoatApi } from "./boat-api.js"
+import { createCloudApi, type CloudApi } from "./cloud-api.js"
 import { createDevicesApi, type DevicesApi } from "./devices-api.js"
+import { createReplyStyleApi, type ReplyStyleApi } from "./reply-style-api.js"
 import { createSubscriptionApi, type SubscriptionApi } from "./subscription-api.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
 import type { ManagedSession, ConnectionState } from "../application/managed-session.js"
@@ -17,6 +20,7 @@ import { createConversationApi, type ConversationApi } from "./conversation-api.
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createWorkspaceApi, type WorkspaceApi } from "./workspace-api.js"
+import { createTerminalApi, type TerminalApi } from "./terminal-api.js"
 import { createChannelApi, type ChannelApi } from "./channel-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createVaultApi, type VaultApi } from "./vault-api.js"
@@ -89,8 +93,14 @@ export class NessaClient {
 
   /** Encrypted Boat connection setup for cloud workspaces. */
   readonly boat: BoatApi
+  /** Encrypted Agent37 connection setup for cloud workspaces. */
+  readonly agent37: Agent37Api
+  /** The cloud new thread VMs are made on: Boat or Agent37. */
+  readonly cloud: CloudApi
   /** The hub's devices: its own machine and the workers paired to it. */
   readonly devices: DevicesApi
+  /** How agents talk, at the Nessa level and per channel. */
+  readonly replyStyle: ReplyStyleApi
   /** Authorized gateway health. */
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
@@ -129,6 +139,8 @@ export class NessaClient {
   readonly auth: AuthApi
   /** Tell the gateway what this window shows, for the person's agents to read. */
   readonly workspace: WorkspaceApi
+  /** The person's terminals: open, show in a view, type into, close. */
+  readonly terminals: TerminalApi
   /** Make a channel, with its folder and defaults, and list every channel. */
   readonly channels: ChannelApi
 
@@ -143,7 +155,10 @@ export class NessaClient {
   ) {
     this.server = createServerApi(wire)
     this.boat = createBoatApi(wire)
+    this.agent37 = createAgent37Api(wire)
+    this.cloud = createCloudApi(wire)
     this.devices = createDevicesApi(wire)
+    this.replyStyle = createReplyStyleApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
     this.threadCommands = createThreadCommands(this.conversation, newRequestId, wire)
     this.records = createRecordReadApi(wire)
@@ -163,6 +178,7 @@ export class NessaClient {
     this.vault = createVaultApi(wire)
     this.auth = createAuthApi(wire)
     this.workspace = createWorkspaceApi(wire)
+    this.terminals = createTerminalApi(wire)
     this.channels = createChannelApi(wire)
   }
 

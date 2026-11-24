@@ -207,7 +207,8 @@ const mcpServerRules = {}
 }
 
 // A saved login's bounds, each owned by Rust: how many paired machines may be
-// switched on to receive saved logins (the gateway's logins domain) and the
+// switched on to receive saved logins (the gateway's logins domain), how many
+// ChatGPT accounts it keeps (its ChatGPT domain) and the
 // most bytes of a login (the lease protocol's Login, which logins.save and a
 // lease handoff both decode). The schema's bound must equal each, or
 // generation fails, so the service and a client admit the same values.
@@ -217,6 +218,12 @@ for (const [file, constant, published, name] of [
     "MAX_SWITCHED_ON",
     schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
     "LoginsStatus.devicesOn.maxItems",
+  ],
+  [
+    "crates/nessa-gateway/src/logins/chatgpt/domain.rs",
+    "MAX_ACCOUNTS",
+    schema.$defs.ChatgptLogins.properties.accounts.maxItems,
+    "ChatgptLogins.accounts.maxItems",
   ],
   [
     "crates/nessa-protocol/src/lease.rs",
@@ -484,7 +491,12 @@ rs += `pub const MAX_PEERS: usize = ${maxPeers};\n`
 // Subscription capacity and delivery deadline are product policy too: the
 // server reads these constants, and the desktop keeps within the same limit.
 const subscriptionLimits = schema["x-subscriptionLimits"]
-const subscriptionLimitNames = ["conversationTargets", "listTargets", "deliveryTimeoutMs"]
+const subscriptionLimitNames = [
+  "conversationTargets",
+  "listTargets",
+  "grantTargets",
+  "deliveryTimeoutMs",
+]
 for (const name of subscriptionLimitNames) {
   if (
     !subscriptionLimits ||
@@ -498,6 +510,7 @@ if (Object.keys(subscriptionLimits).length !== subscriptionLimitNames.length)
   throw new Error("Invalid subscription limit: unknown policy key")
 rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscriptionLimits.conversationTargets};\n`
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
+rs += `pub const MAX_CONNECTION_GRANT_SUBSCRIPTIONS: usize = ${subscriptionLimits.grantTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
 const backgroundId = schema.$defs.ConversationTool.properties.backgroundTaskId
@@ -657,6 +670,10 @@ const bounds = {
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   maxLoginDevicesOn: schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
   loginDevicePattern: schema.$defs.LoginsStatus.properties.devicesOn.items.pattern,
+  maxChatgptAccounts: schema.$defs.ChatgptLogins.properties.accounts.maxItems,
+  maxChatgptEmailBytes: schema.$defs.ChatgptAccount.properties.email.maxLength,
+  maxChatgptAuthorizeUrlBytes:
+    schema.$defs.ChatgptSignIn.properties.authorizeUrl.maxLength,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
   // patterns, and the hosts on their own.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [

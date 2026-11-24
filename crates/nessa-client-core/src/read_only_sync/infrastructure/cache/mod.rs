@@ -18,6 +18,7 @@
 mod catalogue;
 mod catalogue_reset;
 mod catalogue_rows;
+mod grants;
 mod offline;
 mod purge;
 mod raw_records;

@@ -108,8 +108,8 @@ production build at 4× CPU throttling.
   layouts: split right, split down, move, close, sidebar toggle, session-list
   toggle, send from a new session, typing, streaming into one of four panes, a
   pane dragged across zones (dropped, and cancelled), the Agents overview
-  opened, walked, answered and left, and the composer's thinking control
-  walked from its least level to its most and its knob dragged along the track.
+  opened, walked, answered and left, and the composer's model picker opened,
+  every model hovered and one chosen with a bar.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
@@ -396,7 +396,7 @@ Experimental turns it on; the rail stands beside the workspace in
   edge, including when both side columns are closed, and a folded rail has a
   reserved slot beside "nessa Studio" in the
   sidebar footer. With the sidebar shown, Agents draws "nessa Studio" clear of
-  the toggle. Devices leaves that corner empty, and the toggle does not move.
+  the toggle. Devices draws it in the same place, and the toggle does not move.
   _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
@@ -406,9 +406,10 @@ Experimental turns it on; the rail stands beside the workspace in
   control folds and reopens the rail. A point just below the titlebar lands
   in the view, not on a workspace card or chat control.
   _Check:_ `columns.mjs --only rail-view-inert`.
-- [ ] **Devices keeps its corner and titlebar for the window**: no "nessa
-  Studio" in the bottom-left corner (its cards run under it), and a press in
-  the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
+- [ ] **Devices keeps "nessa Studio" and its titlebar for the window**:
+  "nessa Studio" stands in the bottom-left corner as in Agents, and the page
+  fades out before the window's foot so its cards never sit under the words.
+  A press in the titlebar's free room lands on a `data-tauri-drag-region`, so a drag
   moves the window and a double-click zooms it, as over a chat. _Check:_
   `conversation-stress` step `devices` (Chromium and WebKit, `local-auth.yml`).
 - [ ] **A chat says where its agent runs**: the heading names This computer,
@@ -718,6 +719,13 @@ on.
   overlapping, and the title keeps a positive width inside the header.
   A production Chromium run fails when the open's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only narrow` (1000 × 560).
+- [ ] **Chat context shows as a column in its own pane.** The header's button
+  controls it and is pressed while it shows, and a new session's home offers
+  none (`widgets.test.tsx`). In a pane of 40rem or more the column sits beside
+  the conversation, inside the pane, 16 to 22rem wide, with nothing under it;
+  in a narrower pane it lies over the conversation's right side, at the pane's
+  right edge, at most 85% of the pane. A second click hides it. _Check:_
+  `subagents.mjs --only context,context-narrow` (1440 × 900 and 1000 × 560).
 - [ ] **The card's Open is measured the same way.** A production Chromium
   run at the same size fails when that click's longest frame exceeds
   50 ms. _Check:_ `subagents.mjs --only card-open` (1000 × 560).
@@ -1014,29 +1022,23 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
   _Check:_ `responsive.mjs --only composer-chips`.
-- [ ] **The thinking control changes level without moving anything**
-  (_ADR 238 › The thinking control_): from the keyboard it opens with the keys
-  on the slider; the arrows, Home and End change the level, the chip's name
-  follows, and only Ultra — past Max, where the model has it — is marked
-  apart; dragged, the knob stays on the pointer (± 2 px), the level is the
-  nearest, and let go the knob settles on its level (± 1 px); as ⌘B and ⌥⌘S
-  move its chip, the popover stays on it (its edge on the chip's ± 1 px, 10 px
-  above it ± 1 px); each model the check names offers exactly the levels the
-  SDK catalogue publishes for it (_ADR 302_), Fast only where the catalogue
-  records it (Claude Opus 5 has it, Claude Sonnet 5 not), no levels at all
-  where none is recorded (Claude Haiku 4.5, its chip disabled), and Ultra only
-  past a published Max — which no catalogue model has today; None carried from
-  GPT-5.6 Sol to Claude Sonnet 5 shows as its least level, and that level
-  chosen there is still it back on GPT-5.6 Sol; in every frame of
-  every change, of the drag, and of turning Fast on, the composer, its
-  controls and the popover hold their place (± 0.5 px); a level's change
-  animates transform and opacity only; Escape, and Tab past its end, close it
-  onto its chip; with the system's reduced motion nothing animates and the
-  words that were shown are not drawn.
-  _Check:_ `responsive.mjs --only thinking-control` (`--shots <dir>` saves it
-  opened and at the utmost level); its look by eye in each theme, light and
-  dark, with and without Fast (Claude Opus 5 and Claude Sonnet 5),
-  against the menus and chips beside it.
+- [ ] **The model and its thinking are chosen in one place**
+  (_ADR 238 › The model and thinking picker_): the chip names the model's
+  short name and its level ("Opus 5 Medium"); Return on it opens the picker
+  with the keys in search; hovering its models changes nothing on the page;
+  each model the check names draws one bar per level the SDK catalogue
+  publishes for it, None drawing none (_ADR 302_), and no bars where none is
+  recorded (Claude Haiku 4.5, whose chip then names no level); one press of a
+  bar chooses that model at that level and closes the picker; a model chosen
+  by name keeps the person's level, shown as near as it allows (None carried
+  from GPT-5.6 Sol shows as Claude Sonnet 5's least, and is None again back on
+  GPT-5.6 Sol); Fast beside the chip is offered only where the catalogue
+  records it (Claude Opus 5 has it, Claude Sonnet 5 not); a star lists the
+  model under Starred, where the picker then opens; Escape gives the keys back
+  to the chip; with the system's reduced motion, opening it animates nothing.
+  _Check:_ `responsive.mjs --only model-picker` (`--shots <dir>` saves it
+  opened and on Starred) and the stress `picker` step; its look by eye in each
+  theme, with Claude's colour on its tile and lit bars.
 - [ ] **Send from a new session arrives in its transcript.** _Check:_ `smoke.mjs` (`send`).
 - [ ] **A new session's home takes its pane's shape.** In a pane under 640px
   wide, or whose room below the title row is under 640px tall, its composer
@@ -2383,6 +2385,10 @@ row.
   row.
 - [ ] **The Archive button archives without opening the row.** _Check:_
   `archive`.
+- [ ] **A sideways swipe moves no side column.** A two-finger swipe over the
+  chat, the sidebar or the session list leaves the sidebar, the list, the rail
+  and the right panel as they were, open or folded; one over a session row
+  only moves the row. _Check:_ `conversation-stress` step `swipe`.
 - [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
   _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
   pane) and right-click opens the row's own menu; a swipe rests the row open,
@@ -2675,3 +2681,21 @@ vault dialog blocking the main conversation click.
 - The conversation stress `passphrases` step changes through Settings, verifies
   Locked, explicitly unlocks, restores its disposable phrase and sends a reply.
   Run default1 and raised3. `vault.mjs`, `conversation-stress.mjs` own these checks.
+
+
+### Terminal agents and OSC 7501 overview
+
+- Terminals running Claude Code or Codex show their rounded-square Claude
+  (orange) or Codex (white) badge and live OSC 7501 status (`blocked`,
+  `working`, `done`, `error`) in the terminal pane header, session list, and
+  sidebar channel tree.
+- Running or settled Claude/Codex terminals appear in the Agents overview under
+  their OSC 7501 group with a live `TerminalPeek`.
+- In narrow mode (`< 820px`), `ArrowDown`/`ArrowUp` typed inside the inline
+  `TerminalPeek` reach `terminal.input` without moving focus to another
+  overview row.
+- Pressing `Enter` on a terminal row (or clicking Open in `TerminalPeek`)
+  leaves the overview and opens its terminal pane with the agent badge and
+  status indicator. `terminal-overview.mjs` owns these checks in Chromium and
+  WebKit.
+

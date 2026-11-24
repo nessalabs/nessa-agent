@@ -20,8 +20,10 @@
  * nothing until it is signed in again.
  *
  * `not-started`: this window was opened with no local server, so no chat
- * credential exists yet. `not-ready`: the host's startup of the server failed, or
- * was still running when the host stopped holding the window's read.
+ * credential exists yet. `not-ready`: the host's startup of the server failed.
+ * `still-starting`: that startup was still running when the host stopped
+ * holding the window's read; no failure, so no startup screen, and the retry
+ * clock connects once it is up.
  * `not-listening`: the server is not answering. `wrong-stage`: this window
  * and the server were asked for different stages; the two values are
  * `StageMismatch`, beside the reason, because a reason cannot carry them.
@@ -35,6 +37,7 @@ export type WorkspaceFailureReason =
   | "signed-out"
   | "not-started"
   | "not-ready"
+  | "still-starting"
   | "not-listening"
   | "wrong-stage"
   | "source-gone"

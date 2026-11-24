@@ -111,6 +111,22 @@
     "readOnly": false,
     "destructive": false
   },
+  "conversation.decisions": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.decisionSettings": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "conversation.pauseAutoPick": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "conversation.setDecisionSettings": {
+    "readOnly": false,
+    "destructive": false
+  },
   "conversation.delete": {
     "readOnly": false,
     "destructive": true
@@ -359,6 +375,10 @@
     "readOnly": false,
     "destructive": false
   },
+  "channel.setCoordinator": {
+    "readOnly": false,
+    "destructive": false
+  },
   "conversation.readEarlier": {
     "readOnly": true,
     "destructive": false
@@ -414,6 +434,26 @@
   "boat.disconnect": {
     "readOnly": false,
     "destructive": true
+  },
+  "agent37.status": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "agent37.save": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "agent37.disconnect": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "cloud.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "cloud.choose": {
+    "readOnly": false,
+    "destructive": false
   },
   "devices.pool": {
     "readOnly": true,
@@ -480,6 +520,30 @@
     "destructive": true
   },
   "logins.setDevice": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "logins.chatgptSignIn": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "logins.chatgptCancel": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "logins.chatgptUse": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "logins.chatgptRemove": {
+    "readOnly": false,
+    "destructive": true
+  },
+  "replyStyle.read": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "replyStyle.set": {
     "readOnly": false,
     "destructive": false
   }

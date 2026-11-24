@@ -293,9 +293,8 @@ impl GatewayReader {
                 .phase()
             {
                 GatewayStartupPhase::Ready => Ok(()),
-                GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Failed(_) => {
-                    Err(GatewayUnread::NotReady)
-                }
+                GatewayStartupPhase::Starting(_) => Err(GatewayUnread::StillStarting),
+                GatewayStartupPhase::Failed(_) => Err(GatewayUnread::NotReady),
             },
         }
     }
@@ -303,13 +302,16 @@ impl GatewayReader {
 
 /// Why a reader was not given a gateway that is up.
 ///
-/// `NotReady` is the desktop window's own fact: startup has not reached
-/// `Ready`. Anything a bundled surface's wait reports stays that wait's
+/// `NotReady` and `StillStarting` are the desktop window's own facts: startup
+/// failed, or was still running when the window's wait ran out. The two are
+/// apart because only a failure is a failure: a startup that is slow (a busy
+/// Mac, a full-tree runtime check) is not shown as "couldn't start". Anything a bundled surface's wait reports stays that wait's
 /// words (`Other`), so a registration failure is not rewritten as "still
 /// starting".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GatewayUnread {
     NotReady,
+    StillStarting,
     Other(String),
 }
 

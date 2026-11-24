@@ -147,6 +147,10 @@ pub(in crate::product) enum Target {
     /// The agent catalog, read again each time a paired environment
     /// connects, disconnects or is revoked.
     Agents,
+    /// This connection's paired receiver's grant log.
+    Grants {
+        after: Option<Cursor>,
+    },
 }
 
 impl Target {
@@ -172,6 +176,9 @@ impl Target {
             // One catalog, so one subscription to it on a connection: this is
             // its per-connection bound (`a_second_agent_catalog_subscription_is_a_duplicate`).
             (Self::Agents, Self::Agents) => true,
+            // One grant subscription is the connection's capacity, checked
+            // before this, so a second is not reported as a duplicate.
+            (Self::Grants { .. }, Self::Grants { .. }) => false,
             _ => false,
         }
     }
@@ -182,6 +189,7 @@ impl Target {
             Self::View { .. } => product_method::CONVERSATION_SUBSCRIBE,
             Self::List { .. } => product_method::CONVERSATION_SUBSCRIBE_LIST,
             Self::Agents => product_method::AGENTS_SUBSCRIBE,
+            Self::Grants { .. } => product_method::GRANTS_SUBSCRIBE,
         }
     }
 
@@ -193,6 +201,7 @@ impl Target {
                 product_method::CONVERSATION_UNSUBSCRIBE
             }
             Self::Agents => product_method::AGENTS_UNSUBSCRIBE,
+            Self::Grants { .. } => product_method::GRANTS_UNSUBSCRIBE,
         }
     }
 }
@@ -311,6 +320,16 @@ impl Sources {
                 environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
                 default_device: state.default_device_changes(),
+                shared_chats: None,
+            },
+            // The grant task watches the log itself.
+            Target::Grants { .. } => Self {
+                records: None,
+                catalogue: None,
+                live: None,
+                environments: None,
+                hooks: None,
+                default_device: None,
                 shared_chats: None,
             },
         })
@@ -432,7 +451,7 @@ pub(super) async fn authorize_batch(
             None
         }
         Target::List { .. } => Some(read_access::admit_list(state, &current).await?),
-        Target::Agents => None,
+        Target::Agents | Target::Grants { .. } => None,
     };
     Ok((current, list))
 }
@@ -532,7 +551,9 @@ async fn read_batch(
             },
         };
         let read = match (target, service) {
-            (Target::Events { .. }, _) => return Err("invalid_request".to_owned()),
+            (Target::Events { .. } | Target::Grants { .. }, _) => {
+                return Err("invalid_request".to_owned())
+            }
             (Target::Agents, _) => {
                 // Read under the permit, as `agents.list` is: one change
                 // wakes every follower at once.
@@ -614,6 +635,8 @@ pub(super) struct Run {
     /// The reply is written by here or the socket closes (row S31): within
     /// the passive delivery budget, which a client's call outlasts.
     pub reply_by: Instant,
+    /// `grants.page` for a grant subscription. Other targets leave it `None`.
+    pub pages: Option<tokio::sync::mpsc::Receiver<super::grants::GrantPage>>,
 }
 
 impl Run {
@@ -629,6 +652,7 @@ impl Run {
         deliveries: Arc<SubscriptionDeliveries>,
         slot: Arc<OwnedSemaphorePermit>,
         received_at: Instant,
+        pages: Option<tokio::sync::mpsc::Receiver<super::grants::GrantPage>>,
     ) -> Self {
         Self {
             state,
@@ -641,6 +665,7 @@ impl Run {
             slot,
             read_by: received_at + PASSIVE_READ_TIMEOUT,
             reply_by: received_at + RECORD_SEND_TIMEOUT,
+            pages,
         }
     }
 }
@@ -935,6 +960,9 @@ pub(super) async fn run(run: Run) {
     if matches!(run.target, Target::Events { .. }) {
         return super::events::run(run).await;
     }
+    if matches!(run.target, Target::Grants { .. }) {
+        return super::grants::run(run).await;
+    }
     let Run {
         state,
         service,
@@ -946,6 +974,7 @@ pub(super) async fn run(run: Run) {
         slot,
         read_by,
         reply_by,
+        pages: _,
     } = run;
     let refuse = |code: &str, slot: Arc<OwnedSemaphorePermit>| {
         drop(deliveries.offer(
@@ -974,7 +1003,9 @@ pub(super) async fn run(run: Run) {
     drop(initial_scope);
     let after = match &target {
         Target::View { after, .. } => after.clone(),
-        Target::List { .. } | Target::Agents | Target::Events { .. } => None,
+        Target::List { .. } | Target::Agents | Target::Events { .. } | Target::Grants { .. } => {
+            None
+        }
     };
     let mut sent = Sent {
         deliveries: deliveries.clone(),
@@ -1084,6 +1115,7 @@ mod tests {
             running: false,
             archived: false,
             channel_id: None,
+            ask: None,
         }
     }
 

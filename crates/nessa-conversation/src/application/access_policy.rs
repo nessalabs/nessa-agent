@@ -38,7 +38,7 @@
 //! that writes a share grant, where a delete cannot land between the
 //! question and the write.
 use super::ConversationCaller;
-use crate::domain::{Capabilities, Conversation, ConversationRefusal};
+use crate::domain::{Capabilities, Conversation, ConversationRefusal, Setting};
 use nessa_auth::domain::{Grant, MembershipRole, OrganizationId, PrincipalId, Resource};
 use std::collections::HashMap;
 
@@ -50,6 +50,8 @@ pub enum AccessSubject<'a> {
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
         owner_initiated: bool,
+        /// The thread the turn is in.
+        conversation: &'a str,
     },
     /// A person on one of their own surfaces, by the organization and
     /// principal their session is in.
@@ -94,6 +96,20 @@ pub enum AccessSubject<'a> {
 pub enum AccessAction {
     /// Delegate the source owner's authority to its running agent turn.
     AgentTools,
+    /// Let a running agent turn read where the owner's saved turns came from
+    /// (`read_turn`). Reading only: a turn another agent started may ask it.
+    ReadTurns,
+    /// Close a thread, from another thread's turn: `close_thread` with a
+    /// `threadId`.
+    CloseCreated,
+    /// Let a running agent turn ask the owner a question (`ask_owner`). It
+    /// only asks and changes nothing: a turn another agent started may too.
+    AskOwner,
+    /// Let a running agent turn ask the owner to raise the conversation's
+    /// access (`request_access`), the red card. Only a turn the owner
+    /// started: an agent nobody asked to work never puts Nessa's own words
+    /// "Allow full access" in front of the owner.
+    RequestAccess,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -140,12 +156,22 @@ pub enum AccessAction {
     ChannelUse,
     /// Read or edit a channel's runtime settings.
     ChannelSettings,
+    /// Change one Nessa setting, as far as its level lets the subject: the
+    /// owner any, a turn the owner started only one an agent may change.
+    SettingChange,
+    /// Open and drive a terminal on the owner's machine, on their catalogue.
+    /// A person only: no agent turn opens or types into one.
+    TerminalUse,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 28] = [
         Self::AgentTools,
+        Self::ReadTurns,
+        Self::CloseCreated,
+        Self::AskOwner,
+        Self::RequestAccess,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -167,12 +193,18 @@ impl AccessAction {
         Self::ChannelList,
         Self::ChannelUse,
         Self::ChannelSettings,
+        Self::SettingChange,
+        Self::TerminalUse,
     ];
 
     /// The action's name, as the policy spells it.
     pub fn name(self) -> &'static str {
         match self {
             Self::AgentTools => "conversation.agent_tools",
+            Self::ReadTurns => "conversation.read_turns",
+            Self::CloseCreated => "conversation.close_created",
+            Self::AskOwner => "conversation.ask_owner",
+            Self::RequestAccess => "conversation.request_access",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",
@@ -194,6 +226,8 @@ impl AccessAction {
             Self::ChannelList => "channel.list",
             Self::ChannelUse => "channel.use",
             Self::ChannelSettings => "channel.settings",
+            Self::SettingChange => "setting.change",
+            Self::TerminalUse => "terminal.use",
         }
     }
 }
@@ -207,6 +241,10 @@ pub enum AccessResource<'a> {
         owner: &'a PrincipalId,
         /// Whether somebody deleted it.
         deleted: bool,
+        /// The thread whose agent created it with `create_thread`, as the
+        /// SDK's record of the spawn says; `None` when no agent did, or the
+        /// ask is not about who created it.
+        created_by: Option<&'a str>,
     },
     /// One owner's catalogue: the list of their conversations.
     Catalogue {
@@ -223,6 +261,13 @@ pub enum AccessResource<'a> {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
     },
+    /// One of an owner's Nessa settings, with the level that decides what an
+    /// agent may do with it.
+    Setting {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+        setting: Setting,
+    },
 }
 
 impl<'a> AccessResource<'a> {
@@ -232,6 +277,17 @@ impl<'a> AccessResource<'a> {
             organization: conversation.organization(),
             owner: conversation.owner(),
             deleted: conversation.deletion().is_some(),
+            created_by: None,
+        }
+    }
+
+    /// `conversation` as [`Self::of`], with the thread that created it.
+    pub fn created(conversation: &'a Conversation, created_by: Option<&'a str>) -> Self {
+        Self::Conversation {
+            organization: conversation.organization(),
+            owner: conversation.owner(),
+            deleted: conversation.deletion().is_some(),
+            created_by,
         }
     }
 }
@@ -346,6 +402,31 @@ fn answer(policy: &dyn ConversationAccessPolicyEvaluator, ask: &AccessAsk<'_>) -
             Answer::Refused
         }
     }
+}
+
+/// Whether `subject` may change one of `owner`'s settings, as its level
+/// lets it (`setting.change`): the policy's decision whole, so an allow
+/// names the rule that allowed it and a refusal says why, for the caller's
+/// audit record.
+pub fn setting_change(
+    policy: &dyn ConversationAccessPolicyEvaluator,
+    subject: AccessSubject<'_>,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    setting: Setting,
+) -> AccessDecision {
+    policy.evaluate(&AccessAsk {
+        subject,
+        action: AccessAction::SettingChange,
+        resource: AccessResource::Setting {
+            organization,
+            owner,
+            setting,
+        },
+        held: None,
+        request: RequestShape::default(),
+        target: None,
+    })
 }
 
 /// Whether a person may take an owner's action on a conversation, as the

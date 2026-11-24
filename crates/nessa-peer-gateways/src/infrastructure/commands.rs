@@ -1424,11 +1424,16 @@ impl PeerCommands {
     /// completion. Polling it again panics
     /// (`an_audit_error_before_the_deadline_is_not_waited_on_again`). Only a
     /// record still pending at the deadline is waited on here.
-    pub(super) async fn poller_kept(
+    /// Records still unanswered when `cycle` is stopped. The caller gives
+    /// the turn back and waits on these; polling one that already finished
+    /// panics. An empty return is every record finished, or the poller
+    /// stopped and shutdown drains the writer.
+    pub(super) async fn poller_kept<'a>(
         &self,
-        mut records: Vec<PollerRecord<'_>>,
+        mut records: Vec<PollerRecord<'a>>,
         stopped: &mut watch::Receiver<bool>,
-    ) {
+        cycle: Option<&CycleStop>,
+    ) -> Vec<PollerRecord<'a>> {
         /// `Pending` was dropped still unanswered. `Kept` and `Refused`
         /// finished, and their futures must not be polled again.
         #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1460,16 +1465,34 @@ impl PeerCommands {
                     "peer gateway poller change not audited; the change stands");
             }
         }
-        for (record, answer) in records.iter_mut().zip(answer) {
+        let mut pending = Vec::new();
+        let mut hand_back = false;
+        for (mut record, answer) in records.into_iter().zip(answer) {
             if answer != Answer::Pending {
                 continue;
             }
+            if hand_back {
+                pending.push(record);
+                continue;
+            }
+            let mut peer_stopped = std::pin::pin!(async {
+                if let Some(cycle) = cycle {
+                    cycle.stopped().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            });
             tokio::select! {
                 biased;
-                _ = stopped.wait_for(|stop| *stop) => return,
+                _ = stopped.wait_for(|stop| *stop) => return Vec::new(),
+                _ = &mut peer_stopped => {
+                    hand_back = true;
+                    pending.push(record);
+                }
                 _ = &mut record.kept => {}
             }
         }
+        pending
     }
     async fn blocking<T: Send + 'static>(
         &self,

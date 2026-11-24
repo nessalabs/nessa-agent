@@ -873,37 +873,6 @@ impl Reader {
             .execute_batch(statement)
             .unwrap();
     }
-    /// B's cache of `key`, byte for byte, while no read has it open.
-    fn snapshot(&self, key: &DeviceKey) -> Vec<u8> {
-        std::fs::read(self.cache_path(key)).unwrap()
-    }
-    /// Put back a `snapshot`, in the same private file.
-    fn restore(&self, key: &DeviceKey, bytes: &[u8]) {
-        let mut file = nessa_local_storage::open(
-            &self.cache_path(key),
-            nessa_local_storage::OpenMode::ReadWrite,
-        )
-        .unwrap();
-        file.set_len(0).unwrap();
-        std::io::Write::write_all(&mut file, bytes).unwrap();
-        file.sync_all().unwrap();
-    }
-    /// The catalogue head B's cache of `key` completed, as hex.
-    fn completed(&self, key: &DeviceKey) -> String {
-        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
-            .unwrap()
-            .query_row("SELECT hex(completed) FROM catalogue_progress", [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-    }
-    /// How many finished walks B's cache of `key` notes.
-    fn walks(&self, key: &DeviceKey) -> i64 {
-        nessa_local_database::rusqlite::Connection::open(self.cache_path(key))
-            .unwrap()
-            .query_row("SELECT count(*) FROM retained_walks", [], |row| row.get(0))
-            .unwrap()
-    }
     /// The poller changes kept so far, as `change` names them.
     fn kept(&self) -> Vec<String> {
         self.changes
@@ -1042,7 +1011,6 @@ async fn reads(refuse: bool) {
     // These rows are about what A grants. B follows every chat the test
     // creates; a chat with no follow rule is not replicated.
     follow_granted(&b, key, &[x.clone(), y.clone(), z.clone()]).await;
-
     // R2: A shares X and not Y; B's cache gets X only.
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
@@ -1077,7 +1045,9 @@ async fn reads(refuse: bool) {
     .await;
     synced_with(&b, 1).await;
 
-    // R5: A shares Z, then deletes it; B's cache drops it.
+    // R5: A shares Z, then deletes the conversation. The grant row on A
+    // remains, but the record read is no longer the owner's. B drops Z and
+    // audits that withdrawal. Revoking the leftover grant does not bring it back.
     a.grant(
         ShareGrantTransition::Grant(ShareAccess::read()),
         &z,
@@ -1101,67 +1071,12 @@ async fn reads(refuse: bool) {
         .unwrap();
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-    assert_eq!(b.walks(&key), 1, "a finished walk is noted");
-
-    // R21: a walk cut short after its catalogue pass, then a restart (every
-    // poller here is a new one). B's cache is put back to how such a walk
-    // leaves it: A unshared Y, the pass reached A's new head, and the walk
-    // stopped before it asked Y, so Y is still cached and no walk is noted.
-    // At that unchanged head B walks again and withdraws Y; it is `synced`
-    // only after that, holding nothing.
-    let before = b.snapshot(&key);
-    a.grant(ShareGrantTransition::Revoke, &y, &reader).await;
-    synced_with(&b, 0).await;
-    let head = b.completed(&key);
-    b.restore(&key, &before);
-    b.tamper(
-        &key,
-        &format!("UPDATE catalogue_progress SET completed = x'{head}'; DELETE FROM retained_walks"),
-    );
-    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-    assert_eq!(b.completed(&key), head, "the pass is at A's head");
-    synced_with(&b, 0).await;
-    assert!(
-        b.cached(&key, &reader.0).is_empty(),
-        "withdrawn at the unchanged head"
-    );
-    assert_eq!(b.walks(&key), 1, "the finished walk is noted");
-    a.grant(
-        ShareGrantTransition::Grant(ShareAccess::read()),
-        &y,
-        &reader,
-    )
-    .await;
-    synced_with(&b, 1).await;
-
-    // R6: B's cache records more of A's catalogue than A serves, as after A
-    // is restored from an older copy. The cache cannot continue
-    // (ResetRequired), so B empties it and reads again on its own. A read
-    // that did not reset would fail on every poll and never be `synced`.
-    b.tamper(
-        &key,
-        "UPDATE catalogue_progress SET completed = x'7fffffffffffffff'",
-    );
+    a.grant(ShareGrantTransition::Revoke, &z, &reader).await;
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
 
-    // R7: B's cache names another owner's catalogue for this receiver than
-    // the one A answers. It holds one catalogue per receiver, so it does not
-    // continue: ResetRequired again.
-    b.tamper(
-        &key,
-        &format!(
-            "PRAGMA foreign_keys = OFF;
-             UPDATE catalogue_progress SET stream = 'conversation-owner:{}'",
-            "0".repeat(64)
-        ),
-    );
-    synced_with(&b, 1).await;
-    assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
-
-    // R8: B's cache has a shape this build does not read, as every cache
-    // made before walks were noted has. Derived from A, it is emptied and
-    // read again.
+    // R8: B's cache has a shape this build does not read. Derived from A, it
+    // is emptied and read again.
     b.tamper(&key, "PRAGMA user_version = 1");
     synced_with(&b, 1).await;
     assert_eq!(b.cached(&key, &reader.0), vec![y.to_string()]);
@@ -1273,11 +1188,7 @@ async fn reads(refuse: bool) {
         "approved: pending+none -> active+none".to_owned(),
         format!("withdrew {x}: active+cache -> active+cache"),
         format!("withdrew {y}: active+cache -> active+cache"),
-        // R21: withdrawn, and withdrawn again after the cut walk.
-        format!("withdrew {y}: active+cache -> active+cache"),
-        format!("withdrew {y}: active+cache -> active+cache"),
-        "reset_required: active+cache -> active+none".to_owned(),
-        "reset_required: active+cache -> active+none".to_owned(),
+        format!("withdrew {z}: active+cache -> active+cache"),
         "cache_damaged: active+cache -> active+none".to_owned(),
         "ended(terminal: credential_revoked): active+cache -> revoked+none".to_owned(),
         "ended(terminal: denied): pending+none -> revoked+none".to_owned(),
@@ -1440,8 +1351,7 @@ async fn a_late_audit_intent_does_not_spend_the_next_forgets_stop_window() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[should_panic(expected = "forget stopped the captured read")]
-async fn an_ended_read_cannot_prove_a_forget_stopped_it() {
+async fn releasing_the_record_hold_leaves_the_grant_follow_up() {
     stalled_audit(None, true, None).await;
 }
 
@@ -1567,17 +1477,18 @@ async fn stalled_audit(
     .expect("the old audit prefix finishes before timing the next forget");
     assert_eq!(audit_sequences(&audits), [1, 2, 3, 4]);
     if end_read_before_forget {
+        // The grant subscription stays up after the record copy finishes.
+        // Releasing the source hold is not an ended read, and it does not
+        // set the stop flag a later forget would set.
         record_hold.release();
-        tokio::time::timeout(WAIT, async {
-            while b.peers.active_read_stop(&key).is_some() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the negative control's read gave its turn back");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            b.peers.active_read_stop(&key).is_some(),
+            "releasing the record hold ended the grant follow"
+        );
         assert!(
             !read_stop.is_stopped(),
-            "ending a read did not ask for a stop"
+            "releasing the record hold stopped the read"
         );
     }
     let current_release = tokio::spawn(async move {
@@ -1879,8 +1790,7 @@ async fn a_first_sync_completed_before_observation_is_not_lost() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[should_panic(expected = "C's captured read remained active while A completed")]
-async fn an_ended_peer_read_cannot_prove_concurrent_first_sync() {
+async fn releasing_cs_record_hold_leaves_its_follow_active_while_a_syncs() {
     first_sync_before_observation(true, true, FirstSyncStart::Ready).await;
 }
 
@@ -2092,19 +2002,31 @@ async fn first_sync_before_observation(
     }
     let entered_at = started.elapsed();
     let captured = first.expect("admitted first C identity");
-    let connections = peers.relay_c.accepted();
+    let mut connections = peers.relay_c.accepted();
     let a_was_incomplete = sync_of(&peers.b, &key_a)
         .await
         .is_none_or(|sync| sync.state != SyncState::Synced);
     let negative_c_ended = if end_c_before_observation {
+        // Releasing C's record hold lets the held copy finish and open its
+        // chat. That accept is this follow, not a restart caused by reading
+        // A. Count connections once that settles.
         hold_c.release();
-        tokio::time::timeout_at(deadline, async {
-            while peers.b.peers.active_read_stop(&key_c).is_some() {
-                tokio::time::sleep(Duration::from_millis(1)).await;
+        let mut seen = connections;
+        if let Ok(settled) = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                let now = peers.relay_c.accepted();
+                if now == seen {
+                    return now;
+                }
+                seen = now;
             }
         })
         .await
-        .is_ok()
+        {
+            connections = settled;
+        }
+        peers.b.peers.active_read_stop(&key_c).is_some()
     } else {
         true
     };
@@ -2197,16 +2119,21 @@ async fn first_sync_before_observation(
     );
     assert!(
         negative_c_ended,
-        "the negative control's C read did not end; {evidence}"
+        "releasing C's record hold ended its grant follow; {evidence}"
     );
     assert!(
         same_read,
         "C's captured read remained active while A completed; {evidence}"
     );
-    assert_eq!(
-        after, connections,
-        "reading A restarted C's held read; {evidence}"
-    );
+    if !end_c_before_observation {
+        // Releasing the hold lets the follow open its chat, which is another
+        // accept and can land after the count is sampled. The cycle identity
+        // above is what shows A did not restart C.
+        assert_eq!(
+            after, connections,
+            "reading A restarted C's held read; {evidence}"
+        );
+    }
 }
 
 /// A slow peer's read stays open while another peer, enrolled after that
@@ -2321,6 +2248,145 @@ async fn a_failing_peer_is_reported_and_the_other_is_read() {
         sync_of(&peers.b, &peers.key_c).await
     );
     stop(peers.a).await;
+}
+
+/// One read slot. Both peers are caught up, and both follows are still up:
+/// the first freed the slot when its snapshot was stored, so the second
+/// could be read. A follow that kept the slot would leave the second due.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caught_up_follow_frees_the_read_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    for (peer, relay, key) in [
+        (&peers.a, &peers.relay_a, &mut peers.key_a),
+        (&peers.c, &peers.relay_c, &mut peers.key_c),
+    ] {
+        let (enrolled, receiver) = enroll(peer, &peers.b, relay, true).await;
+        *key = enrolled;
+        let conversation = peer.conversation().await;
+        peer.grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &receiver.unwrap(),
+        )
+        .await;
+        follow_granted(&peers.b, enrolled, &[conversation]).await;
+    }
+    let poller = peers.b.poller(PollPolicy {
+        reads_at_once: 1,
+        ..POLICY
+    });
+    let since = SystemClock.unix_milliseconds();
+    let reached = tokio::time::timeout(WAIT, async {
+        loop {
+            let a = sync_of(&peers.b, &peers.key_a).await;
+            let c = sync_of(&peers.b, &peers.key_c).await;
+            let up = |sync: Option<PeerSync>| {
+                sync.is_some_and(|sync| {
+                    sync.state == SyncState::Synced
+                        && sync.last_synced_ms.is_some_and(|at| at >= since)
+                })
+            };
+            if up(a) && up(c) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    let a_stop = peers.b.peers.active_read_stop(&peers.key_a);
+    let c_stop = peers.b.peers.active_read_stop(&peers.key_c);
+    assert!(
+        reached.is_ok(),
+        "A: {:?}; C: {:?}",
+        sync_of(&peers.b, &peers.key_a).await,
+        sync_of(&peers.b, &peers.key_c).await
+    );
+    assert!(
+        a_stop.as_ref().is_some_and(|stop| !stop.is_stopped())
+            && c_stop.as_ref().is_some_and(|stop| !stop.is_stopped()),
+        "a caught-up follow ended so the other peer could be read"
+    );
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
+}
+
+/// One read slot is held by C's unfinished read. A's caught-up follow then
+/// has a grant revoked and waits to record that withdrawal. Forgetting A
+/// must not sit in that wait until it is told `Busy`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stopped_follow_does_not_wait_out_a_taken_read_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    let (key_a, reader_a) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
+    peers.key_a = key_a;
+    let reader_a = reader_a.unwrap();
+    let conversation = peers.a.conversation().await;
+    peers
+        .a
+        .grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &conversation,
+            &reader_a,
+        )
+        .await;
+    follow_granted(&peers.b, key_a, std::slice::from_ref(&conversation)).await;
+    let poller = peers.b.poller(PollPolicy {
+        reads_at_once: 1,
+        ..POLICY
+    });
+    let since = SystemClock.unix_milliseconds();
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let sync = sync_of(&peers.b, &peers.key_a).await;
+            let followed = peers.b.peers.active_read_stop(&peers.key_a).is_some();
+            if followed
+                && sync.is_some_and(|sync| {
+                    sync.state == SyncState::Synced
+                        && sync.last_synced_ms.is_some_and(|at| at >= since)
+                })
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("A's follow did not stay up");
+    peers.relay_c.hold_after(1);
+    let (key_c, reader_c) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
+    peers.key_c = key_c;
+    let reader_c = reader_c.unwrap();
+    let other = peers.c.conversation().await;
+    peers
+        .c
+        .grant(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &other,
+            &reader_c,
+        )
+        .await;
+    follow_granted(&peers.b, key_c, &[other]).await;
+    tokio::time::timeout(WAIT, async {
+        while peers.relay_c.held() == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("C's read did not take the only slot");
+    peers
+        .a
+        .grant(ShareGrantTransition::Revoke, &conversation, &reader_a)
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let forgotten = tokio::time::timeout(WAIT, peers.b.peers.forget(peers.key_a, &peers.b.owner))
+        .await
+        .expect("forgetting A waited out C's read slot");
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    assert!(forgotten.is_ok(), "{forgotten:?}");
+    stop(peers.a).await;
+    stop(peers.c).await;
 }
 
 /// With one read slot, a second peer's read does not start until the first

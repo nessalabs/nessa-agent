@@ -66,6 +66,29 @@ describe("grouping by status", () => {
     )
   })
 
+  it("keeps the channel's coordinator alone at the top, whatever its status, pin or age", () => {
+    const sessions = [
+      session("new", 5),
+      session("coord", 1, "idle", { pinned: true }),
+      session("pin", 2, "idle", { pinned: true }),
+      session("run", 3, "running"),
+    ]
+    const groups = groupByStatus(sessions, { coordinatorId: "coord" })
+    expect(groups.map((group) => [group.label, group.sessions.map((s) => s.id)])).toEqual(
+      [
+        ["Coordinator", ["coord"]],
+        ["Pinned", ["pin"]],
+        ["Running", ["run"]],
+        ["Earlier", ["new"]],
+      ],
+    )
+    expect(
+      groupByStatus(sessions, { coordinatorId: "coord", runningFirst: false })[0].id,
+    ).toBe("coordinator")
+    // A coordinator the search left out, or none: no group for it.
+    expect(groupByStatus([session("a", 1)], { coordinatorId: "coord" })).toHaveLength(1)
+  })
+
   it("lists running sessions with the rest, newest first, when they are not kept at the top", () => {
     const groups = groupByStatus(
       [session("old", 1), session("run", 3, "running"), session("wait", 2, "needs-you")],

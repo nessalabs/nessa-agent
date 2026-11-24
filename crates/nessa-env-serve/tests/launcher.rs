@@ -38,7 +38,7 @@ fn a_saved_login_is_set_only_where_the_host_has_none_of_its_own() {
         Some("CODEX_API_KEY")
     );
     assert_eq!(
-        login_to_set(AgentId::Claude, None, &none, |_| false, None),
+        login_to_set(None, AgentId::Claude, None, &none, |_| false, None),
         None
     );
     // A saved Anthropic API key goes where Claude Code reads one.
@@ -50,7 +50,7 @@ fn a_saved_login_is_set_only_where_the_host_has_none_of_its_own() {
     // An API key the host set is the host's login too.
     let own = BTreeMap::from([(OsString::from("ANTHROPIC_API_KEY"), OsString::from("mine"))]);
     assert_eq!(
-        login_to_set(AgentId::Claude, Some(&login), &own, |_| false, None),
+        login_to_set(None, AgentId::Claude, Some(&login), &own, |_| false, None),
         None
     );
     // Another agent's variable is not this agent's login.
@@ -66,7 +66,7 @@ fn var(
     configured: &BTreeMap<OsString, OsString>,
 ) -> Option<String> {
     let sessions = std::env::temp_dir().join(format!("nessa-codex-test-{}", uuid::Uuid::new_v4()));
-    let handed = login_to_set(agent, login, configured, |_| false, Some(&sessions))?;
+    let handed = login_to_set(None, agent, login, configured, |_| false, Some(&sessions))?;
     let _ = std::fs::remove_dir_all(&sessions);
     Some(handed.into_iter().next().unwrap().0)
 }
@@ -78,6 +78,7 @@ fn a_saved_codex_key_uses_the_api_key_method_in_a_private_home() {
     let login = Login::new("sk-proj-secret".into()).unwrap();
     let sessions = std::env::temp_dir().join(format!("nessa-codex-test-{}", uuid::Uuid::new_v4()));
     let handed = login_to_set(
+        None,
         AgentId::Codex,
         Some(&login),
         &BTreeMap::new(),
@@ -115,6 +116,7 @@ fn a_second_harness_launch_finds_the_codex_session_the_first_one_stored() {
     let login = Login::new("sk-proj-secret".into()).unwrap();
     let sessions = std::env::temp_dir().join(format!("nessa-codex-test-{}", uuid::Uuid::new_v4()));
     let first = login_to_set(
+        None,
         AgentId::Codex,
         Some(&login),
         &BTreeMap::new(),
@@ -138,6 +140,7 @@ fn a_second_harness_launch_finds_the_codex_session_the_first_one_stored() {
     std::fs::write(home.join("config.toml"), &config).unwrap();
 
     let second = login_to_set(
+        None,
         AgentId::Codex,
         Some(&login),
         &BTreeMap::new(),
@@ -159,6 +162,160 @@ fn a_second_harness_launch_finds_the_codex_session_the_first_one_stored() {
     assert!(!config.contains("sk-proj"));
     assert!(!home.join("auth.json").exists());
     std::fs::remove_dir_all(&sessions).unwrap();
+}
+
+/// A ChatGPT access token is handed in the ChatGPT provider's variable,
+/// in a home of its own beside the key's whose default provider reads it,
+/// with no auth request; a thread the key's home stored is found from it.
+#[cfg(unix)]
+#[test]
+fn a_chatgpt_access_token_uses_the_chatgpt_provider_in_its_own_home() {
+    let token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+    let login = Login::new(token.into()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("codex");
+    // The key's home stored a thread first.
+    let key = Login::new("sk-proj-secret".into()).unwrap();
+    let keyed = login_to_set(
+        None,
+        AgentId::Codex,
+        Some(&key),
+        &BTreeMap::new(),
+        |_| false,
+        Some(&sessions),
+    )
+    .unwrap();
+    let key_home = PathBuf::from(codex_value(&keyed, "CODEX_HOME"));
+    let session_id = "01936a4e-8c2a-7b2e-9c1d-0a1b2c3d4e5f";
+    let rollout = key_home
+        .join("sessions/2026/11/09")
+        .join(format!("rollout-2026-11-09T10-00-00-{session_id}.jsonl"));
+    std::fs::create_dir_all(rollout.parent().unwrap()).unwrap();
+    std::fs::write(&rollout, "{}\n").unwrap();
+
+    // Outside a lease, nothing could renew it: not handed.
+    assert_eq!(
+        login_to_set(
+            None,
+            AgentId::Codex,
+            Some(&login),
+            &BTreeMap::new(),
+            |_| false,
+            Some(&sessions)
+        ),
+        None
+    );
+    for _ in 0..2 {
+        let handed = login_to_set(
+            Some("lease-1"),
+            AgentId::Codex,
+            Some(&login),
+            &BTreeMap::new(),
+            |_| false,
+            Some(&sessions),
+        )
+        .unwrap();
+        let names: Vec<&str> = handed.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["NESSA_CHATGPT_TOKEN_FILE", "CODEX_HOME"]);
+        assert!(handed.iter().all(|(_, value)| !value.contains(token)));
+        let file = PathBuf::from(codex_value(&handed, "NESSA_CHATGPT_TOKEN_FILE"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), token);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(file.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+        let home = PathBuf::from(codex_value(&handed, "CODEX_HOME"));
+        assert!(file.starts_with(&home));
+        assert_eq!(home, root.path().join("codex-chatgpt"));
+        let config: toml_edit::DocumentMut = std::fs::read_to_string(home.join("config.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(config["model_provider"].as_str(), Some("nessa_chatgpt"));
+        assert_eq!(
+            config["cli_auth_credentials_store"].as_str(),
+            Some("ephemeral")
+        );
+        let provider = &config["model_providers"]["nessa_chatgpt"];
+        assert!(provider.get("env_key").is_none());
+        assert_eq!(provider["auth"]["command"].as_str(), Some("/bin/sh"));
+        assert!(provider["auth"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg.as_str().unwrap().contains("$NESSA_CHATGPT_TOKEN_FILE")));
+        assert_eq!(
+            provider["auth"]["refresh_interval_ms"].as_integer(),
+            Some(300_000)
+        );
+        assert_eq!(
+            provider["base_url"].as_str(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        assert_eq!(provider["requires_openai_auth"].as_bool(), Some(false));
+        assert_eq!(provider["supports_websockets"].as_bool(), Some(false));
+        assert!(!config.to_string().contains(token));
+        assert_eq!(
+            codex_thread_rollout(&home, session_id)
+                .map(|found| found.file_name().unwrap().to_owned()),
+            Some(rollout.file_name().unwrap().to_owned())
+        );
+        assert!(!home.join("auth.json").exists());
+    }
+    // A renewal replaces the lease's token whole; a lease with no file
+    // gets none, and an ended lease's file is gone.
+    let renewed = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ5In0.bmV3";
+    let renewed = Login::new(renewed.into()).unwrap();
+    assert!(renew_chatgpt_token(&sessions, "lease-1", &renewed));
+    let file = token_file(&root.path().join("codex-chatgpt"), "lease-1");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), renewed.expose());
+    assert!(!renew_chatgpt_token(&sessions, "lease-2", &renewed));
+    forget_chatgpt_token(&sessions, "lease-1");
+    assert!(!file.exists());
+    // As serving starts, a file a crash left behind is removed.
+    let left =
+        write_chatgpt_token(&root.path().join("codex-chatgpt"), "lease-3", &renewed).unwrap();
+    let mut starting = ConfiguredLauncher::new("/srv/work".into(), HashMap::new());
+    starting.codex_sessions(sessions.clone());
+    starting.forget_chatgpt_tokens();
+    assert!(!left.exists());
+    // The key's home keeps OpenAI's own provider.
+    let key_config = std::fs::read_to_string(key_home.join("config.toml")).unwrap();
+    assert!(!key_config.contains("nessa_chatgpt"));
+}
+
+/// Something that is not this launcher's link where the shared sessions
+/// go: the token is not handed rather than Codex losing its threads.
+#[cfg(unix)]
+#[test]
+fn a_chatgpt_home_whose_sessions_are_not_the_shared_ones_is_not_used() {
+    let login = Login::new("eyJh.eyJz.c2ln".into()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("codex");
+    std::fs::create_dir_all(root.path().join("codex-chatgpt/sessions")).unwrap();
+    assert_eq!(
+        login_to_set(
+            Some("lease-1"),
+            AgentId::Codex,
+            Some(&login),
+            &BTreeMap::new(),
+            |_| false,
+            Some(&sessions)
+        ),
+        None
+    );
 }
 
 fn codex_value(handed: &[(String, String)], name: &str) -> String {
@@ -225,7 +382,14 @@ fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
     );
     let own_key = BTreeMap::from([(OsString::from("OPENCODE_API_KEY"), OsString::from("mine"))]);
     assert_eq!(
-        login_to_set(AgentId::Opencode, Some(&login), &own_key, |_| true, None),
+        login_to_set(
+            None,
+            AgentId::Opencode,
+            Some(&login),
+            &own_key,
+            |_| true,
+            None
+        ),
         None
     );
     let pointed = BTreeMap::from([
@@ -240,6 +404,7 @@ fn a_host_signed_in_with_the_agent_s_own_file_keeps_it() {
     let absent = std::env::temp_dir().join(format!("nessa-codex-absent-{}", uuid::Uuid::new_v4()));
     assert_eq!(
         login_to_set(
+            None,
             AgentId::Codex,
             Some(&login),
             &pointed,
@@ -275,7 +440,7 @@ fn the_ephemeral_store_is_set_by_toml_key_in_an_existing_config() {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(home.join("config.toml"), existing).unwrap();
         for _ in 0..2 {
-            login_to_set(AgentId::Codex, Some(&login), &BTreeMap::new(), |_| false, Some(&home))
+            login_to_set(None, AgentId::Codex, Some(&login), &BTreeMap::new(), |_| false, Some(&home))
                 .unwrap();
             let config = std::fs::read_to_string(home.join("config.toml")).unwrap();
             let document: toml_edit::DocumentMut = config.parse().unwrap();
@@ -297,6 +462,7 @@ fn the_ephemeral_store_is_set_by_toml_key_in_an_existing_config() {
     std::fs::write(home.join("config.toml"), "not = [toml").unwrap();
     assert_eq!(
         login_to_set(
+            None,
             AgentId::Codex,
             Some(&login),
             &BTreeMap::new(),

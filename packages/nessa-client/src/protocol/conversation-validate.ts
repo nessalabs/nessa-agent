@@ -5,6 +5,10 @@ import type {
   ConversationMessageStatusResult,
   ConversationObserveResult,
   ConversationSummary,
+  ConversationDecisionsResult,
+  OwnerAsk,
+  OwnerDecision,
+  DecisionSettings,
   ConversationView,
   ConversationEarlier,
   ConversationPermission,
@@ -823,6 +827,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     "queueComplete",
     "transcriptState",
     "runtime",
+    "setup",
     "lease",
     "artifacts",
     "notes",
@@ -995,6 +1000,11 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Invalid conversation model context window")
     flag(runtime, "reasoning")
+  }
+  if (item.setup !== undefined) {
+    const setups = items(item, "setup", 2)
+    if (!setups.length) throw new Error("Invalid conversation setup")
+    for (const setup of setups) machineSetup(setup)
   }
   if (item.lease !== undefined) lease(item.lease)
   for (const artifact of items(item, "artifacts", 64)) conversationArtifact(artifact)
@@ -1187,6 +1197,25 @@ const leaseShapes = {
     dropped: false,
   },
 } satisfies Record<ConversationLease["state"], LeaseShape>
+
+/** Getting the conversation's cloud machine ready: its steps, in order. */
+function machineSetup(item: Record<string, unknown>) {
+  exact(item, ["state", "executionId", "steps"])
+  if (!word(item, "state", ["running", "ready", "failed"]))
+    throw new Error("Invalid conversation setup state")
+  if (item.executionId !== undefined) identity(item, "executionId")
+  const steps = items(item, "steps", 8)
+  if (!steps.length) throw new Error("Invalid conversation setup steps")
+  for (const step of steps) {
+    exact(step, ["step", "startedAtMs", "endedAtMs"])
+    if (
+      !word(step, "step", ["creating", "waking", "installing", "connecting", "starting"])
+    )
+      throw new Error("Invalid conversation setup step")
+    time(step, "startedAtMs")
+    if (step.endedAtMs !== undefined) time(step, "endedAtMs")
+  }
+}
 
 /** The view's lease: the published shape, and only the fields its state
  * carries, so a lease that contradicts itself is refused rather than shown. */
@@ -1475,6 +1504,7 @@ function summaryRow(
     "running",
     "archived",
     "channelId",
+    "ask",
   ])
   const conversationId = identity(row, "conversationId")
   if (!conversationIdPattern.test(conversationId) || seen.has(conversationId))
@@ -1499,10 +1529,215 @@ function summaryRow(
     running: row.running as boolean,
     archived: row.archived as boolean,
     ...(Object.hasOwn(row, "channelId") ? { channelId: row.channelId as string } : {}),
+    ...(Object.hasOwn(row, "ask") ? { ask: ownerAsk(row.ask) } : {}),
   }
 }
 
 const madeChannelIdPattern = /^ch_[a-z2-7]{10}$/
+
+/**
+ * A decision an agent asked the owner, held to the schema's bounds: a short
+ * question, two to four choices with distinct labels, the index of the one
+ * recommended, and a one-line reason. An access request also names the mode
+ * it would raise the chat to and the three lines of what that allows.
+ */
+function ownerAsk(value: unknown): OwnerAsk {
+  const ask = record(value)
+  exact(ask, [
+    "askId",
+    "question",
+    "choices",
+    "recommended",
+    "reason",
+    "askedAtMs",
+    "access",
+    "summary",
+    "autoPick",
+  ])
+  const askId = text(ask, "askId", 32, false)
+  if (!/^[0-9a-f]{32}$/.test(askId)) throw new Error("Invalid conversation askId")
+  const choices = items(ask, "choices", 4).map((choice) => {
+    exact(choice, ["label", "consequence", "undo", "effort", "pros", "cons"])
+    const undo = word(choice, "undo", ["easy", "costly", "no"] as const)
+    const effort = word(choice, "effort", ["small", "medium", "large"] as const)
+    const pros = lines(choice, "pros")
+    const cons = lines(choice, "cons")
+    return {
+      label: text(choice, "label", 40, false),
+      consequence: text(choice, "consequence", 200, false),
+      ...(undo === undefined ? {} : { undo }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(pros === undefined ? {} : { pros }),
+      ...(cons === undefined ? {} : { cons }),
+    }
+  })
+  if (
+    choices.length < 2 ||
+    new Set(choices.map((choice) => choice.label)).size !== choices.length
+  )
+    throw new Error("Invalid conversation choices")
+  const recommended = ask.recommended
+  if (
+    !Number.isSafeInteger(recommended) ||
+    (recommended as number) < 0 ||
+    (recommended as number) >= choices.length
+  )
+    throw new Error("Invalid conversation recommended")
+  const autoPick = word(ask, "autoPick", ["allowed", "never"] as const)
+  return {
+    askId,
+    question: text(ask, "question", 160, false),
+    choices,
+    recommended: recommended as number,
+    reason: text(ask, "reason", 200, false),
+    askedAtMs: time(ask, "askedAtMs"),
+    ...(ask.access === undefined ? {} : { access: askAccess(ask.access) }),
+    ...(Object.hasOwn(ask, "summary")
+      ? { summary: text(ask, "summary", 200, false) }
+      : {}),
+    ...(autoPick === undefined ? {} : { autoPick }),
+  }
+}
+
+/** What an access request would raise the chat to, and what that allows. */
+function askAccess(value: unknown): NonNullable<OwnerAsk["access"]> {
+  const access = record(value)
+  exact(access, ["mode", "grants"])
+  const mode = access.mode
+  if (mode !== "auto" && mode !== "full") throw new Error("Invalid conversation access")
+  const listed = access.grants
+  if (!Array.isArray(listed) || listed.length !== 3)
+    throw new Error("Invalid conversation access")
+  const grants = listed.map((grant) => text({ grant }, "grant", 200, false))
+  return { mode, grants }
+}
+
+/** An ask's optional one-word field, when it is there: one of `words`. */
+function word<const Word extends string>(
+  item: Record<string, unknown>,
+  key: string,
+  words: readonly Word[],
+): Word | undefined {
+  if (!Object.hasOwn(item, key)) return undefined
+  if (!words.includes(item[key] as Word)) throw new Error(`Invalid conversation ${key}`)
+  return item[key] as Word
+}
+
+/** A choice's pros or cons, when there: one or two lines of 120 bytes. */
+function lines(item: Record<string, unknown>, key: string): string[] | undefined {
+  if (!Object.hasOwn(item, key)) return undefined
+  const value = item[key]
+  if (!Array.isArray(value) || value.length > 2)
+    throw new Error(`Invalid conversation ${key}`)
+  return value.map((line: unknown) => {
+    if (typeof line !== "string" || !line.length || utf8.encode(line).byteLength > 120)
+      throw new Error(`Invalid conversation ${key}`)
+    return line
+  })
+}
+
+/**
+ * An owner's decision settings, held to the schema: whether auto-pick is on,
+ * and a whole number of seconds from 60 to 86,400.
+ */
+export function decisionSettings(value: unknown): DecisionSettings {
+  const item = record(value)
+  exact(item, ["autoPick", "autoPickAfterSeconds"])
+  flag(item, "autoPick")
+  const after = item.autoPickAfterSeconds
+  if (
+    !Number.isSafeInteger(after) ||
+    (after as number) < 60 ||
+    (after as number) > 86_400
+  )
+    throw new Error("Invalid conversation autoPickAfterSeconds")
+  return { autoPick: item.autoPick as boolean, autoPickAfterSeconds: after as number }
+}
+
+/** Whether `conversation.pauseAutoPick` changed anything. */
+export function pauseAutoPickApplied(value: unknown): boolean {
+  const item = record(value)
+  exact(item, ["applied"])
+  flag(item, "applied")
+  return item.applied as boolean
+}
+
+/**
+ * A conversation's decisions as `conversation.decisions` listed them, newest
+ * first: each ask held to `ownerAsk`'s bounds, and its outcome to the
+ * schema's. A decided one carries the answer's text and, when it names one,
+ * a choice the ask has; a replaced one names a different ask that took its
+ * place. An ask listed twice is refused: the list is keyed by ask.
+ */
+export function conversationDecisions(value: unknown): ConversationDecisionsResult {
+  const item = record(value)
+  exact(item, ["decisions"])
+  const seen = new Set<string>()
+  const decisions = items(item, "decisions", 100).map((entry): OwnerDecision => {
+    exact(entry, ["ask", "outcome", "autoPickPaused", "autoPickDueAtMs"])
+    const ask = ownerAsk(entry.ask)
+    if (seen.has(ask.askId)) throw new Error("Conversation decision listed twice")
+    seen.add(ask.askId)
+    if (entry.outcome === undefined) {
+      // A pause and a due time are only for one still waiting, and a paused
+      // one is not due.
+      const paused = entry.autoPickPaused
+      if (paused !== undefined && paused !== true)
+        throw new Error("Invalid conversation autoPickPaused")
+      if (entry.autoPickDueAtMs === undefined)
+        return { ask, ...(paused ? { autoPickPaused: true as const } : {}) }
+      if (paused || ask.autoPick !== "allowed")
+        throw new Error("Invalid conversation autoPickDueAtMs")
+      return { ask, autoPickDueAtMs: time(entry, "autoPickDueAtMs") }
+    }
+    if (entry.autoPickPaused !== undefined || entry.autoPickDueAtMs !== undefined)
+      throw new Error("Invalid conversation decision")
+    const outcome = record(entry.outcome)
+    exact(outcome, ["state", "text", "choice", "by", "auto", "atMs"])
+    const atMs = time(outcome, "atMs")
+    if (outcome.state === "decided") {
+      if (outcome.by !== undefined) throw new Error("Invalid conversation decision")
+      if (outcome.auto !== undefined && outcome.auto !== true)
+        throw new Error("Invalid conversation decision auto")
+      const said = text(outcome, "text", 1024)
+      const choice = outcome.choice
+      if (
+        choice !== undefined &&
+        (!Number.isSafeInteger(choice) ||
+          (choice as number) < 0 ||
+          (choice as number) >= ask.choices.length)
+      )
+        throw new Error("Invalid conversation decision choice")
+      // Auto-pick sends the recommended choice, and only where it was allowed.
+      if (outcome.auto && (choice !== ask.recommended || ask.autoPick !== "allowed"))
+        throw new Error("Invalid conversation decision auto")
+      return {
+        ask,
+        outcome: {
+          state: "decided",
+          text: said,
+          ...(choice === undefined ? {} : { choice: choice as number }),
+          ...(outcome.auto ? { auto: true as const } : {}),
+          atMs,
+        },
+      }
+    }
+    if (outcome.state === "replaced") {
+      if (
+        outcome.text !== undefined ||
+        outcome.choice !== undefined ||
+        outcome.auto !== undefined
+      )
+        throw new Error("Invalid conversation decision")
+      const by = text(outcome, "by", 32, false)
+      if (!/^[0-9a-f]{32}$/.test(by) || by === ask.askId)
+        throw new Error("Invalid conversation decision")
+      return { ask, outcome: { state: "replaced", by, atMs } }
+    }
+    throw new Error("Invalid conversation decision state")
+  })
+  return { decisions }
+}
 
 /**
  * The caller's conversations as the gateway listed them. Each row is checked

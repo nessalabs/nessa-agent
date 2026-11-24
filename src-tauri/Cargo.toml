@@ -93,6 +93,15 @@ objc2-foundation = { version = "0.3", features = [
 # which is the thing this exists to stop.
 objc2-uniform-type-identifiers = { version = "0.3", features = ["UTType"] }
 block2 = "0.6"
+# The vault's Touch ID unlock (`vault/infrastructure/biometrics`) asks
+# `LAContext` whether this Mac can check a fingerprint, shows its prompt, and
+# reads the enrolled-fingerprint state that tells a changed set apart.
+objc2-local-authentication = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "LAContext",
+  "LAError",
+] }
 # Already in the tree under the same objc2 crates. `review_notices` posts and
 # takes back the notice for a waiting permission review through it: WKWebView
 # has no web notifications to do it from the page.

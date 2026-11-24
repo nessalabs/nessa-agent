@@ -11,7 +11,7 @@
 import type { VoicePhase } from "./phase"
 
 /** The phases of an open call: the ones a pill is drawn for. */
-export type OpenPhase = "connecting" | "listening" | "working" | "speaking"
+export type OpenPhase = "connecting" | "listening" | "working" | "speaking" | "paused"
 
 /** The call as the pill draws it. */
 export interface CallPicture {
@@ -23,13 +23,16 @@ export interface CallPicture {
 }
 
 /** What the person pressed on the pill. `open`: the chat's name. */
-export type CallPress = "end" | "mute" | "unmute" | "speaker-off" | "speaker-on" | "open"
+export type CallPress =
+  "end" | "mute" | "unmute" | "speaker-off" | "speaker-on" | "pause" | "resume" | "open"
 
 /** What a press asks of the call. `show` is the chat brought forward. */
 export type CallPressed =
   | { readonly kind: "end" }
   | { readonly kind: "microphone"; readonly on: boolean }
   | { readonly kind: "speaker"; readonly on: boolean }
+  | { readonly kind: "pause" }
+  | { readonly kind: "resume" }
   | { readonly kind: "show" }
 
 function openPhase(phase: VoicePhase): OpenPhase | null {
@@ -38,6 +41,7 @@ function openPhase(phase: VoicePhase): OpenPhase | null {
     case "listening":
     case "working":
     case "speaking":
+    case "paused":
       return phase
     case "idle":
     case "failed":
@@ -88,6 +92,10 @@ export function callPressed(press: CallPress): CallPressed {
       return { kind: "speaker", on: false }
     case "speaker-on":
       return { kind: "speaker", on: true }
+    case "pause":
+      return { kind: "pause" }
+    case "resume":
+      return { kind: "resume" }
     case "open":
       return { kind: "show" }
   }
@@ -105,5 +113,7 @@ export function pillWords(picture: CallPicture): string {
       return "Working"
     case "speaking":
       return "Speaking"
+    case "paused":
+      return "Paused"
   }
 }

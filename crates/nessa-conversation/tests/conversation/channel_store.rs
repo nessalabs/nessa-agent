@@ -2,8 +2,9 @@
 //! answers the kept channel; a conversation is in one channel for its life;
 //! and a folder is checked, resolved, before agents may work in it.
 use super::*;
+use crate::application::PinnedStart;
 use crate::conversation_test_support::absolute;
-use crate::domain::{ChannelExecution, Place};
+use crate::domain::{ChannelExecution, Place, ReplyStyle, RoleStyles, StyleRole};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 
 fn store(directory: &Path) -> LocalChannelStore {
@@ -329,16 +330,30 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2, 3, 4, 5] {
+    for version in [1, 2, 3, 4, 5, 6, 7] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("channels.sqlite3");
         // Start from the actual old schema, rather than a second handwritten one.
         let current = DEFINITION;
-        let tables = current[..current.find("-- A replacement is recorded").unwrap()].to_owned();
+        // No older file can turn its coordinator off (v8). Dropped by line,
+        // so a checkout with CRLF line endings (Windows) drops it too.
+        let tables = current[..current.find("-- A replacement is recorded").unwrap()]
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                !line.starts_with("coordinator_on ")
+                    && !line.starts_with("-- Whether its coordinator is on")
+            })
+            .map(|line| format!("{line}\n"))
+            .collect::<String>();
         // Before one named computer (v6), a channel held a kind of place only.
-        let tables = tables
+        // A v6 file is today's tables without how agents talk (v7).
+        let tables = if version >= 6 {
+            tables
+        } else {
+            tables
             .replace(
                 "    -- Where its main agent and its threads run: `local`, `boat`, `pool`, or\n    -- one computer by its place name (ChannelExecution reads them).\n",
                 "",
@@ -350,7 +365,8 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             .replace(
                 "CHECK (length(thread_placement) BETWEEN 1 AND 253)",
                 "CHECK (thread_placement IN ('local', 'boat', 'pool'))",
-            );
+            )
+        };
         // Before the pool (v4), a thread could not run on "any computer".
         let tables = if version < 4 {
             tables.replace(", 'pool')", ")")
@@ -359,13 +375,38 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         };
         // Before a main agent could move (v5), only an erasure retired one.
         let replacements = current[current.find("-- A replacement is recorded").unwrap()
-            ..current.find("PRAGMA user_version").unwrap()]
-            .replace(
+            ..current.find("-- How agents talk").unwrap()]
+            .to_owned();
+        let replacements = if version >= 6 {
+            replacements
+        } else {
+            replacements.replace(
                 "cause IN ('coordinator_conversation_erased', 'coordinator_moved')",
                 "cause = 'coordinator_conversation_erased'",
-            );
+            )
+        };
+        // A v7 file already keeps how agents talk, but no job (v8).
+        let styles = if version >= 7 {
+            current[current.find("-- How agents talk").unwrap()
+                ..current.find("PRAGMA user_version").unwrap()]
+                .lines()
+                .filter(|line| {
+                    let line = line.trim_start();
+                    !line.starts_with("job TEXT")
+                        && !line.starts_with("-- The job its role")
+                        && !line.starts_with("-- as told:")
+                })
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+                .replace(
+                    "<= 4096),\n) STRICT, WITHOUT ROWID",
+                    "<= 4096)\n) STRICT, WITHOUT ROWID",
+                )
+        } else {
+            String::new()
+        };
         let old = if version >= 3 {
-            format!("{tables}{replacements}")
+            format!("{tables}{replacements}{styles}")
         } else if version == 1 {
             tables
                 .lines()
@@ -394,10 +435,22 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 params![main.to_string(), kept.id().as_str()],
             )
             .unwrap();
+        // A v7 coordinator was pinned with no job and keeps none: telling it
+        // one now would change its saved prompt.
+        if version == 7 {
+            connection
+                .execute(
+                    "INSERT INTO conversation_reply_styles (conversation, role, style, text) VALUES (?1, 'coordinator', 'plain', NULL)",
+                    params![main.to_string()],
+                )
+                .unwrap();
+        }
         drop(connection);
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
         assert_eq!(*restored.execution(), ChannelExecution::default());
+        // A channel from before kept its main agent, so its coordinator is on.
+        assert!(restored.coordinator_on(), "version {version}");
         assert_eq!(restored.coordinator_id(), main);
         assert_eq!(
             store.channel_of(&main).await.unwrap(),
@@ -428,6 +481,28 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             *upgraded.execution().coordinator(),
             Place::Host(SshDestination::new("devbox").unwrap())
         );
+        // An upgraded file keeps no style: every level inherits, and a
+        // conversation from before was started with none.
+        assert_eq!(
+            store
+                .styles(kept.organization(), kept.owner(), Some(kept.id()))
+                .await
+                .unwrap(),
+            RoleStyles::default()
+        );
+        let pinned = store.pinned(&main).await.unwrap();
+        if version == 7 {
+            assert_eq!(
+                pinned,
+                Some(PinnedStart {
+                    role: StyleRole::Coordinator,
+                    style: ReplyStyle::Plain,
+                    job: None,
+                })
+            );
+        } else {
+            assert_eq!(pinned, None);
+        }
         store.forget(&main).await.unwrap();
         assert_ne!(
             store
@@ -439,6 +514,40 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             main
         );
     }
+}
+
+#[tokio::test]
+async fn a_coordinator_switched_off_keeps_its_chat_and_reads_back_after_a_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let original = made("switch", "design", 1);
+    assert!(original.coordinator_on());
+    store.create(original.clone()).await.unwrap();
+    let off = store
+        .set_coordinator_on(original.id(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!off.coordinator_on());
+    assert_eq!(off.coordinator_id(), original.coordinator_id());
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept = reopened.get(original.id()).await.unwrap().unwrap();
+    assert!(!kept.coordinator_on());
+    let on = reopened
+        .set_coordinator_on(original.id(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(on.coordinator_on());
+    assert_eq!(on.coordinator_id(), original.coordinator_id());
+    let missing = made("absent", "none", 1);
+    assert!(reopened
+        .set_coordinator_on(missing.id(), false)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -490,6 +599,26 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
         .unwrap();
     assert_ne!(back.coordinator_id(), moved.coordinator_id());
     assert_ne!(back.coordinator_id(), first);
+    // A main chat made on one cloud moves when the channel names another:
+    // its VM stays on the cloud it was made on, so the move needs a fresh one.
+    let on_boat = ChannelExecution::parse("boat", "local").unwrap();
+    let boat_main = reopened
+        .set_execution(original.id(), on_boat)
+        .await
+        .unwrap()
+        .unwrap();
+    reopened
+        .place(&boat_main.coordinator_id(), original.id())
+        .await
+        .unwrap();
+    let on_agent37 = ChannelExecution::parse("agent37", "local").unwrap();
+    let agent37_main = reopened
+        .set_execution(original.id(), on_agent37.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(agent37_main.coordinator_id(), boat_main.coordinator_id());
+    assert_eq!(*agent37_main.execution(), on_agent37);
     // A main chat never made keeps its id when the main agent moves.
     let fresh = made("unused", "quiet", 1);
     reopened.create(fresh.clone()).await.unwrap();
@@ -506,4 +635,110 @@ async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn reply_styles_are_kept_per_level_and_role_and_a_pin_is_fixed_once() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let channel = made("styles", "design", 1);
+    store.create(channel.clone()).await.unwrap();
+    let organization = OrganizationId::new("org").unwrap();
+    let owner = PrincipalId::new("owner").unwrap();
+    let custom = ReplyStyle::custom("Answer in one line.").unwrap();
+    store
+        .set_style(
+            &organization,
+            &owner,
+            None,
+            StyleRole::Thread,
+            Some(custom.clone()),
+        )
+        .await
+        .unwrap();
+    store
+        .set_style(
+            &organization,
+            &owner,
+            Some(channel.id()),
+            StyleRole::Coordinator,
+            Some(ReplyStyle::Off),
+        )
+        .await
+        .unwrap();
+    // A second save of the same role replaces the first.
+    store
+        .set_style(
+            &organization,
+            &owner,
+            None,
+            StyleRole::Thread,
+            Some(ReplyStyle::Plain),
+        )
+        .await
+        .unwrap();
+    let reopened = LocalChannelStore::open(
+        &directory
+            .path()
+            .join("conversations")
+            .join("channels.sqlite3"),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened.styles(&organization, &owner, None).await.unwrap(),
+        RoleStyles::default().with(StyleRole::Thread, Some(ReplyStyle::Plain))
+    );
+    assert_eq!(
+        reopened
+            .styles(&organization, &owner, Some(channel.id()))
+            .await
+            .unwrap(),
+        RoleStyles::default().with(StyleRole::Coordinator, Some(ReplyStyle::Off))
+    );
+    // Another owner sees none of it.
+    let other = PrincipalId::new("someone-else").unwrap();
+    assert_eq!(
+        reopened.styles(&organization, &other, None).await.unwrap(),
+        RoleStyles::default()
+    );
+    // Clearing inherits again.
+    reopened
+        .set_style(
+            &organization,
+            &owner,
+            Some(channel.id()),
+            StyleRole::Coordinator,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .styles(&organization, &owner, Some(channel.id()))
+            .await
+            .unwrap(),
+        RoleStyles::default()
+    );
+    // The first pin stays; a deleted conversation's pin goes.
+    let started = conversation();
+    let first = PinnedStart {
+        role: StyleRole::Coordinator,
+        style: custom.clone(),
+        job: Some("Run the work.".to_owned()),
+    };
+    reopened.pin(&started, first.clone()).await.unwrap();
+    reopened
+        .pin(
+            &started,
+            PinnedStart {
+                role: StyleRole::Thread,
+                style: ReplyStyle::Off,
+                job: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reopened.pinned(&started).await.unwrap(), Some(first));
+    reopened.forget(&started).await.unwrap();
+    assert_eq!(reopened.pinned(&started).await.unwrap(), None);
 }

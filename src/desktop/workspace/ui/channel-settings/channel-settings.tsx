@@ -1,16 +1,22 @@
 import { useRef, useState } from "react"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { IconButton } from "../../../ui/icon-button"
-import { useBoatConnection, useBoatGateway } from "../../../settings/ui/boat-row"
+import { useBoatGateway } from "../../../settings/ui/boat-row"
 import { BoatRuntimeControl } from "../../../settings/ui/boat-runtime-control"
+import {
+  ReplyStyleControl,
+  useReplyStyleGateway,
+} from "../../../settings/ui/reply-style-control"
 import { Choice, ItemRow } from "../../../settings/ui/settings-controls"
 import type { ChoiceOption } from "../../../ui/choice-menu"
 import { channelFailure, type ChannelPlacement } from "../../application/ports"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
 import { PoolOrder, useDevicesGateway } from "../../../devices"
 import { channelPlaceKind, type ChannelPlace } from "../../model/channel-place"
+import { cloudChoices, type CloudChoice } from "../../../clouds/model/clouds"
+import { useCloudStates } from "../../../clouds/ui/cloud-states"
 import { channelPlaceWords } from "../channel-place-words"
-import { setChannelPlacement } from "../../adapters/store/commands"
+import { setChannelCoordinator, setChannelPlacement } from "../../adapters/store/commands"
 import { useComputers, type Computer } from "./computers"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectChannel } from "../../adapters/store/selectors"
@@ -26,7 +32,7 @@ function PlaceRow({
   label,
   value,
   computers,
-  boatReady,
+  clouds,
   saving,
   onChange,
 }: {
@@ -34,13 +40,17 @@ function PlaceRow({
   label: string
   value: ChannelPlace
   computers: readonly Computer[]
-  boatReady: boolean
+  clouds: readonly CloudChoice[]
   saving: boolean
   onChange: (next: ChannelPlace) => void
 }) {
   const options: ChoiceOption<ChannelPlace>[] = [
     { id: "local", label: "This Mac" },
-    { id: "boat", label: "Boat", disabled: !boatReady },
+    ...clouds.map((cloud) => ({
+      id: cloud.id,
+      label: cloud.label,
+      disabled: cloud.disabled,
+    })),
     { id: "pool", label: "Any computer" },
     ...computers.map((computer) => ({
       id: computer.environment,
@@ -61,8 +71,8 @@ function PlaceRow({
     <ItemRow
       label={label}
       detail={
-        row === "coordinator" && !boatReady
-          ? "Connect Boat to run agents there."
+        row === "coordinator" && clouds.every((cloud) => cloud.disabled)
+          ? "Connect a cloud in Settings › Accounts to run agents there."
           : undefined
       }
       data-placement-row={row}
@@ -71,6 +81,72 @@ function PlaceRow({
         <Choice label={label} value={value} options={options} onChange={onChange} />
       }
     />
+  )
+}
+
+/**
+ * Whether a made channel has a coordinator, switched at any time. Off keeps
+ * its chat and its threads; the channel just opens without it. On again,
+ * the same chat is its coordinator. Saves as it is chosen.
+ */
+export function ChannelCoordinatorControl({ channelId }: { channelId: string }) {
+  const dispatch = useWorkspaceDispatch()
+  const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
+  const [saving, setSaving] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
+  if (!channel || channel.coordinatorOn === undefined) return null
+  const on = channel.coordinatorOn
+  const change = (next: "on" | "off") => {
+    if (saving || (next === "on") === on) return
+    setSaving(true)
+    setFailed(null)
+    void dispatch(setChannelCoordinator({ channelId, on: next === "on" }))
+      .then((changed) => {
+        if (!changed) setFailed("This window cannot change this channel.")
+      })
+      .catch((error: unknown) => {
+        setFailed(
+          channelFailure(error) === "forbidden"
+            ? "You can’t change this channel."
+            : "Couldn’t save that. Try again in a moment.",
+        )
+      })
+      .finally(() => setSaving(false))
+  }
+  return (
+    <div
+      role="group"
+      aria-label="Coordinator"
+      aria-busy={saving || undefined}
+      data-channel-coordinator={channelId}
+      data-coordinator-on={on ? "true" : "false"}
+    >
+      <ItemRow
+        label="Coordinator"
+        detail={
+          on
+            ? "Starts threads and keeps you up to date. The channel opens at its chat."
+            : "Off. Its chat and threads stay. Turn it on to pick up the same chat."
+        }
+        unavailable={saving}
+        control={
+          <Choice
+            label="Coordinator"
+            value={on ? "on" : "off"}
+            options={[
+              { id: "on", label: "On" },
+              { id: "off", label: "Off" },
+            ]}
+            onChange={change}
+          />
+        }
+      />
+      {failed ? (
+        <p role="alert" className="settings-boat-note">
+          {failed}
+        </p>
+      ) : null}
+    </div>
   )
 }
 
@@ -85,9 +161,10 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
   const channel = useWorkspaceSelector((state) => selectChannel(state, channelId))
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
-  // As when a channel is made, Boat is offered only once it is connected:
-  // agents placed there before that could not start.
-  const boatReady = useBoatConnection().status?.state === "connected"
+  // As when a channel is made, a cloud is offered only once it is
+  // connected: agents placed there before that could not start.
+  const states = useCloudStates()
+  const clouds = cloudChoices((id) => states[id] === "connected")
   const computers = useComputers()
   if (!channel) return null
   const placement: ChannelPlacement = {
@@ -135,7 +212,7 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
         label="Main agent runs on"
         value={placement.coordinatorPlacement}
         computers={computers}
-        boatReady={boatReady}
+        clouds={clouds}
         saving={saving}
         onChange={(next) => change({ coordinatorPlacement: next })}
       />
@@ -144,7 +221,7 @@ export function ChannelPlacementControl({ channelId }: { channelId: string }) {
         label="New threads run on"
         value={placement.threadPlacement}
         computers={computers}
-        boatReady={boatReady}
+        clouds={clouds}
         saving={saving}
         onChange={(next) => change({ threadPlacement: next })}
       />
@@ -173,6 +250,7 @@ export function ChannelSettingsButton({
   const trigger = useRef<HTMLButtonElement>(null)
   const gateway = useBoatGateway()
   const devices = useDevicesGateway()
+  const replyStyle = useReplyStyleGateway()
   const scope = gatewayChannelId(channelId)
   return (
     <>
@@ -204,10 +282,24 @@ export function ChannelSettingsButton({
         >
           <div className="settings-boat settings-surface channel-settings-section">
             {scope === undefined ? null : (
-              <ChannelPlacementControl channelId={channelId} />
+              <>
+                <ChannelCoordinatorControl channelId={channelId} />
+                <ChannelPlacementControl channelId={channelId} />
+              </>
             )}
             <BoatRuntimeControl channelId={scope} gateway={gateway} />
           </div>
+          {/* The default channel's dialog sets the Nessa level, which every
+          channel follows unless it has its own. */}
+          {replyStyle ? (
+            <div
+              className="settings-surface channel-settings-section"
+              data-channel-settings-reply-style=""
+            >
+              <h3 className="channel-settings-heading">How agents talk</h3>
+              <ReplyStyleControl channelId={scope} gateway={replyStyle} />
+            </div>
+          ) : null}
           {/* The default channel follows Devices' order, set there. */}
           {scope !== undefined && devices ? (
             <div

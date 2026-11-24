@@ -11,10 +11,15 @@
 //!   ──▶ the vault's saved login for the agent ──▶ LoginAudit (sent, or withheld and why)
 //! ```
 //!
+//! Codex may use a ChatGPT account instead of its saved key
+//! (`chatgpt`, issue #1403): the lease is then handed that account's access
+//! token, which only `ChatgptLogins` refreshes.
+//!
 //! Arrows are calls. The vault is the one place a login is kept; a machine
 //! holds the one it is sent only for the harness it starts with it. The
 //! design is in `docs/design/saved-logins.md`.
 pub mod application;
+pub mod chatgpt;
 pub mod domain;
 pub mod infrastructure;
 

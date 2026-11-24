@@ -92,6 +92,15 @@ export {
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
 export { channelGateway } from "./adapters/gateway/channel-gateway"
+export { terminalGateway, type TerminalClient } from "./adapters/gateway/terminal-gateway"
+export { terminalsById } from "./model/terminal"
+export {
+  decisionsGateway,
+  type DecisionsClient,
+} from "./adapters/gateway/decisions-gateway"
+export { sampleDecisions } from "./adapters/in-memory/sample-decisions"
+export { DecisionsProvider } from "./ui/chrome/decisions-source"
+export type { DecisionSource } from "./application/ports"
 export {
   inMemoryChannels,
   type InMemoryChannels,
@@ -138,3 +147,42 @@ export type {
 export type { WorkspaceFailureReason } from "./model/failure"
 export { elapsed, sessionTime } from "./model/time-labels"
 export { ReadOnlyTranscript } from "./ui/transcript/read-only-transcript"
+export {
+  LOCAL_GATEWAY_ID,
+  gatewaySectionId,
+  gatewayStatusLabel,
+  normalizeGatewayUrl,
+  parseQualifiedId,
+  qualifyEntityId,
+  type GatewayConnectionState,
+  type GatewaySnapshot,
+  type PersistedRemoteGateway,
+} from "./model/gateway-id"
+export {
+  GatewayRegistryError,
+  type AddGatewayInput,
+  type GatewayRegistryFailure,
+  type GatewayRegistryPort,
+} from "./application/gateway-registry"
+export {
+  createGatewayRegistry,
+  type DesktopGatewayRegistry,
+  type RemoteClient,
+  type RemoteClientConnector,
+} from "./adapters/gateway/gateway-registry-adapter"
+export { multiGatewaySource } from "./adapters/gateway/multi-gateway-source"
+export { multiTerminalGateway } from "./adapters/gateway/multi-terminal-gateway"
+export { multiChannelGateway } from "./adapters/gateway/multi-channel-gateway"
+export {
+  inMemoryGatewayCredentialStore,
+  remoteGatewayStore,
+  type GatewayStorage,
+  type RemoteGatewayCredentialStore,
+  type RemoteGatewayStore,
+} from "./adapters/storage/gateway-store"
+export {
+  selectGateway,
+  selectGateways,
+  selectHasMultipleGateways,
+} from "./adapters/store/selectors"
+export { workspaceActions } from "./adapters/store/slice"

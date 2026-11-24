@@ -35,6 +35,10 @@ import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
 import { PageHeader } from "@nessa-ui/react/page-header"
 import { DeviceLoginsSwitch } from "../../settings/ui/saved-logins"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
+import { Agent37Row } from "../../settings/ui/agent37-row"
+import { clouds, cloudProvider, type Cloud } from "../../clouds/model/clouds"
+import { CloudFigure } from "../../clouds/ui/cloud-figure"
+import { useCloudStates } from "../../clouds/ui/cloud-states"
 import type {
   CloudState,
   DevicesGateway,
@@ -141,8 +145,9 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
 type Page =
   | { readonly kind: "list" }
   | { readonly kind: "worker"; readonly id: string }
-  | { readonly kind: "cloud" }
+  | { readonly kind: "cloud"; readonly cloud: Cloud }
   | { readonly kind: "add" }
+  | { readonly kind: "add-cloud" }
   | { readonly kind: "add-computer" }
   | { readonly kind: "add-phone" }
   | { readonly kind: "pool" }
@@ -171,9 +176,16 @@ export function DevicesView() {
                 ? "add-computer"
                 : kind === "phone"
                   ? "add-phone"
-                  : "cloud",
+                  : "add-cloud",
           })
         }
+      />
+    )
+  if (page.kind === "add-cloud")
+    return (
+      <AddCloud
+        onBack={() => setPage({ kind: "add" })}
+        onPick={(cloud) => setPage({ kind: "cloud", cloud })}
       />
     )
   if (page.kind === "add-phone")
@@ -192,7 +204,11 @@ export function DevicesView() {
       </div>
     )
   if (page.kind === "cloud")
-    return <CloudPage cloud={devices.cloud} onBack={list} onChanged={devices.reload} />
+    return page.cloud === "boat" ? (
+      <CloudPage cloud={devices.cloud} onBack={list} onChanged={devices.reload} />
+    ) : (
+      <Agent37Page onBack={list} />
+    )
   if (page.kind === "add-computer")
     return (
       <AddComputer
@@ -234,7 +250,7 @@ export function DevicesView() {
       gateway={gateway}
       onChanged={devices.reload}
       onOpen={(id) => setPage({ kind: "worker", id })}
-      onCloud={() => setPage({ kind: "cloud" })}
+      onCloud={(cloud) => setPage({ kind: "cloud", cloud })}
       onAdd={() => setPage({ kind: "add" })}
       onPool={() => setPage({ kind: "pool" })}
     />
@@ -270,7 +286,7 @@ function DevicesList({
   /** Something was saved: read the list again. */
   onChanged: () => void
   onOpen: (id: string) => void
-  onCloud: () => void
+  onCloud: (cloud: Cloud) => void
   onAdd: () => void
   onPool: () => void
 }) {
@@ -379,7 +395,7 @@ function DevicesList({
                   footer={<span>{host.address}</span>}
                 />
               ))}
-              <CloudTile cloud={read.cloud} onOpen={onCloud} />
+              <CloudTiles boat={read.cloud} seen={read} onOpen={onCloud} />
               <LinkedTiles linked={read.linked} />
             </div>
             {read.more ? (
@@ -475,6 +491,7 @@ function Stat({ label, usage }: { label: string; usage: Usage }) {
 
 function Tile({
   art,
+  figure,
   afloat,
   name,
   kind,
@@ -485,7 +502,9 @@ function Tile({
   star,
   ...data
 }: {
-  art: DeviceFigureKind
+  art?: DeviceFigureKind
+  /** Drawn in place of `art`: a picture of its own, such as a cloud's mark. */
+  figure?: ReactNode
   /** A boat bobs on its water while it is not dimmed. */
   afloat?: boolean
   name: string
@@ -502,12 +521,14 @@ function Tile({
   const body = (
     <>
       <div className="devices-stage">
-        <DeviceFigure
-          kind={art}
-          afloat={afloat}
-          dimmed={status === "offline"}
-          className="devices-tile-figure"
-        />
+        {figure ?? (
+          <DeviceFigure
+            kind={art ?? "server"}
+            afloat={afloat}
+            dimmed={status === "offline"}
+            className="devices-tile-figure"
+          />
+        )}
       </div>
       <div className="devices-tile-body">
         <div className="devices-tile-row">
@@ -698,27 +719,44 @@ function cloudWord(cloud: CloudState | null): string {
         : "Not connected"
 }
 
-function CloudTile({
-  cloud,
+/**
+ * A tile for each cloud: Boat's state comes with the list's own read; each
+ * other cloud's is read beside it, again on each of the list's reads.
+ */
+function CloudTiles({
+  boat,
+  seen,
   onOpen,
 }: {
-  cloud: CloudState | null | undefined
-  onOpen: () => void
+  boat: CloudState | null | undefined
+  seen: unknown
+  onOpen: (cloud: Cloud) => void
 }) {
-  if (cloud === undefined) return null
-  return (
-    <Tile
-      art="boat"
-      afloat
-      name="Boat"
-      kind="Cloud VMs"
-      status={cloud === "connected" ? "ready" : "offline"}
-      // One word: where Boat stands, said once beside its name.
-      said={cloudWord(cloud)}
-      onClick={onOpen}
-      data-devices-cloud={cloud ?? "unknown"}
-    />
-  )
+  const states = useCloudStates(seen)
+  return clouds.map(({ id, name, kind }) => {
+    const state = id === "boat" ? boat : states[id]
+    if (state === undefined) return null
+    return (
+      <Tile
+        key={id}
+        figure={
+          <CloudFigure
+            cloud={id}
+            dimmed={state !== "connected"}
+            className="devices-tile-figure"
+          />
+        }
+        name={name}
+        kind={kind}
+        status={state === "connected" ? "ready" : "offline"}
+        // One word: where the cloud stands, said once beside its name.
+        said={cloudWord(state)}
+        onClick={() => onOpen(id)}
+        data-devices-cloud={state ?? "unknown"}
+        data-devices-cloud-id={id}
+      />
+    )
+  })
 }
 
 function LinkedTiles({ linked }: { linked: readonly LinkedDevice[] | null | undefined }) {
@@ -755,7 +793,7 @@ const addKinds: readonly {
     kind: "cloud",
     art: "boat",
     name: "Cloud",
-    detail: "Boat VMs for channels to run in",
+    detail: `${clouds.map((cloud) => cloud.name).join(" or ")} VMs for channels to run in`,
   },
 ]
 
@@ -797,6 +835,84 @@ function AddDevice({
   )
 }
 
+/** "Add device › Cloud": which cloud, then its own page to connect it. */
+function AddCloud({
+  onBack,
+  onPick,
+}: {
+  onBack: () => void
+  onPick: (cloud: Cloud) => void
+}) {
+  return (
+    <div className="devices-page" data-devices-page="add-cloud">
+      <BackButton onBack={onBack} />
+      <div className="devices-heading">
+        <PageHeader title="Add a cloud" />
+        <p className="devices-muted">Which cloud should make VMs for your threads?</p>
+      </div>
+      <div className="devices-grid">
+        {clouds.map((cloud) => (
+          <button
+            key={cloud.id}
+            type="button"
+            className="devices-tile"
+            onClick={() => onPick(cloud.id)}
+            data-devices-add-cloud={cloud.id}
+          >
+            <div className="devices-stage">
+              <CloudFigure cloud={cloud.id} className="devices-tile-figure" />
+            </div>
+            <div className="devices-tile-body">
+              <span className="devices-tile-name">{cloud.name}</span>
+              <span className="devices-muted">{cloud.detail}</span>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Agent37's own page: its key, and which cloud new thread VMs go to. */
+function Agent37Page({ onBack }: { onBack: () => void }) {
+  // The row below reads, connects, unlocks and disconnects; the header
+  // follows what it last read.
+  const [read, setRead] = useState<CloudState | undefined>()
+  const states = useCloudStates()
+  const state = read ?? states.agent37
+  const word = state === undefined ? "Reading…" : cloudWord(state)
+  return (
+    <div
+      className="devices-page"
+      data-devices-page="cloud"
+      data-devices-cloud-page="agent37"
+    >
+      <BackButton onBack={onBack} />
+      <header className="devices-detail-head">
+        <CloudFigure
+          cloud="agent37"
+          dimmed={state !== "connected"}
+          className="devices-detail-figure"
+        />
+        <div className="devices-heading">
+          <PageHeader title={cloudProvider("agent37").name} />
+          <p
+            className="devices-status devices-detail-status"
+            data-devices-cloud-state={word}
+          >
+            <Dot status={state === "connected" ? "ready" : "offline"} />
+            {word}
+            <span className="devices-muted">{" · "}Cloud VMs</span>
+          </p>
+        </div>
+      </header>
+      <div className="devices-settings settings-surface">
+        <Agent37Row onChange={setRead} />
+      </div>
+    </div>
+  )
+}
+
 /** Boat's own page: its connection and VM settings, managed here. */
 function CloudPage({
   cloud,
@@ -821,9 +937,8 @@ function CloudPage({
     <div className="devices-page" data-devices-page="cloud">
       <BackButton onBack={onBack} />
       <header className="devices-detail-head">
-        <DeviceFigure
-          kind="boat"
-          afloat
+        <CloudFigure
+          cloud="boat"
           dimmed={state !== "connected"}
           className="devices-detail-figure"
         />

@@ -23,6 +23,7 @@ import {
   setDraft,
   setSelection,
   controlConversation,
+  raiseAccess,
   setUsageLimitAutoContinue,
   stopGenerating,
   followConversation,
@@ -55,6 +56,13 @@ export function useConversation() {
   return {
     setApprovalMode: (id: string, mode: ApprovalMode) =>
       dispatch(controlConversation({ id, control: { kind: "setApprovalMode", mode } })),
+    /**
+     * Raises the active conversation to `mode` for an access request the
+     * person approved, and says what became of it. The same command the
+     * access picker sends.
+     */
+    raiseAccess: (mode: ApprovalMode): Promise<"taken" | "changing" | "refused"> =>
+      dispatch(raiseAccess({ id: active.id, mode })).unwrap(),
     setUsageLimitAutoContinue: (enabled: boolean) =>
       dispatch(setUsageLimitAutoContinue(enabled)).unwrap(),
     setSelection: (id: string, selection: ConversationSelection) =>
@@ -127,6 +135,24 @@ export function useConversation() {
       )
       if (!sendDraft.rejected.match(finished)) return true
       return finished.payload === undefined
+    },
+    /**
+     * Sends `content` as the person's answer to what an agent asked, and
+     * says whether the gateway took it: a refusal, local or the gateway's,
+     * and a failed send all resolve false, so the choices are offered again.
+     * Sent beside the composer's draft, which keeps its text and files.
+     */
+    answer: async (content: MessageContent): Promise<boolean> => {
+      const finished = await dispatch(
+        sendDraft({
+          content,
+          besideDraft: true,
+          id: active.id,
+          connected: gatewayAvailable,
+          steering: deliveryMode === "steer" && active.phase !== "idle",
+        }),
+      )
+      return !sendDraft.rejected.match(finished)
     },
     /** The Messages tab was left: what its list said about earlier actions is past. */
     forgetListNotices: () => dispatch(commandErrorCleared()),

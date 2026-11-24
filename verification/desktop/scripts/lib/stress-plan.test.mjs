@@ -65,6 +65,11 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("passphrase"), knobs.passphrases)
   assert.equal(count("channel"), knobs.channels)
   assert.equal(count("restore"), knobs.restores)
+  assert.equal(count("swipe"), knobs.swipes)
+  assert.equal(count("touchId"), knobs.touchIds)
+  assert.equal(count("style"), knobs.styles)
+  assert.equal(count("coordinator"), knobs.coordinators)
+  assert.equal(count("accessRequest"), knobs.accessRequests)
   assert.equal(count("huddle"), knobs.huddles)
   assert.equal(count("webhook"), knobs.webhooks)
   assert.equal(count("sharedChat"), knobs.sharedChats)
@@ -89,7 +94,7 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
         assert.ok(
-          ["permission", "reviews", "large", "waitingRow", "model"].includes(
+          ["permission", "reviews", "large", "waitingRow", "model", "raise"].includes(
             steps[index + 1]?.kind,
           ),
         )
@@ -124,12 +129,14 @@ test("parent Stop appears once by default and at the raised flag or environment 
   assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
 })
 
-test("handoffs run last of all, after every upgrade, whatever the seed", () => {
+test("handoffs, refused ones too, run last of all, after every upgrade, whatever the seed", () => {
   for (let seed = 0; seed < 50; seed += 1) {
     const steps = plan(knobsFrom({ seed: String(seed), handoffs: "2" }, {}))
     const first = steps.findIndex((step) => step.kind === "handoff")
     assert.equal(steps.filter((step) => step.kind === "handoff").length, 2)
-    assert.ok(steps.slice(first).every((step) => step.kind === "handoff"))
+    assert.ok(
+      steps.slice(first).every((step) => ["handoff", "unsigned"].includes(step.kind)),
+    )
     assert.ok(first > steps.findLastIndex((step) => step.kind === "upgrade"))
   }
 })
@@ -143,11 +150,17 @@ test("positive model steps retain default and raised counts, run last but for ha
       const first = steps.findIndex((step) => step.kind === "model")
       assert.equal(steps.filter((step) => step.kind === "model").length, count)
       assert.ok(
-        steps.slice(first).every((step) => ["model", "handoff"].includes(step.kind)),
+        steps
+          .slice(first)
+          .every((step) =>
+            ["model", "picker", "failedControl", "handoff", "unsigned"].includes(
+              step.kind,
+            ),
+          ),
       )
       let mode = "ask"
       for (const step of steps) {
-        if (step.kind === "switch") {
+        if (step.kind === "switch" || step.kind === "raise") {
           assert.equal(step.from, mode)
           mode = step.to
         }
@@ -166,9 +179,12 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       {
         parentstops: "0",
         handoffs: "0",
+        unsigned: "0",
+        failedControls: "0",
         inputFiles: "0",
         backgroundTasks: "0",
         vmBackgroundTasks: "0",
+        cloudChoices: "0",
         windows: "0",
         controls: "0",
         linkings: "0",
@@ -192,10 +208,15 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         launches: "0",
         menuPanels: "0",
         menus: "0",
+        terminals: "0",
+        runs: "0",
         composers: "0",
+        pickers: "0",
+        raises: "0",
         githubs: "0",
         voices: "0",
         logins: "0",
+        chatgpts: "0",
         passphrases: "0",
         channels: "0",
         huddles: "0",
@@ -203,8 +224,15 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         peers: "0",
         pastes: "0",
         attaches: "0",
+        swipes: "0",
+        touchIds: "0",
+        styles: "0",
+        coordinators: "0",
+        accessRequests: "0",
+        asks: "0",
         awaits: "0",
         closes: "0",
+        provenances: "0",
         fresh: "0",
         renames: "0",
         deletes: "0",
@@ -324,4 +352,19 @@ test("selected Ask-only qualification filters that profile's plan without admitt
     () => selectedPlan(knobsFrom({}, {}), "parent-stop", "unknown"),
     /scenario/,
   )
+})
+
+test("a raise runs from Ask to Full, a switch to Ask first where Full or Auto is in force", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    const steps = plan(knobsFrom({ seed: String(seed), raises: "2" }, {}))
+    assert.equal(steps.filter((step) => step.kind === "raise").length, 2)
+    let mode = "ask"
+    for (const step of steps) {
+      if (step.kind === "raise") assert.equal(mode, "ask")
+      if (step.kind === "switch" || step.kind === "raise") {
+        assert.equal(step.from, mode)
+        mode = step.to
+      }
+    }
+  }
 })

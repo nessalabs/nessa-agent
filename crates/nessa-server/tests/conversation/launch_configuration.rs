@@ -47,6 +47,8 @@ fn agents_config() -> AgentsConfig {
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        reply_style: None,
+        role_job: None,
         review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),
@@ -683,6 +685,8 @@ fn composed_provider(
         stand_ins: Default::default(),
         mcp_stand_ins: Default::default(),
         channel_instructions: None,
+        reply_style: None,
+        role_job: None,
         review_deadlines: crate::composition::agent::review_deadlines(),
         selected: None,
         runtimes: HashMap::new(),
@@ -707,4 +711,63 @@ fn composed_provider(
     )
     .unwrap_or_else(|error| panic!("{agent:?} provider: {error}"))
     .provider
+}
+
+#[test]
+fn a_reply_style_is_told_after_the_channel_and_only_when_one_was_started_with() {
+    let plain = super::build::system_prompt(&agents_config()).unwrap();
+    assert!(plain
+        .contributions()
+        .all(|part| part.source().name() != "nessa/reply-style"));
+    let styled = super::build::system_prompt(&AgentsConfig {
+        channel_instructions: Some("This conversation is in the person's channel \"x\".".into()),
+        reply_style: Some("Answer in one line.".into()),
+        ..agents_config()
+    })
+    .unwrap();
+    let names: Vec<_> = styled
+        .contributions()
+        .map(|part| part.source().name().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["nessa/gateway", "nessa/channel", "nessa/reply-style"]
+    );
+    let last = styled.contributions().last().unwrap();
+    assert_eq!(last.text(), "\n\nAnswer in one line.");
+}
+
+#[test]
+fn a_coordinators_job_is_told_after_the_channel_and_before_its_style() {
+    let thread = super::build::system_prompt(&AgentsConfig {
+        channel_instructions: Some("This conversation is in the person's channel \"x\".".into()),
+        reply_style: Some("Answer in one line.".into()),
+        ..agents_config()
+    })
+    .unwrap();
+    assert!(thread
+        .contributions()
+        .all(|part| part.source().name() != "nessa/role"));
+    let coordinator = super::build::system_prompt(&AgentsConfig {
+        channel_instructions: Some("This conversation is in the person's channel \"x\".".into()),
+        role_job: Some("You are this channel's coordinator.".into()),
+        reply_style: Some("Answer in one line.".into()),
+        ..agents_config()
+    })
+    .unwrap();
+    let names: Vec<_> = coordinator
+        .contributions()
+        .map(|part| part.source().name().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "nessa/gateway",
+            "nessa/channel",
+            "nessa/role",
+            "nessa/reply-style"
+        ]
+    );
+    let job = coordinator.contributions().nth(2).unwrap();
+    assert_eq!(job.text(), "\n\nYou are this channel's coordinator.");
 }

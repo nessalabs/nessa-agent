@@ -48,17 +48,27 @@ interface StatusGroup {
 }
 
 /**
- * Sessions in the list's order, newest first in each group: the ones the
- * person pinned, each there only, then the rest by status; empty groups are
- * left out. With `runningFirst` off (Settings › Workspace › Sessions),
+ * Sessions in the list's order, newest first in each group: the channel's
+ * coordinator (`coordinatorId`, while it is on) alone at the top, then the
+ * ones the person pinned, each there only, then the rest by status; empty
+ * groups are left out. With `runningFirst` off (Settings › Workspace › Sessions),
  * running sessions are not kept above the rest: "Needs you", then every other
  * session in one group, newest first.
  */
 export function groupByStatus(
   sessions: readonly SessionSummary[],
-  { runningFirst = true }: { runningFirst?: boolean } = {},
+  {
+    runningFirst = true,
+    coordinatorId,
+  }: { runningFirst?: boolean; coordinatorId?: string } = {},
 ): StatusGroup[] {
-  const sorted = [...sessions].sort(byRecency)
+  const all = [...sessions].sort(byRecency)
+  const coordinator: StatusGroup = {
+    id: "coordinator",
+    label: "Coordinator",
+    sessions: all.filter((session) => session.id === coordinatorId),
+  }
+  const sorted = all.filter((session) => session.id !== coordinatorId)
   const pinned: StatusGroup = {
     id: "pinned",
     label: "Pinned",
@@ -83,7 +93,7 @@ export function groupByStatus(
           sessions: newest.filter((session) => session.status !== "needs-you"),
         },
       ]
-  return [pinned, ...groups].filter((group) => group.sessions.length > 0)
+  return [coordinator, pinned, ...groups].filter((group) => group.sessions.length > 0)
 }
 
 /** Whether a session answers the list's search, by title, preview, model or agent. */

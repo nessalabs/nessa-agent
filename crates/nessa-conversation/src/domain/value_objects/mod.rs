@@ -6,9 +6,13 @@
 //! [`WorkspaceWindow`]. A named place conversations live in, with the folder
 //! their agents work in, is a [`Channel`].
 mod channel;
+mod cloud;
+pub use cloud::Cloud;
 mod conversation_deletion;
 mod place;
 mod pool_preference;
+mod reply_style;
+mod setting_level;
 mod settings_scope;
 mod share_access;
 mod tool_call;
@@ -38,5 +42,9 @@ pub use workspace_window::{
 
 pub use place::{Place, UnknownPlace};
 pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
+pub use reply_style::{
+    ReplyStyle, ReplyStyleSettings, RoleStyles, StyleRole, StyleText, MAX_REPLY_STYLE_BYTES,
+};
+pub use setting_level::{Setting, SettingLevel};
 pub use settings_scope::SettingsScope;
 pub use vm_lifetime::{RestCause, VmLifetime, VmLifetimeSettings};

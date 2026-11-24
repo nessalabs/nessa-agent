@@ -218,10 +218,7 @@ export function indexLoaded(
   if (opening) return withPanes(opened, singlePane(paneItemKey(sessionItem(opening.id))))
   const model = defaultModel()
   if (!channelId || !model) return opened
-  return withPanes(
-    { ...opened, drafts: { [draftId]: { id: draftId, channelId, model } } },
-    singlePane(paneItemKey(sessionItem(draftId))),
-  )
+  return createDraft(opened, { draftId, channelId, model })
 }
 
 /** Every read still on its way that was asked before `read`: outrun by its answer. */

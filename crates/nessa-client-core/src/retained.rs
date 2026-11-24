@@ -160,6 +160,9 @@ const CATALOGUE_PAGES: usize = 64;
 const RECORD_PAGES: usize = 16;
 /// How long connecting and authenticating may take, in milliseconds.
 const HANDSHAKE_MS: u64 = 5_000;
+/// Bytes of grant entries held while an incomplete snapshot is assembled.
+/// A further page fails the follow and leaves the committed cursor where it was.
+const STAGED_GRANT_BYTES: usize = 512 * 1024;
 /// How long connecting and authenticating may take. The operating system's
 /// connect inside it cannot be stopped: [`ReadStop::stop`] shuts the sockets a
 /// read has open, not one still connecting, so a stop can wait up to this.
@@ -298,6 +301,9 @@ pub struct ReadStop {
 /// A socket belongs to one read, even when several reads share cancellation.
 struct StopSocket {
     owner: Arc<()>,
+    /// This socket alone, so it leaves the list when it closes, while other
+    /// sockets of the same read stay.
+    id: Arc<()>,
     socket: TcpStream,
 }
 impl ReadStop {
@@ -343,17 +349,24 @@ impl ReadStop {
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<StopSocket>> {
         self.sockets.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<()> {
+    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<()>> {
         let handle = socket.try_clone()?;
+        let id = Arc::new(());
         self.lock().push(StopSocket {
             owner: owner.clone(),
+            id: id.clone(),
             socket: handle,
         });
         // A stop between the check in `connect` and here still reaches it.
         if self.is_stopped() {
             self.stop();
         }
-        Ok(())
+        Ok(id)
+    }
+    /// One socket closed: drop its handle, so a read that reopens sessions
+    /// for as long as it lives does not keep every closed one open.
+    fn forget(&self, id: &Arc<()>) {
+        self.lock().retain(|socket| !Arc::ptr_eq(&socket.id, id));
     }
     fn release(&self, owner: &Arc<()>) {
         self.lock()
@@ -379,7 +392,7 @@ struct Stopping {
     owner: Arc<()>,
     clock: Arc<dyn MonotonicClock>,
     /// When the budget is spent, by `clock`.
-    until: u64,
+    until: std::sync::atomic::AtomicU64,
     /// [`END_OPEN`] until the first end, then [`END_CALLER`] or [`END_BUDGET`].
     cause: AtomicU8,
 }
@@ -389,18 +402,24 @@ impl Stopping {
             stop,
             owner: Arc::new(()),
             clock,
-            until,
+            until: std::sync::atomic::AtomicU64::new(until),
             cause: AtomicU8::new(END_OPEN),
         }
     }
-    fn register(&self, socket: &TcpStream) -> IoResult<()> {
+    /// A live subscription is not ended by the read budget that bounded
+    /// its first snapshot.
+    fn relax(&self) {
+        self.until
+            .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn register(&self, socket: &TcpStream) -> IoResult<Arc<()>> {
         self.stop.register(&self.owner, socket)
     }
     fn release(&self) {
         self.stop.release(&self.owner);
     }
     fn spent(&self) -> bool {
-        self.clock.elapsed_ms() >= self.until
+        self.clock.elapsed_ms() >= self.until.load(std::sync::atomic::Ordering::SeqCst)
     }
     /// Whether this fetch has ended, and the first condition that ended it.
     /// A caller stop observed now is kept ahead of a spent budget. A budget
@@ -436,7 +455,7 @@ impl Cancellation for Stopping {
         self.note_end()
     }
     fn until_ms(&self) -> Option<u64> {
-        Some(self.until)
+        Some(self.until.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 /// Connect to a paired gateway's native listener at `address` within
@@ -614,8 +633,8 @@ impl GatewayConnector for StoppableConnector {
             Ordering::SeqCst,
         );
         let socket = connected?;
-        self.ending.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.ending.stop.clone())))
+        let id = self.ending.register(&socket)?;
+        Ok(Box::new(Socket::new(socket, self.ending.stop.clone(), id)))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -625,14 +644,22 @@ impl GatewayConnector for StoppableConnector {
 struct Socket {
     stream: TcpStream,
     stop: Arc<ReadStop>,
+    /// Its entry in `stop`, removed when this socket is dropped.
+    id: Arc<()>,
     read_for: Cell<Duration>,
     write_for: Cell<Duration>,
 }
+impl Drop for Socket {
+    fn drop(&mut self) {
+        self.stop.forget(&self.id);
+    }
+}
 impl Socket {
-    fn new(stream: TcpStream, stop: Arc<ReadStop>) -> Self {
+    fn new(stream: TcpStream, stop: Arc<ReadStop>, id: Arc<()>) -> Self {
         Self {
             stream,
             stop,
+            id,
             read_for: Cell::new(STOP_SLICE),
             write_for: Cell::new(STOP_SLICE),
         }
@@ -701,6 +728,106 @@ impl GatewayStream for Socket {
     }
 }
 
+/// A complete frame continues the staged prefix only when it names the same
+/// snapshot. A replacement that fits in one frame would otherwise put the
+/// old prefix back, including a grant revoked between the two snapshots.
+fn finish_staged(
+    staged: &mut Vec<nessa_protocol::product::generated::GrantFrameEntry>,
+    staged_snapshot: &mut Option<String>,
+    changed: &nessa_protocol::product::generated::GrantsChanged,
+) -> Vec<nessa_protocol::product::generated::GrantFrameEntry> {
+    let continues = changed
+        .snapshot_id
+        .as_ref()
+        .is_some_and(|id| staged_snapshot.as_ref() == Some(id));
+    if !continues {
+        staged.clear();
+    }
+    *staged_snapshot = None;
+    let mut entries = std::mem::take(staged);
+    entries.extend(changed.grants.iter().map(copy_grant_entry));
+    entries
+}
+
+/// Append one incomplete page, or replace the buffer when a new snapshot
+/// starts. Past [`STAGED_GRANT_BYTES`] the page is not kept.
+fn stage_grant_page(
+    staged: &mut Vec<nessa_protocol::product::generated::GrantFrameEntry>,
+    staged_bytes: &mut usize,
+    staged_snapshot: &mut Option<String>,
+    changed: &nessa_protocol::product::generated::GrantsChanged,
+) -> Result<(), ReadFailure> {
+    let same_snapshot = changed
+        .snapshot_id
+        .as_ref()
+        .is_some_and(|id| staged_snapshot.as_ref() == Some(id));
+    let fresh = changed.replaces && !same_snapshot;
+    let base = if fresh { 0 } else { *staged_bytes };
+    let adding = grant_text_len(&changed.grants);
+    if base.saturating_add(adding) > STAGED_GRANT_BYTES {
+        return Err(ReadFailure::Protocol);
+    }
+    if fresh {
+        staged.clear();
+    }
+    staged.extend(changed.grants.iter().map(copy_grant_entry));
+    *staged_bytes = base.saturating_add(adding);
+    *staged_snapshot = changed.snapshot_id.clone();
+    Ok(())
+}
+
+fn grant_text_len(entries: &[nessa_protocol::product::generated::GrantFrameEntry]) -> usize {
+    entries.iter().fold(0_usize, |sum, entry| {
+        sum.saturating_add(
+            serde_json::to_string(entry)
+                .map(|text| text.len())
+                .unwrap_or(usize::MAX),
+        )
+    })
+}
+
+fn copy_grant_entry(
+    entry: &nessa_protocol::product::generated::GrantFrameEntry,
+) -> nessa_protocol::product::generated::GrantFrameEntry {
+    nessa_protocol::product::generated::GrantFrameEntry {
+        conversation_id: entry.conversation_id.clone(),
+        absent: entry.absent,
+        capabilities: entry.capabilities.clone(),
+        policy_revision: entry.policy_revision.clone(),
+    }
+}
+
+/// Whether the gateway, not the local follow rule, dropped `id`. The last
+/// record in the frame wins, the same rule the replica uses.
+fn revoked_by_gateway(
+    id: &str,
+    replaces: bool,
+    entries: &[nessa_protocol::product::generated::GrantFrameEntry],
+) -> bool {
+    match entries.iter().rfind(|entry| entry.conversation_id == id) {
+        Some(entry) => entry.absent,
+        None => replaces,
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum CopyStop {
+    More,
+    Held,
+    Gone,
+}
+
+fn last_present_ids(entries: &[(String, bool, Option<String>, i64)]) -> Vec<String> {
+    let mut last = Vec::new();
+    for (conversation, absent, _, _) in entries {
+        last.retain(|id: &String| id != conversation);
+        if !absent {
+            last.push(conversation.clone());
+        }
+    }
+    last
+}
+
 /// One reader's private retained cache.
 pub struct RetainedCache {
     cache: ReadOnlyCache,
@@ -746,15 +873,24 @@ impl RetainedCache {
     /// The conversations the cache holds for `receiver`, by id, read from
     /// the cache alone.
     pub fn conversation_ids(&mut self, receiver: &str) -> Result<Vec<String>, ReadFailure> {
-        let receiver = Id::new(receiver).map_err(|_| ReadFailure::Cache)?;
-        let Some(scope) = self.catalogue_scope(&receiver)? else {
-            return Ok(Vec::new());
-        };
-        Ok(self
-            .live(&scope)?
-            .into_iter()
-            .map(|id| id.as_str().to_owned())
-            .collect())
+        let mut ids = Vec::new();
+        if let Ok(parsed) = Id::new(receiver) {
+            if let Some(scope) = self.catalogue_scope(&parsed)? {
+                ids.extend(
+                    self.live(&scope)?
+                        .into_iter()
+                        .map(|id| id.as_str().to_owned()),
+                );
+            }
+        }
+        ids.extend(
+            self.cache
+                .grant_ids(receiver)
+                .map_err(|error| cache_failure(&error))?,
+        );
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 
     /// Read what the gateway grants `access` into this cache, within
@@ -811,6 +947,609 @@ impl RetainedCache {
             self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
         let retained = retained_page(&result, progressed);
         (result, retained)
+    }
+
+    /// Follow this receiver's grants on `grants.subscribe`, and each chat
+    /// `follow` names on `conversation.subscribe`. The catalogue is not read.
+    /// `on_withdrawn` runs as each revoke is stored, so the audit does not
+    /// wait for this call to return. `on_synced` runs after each complete
+    /// frame, with how many conversations the replica holds. The call stays
+    /// until `stop` or the subscription ends.
+    ///
+    /// The boolean is true when a page was kept and the follow then failed
+    /// because the cache is full, could not be written, or the connection
+    /// was lost. The error still stands. `on_synced` has already run for a
+    /// snapshot that was stored.
+    #[allow(clippy::too_many_arguments)]
+    pub fn follow_grants(
+        &mut self,
+        access: ReaderAccess<'_>,
+        follow: &FollowRule,
+        stop: &Arc<ReadStop>,
+        budget: Duration,
+        max_withdrawn: usize,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: impl FnMut(&[String]),
+        on_synced: impl FnMut(u64),
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
+        let receiver = access.receiver.to_owned();
+        let before = withdrawn.len();
+        self.progressed = false;
+        let ending = Arc::new(Stopping::new(
+            stop.clone(),
+            self.clock.clone(),
+            self.clock
+                .elapsed_ms()
+                .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        ));
+        let result = self.follow_until(
+            access,
+            follow,
+            stop,
+            &ending,
+            max_withdrawn,
+            withdrawn,
+            on_withdrawn,
+            on_synced,
+        );
+        // A budget that cancels the socket is `Stopped` at the stream. The
+        // same end as a catalogue read: a caller stop stays stopped, and a
+        // spent budget that saved nothing is unreachable.
+        let progressed = self.progressed || withdrawn.len() > before;
+        let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
+        let result = match end {
+            ReadEnd::Read(report) => Ok(report),
+            ReadEnd::Incomplete => self
+                .cache
+                .grant_ids(&receiver)
+                .map_err(|error| cache_failure(&error))
+                .map(|ids| ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: ids.len(),
+                }),
+            ReadEnd::Failed(failure) => Err(failure),
+        };
+        let retained = retained_page(&result, progressed);
+        (result, retained)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn follow_until(
+        &mut self,
+        access: ReaderAccess<'_>,
+        follow: &FollowRule,
+        stop: &Arc<ReadStop>,
+        ending: &Arc<Stopping>,
+        max_withdrawn: usize,
+        withdrawn: &mut Vec<String>,
+        mut on_withdrawn: impl FnMut(&[String]),
+        mut on_synced: impl FnMut(u64),
+    ) -> Result<ReadReport, ReadFailure> {
+        let receiver = access.receiver.to_owned();
+        let offline = Arc::new(AtomicBool::new(false));
+        let session = self.open_session(&access, ending, &offline)?;
+        let connection = GatewayConnection::new(session);
+        let stored = self
+            .cache
+            .grant_cursor(&receiver)
+            .map_err(|error| cache_failure(&error))?;
+        let cursor_of = |stored: &Option<(String, u64)>| {
+            stored.as_ref().map(|(incarnation, position)| {
+                nessa_protocol::product::generated::GrantStreamCursor {
+                    incarnation: incarnation.clone(),
+                    position: position.to_string(),
+                }
+            })
+        };
+        let resume = if let Err(error) = connection.subscribe_grants(cursor_of(&stored)) {
+            if stored.is_some() && grant_cursor_refused(&error) {
+                self.cache
+                    .clear_grant_cursor(&receiver)
+                    .map_err(|cause| cache_failure(&cause))?;
+                connection.subscribe_grants(None).map_err(failure)?;
+                None
+            } else {
+                return Err(failure(error));
+            }
+        } else {
+            cursor_of(&stored)
+        };
+        let mut staged: Vec<nessa_protocol::product::generated::GrantFrameEntry> = Vec::new();
+        let mut staged_bytes = 0_usize;
+        let mut staged_snapshot: Option<String> = None;
+        let mut chats: Vec<(GatewayConnection, String)> = Vec::new();
+        let mut live = LiveFollow::new();
+        let mut synced = false;
+        let mut catch_up = 0_usize;
+        loop {
+            if ending.cancelled() || stop.is_stopped() {
+                break;
+            }
+            let delivery = match connection.poll_grant() {
+                Ok(Some(delivery)) => delivery,
+                Ok(None) => {
+                    let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
+                    let mut dropped = self.drain_chats(
+                        &connection,
+                        &id,
+                        access.access_epoch,
+                        &mut live,
+                        &mut chats,
+                        withdrawn,
+                        &mut on_withdrawn,
+                    )?;
+                    if synced {
+                        let present = self.followed_present(&receiver, follow)?;
+                        dropped |= self.open_chats(
+                            &access,
+                            ending,
+                            &offline,
+                            &connection,
+                            &id,
+                            access.access_epoch,
+                            &present,
+                            &mut live,
+                            &mut chats,
+                            withdrawn,
+                            &mut on_withdrawn,
+                        )?;
+                        dropped |= self.catch_up_one(
+                            &connection,
+                            &id,
+                            access.access_epoch,
+                            &present,
+                            &chats,
+                            &mut catch_up,
+                            withdrawn,
+                            &mut on_withdrawn,
+                        )?;
+                    }
+                    if dropped {
+                        let count = u64::try_from(
+                            self.cache
+                                .grant_ids(&receiver)
+                                .map_err(|error| cache_failure(&error))?
+                                .len(),
+                        )
+                        .unwrap_or(0);
+                        on_synced(count);
+                    }
+                    if let Some(snapshot_id) = staged_snapshot.clone() {
+                        let _ = connection.grant_page(&snapshot_id, resume.as_ref());
+                    }
+                    continue;
+                }
+                Err(error) => return Err(failure(error)),
+            };
+            let changed = match delivery {
+                crate::read_only_sync::infrastructure::gateway::GrantDelivery::Changed(changed) => {
+                    changed
+                }
+                crate::read_only_sync::infrastructure::gateway::GrantDelivery::Ended(ended) => {
+                    tracing::info!(reason = ended.reason.as_str(), "grant subscription ended");
+                    return Err(ReadFailure::Unreachable);
+                }
+            };
+            if !changed.complete {
+                // `replaces` describes the whole snapshot, not each page.
+                // A later page of the same snapshot appends. A new snapshot
+                // starts the staging buffer over. The cursor stays until a
+                // complete frame is stored.
+                stage_grant_page(
+                    &mut staged,
+                    &mut staged_bytes,
+                    &mut staged_snapshot,
+                    &changed,
+                )?;
+                if let Some(snapshot_id) = staged_snapshot.clone() {
+                    let _ = connection.grant_page(&snapshot_id, resume.as_ref());
+                }
+                continue;
+            }
+            let entries = finish_staged(&mut staged, &mut staged_snapshot, &changed);
+            staged_bytes = 0;
+            let ordered: Vec<(String, bool, Option<String>, i64)> = entries
+                .iter()
+                .map(|entry| {
+                    let revision = entry
+                        .policy_revision
+                        .as_deref()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    let absent = entry.absent || !follow.contains(&entry.conversation_id);
+                    (
+                        entry.conversation_id.clone(),
+                        absent,
+                        entry.capabilities.clone(),
+                        revision,
+                    )
+                })
+                .collect();
+            let id = Id::new(&receiver).map_err(|_| ReadFailure::Protocol)?;
+            let position = changed
+                .cursor
+                .position
+                .parse()
+                .map_err(|_| ReadFailure::Protocol)?;
+            // A revoke lands even when a later copy cannot. The cursor stays,
+            // so the addition is asked again.
+            let removed = self
+                .cache
+                .withdraw_grant_entries(&receiver, changed.replaces, &ordered)
+                .map_err(|error| cache_failure(&error))?;
+            let mut fresh = Vec::new();
+            for id in removed {
+                // A replacement lists only the grants that remain. One missing
+                // from it was revoked. A chat the follow rule skips is still
+                // present in the frame, so it is not reported as a revoke.
+                if revoked_by_gateway(&id, changed.replaces, &entries) {
+                    fresh.push(id);
+                }
+            }
+            if !fresh.is_empty() {
+                withdrawn.extend(fresh.iter().cloned());
+                on_withdrawn(&fresh);
+            }
+            if withdrawn.len() >= max_withdrawn {
+                return Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: self
+                        .cache
+                        .grant_ids(&receiver)
+                        .map_err(|error| cache_failure(&error))?
+                        .len(),
+                });
+            }
+            self.copy_granted(
+                &connection,
+                &id,
+                access.access_epoch,
+                stop,
+                &ordered,
+                withdrawn,
+                &mut on_withdrawn,
+            )?;
+            self.cache
+                .commit_grant_entries(&receiver, &changed.cursor.incarnation, position, &ordered)
+                .map_err(|error| cache_failure(&error))?;
+            let present = self.followed_present(&receiver, follow)?;
+            let copied = last_present_ids(&ordered);
+            for (conversation, _, _) in &present {
+                if copied.iter().any(|id| id == conversation)
+                    || chats.iter().any(|(_, open)| open == conversation)
+                {
+                    continue;
+                }
+                let conversation_id =
+                    ConversationId::new(conversation).map_err(|_| ReadFailure::Protocol)?;
+                self.copy_one(
+                    &connection,
+                    &id,
+                    access.access_epoch,
+                    conversation_id,
+                    withdrawn,
+                    &mut on_withdrawn,
+                )?;
+            }
+            self.open_chats(
+                &access,
+                ending,
+                &offline,
+                &connection,
+                &id,
+                access.access_epoch,
+                &present,
+                &mut live,
+                &mut chats,
+                withdrawn,
+                &mut on_withdrawn,
+            )?;
+            let count = u64::try_from(
+                self.cache
+                    .grant_ids(&receiver)
+                    .map_err(|error| cache_failure(&error))?
+                    .len(),
+            )
+            .unwrap_or(0);
+            on_synced(count);
+            synced = true;
+            ending.relax();
+            self.drain_chats(
+                &connection,
+                &id,
+                access.access_epoch,
+                &mut live,
+                &mut chats,
+                withdrawn,
+                &mut on_withdrawn,
+            )?;
+        }
+        let conversations = self
+            .cache
+            .grant_ids(&receiver)
+            .map_err(|error| cache_failure(&error))?
+            .len();
+        if stop.is_stopped() || ending.ended_by_caller() {
+            return Err(ReadFailure::Stopped);
+        }
+        Ok(ReadReport {
+            moved: synced,
+            complete: synced,
+            conversations,
+        })
+    }
+
+    /// The grants `follow` still names, from the replica.
+    fn followed_present(
+        &mut self,
+        receiver: &str,
+        follow: &FollowRule,
+    ) -> Result<Vec<(String, String, i64)>, ReadFailure> {
+        Ok(self
+            .cache
+            .grant_present(receiver)
+            .map_err(|error| cache_failure(&error))?
+            .into_iter()
+            .filter(|(conversation, _, _)| follow.contains(conversation))
+            .collect())
+    }
+
+    /// One retained chat that has no subscription, in turn. The connection cap
+    /// is eight subscriptions, and each chat has its own connection, so a
+    /// ninth stays unsubscribed. This read is what keeps it current.
+    #[allow(clippy::too_many_arguments)]
+    fn catch_up_one(
+        &mut self,
+        connection: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        present: &[(String, String, i64)],
+        chats: &[(GatewayConnection, String)],
+        cursor: &mut usize,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        let waiting: Vec<&str> = present
+            .iter()
+            .map(|(conversation, _, _)| conversation.as_str())
+            .filter(|conversation| !chats.iter().any(|(_, open)| open == conversation))
+            .collect();
+        if waiting.is_empty() {
+            return Ok(false);
+        }
+        let index = *cursor % waiting.len();
+        *cursor = index.saturating_add(1);
+        let conversation_id =
+            ConversationId::new(waiting[index]).map_err(|_| ReadFailure::Protocol)?;
+        self.copy_one(
+            connection,
+            receiver,
+            epoch,
+            conversation_id,
+            withdrawn,
+            on_withdrawn,
+        )
+    }
+
+    /// Subscribe the chats `present` names, up to the connection cap. A chat
+    /// whose subscription ends is taken out of `live` so the next pass opens
+    /// it again. The view that arrived with the subscribe is copied here.
+    #[allow(clippy::too_many_arguments)]
+    fn open_chats(
+        &mut self,
+        access: &ReaderAccess<'_>,
+        ending: &Arc<Stopping>,
+        offline: &Arc<AtomicBool>,
+        records: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        present: &[(String, String, i64)],
+        live: &mut LiveFollow,
+        chats: &mut Vec<(GatewayConnection, String)>,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        let mut gone = false;
+        for (conversation, _, _) in present {
+            if live.open_ids().iter().any(|id| id == conversation) {
+                continue;
+            }
+            if live.open_ids().len()
+                >= nessa_protocol::product::generated::MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS
+            {
+                break;
+            }
+            let _ = live.open(conversation);
+            let Ok(conversation_id) = ConversationId::new(conversation) else {
+                live.close(conversation);
+                continue;
+            };
+            let Ok(session) = self.open_session(access, ending, offline) else {
+                live.close(conversation);
+                continue;
+            };
+            let connection = GatewayConnection::new(session);
+            match connection.subscribe(&conversation_id) {
+                Ok(subscribed) => match subscribed.first {
+                    crate::read_only_sync::application::follow::Wait::Ended(_) => {
+                        live.close(conversation);
+                    }
+                    crate::read_only_sync::application::follow::Wait::View { .. } => {
+                        let dropped = self.copy_one(
+                            records,
+                            receiver,
+                            epoch,
+                            conversation_id,
+                            withdrawn,
+                            on_withdrawn,
+                        )?;
+                        gone |= dropped;
+                        if dropped {
+                            live.close(conversation);
+                        } else {
+                            chats.push((connection, conversation.clone()));
+                        }
+                    }
+                },
+                Err(_) => live.close(conversation),
+            }
+        }
+        Ok(gone)
+    }
+
+    /// Read each followed conversation through to its record head. A failure
+    /// is returned before the grant cursor moves.
+    #[allow(clippy::too_many_arguments)]
+    fn copy_granted(
+        &mut self,
+        connection: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        stop: &ReadStop,
+        entries: &[(String, bool, Option<String>, i64)],
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<(), ReadFailure> {
+        let mut last_present = Vec::new();
+        for (conversation, absent, _, _) in entries {
+            last_present.retain(|id| id != conversation);
+            if !absent {
+                last_present.push(conversation.clone());
+            }
+        }
+        for conversation in last_present {
+            let conversation_id =
+                ConversationId::new(&conversation).map_err(|_| ReadFailure::Protocol)?;
+            loop {
+                if stop.is_stopped() {
+                    return Err(ReadFailure::Stopped);
+                }
+                let outcome =
+                    self.records(connection, receiver, epoch, conversation_id.clone(), false)?;
+                if self.copied(
+                    outcome,
+                    receiver.as_str(),
+                    &conversation,
+                    withdrawn,
+                    on_withdrawn,
+                )? != CopyStop::More
+                {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Take chat views that have arrived and copy the records they name.
+    #[allow(clippy::too_many_arguments)]
+    fn drain_chats(
+        &mut self,
+        records: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        live: &mut LiveFollow,
+        chats: &mut Vec<(GatewayConnection, String)>,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        let mut gone = false;
+        let mut index = 0;
+        while index < chats.len() {
+            let conversation = chats[index].1.clone();
+            match chats[index].0.poll_view() {
+                Ok(Some(crate::read_only_sync::application::follow::Wait::View { .. })) => {
+                    let conversation_id =
+                        ConversationId::new(&conversation).map_err(|_| ReadFailure::Protocol)?;
+                    let dropped = self.copy_one(
+                        records,
+                        receiver,
+                        epoch,
+                        conversation_id,
+                        withdrawn,
+                        on_withdrawn,
+                    )?;
+                    if dropped {
+                        let (_, conversation) = chats.remove(index);
+                        live.close(&conversation);
+                        gone = true;
+                        continue;
+                    }
+                }
+                Ok(Some(crate::read_only_sync::application::follow::Wait::Ended(_))) => {
+                    let (_, conversation) = chats.remove(index);
+                    live.close(&conversation);
+                    continue;
+                }
+                Ok(None) => {
+                    index += 1;
+                    continue;
+                }
+                Err(error) => return Err(failure(error)),
+            }
+            index += 1;
+        }
+        Ok(gone)
+    }
+
+    fn copy_one(
+        &mut self,
+        connection: &GatewayConnection,
+        receiver: &Id,
+        epoch: u64,
+        conversation: ConversationId,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<bool, ReadFailure> {
+        loop {
+            let outcome = self.records(connection, receiver, epoch, conversation.clone(), false)?;
+            match self.copied(
+                outcome,
+                receiver.as_str(),
+                &conversation.to_string(),
+                withdrawn,
+                on_withdrawn,
+            )? {
+                CopyStop::More => continue,
+                CopyStop::Held => return Ok(false),
+                CopyStop::Gone => return Ok(true),
+            }
+        }
+    }
+
+    /// How far one conversation's copy got. `Gone` means the owner deleted it
+    /// without a grant tombstone: the local grant and transcript are removed
+    /// and the audit is told.
+    fn copied(
+        &mut self,
+        outcome: Conversation,
+        receiver: &str,
+        conversation: &str,
+        withdrawn: &mut Vec<String>,
+        on_withdrawn: &mut impl FnMut(&[String]),
+    ) -> Result<CopyStop, ReadFailure> {
+        match outcome {
+            Conversation::Read { complete: false } => Ok(CopyStop::More),
+            Conversation::Read { complete: true } => Ok(CopyStop::Held),
+            Conversation::Unread { .. } => Err(ReadFailure::Unreachable),
+            Conversation::Withdrawn => {
+                let removed = self
+                    .cache
+                    .withdraw_grant_entries(
+                        receiver,
+                        false,
+                        &[(conversation.to_owned(), true, None, 0_i64)],
+                    )
+                    .map_err(|error| cache_failure(&error))?;
+                if !removed.is_empty() {
+                    withdrawn.extend(removed.iter().cloned());
+                    on_withdrawn(&removed);
+                }
+                Ok(CopyStop::Gone)
+            }
+        }
     }
 
     fn read_in(
@@ -1524,6 +2263,17 @@ fn connect_reader(
 }
 
 /// A gateway failure as the caller acts on it.
+fn grant_cursor_refused(error: &GatewayError) -> bool {
+    matches!(
+        error,
+        GatewayError::Subscription(
+            crate::read_only_sync::application::SubscriptionRefusal::Subscription(
+                crate::read_only_sync::application::SubscriptionCode::CursorAhead,
+            )
+        )
+    )
+}
+
 fn failure(error: GatewayError) -> ReadFailure {
     if let Some(outcome) = error.connection_outcome() {
         return match outcome {
@@ -1549,3 +2299,133 @@ fn failure(error: GatewayError) -> ReadFailure {
 #[cfg(test)]
 #[path = "../tests/retained/read.rs"]
 mod tests;
+
+#[cfg(test)]
+mod grant_frames {
+    use super::{
+        finish_staged, revoked_by_gateway, stage_grant_page, ReadFailure, STAGED_GRANT_BYTES,
+    };
+    use nessa_protocol::product::generated::{GrantFrameEntry, GrantStreamCursor, GrantsChanged};
+
+    fn entry(id: &str, absent: bool) -> GrantFrameEntry {
+        GrantFrameEntry {
+            conversation_id: id.to_owned(),
+            absent,
+            capabilities: (!absent).then(|| "read".to_owned()),
+            policy_revision: Some("1".to_owned()),
+        }
+    }
+
+    fn frame(snapshot: Option<&str>, grants: Vec<GrantFrameEntry>) -> GrantsChanged {
+        changed(true, snapshot, grants)
+    }
+
+    fn changed(
+        complete: bool,
+        snapshot: Option<&str>,
+        grants: Vec<GrantFrameEntry>,
+    ) -> GrantsChanged {
+        GrantsChanged {
+            subscription_id: "sub".to_owned(),
+            cursor: GrantStreamCursor {
+                incarnation: "inc".to_owned(),
+                position: "2".to_owned(),
+            },
+            complete,
+            replaces: true,
+            snapshot_id: snapshot.map(str::to_owned),
+            grants,
+        }
+    }
+
+    #[test]
+    fn a_replacement_snapshot_drops_the_staged_prefix() {
+        let mut staged = vec![entry("old", false)];
+        let mut snapshot = Some("1".to_owned());
+        let done = finish_staged(
+            &mut staged,
+            &mut snapshot,
+            &frame(Some("2"), vec![entry("new", false)]),
+        );
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].conversation_id, "new");
+        assert!(staged.is_empty());
+    }
+
+    #[test]
+    fn the_last_page_of_a_snapshot_keeps_the_prefix() {
+        let mut staged = vec![entry("first", false)];
+        let mut snapshot = Some("4".to_owned());
+        let done = finish_staged(
+            &mut staged,
+            &mut snapshot,
+            &frame(Some("4"), vec![entry("second", false)]),
+        );
+        assert_eq!(
+            done.iter()
+                .map(|entry| entry.conversation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+    }
+
+    #[test]
+    fn a_replacement_counts_a_missing_grant_as_revoked() {
+        let entries = vec![entry("kept", false)];
+        assert!(revoked_by_gateway("gone", true, &entries));
+        assert!(!revoked_by_gateway("kept", true, &entries));
+        assert!(!revoked_by_gateway("gone", false, &entries));
+        assert!(revoked_by_gateway("gone", false, &[entry("gone", true)]));
+        assert!(revoked_by_gateway(
+            "gone",
+            false,
+            &[entry("gone", false), entry("gone", true)]
+        ));
+        assert!(!revoked_by_gateway(
+            "gone",
+            false,
+            &[entry("gone", true), entry("gone", false)]
+        ));
+    }
+
+    #[test]
+    fn a_later_page_past_the_staging_budget_is_not_kept() {
+        let mut staged = vec![entry("kept", false)];
+        let mut bytes = STAGED_GRANT_BYTES;
+        let mut snapshot = Some("7".to_owned());
+        let refused = stage_grant_page(
+            &mut staged,
+            &mut bytes,
+            &mut snapshot,
+            &changed(false, Some("7"), vec![entry("more", false)]),
+        );
+        assert_eq!(refused, Err(ReadFailure::Protocol));
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].conversation_id, "kept");
+        assert_eq!(bytes, STAGED_GRANT_BYTES);
+        assert_eq!(snapshot.as_deref(), Some("7"));
+    }
+}
+
+#[cfg(test)]
+mod stop_sockets {
+    use super::ReadStop;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    #[test]
+    fn a_closed_socket_leaves_the_stop_and_the_others_stay() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = ReadStop::new();
+        let read = Arc::new(());
+        let first = TcpStream::connect(address).unwrap();
+        let second = TcpStream::connect(address).unwrap();
+        let first_id = stop.register(&read, &first).unwrap();
+        let _second_id = stop.register(&read, &second).unwrap();
+        stop.forget(&first_id);
+        assert_eq!(stop.lock().len(), 1);
+        stop.release(&read);
+        assert!(stop.lock().is_empty());
+    }
+}

@@ -45,7 +45,7 @@
  * - **Refusals are typed.** The gateway's codes become `WorkspaceSourceError`
  *   reasons (`refusalOf`); a fault that is no answer at all is passed on as
  *   it is, for `failureReason` to log. A connection that could not be made
- *   is `signed-out`, `not-started`, `not-ready`, `not-listening`,
+ *   is `signed-out`, `not-started`, `not-ready`, `still-starting`, `not-listening`,
  *   `wrong-stage`, or `unavailable` by why (`connectFailure`, #419). A
  *   subscription that is refused is also traced (`noteReadAsked`,
  *   `noteReadRefused`).
@@ -172,7 +172,7 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { waitingReviews, type WaitingReview } from "./review-notices"
+import { waitingAsk, waitingReviews, type WaitingReview } from "./review-notices"
 import {
   gapOf,
   leading,
@@ -458,6 +458,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   readonly apps?: GatewayViewObserver
   /** The reviews still waiting, each time the gateway says so. An empty list means none. */
   readonly onReviewWaiting?: (reviews: readonly WaitingReview[]) => void
+  /**
+   * The decisions agents asked the owner (`ask_owner`) that the list says
+   * are still waiting, each time that set changes. An empty list means none.
+   */
+  readonly onAsksWaiting?: (asks: readonly WaitingReview[]) => void
   /** Reads a message's images back to upload them; without it, a message with images is refused. */
   readonly imageBytes?: ImageBytes
 }): GatewaySource<C> {
@@ -921,6 +926,28 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     if (result.complete)
       for (const sessionId of summaries.keys())
         if (!takenOut(sessionId) && !listed.has(sessionId)) remove(sessionId)
+    noteAsks()
+  }
+
+  // The asks last told, by key, so the same set is not told twice.
+  let toldAsks = ""
+  /**
+   * Tells the decisions the list says are asked. The list row is the one
+   * place an ask is kept: a person's message removes it, and the next list
+   * frame says so.
+   */
+  const noteAsks = (): void => {
+    const asks: WaitingReview[] = []
+    for (const [sessionId, row] of rows)
+      if (row.ask && !takenOut(sessionId))
+        asks.push(waitingAsk(sessionId, row.ask, row.title))
+    const key = asks
+      .map((ask) => `${ask.conversationId}\u0000${ask.executionId}`)
+      .sort()
+      .join("\n")
+    if (key === toldAsks) return
+    toldAsks = key
+    options.onAsksWaiting?.(asks)
   }
 
   /**
@@ -937,6 +964,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   ): Promise<ConversationListResult> => {
     const observed = new Map<string, ConversationSummary>()
     let cursor: ConversationObserveCursor | undefined
+    // A page that cannot resume — the replica list changed, so it carries no
+    // cursor — is not the end of the catalogue. The walk starts again from
+    // the first page. A few tries, then the rows seen so far stand and the
+    // catalogue is not claimed complete.
+    let restarts = 0
     for (;;) {
       if (!live() || !caller()) throw new WorkspaceSourceError("unavailable")
       const page = await connected.conversation.observe(
@@ -945,6 +977,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       for (const row of page.conversations) observed.set(row.conversationId, row)
       if (page.complete) return { conversations: [...observed.values()], complete: true }
       if (page.cursor === undefined || !cursorAdvances(cursor, page.cursor)) {
+        if (restarts < 3) {
+          restarts += 1
+          observed.clear()
+          cursor = undefined
+          continue
+        }
         const merged = new Map(
           listed.conversations.map((row) => [row.conversationId, row] as const),
         )
@@ -1378,6 +1416,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     const held = reads.get(sessionId)
     if (held && behind(frame.cursor, held.cursor)) return
     const transcript = applyRead(sessionId, frame.view, frame.cursor, receivedAtMs)
+    // Read back, it was made after all (its creation's answer was lost).
+    notCreated.delete(sessionId)
     follow.applied = true
     settle(follow, { value: transcript })
   }
@@ -1403,7 +1443,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     refusal: unknown,
     deleted: boolean,
   ) => {
-    if (gone(refusal)) {
+    // One this window is creating is not gone for not being there yet: its
+    // record is written as its machine starts being made. One whose creation
+    // failed is let go, not taken out: its message stays, to send again.
+    if (gone(refusal) && notCreated.has(sessionId)) {
+      unfollow(sessionId, refusal)
+      return
+    }
+    if (gone(refusal) && !creating.has(sessionId)) {
       remove(sessionId)
       if (deleted) tellApps(() => options.apps?.forget(sessionId))
       settle(follow, { error: refusal })
@@ -1570,6 +1617,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     open(sessionId, follow, who)
     return follow
   }
+
+  // The conversations this window is creating now (`open` in `send`), and
+  // those whose creation it asked for last failed.
+  const creating = new Set<string>()
+  const notCreated = new Set<string>()
 
   /** The conversation as its subscription last said it, waiting for the first frame when none is held (D20). */
   const transcriptOf = (sessionId: string, who: Caller): Promise<Transcript> => {
@@ -1747,19 +1799,39 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const open = async (live: () => boolean) => {
         if (!start) return
         const agent = agentForProvider(model.provider)
-        await dispatch(live, (connected) => {
-          held(sessionId)
-          return connected.conversation.create({
-            conversationId: sessionId,
-            ...(agent ? { agent } : {}),
-            model: model.modelId,
-            // The access chosen in the home; the gateway asks when told none,
-            // or starts as the channel says.
-            ...(access ? { approvalMode: access } : {}),
-            // The channel it is in for its whole life; none is the default one.
-            ...(channelId ? { channelId } : {}),
+        // A chat on a cloud machine answers its creation only once the
+        // machine is made and its agent started, a minute or more on. It is
+        // followed while it waits, once a retry's wait has let its record be
+        // written, so the window can say each step of that (`setup`).
+        creating.add(sessionId)
+        const following = waitsOnWorkspace
+          ? clock.after(timing.retryMs, () => {
+              if (creating.has(sessionId) && !takenOut(sessionId))
+                follow(sessionId, "held")
+            })
+          : undefined
+        try {
+          await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.create({
+              conversationId: sessionId,
+              ...(agent ? { agent } : {}),
+              model: model.modelId,
+              // The access chosen in the home; the gateway asks when told none,
+              // or starts as the channel says.
+              ...(access ? { approvalMode: access } : {}),
+              // The channel it is in for its whole life; none is the default one.
+              ...(channelId ? { channelId } : {}),
+            })
           })
-        })
+          notCreated.delete(sessionId)
+        } catch (error) {
+          notCreated.add(sessionId)
+          throw error
+        } finally {
+          following?.()
+          creating.delete(sessionId)
+        }
       }
       const submit = async (live: () => boolean, submitted: PreparedSubmission) => {
         await dispatch(live, (connected) => {
@@ -2387,6 +2459,8 @@ function connectFailure(error: unknown): WorkspaceSourceError {
   if (error instanceof HostRefusalError) {
     if (error.reason === "not-provisioned") return new WorkspaceSourceError("not-started")
     if (error.reason === "not-ready") return new WorkspaceSourceError("not-ready")
+    if (error.reason === "still-starting")
+      return new WorkspaceSourceError("still-starting")
     if (error.reason === "wrong-stage" && error.bundle && error.requested) {
       return new WorkspaceSourceError("wrong-stage", {
         bundle: error.bundle,
@@ -2596,6 +2670,7 @@ function reasonFor(
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:
+    case ConversationErrorCode.AgentSignInRequired: // no retry differs until someone signs it in where it runs
     case ConversationErrorCode.UnknownMethod:
     case ConversationErrorCode.InvalidRequest:
     case ConversationErrorCode.SubmissionConflict:

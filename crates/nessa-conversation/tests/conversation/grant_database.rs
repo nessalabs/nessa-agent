@@ -28,7 +28,7 @@ fn a_foreign_grant_version_refuses_before_opening_or_creating_metadata() {
             Err(crate::infrastructure::ConversationStoreOpenError::Grants {
                 cause: nessa_local_database::OpenError::Version {
                     found: 99,
-                    expected: 1
+                    expected: 2
                 },
                 ..
             })
@@ -39,6 +39,40 @@ fn a_foreign_grant_version_refuses_before_opening_or_creating_metadata() {
             assert_eq!(std::fs::read(&metadata).unwrap(), bytes);
         }
     }
+}
+
+#[tokio::test]
+async fn a_version_one_grant_file_keeps_its_rows_and_gains_the_log() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(grant(&opened.store, &id, "phone").await);
+    drop(opened.store);
+    let grants = opened.path.with_extension("grants.sqlite3");
+    let connection = Connection::open(&grants).unwrap();
+    let before: i64 = connection
+        .query_row("SELECT count(*) FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert!(before >= 1);
+    connection
+        .execute_batch("DROP TABLE grant_log; DROP TABLE grant_streams; PRAGMA user_version = 1;")
+        .unwrap();
+    drop(connection);
+    let store = LocalConversationStore::open(&opened.path).unwrap();
+    assert!(store.held_grant(&id, "phone").await.unwrap().is_some());
+    let connection = Connection::open(&grants).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let after: i64 = connection
+        .query_row("SELECT count(*) FROM share_grants", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+    let streams: i64 = connection
+        .query_row("SELECT count(*) FROM grant_streams", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(streams, 0);
 }
 
 #[test]
@@ -191,4 +225,62 @@ async fn contradictory_revoke_selectors_cannot_choose_between_same_principal_rec
         .await
         .unwrap()
         .is_some());
+}
+
+#[test]
+fn a_refused_grant_upgrade_preserves_the_original_schema_and_file() {
+    let opened = opened();
+    let grants = opened.path.with_extension("grants.sqlite3");
+    drop(opened.store);
+    let connection = Connection::open(&grants).unwrap();
+    connection
+        .execute_batch(
+            "DROP TABLE grant_streams; DROP TABLE grant_log;
+         DROP TABLE person_links; PRAGMA user_version=1;",
+        )
+        .unwrap();
+    drop(connection);
+    let before = std::fs::read(&grants).unwrap();
+    assert!(LocalConversationStore::open(&opened.path).is_err());
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+    let connection = Connection::open(&grants).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='grant_log'",
+                [],
+                |r| r.get::<_, u32>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn a_refused_current_grant_shape_preserves_wal_mode_and_contents() {
+    let opened = opened();
+    let grants = opened.path.with_extension("grants.sqlite3");
+    drop(opened.store);
+    let connection = Connection::open(&grants).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute_batch("DROP TABLE person_links; PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    let before = std::fs::read(&grants).unwrap();
+    assert!(LocalConversationStore::open(&opened.path).is_err());
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
 }

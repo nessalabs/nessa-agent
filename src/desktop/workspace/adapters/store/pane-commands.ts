@@ -184,7 +184,7 @@ export function newSession(
     )
     const after = getState().workspace
     if (draftOf(after, draftId)) return draftId
-    // A kept draft shown again: the one pane that did not show it before.
+    // Either a remote-qualified draft minted by `createDraft` or a kept draft shown again.
     return paneIds(after.panes).find((id) => !before.has(id) && draftOf(after, id))
   }
 }

@@ -193,7 +193,10 @@ impl ConversationAgentSource for CreationReadinessSource {
         mode: ConversationApprovalMode,
     ) -> ConversationAgentFuture<'a> {
         Box::pin(async move {
-            let mut configured = self.original.resolve_for(agent, model, mode, None).await?;
+            let mut configured = self
+                .original
+                .resolve_for(agent, model, mode, &Default::default())
+                .await?;
             configured.readiness = Some(self.readiness.clone());
             Ok(Some(configured))
         })

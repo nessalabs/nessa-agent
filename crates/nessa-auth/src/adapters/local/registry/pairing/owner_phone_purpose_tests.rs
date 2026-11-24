@@ -254,3 +254,41 @@ fn purpose_refuses_revision_changed_after_current_session_snapshot() {
 
 #[path = "owner_phone_original_tests.rs"]
 mod original_projection;
+/// What a credential was issued to is read from its proof, needs no session,
+/// and does not change when the credential is revoked.
+#[test]
+fn a_credential_says_what_it_was_issued_to_even_after_revocation() {
+    use crate::application::pairing::{CredentialDevice, CredentialDeviceSource};
+    let device = |store: &LocalCredentialStore, id: &str| {
+        ready(store.credential_device(&CredentialId::new(id).unwrap())).unwrap()
+    };
+    let f = signed_fixture();
+    active_signed(&f);
+    assert_eq!(
+        device(&f.store, "owner-phone-device"),
+        Some(CredentialDevice::Phone)
+    );
+    let bootstrap = f.session.context().credential_id().as_str().to_owned();
+    assert_eq!(device(&f.store, &bootstrap), Some(CredentialDevice::Token));
+    assert_eq!(device(&f.store, "never-issued"), None);
+    f.store
+        .revoke_sync(RevokeCredentialRequest {
+            request_id: "revoke-phone".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: "owner-phone-device".into(),
+            revoked_at: 110,
+        })
+        .unwrap();
+    assert_eq!(
+        device(&f.store, "owner-phone-device"),
+        Some(CredentialDevice::Phone)
+    );
+    for (fixture, expected) in [
+        (enrolled_claim(), CredentialDevice::PairedDevice),
+        (peer_claim(), CredentialDevice::Peer),
+        (environment_claim(), CredentialDevice::Peer),
+    ] {
+        publish(&fixture);
+        assert_eq!(device(&fixture.store, "native-device"), Some(expected));
+    }
+}

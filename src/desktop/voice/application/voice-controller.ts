@@ -31,6 +31,13 @@ import {
 export const TRANSCRIPT_WAIT_MS = 5_000
 /** The most of a reply the voice is handed; the rest is on screen. */
 export const MAX_REPLY_CHARS = 8_000
+/** How many lines of what was said a paused call keeps to resume with. */
+export const RECAP_LINES = 24
+/** The most of one line of what was said a paused call keeps. */
+export const RECAP_LINE_CHARS = 600
+/** How a resumed call's recap begins, so the voice carries on, not starts over. */
+export const RESUMED =
+  "The person paused this call and has now resumed it. Carry on from where it was; do not greet them again. What was said in the call before the pause:"
 
 export type { VoicePhase }
 
@@ -119,8 +126,21 @@ interface Call {
   /** Waiting `send_to_agent`s, told when a transcript arrives. */
   readonly waiters: Set<() => void>
   readonly timers: Set<unknown>
-  /** Aborted when the call ends, so a connect still under way lets go. */
-  readonly abort: AbortController
+  /**
+   * Aborted when the call ends or pauses, so a connect still under way lets
+   * go. Each connect has its own.
+   */
+  abort: AbortController
+  /**
+   * Hung up with the provider by the person, and kept to resume: nothing
+   * is billed while paused. What reaches the conversation meanwhile — a
+   * send already admitted, a reply — is kept and handed over on resume.
+   */
+  paused: boolean
+  /** Which connect is the call's own; a connect from before a pause is dropped. */
+  attempt: number
+  /** What the person and the voice said, oldest first, to resume with. */
+  readonly recap: string[]
   responding: boolean
   /** The `event_id` of the `response.create` not yet answered or refused. */
   awaitingCreated: string | null
@@ -217,6 +237,9 @@ export class VoiceController {
       waiters: new Set(),
       timers: new Set(),
       abort: new AbortController(),
+      paused: false,
+      attempt: 0,
+      recap: [],
       responding: false,
       awaitingCreated: null,
       responseQueued: false,
@@ -235,49 +258,109 @@ export class VoiceController {
     }
     this.call = call
     this.set({ ...idle, phase: "connecting", sessionId })
+    await this.connect(call, false)
+  }
+
+  /**
+   * Pauses the open call: it hangs up with the provider, so nothing is
+   * billed and the microphone is let go, and is kept to resume. What was
+   * said is kept with it, and the chat it talks to is still followed.
+   */
+  pause(): void {
+    const call = this.call
+    if (!call || call.paused) return
+    call.paused = true
+    // A connect under way (the call was still connecting) is dropped.
+    call.attempt++
+    call.abort.abort()
+    if (call.hearingCheck !== null) {
+      call.timers.delete(call.hearingCheck)
+      this.dependencies.timers.clearTimeout(call.hearingCheck)
+      call.hearingCheck = null
+    }
+    call.connection?.close()
+    call.connection = null
+    // Speech the old connection had not written down never will be: it is
+    // nothing heard, so a send waiting on it goes on at once (V9) and a
+    // later send does not wait for it.
+    for (const heard of call.heard.values()) if (heard.text === null) heard.text = ""
+    for (const wake of [...call.waiters]) wake()
+    // A response asked of the old connection is not answered there now.
+    call.responding = false
+    call.awaitingCreated = null
+    call.responseQueued = false
+    this.update(call, { hearing: "", saying: "", hint: null })
+  }
+
+  /**
+   * Resumes a paused call: a new connection to the provider, handed the
+   * chat so far and what was said in the call before the pause, so the
+   * voice carries on. Replies that came while paused are handed over.
+   */
+  async resume(): Promise<void> {
+    const call = this.call
+    if (!call || !call.paused) return
+    call.paused = false
+    await this.connect(call, true)
+  }
+
+  /** Opens the call's connection: when it starts, and each time it resumes. */
+  private async connect(call: Call, resumed: boolean): Promise<void> {
+    const attempt = ++call.attempt
+    const abort = new AbortController()
+    call.abort = abort
+    // Not ended, not paused, and no newer connect since.
+    const live = () => this.current(call) && call.attempt === attempt && !call.paused
+    if (resumed) this.update(call)
     let grant
     try {
-      grant = await this.dependencies.gateway.startCall(sessionId)
+      grant = await this.dependencies.gateway.startCall(call.sessionId)
     } catch (error) {
       // V2
-      if (this.current(call))
+      if (live())
         this.fail(
           error instanceof VoiceStartRefused
             ? error.sentence
-            : "Couldn’t start the call.",
+            : resumed
+              ? "Couldn’t resume the call."
+              : "Couldn’t start the call.",
           error instanceof VoiceStartRefused ? error.fix : null,
         )
       return
     }
-    if (!this.current(call)) return // V5
+    if (!live()) return // V5
     let connection: RealtimeConnection
     try {
       connection = await this.dependencies.transports[grant.transport].connect(
         grant,
-        call.abort.signal,
+        abort.signal,
       )
     } catch (error) {
       // V3
-      if (this.current(call))
+      if (live())
         this.fail(
           error instanceof TransportRefused
             ? error.sentence
-            : "Couldn’t connect the call.",
+            : resumed
+              ? "Couldn’t resume the call."
+              : "Couldn’t connect the call.",
         )
       return
     }
-    if (!this.current(call)) {
-      connection.close() // V5: ended while it connected
+    if (!live()) {
+      connection.close() // V5: ended or paused while it connected
       return
     }
     // V4
     call.connection = connection
+    call.heardSpeech = false
     connection.onEvent((event) => {
-      if (this.current(call)) this.heardEvent(call, event)
+      if (this.current(call) && call.connection === connection)
+        this.heardEvent(call, event)
     })
     connection.onClosed(() => {
       // V17
-      if (!this.current(call)) return
+      if (!this.current(call) || call.connection !== connection) return
       this.release(call)
       this.call = null
       this.set({
@@ -289,13 +372,18 @@ export class VoiceController {
     })
     connection.setMicrophone(this.state.microphoneOn)
     connection.setSpeaker(this.state.speakerOn)
+    if (resumed) this.update(call, { hint: null })
     const context = call.conversation.recentTurns().trim()
     if (context) this.tell(call, `Chat so far:\n${context}`)
-    call.stopWatching = call.conversation.onChange(() => {
+    if (resumed && call.recap.length > 0)
+      this.tell(call, `${RESUMED}\n${call.recap.join("\n")}`)
+    call.stopWatching ??= call.conversation.onChange(() => {
       if (this.current(call)) this.replied(call)
     })
     this.update(call)
     this.scheduleHearingCheck(call)
+    // What ended while the call was paused is handed over now.
+    if (resumed) this.replied(call)
   }
 
   /**
@@ -327,7 +415,14 @@ export class VoiceController {
     if (!this.current(call) || !connection || call.heardSpeech || muted()) return
     const mutes = call.mutes
     const found = await connection.check().catch(() => null)
-    if (!found || !this.current(call) || call.heardSpeech) return
+    // A check of a connection since paused says nothing of the call now.
+    if (
+      !found ||
+      !this.current(call) ||
+      call.connection !== connection ||
+      call.heardSpeech
+    )
+      return
     if (muted() || call.mutes !== mutes) return
     console.warn("Voice: nothing heard yet", found)
     const hint = hearingHint(found)
@@ -461,11 +556,15 @@ export class VoiceController {
   /** The phase an open call is in, from what it is doing. */
   private update(call: Call, change: Partial<VoiceSnapshot> = {}): void {
     if (!this.current(call)) return
-    const phase = call.responding
-      ? "speaking"
-      : call.sending > 0 || call.waiting.length > 0
-        ? "working"
-        : "listening"
+    const phase = call.paused
+      ? "paused"
+      : !call.connection
+        ? "connecting"
+        : call.responding
+          ? "speaking"
+          : call.sending > 0 || call.waiting.length > 0
+            ? "working"
+            : "listening"
     this.set({ ...this.state, ...change, phase, sessionId: call.sessionId })
   }
 
@@ -490,6 +589,8 @@ export class VoiceController {
         if (!item) return
         this.committed(call, item).text =
           typeof event.transcript === "string" ? event.transcript : ""
+        if (typeof event.transcript === "string")
+          this.remember(call, "Person", event.transcript)
         for (const wake of [...call.waiters]) wake()
         this.update(call, { hearing: "" })
         return
@@ -505,6 +606,7 @@ export class VoiceController {
           this.update(call, { saying: this.state.saying + event.delta })
         return
       case "response.done":
+        this.remember(call, "Voice", this.state.saying)
         call.responding = false
         call.awaitingCreated = null
         // A tool is called only by a response that completed: one the
@@ -519,6 +621,15 @@ export class VoiceController {
     }
   }
 
+  /** A line of what was said, kept for a resume. */
+  private remember(call: Call, who: "Person" | "Voice", said: string): void {
+    const text = said.replace(/\s+/g, " ").trim().slice(0, RECAP_LINE_CHARS)
+    if (!text) return
+    call.recap.push(`${who}: ${text}`)
+    if (call.recap.length > RECAP_LINES)
+      call.recap.splice(0, call.recap.length - RECAP_LINES)
+  }
+
   /** The user item `item`, committed in order the first time it is named. */
   private committed(call: Call, item: string): Heard {
     const known = call.heard.get(item)
@@ -530,6 +641,8 @@ export class VoiceController {
   }
 
   private async toolCalled(call: Call, name: string, callId: string): Promise<void> {
+    // The connection that asked: its call id means nothing to a later one.
+    const asked = call.connection
     let outcome: ToolOutcome
     switch (name) {
       case VoiceToolName.SendToAgent:
@@ -546,7 +659,9 @@ export class VoiceController {
       default:
         outcome = "unknown_tool"
     }
-    if (!this.current(call)) return
+    // Ended, or paused since: the answer has no one to go to. What the tool
+    // did stands, and a resume hands over what it led to.
+    if (!this.current(call) || call.connection !== asked) return
     call.connection?.send({
       type: "conversation.item.create",
       item: { type: "function_call_output", call_id: callId, output: outcome },
@@ -637,6 +752,8 @@ export class VoiceController {
    */
   private replied(call: Call): void {
     if (call.waiting.length === 0) return
+    // Looked at whatever the call is doing, so a turn seen open while paused
+    // still counts as ended once it leaves the window.
     for (const turn of call.waiting) {
       if (call.ends.has(turn)) continue
       const state = call.conversation.turnState(turn)
@@ -646,6 +763,9 @@ export class VoiceController {
       else if (call.seen.has(turn)) call.ends.set(turn, { text: "", ended: "finished" })
     }
     if (call.pending > 0 || call.waiting.some((turn) => !call.ends.has(turn))) return
+    // Kept while paused, and while a resume still connects: handed over
+    // once there is a connection to hand it to.
+    if (call.paused || !call.connection) return
     const ends = call.waiting.map((turn) => call.ends.get(turn))
     call.waiting.length = 0
     call.ends.clear()
@@ -677,6 +797,8 @@ export class VoiceController {
 
   /** V14: one response at a time; asked again once the one speaking is done. */
   private respond(call: Call): void {
+    // Paused, there is no one to ask; a resume hands over what is due.
+    if (!call.connection) return
     if (call.responding) {
       call.responseQueued = true
       return

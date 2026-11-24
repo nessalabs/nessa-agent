@@ -45,6 +45,11 @@ import {
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { Draft } from "../../model/session-lifecycle"
+import {
+  effectiveTerminalStatus,
+  isOverviewTerminalAgent,
+  type TerminalEntry,
+} from "../../model/terminal"
 import { atWork, type Message, type Transcript } from "../../model/transcript"
 import {
   channelOf,
@@ -55,6 +60,8 @@ import {
   focusedChannel,
   paneIds,
   sessionIn,
+  itemIn,
+  paneShowingItem,
   windowWidget,
   contentKind,
   answerOf,
@@ -65,13 +72,21 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import { canClosePane } from "../../application/usecases/panes"
-import { paneItemKey, widgetItem } from "../../model/pane-item"
+import { paneItemKey, terminalItem, widgetItem } from "../../model/pane-item"
 import { sameWidget, type WidgetRef } from "../../../widgets/model/widget-ref"
 
 type Root = { workspace: WorkspaceState }
 
 export const selectFailure = (state: Root) => state.workspace.failure
 export const selectFailureStages = (state: Root) => state.workspace.failureStages
+export const selectGatewaysById = (state: Root) => state.workspace.gateways
+export const selectGateways = createSelector([selectGatewaysById], (gateways) =>
+  Object.values(gateways),
+)
+export const selectGateway = (state: Root, gatewayId: string) =>
+  entry(state.workspace.gateways, gatewayId)
+export const selectHasMultipleGateways = (state: Root) =>
+  Object.keys(state.workspace.gateways).length > 1
 export const selectChrome = (state: Root): Chrome => state.workspace.chrome
 /** Whether the sidebar is drawn: the person's choice, unless the window folded it for room. */
 export const selectSidebarOpen = (state: Root) =>
@@ -208,6 +223,22 @@ export const selectAccessNotice = (
   return choice?.state === "pending" || choice?.state === "refused" ? choice : undefined
 }
 
+/**
+ * The access a model change stepped a session down from, while it still
+ * runs at Ask: the new model is not offered at that access here, so the
+ * agent moved to Ask in the same change (`applyStagedModel`). Undefined once
+ * anything else changes its access or another model is asked for.
+ */
+export const selectSteppedAccess = (
+  state: Root,
+  sessionId: string,
+): AccessMode | undefined => {
+  const from = entry(state.workspace.steppedAccess, sessionId)
+  return from && entry(state.workspace.transcripts, sessionId)?.access?.mode === "ask"
+    ? from
+    : undefined
+}
+
 /** Whether a message the person sent to a session is still on its way. */
 export const selectSending = (state: Root, sessionId: string): boolean =>
   selectOutbox(state, sessionId).some((message) => message.delivery?.state === "sending")
@@ -282,6 +313,66 @@ export const selectFocusedSessionId = (state: Root): string | null => {
 }
 
 /** The session a pane shows; none when it shows a widget. */
+/** The terminal a pane shows, if it shows one. */
+export const selectPaneTerminal = (state: Root, pane: PaneKey): string | null => {
+  const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
+  const item = shown ? itemIn(shown) : null
+  return item?.kind === "terminal" ? item.terminalId : null
+}
+
+const listedTerminals = createSelector(
+  [(state: Root) => state.workspace.terminals],
+  (terminals) => Object.values(terminals),
+)
+
+const shellsByChannel = createSelector([listedTerminals], (terminals) => {
+  const byChannel = new Map<string, TerminalEntry[]>()
+  for (const terminal of terminals) {
+    if (terminal.kind !== "shell") continue
+    const list = byChannel.get(terminal.channelId)
+    if (list) list.push(terminal)
+    else byChannel.set(terminal.channelId, [terminal])
+  }
+  for (const list of byChannel.values()) {
+    list.sort((a, b) => b.startedAtMs - a.startedAtMs)
+  }
+  return byChannel
+})
+
+const shellIdsByChannel = createSelector([shellsByChannel], (byChannel) => {
+  const ids = new Map<string, readonly string[]>()
+  for (const [channelId, list] of byChannel) {
+    ids.set(
+      channelId,
+      list.map((terminal) => terminal.id),
+    )
+  }
+  return ids
+})
+
+const noShells: readonly TerminalEntry[] = []
+
+/** The ids of a channel's shells, newest first, as its session list shows them. */
+export const selectChannelShells = (state: Root, channelId: string): readonly string[] =>
+  shellIdsByChannel(state).get(channelId) ?? noIds
+
+/** Whether a pane shows the terminal, and whether it is the focused pane. */
+export const selectTerminalShown = (
+  state: Root,
+  terminalId: string,
+): "focused" | "open" | null => {
+  const panes = state.workspace.panes
+  const pane = panes ? paneShowingItem(panes, terminalItem(terminalId)) : undefined
+  if (!pane || !panes) return null
+  return panes.focused === pane.key ? "focused" : "open"
+}
+
+/** A terminal as the gateway last listed it. */
+export const selectTerminal = (
+  state: Root,
+  terminalId: string,
+): TerminalEntry | undefined => entry(state.workspace.terminals, terminalId)
+
 export const selectPaneSession = (state: Root, pane: PaneKey): string | null => {
   const shown = state.workspace.panes && paneByKey(state.workspace.panes, pane)
   return (shown && sessionIn(shown)) ?? null
@@ -320,7 +411,22 @@ export const selectPanePresent = (state: Root, pane: PaneKey): boolean =>
 /** The sessions the panes show, in reading order. */
 export const selectShownSessionIds = createSelector([selectPanes], paneIds)
 
-export const selectStatusCounts = createSelector([listed], statusCounts)
+export const selectStatusCounts = createSelector(
+  [listed, listedTerminals],
+  (sessions, terminals) => {
+    const base = statusCounts(sessions)
+    let needsYou = base.needsYou
+    for (const terminal of terminals) {
+      if (
+        isOverviewTerminalAgent(terminal) &&
+        effectiveTerminalStatus(terminal)?.state === "blocked"
+      ) {
+        needsYou += 1
+      }
+    }
+    return needsYou === base.needsYou ? base : { needsYou }
+  },
+)
 
 /** A channel's sessions, newest-first order left to the caller. */
 const sessionsByChannel = createSelector([listed], (sessions) => {
@@ -337,9 +443,28 @@ const none: readonly SessionSummary[] = []
 const channelSessions = (state: Root, channelId: string) =>
   sessionsByChannel(state).get(channelId) ?? none
 
-/** What a channel's row shows about its sessions; compare with `shallowEqual`. */
-export const selectChannelActivity = (state: Root, channelId: string): ChannelActivity =>
-  channelActivity(channelSessions(state, channelId))
+/** What a channel's row shows about its sessions and terminals; compare with `shallowEqual`. */
+export const selectChannelActivity = (
+  state: Root,
+  channelId: string,
+): ChannelActivity => {
+  const base = channelActivity(channelSessions(state, channelId))
+  const shells = shellsByChannel(state).get(channelId) ?? noShells
+  if (shells.length === 0) return base
+  let waiting = base.waiting
+  let running = base.running
+  let unread = base.unread
+  for (const terminal of shells) {
+    const prog = effectiveTerminalStatus(terminal)?.state
+    if (prog === "blocked") waiting += 1
+    else if (prog === "working") running = true
+    else if (prog === "done" || prog === "error") unread = true
+  }
+  if (waiting === base.waiting && running === base.running && unread === base.unread) {
+    return base
+  }
+  return { waiting, running, unread }
+}
 
 /** The sessions a channel's branch discloses, as ids, and how many it holds back. */
 export function selectBranch(
@@ -374,6 +499,8 @@ export const selectShowAll = (state: Root, channelId: string) =>
   state.workspace.tree.showAllChannels.includes(channelId)
 export const selectSectionCollapsed = (state: Root, sectionId: string) =>
   state.workspace.tree.collapsedSections.includes(sectionId)
+export const selectChatContextFolded = (state: Root) =>
+  state.workspace.tree.chatContextFolded
 
 export interface ListGroup {
   readonly id: string
@@ -382,9 +509,9 @@ export interface ListGroup {
 }
 
 /**
- * The session list's groups for the current view and a search, as ids;
- * running sessions kept in a group above the rest unless `runningFirst` is
- * off.
+ * The session list's groups for the current view and a search, as ids: the
+ * channel's coordinator on top while it is on, then running sessions kept in
+ * a group above the rest unless `runningFirst` is off.
  */
 export function selectListGroups(
   state: Root,
@@ -392,11 +519,14 @@ export function selectListGroups(
   runningFirst = true,
 ): ListGroup[] {
   const view = state.workspace.view
+  const channel = selectChannel(state, view.channelId)
+  const coordinatorId =
+    channel?.coordinatorOn === false ? undefined : channel?.coordinatorConversationId
   return groupByStatus(
     listed(state).filter(
       (session) => inView(session, view) && matchesSearch(session, query),
     ),
-    { runningFirst },
+    { runningFirst, coordinatorId },
   ).map((group) => ({
     id: group.id,
     label: group.label,
@@ -433,14 +563,15 @@ export const selectListedSessions = listed
 export const selectGlance = createSelector(
   [
     listed,
+    listedTerminals,
     (state: Root) => state.workspace.overview.filter,
     (state: Root) => state.workspace.overview.group,
     (state: Root) => state.workspace.overview.selected,
     (_state: Root, held: readonly Held[]) => held,
     (_state: Root, _held: readonly Held[], now: number) => now,
   ],
-  (sessions, filter, group, looking, held, now): AgentsGlance =>
-    agentsGlance(sessions, held, { filter, group, now, looking }),
+  (sessions, terminals, filter, group, looking, held, now): AgentsGlance =>
+    agentsGlance(sessions, held, { filter, group, now, looking, terminals }),
 )
 
 /** Latest refused message, retained by identity for composer recovery actions. */

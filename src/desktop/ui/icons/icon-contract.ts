@@ -42,6 +42,9 @@ const desktopRoles = [
   // Window and panes
   "sidebar",
   "panelRight",
+  "chatContext",
+  // Where a chat's agent runs
+  "device",
   "sessionList",
   "splitRight",
   "splitDown",
@@ -62,6 +65,10 @@ const desktopRoles = [
   // Composer
   "send",
   "stop",
+  // Auto-pick: when it picks, and holding or letting it go.
+  "timer",
+  "pause",
+  "resume",
   "attach",
   "folder",
   "folderAdd",
@@ -85,12 +92,15 @@ const desktopRoles = [
   "edit",
   "terminal",
   "copy",
+  // What a terminal is: where it runs, its folder, its shell
+  "details",
   // A website, where its own icon cannot be shown
   "site",
   // Settings categories
   "preferences",
   "appearance",
   "workspace",
+  "chatSettings",
   "model",
   "connections",
   "privacy",

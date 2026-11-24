@@ -26,6 +26,11 @@ path = "src/backup_plan_main.rs"
 name = "nessa-backup-restore"
 path = "src/backup_restore_main.rs"
 
+[features]
+# Terminals in the gateway (docs/design/terminals.md); needs the pinned Ghostty
+# library, named by PTY_RUNTIME_GHOSTTY_SOURCE (scripts/terminal/ghostty.sh).
+terminals = ["nessa-gateway/terminals"]
+
 [dependencies]
 # The request path this crate composes and starts.
 nessa-gateway = { path = "../nessa-gateway" }
@@ -79,7 +84,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
-workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "7501f6b2fda1212fa118698f1bbd599a28459eea" }
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "7aea78061bdde4fa1f600674e6f37fa951f162f3" }
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their

@@ -21,6 +21,8 @@ CREATE TABLE channels (
     -- one computer by its place name (ChannelExecution reads them).
     coordinator_placement TEXT NOT NULL DEFAULT 'local' CHECK (length(coordinator_placement) BETWEEN 1 AND 253),
     thread_placement TEXT NOT NULL DEFAULT 'local' CHECK (length(thread_placement) BETWEEN 1 AND 253),
+    -- Whether its coordinator is on; off keeps its main conversation.
+    coordinator_on INTEGER NOT NULL DEFAULT 1 CHECK (coordinator_on IN (0, 1)),
     UNIQUE (organization_id, owner_id, request_id)
 ) STRICT;
 CREATE TABLE channel_conversations (
@@ -38,4 +40,24 @@ CREATE TABLE channel_coordinator_replacements (
     cause TEXT NOT NULL CHECK (cause IN ('coordinator_conversation_erased', 'coordinator_moved')),
     UNIQUE (channel, generation)
 ) STRICT;
-PRAGMA user_version = 6;
+-- How agents talk: a person's own choices (channel '' is their Nessa
+-- level), and the style each conversation was started with.
+CREATE TABLE reply_styles (
+    organization_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
+    style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096),
+    PRIMARY KEY (organization_id, owner_id, channel, role)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE conversation_reply_styles (
+    conversation TEXT PRIMARY KEY NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('coordinator', 'thread')),
+    style TEXT NOT NULL CHECK (style IN ('plain', 'off', 'custom')),
+    text TEXT CHECK ((style = 'custom') = (text IS NOT NULL) AND length(text) > 0 AND length(CAST(text AS BLOB)) <= 4096),
+    -- The job its role was told when it was created (a coordinator's), kept
+    -- as told: a conversation from before jobs has none and is told none.
+    job TEXT CHECK (job IS NULL OR (length(job) > 0 AND length(CAST(job AS BLOB)) <= 8192))
+) STRICT, WITHOUT ROWID;
+PRAGMA user_version = 8;

@@ -50,6 +50,14 @@ function scene() {
         did.push(`speaker ${on}`)
         set({ speakerOn: on })
       },
+      pause: () => {
+        did.push("pause")
+        set({ phase: "paused" })
+      },
+      resume: async () => {
+        did.push("resume")
+        set({ phase: "listening" })
+      },
     },
     pill: {
       set: async (picture, chatShown) => {
@@ -158,6 +166,23 @@ it("carries each press out on the call, and the pill follows what the call then 
     "end",
   ])
   expect(s.told.at(-1)).toBeNull()
+})
+
+it("keeps the pill for a paused call, saying so, and resumes it from the pill", async () => {
+  const s = scene()
+  s.set({ phase: "listening", sessionId: "s1" })
+  s.press("pause")
+  await s.settled()
+  expect(s.told.at(-1)).toEqual({
+    phase: "paused",
+    title: "Fix the build",
+    microphoneOn: true,
+    speakerOn: true,
+  })
+  s.press("resume")
+  await s.settled()
+  expect(s.did).toEqual(["pause", "resume"])
+  expect(s.told.at(-1)).toMatchObject({ phase: "listening" })
 })
 
 it("stopping clears the pill and lets go of everything it listened to", async () => {

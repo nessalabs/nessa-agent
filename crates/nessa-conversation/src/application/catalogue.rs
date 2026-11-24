@@ -220,6 +220,7 @@ impl CatalogueEntryAdmission<'_> {
                 organization: self.organization,
                 owner: self.owner,
                 deleted: entry.deleted,
+                created_by: None,
             },
             held: entry.held,
             request: RequestShape::default(),

@@ -24,6 +24,7 @@ import {
 import {
   sameListGroups,
   selectChannel,
+  selectChannelShells,
   selectFocusedSessionId,
   selectListGroups,
   selectSession,
@@ -44,6 +45,7 @@ import { ListRow } from "../../../ui/list-row"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
+import { TerminalRows } from "../terminals/terminal-rows"
 import "../../../ui/pill-ink.css"
 import {
   ContextMenu,
@@ -59,7 +61,7 @@ import { useSessionRowActions, type SessionRowActions } from "../session-row-act
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
- * session in one state — its pinned ones first, then grouped "Needs you",
+ * session in one state — its coordinator first, then its pinned ones, then grouped "Needs you",
  * "Running", "Earlier", with a search over them. A row in Needs you is a row
  * like any other: what it asks is answered in its chat. Arrow keys walk the
  * list and open as they go, like Mail's message list. A new session appears here with its first message.
@@ -79,6 +81,9 @@ export const SessionList = memo(function SessionList() {
   const groups = useWorkspaceSelector(
     (state) => selectListGroups(state, query, runningFirst === "on"),
     sameListGroups,
+  )
+  const hasTerminals = useWorkspaceSelector(
+    (state) => !query && selectChannelShells(state, view.channelId).length > 0,
   )
   const listRef = useRef<HTMLDivElement>(null)
   useRowFocusKept(listRef, "[data-session-row]")
@@ -167,7 +172,7 @@ export const SessionList = memo(function SessionList() {
             aria-label="Sessions"
             onKeyDown={onKeyDown}
           >
-            {ordered.length === 0 ? (
+            {ordered.length === 0 && !hasTerminals ? (
               <EmptyState
                 className="workspace-list-empty desktop-pill-ink"
                 variant="compact"
@@ -201,11 +206,12 @@ export const SessionList = memo(function SessionList() {
                     key={sessionId}
                     sessionId={sessionId}
                     tabStop={sessionId === tabStop}
-                    summarized={group.id === "needs-you"}
+                    summarized={group.id === "needs-you" || group.id === "coordinator"}
                   />
                 ))}
               </div>
             ))}
+            {query ? null : <TerminalRows channelId={view.channelId} />}
           </div>
         </SwipeRowGroup>
       </div>
@@ -223,7 +229,8 @@ const SessionRow = memo(function SessionRow({
   tabStop: boolean
   /**
    * Whether the row says what was said last, under its title: only where the
-   * person is asked for something (Needs you). Every other row is one line,
+   * person is asked for something (Needs you), and for the channel's
+   * coordinator, whose last word is its one-line status. Every other row is one line,
    * title and time, so a column holds many sessions at a glance.
    */
   summarized: boolean

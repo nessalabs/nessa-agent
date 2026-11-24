@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
+import type { ChatgptSignInEnd } from "@nessa/client"
 import { BoatSignInFailure, type SignInAction } from "../model/boat-sign-in"
+import { chatgptEndSentence, type CodexChatgptSignIn } from "../model/chatgpt-sign-in"
 import { AgentActionButton, AgentActionCard } from "./agent-action-card"
 
 /**
@@ -84,7 +86,7 @@ export function ProviderSignInCard({
       }
     >
       {signedIn ? (
-        <p role="status">Signed in for Boat workspaces. Send your message again.</p>
+        <p role="status">Signed in for cloud workspaces. Send your message again.</p>
       ) : pending && action === "boat" ? (
         <p role="status">Finish signing in in your browser.</p>
       ) : failed ? (
@@ -99,3 +101,87 @@ const failureText = {
   minted: "Could not sign in. Try again.",
   saved: "Could not save the sign-in. Unlock Nessa and try again.",
 } as const
+
+/**
+ * Codex on another computer signs in with a ChatGPT plan: the gateway keeps
+ * the account and hands that computer its tokens. The button starts the
+ * sign-in and opens the browser on it where the host can; the card links
+ * to it as well, and says how it ended. Signed in, the person's next message
+ * runs with it.
+ */
+export function ChatgptSignInCard({ signIn }: { signIn?: CodexChatgptSignIn }) {
+  const [available, setAvailable] = useState<{ for: typeof signIn; yes: boolean }>()
+  useEffect(() => {
+    let current = true
+    if (signIn)
+      void signIn.available().then((yes) => {
+        if (current) setAvailable({ for: signIn, yes })
+      })
+    return () => {
+      current = false
+    }
+  }, [signIn])
+  const offered = !!signIn && available?.for === signIn && available.yes
+  const inFlight = useRef(false)
+  const [waiting, setWaiting] = useState<string>()
+  const [pending, setPending] = useState(false)
+  const [end, setEnd] = useState<ChatgptSignInEnd | "failed">()
+  const start = async () => {
+    if (!signIn || !offered || inFlight.current) return
+    inFlight.current = true
+    setPending(true)
+    setEnd(undefined)
+    try {
+      setEnd(await signIn.signIn(setWaiting))
+    } catch {
+      setEnd("failed")
+    } finally {
+      inFlight.current = false
+      setPending(false)
+      setWaiting(undefined)
+    }
+  }
+  const signedIn = end === "signed_in"
+  const said =
+    end === "failed"
+      ? "Could not sign in with ChatGPT. Try again."
+      : end && !signedIn
+        ? chatgptEndSentence(end)
+        : undefined
+  return (
+    <AgentActionCard
+      className="provider-sign-in"
+      label="Codex needs a sign-in"
+      title="Codex needs a sign-in"
+      actions={
+        signedIn ? null : (
+          <AgentActionButton
+            disabled={pending || !offered}
+            title={
+              !offered ? "ChatGPT sign-in is unavailable on this gateway" : undefined
+            }
+            onClick={() => void start()}
+            data-chatgpt-card-continue
+          >
+            Continue with ChatGPT
+          </AgentActionButton>
+        )
+      }
+    >
+      {signedIn ? (
+        <p role="status">Signed in with ChatGPT. Send your message again.</p>
+      ) : waiting ? (
+        <p role="status">
+          Finish signing in to ChatGPT in your browser.{" "}
+          <a href={waiting} data-chatgpt-card-open>
+            Open ChatGPT
+          </a>
+        </p>
+      ) : said ? (
+        <p role="status">{said}</p>
+      ) : (
+        <p>Codex runs on another computer here. Use your ChatGPT plan for it.</p>
+      )}
+    </AgentActionCard>
+  )
+}

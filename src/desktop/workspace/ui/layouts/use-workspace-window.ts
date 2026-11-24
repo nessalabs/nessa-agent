@@ -42,6 +42,9 @@ import {
   closeInFront,
   focusPane,
   newSession,
+  newTerminal,
+  openTerminal,
+  openTerminalBeside,
   nudgePane,
   openBeside,
   openChannel,
@@ -176,6 +179,11 @@ function useWorkspaceKeys(
         return
       case "newSession":
         dispatch(newSession())
+        return
+      case "newTerminal":
+        void dispatch(newTerminal()).catch((error: unknown) =>
+          console.warn("A terminal did not open", error),
+        )
         return
       case "newSessionBeside":
       case "splitRight":
@@ -543,6 +551,16 @@ function useWorkspaceSwitcher(
       )
     } else if (row.kind === "channel") {
       dispatch(openChannel({ channelId: row.channel.id, beside }))
+    } else if (row.kind === "terminal") {
+      dispatch(
+        beside
+          ? openTerminalBeside({ terminalId: row.terminal.id })
+          : openTerminal({ terminalId: row.terminal.id }),
+      )
+    } else if (row.kind === "newTerminal") {
+      void dispatch(newTerminal({ channelId: row.channelId, beside })).catch(
+        (error: unknown) => console.warn("A terminal did not open", error),
+      )
     } else {
       const draftId = dispatch(
         // Its own first message goes in a blank draft, never one left with typing.

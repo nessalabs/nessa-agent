@@ -66,6 +66,16 @@ stateDiagram-v2
     end note
 ```
 
+## No sideways swipe
+
+A two-finger sideways swipe moves no side column and not the right panel:
+they fold and open from their buttons, their keys, or an edge's drag. A swipe
+over the chat is left to whatever scrolls sideways under it (a wide table, a
+code block), and one over a session row to the row's own actions. The swipe
+that once folded and opened the sidebar and the session list was taken out
+until it can be made to feel right; the conversation stress step `swipe`
+checks that nothing moves.
+
 ## Layout observer orderings (#693)
 
 | Ordering | Result | Regression |

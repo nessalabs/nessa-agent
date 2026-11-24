@@ -3,6 +3,7 @@ import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
 import type { SessionAccess } from "./access"
 import type { DraftImage } from "./draft-images"
+import type { MachineSetup } from "./machine-setup"
 /**
  * A session's conversation: messages from the person and the agent, what the
  * agent is doing now, and the approvals it is waiting on, if any. The agent's
@@ -215,6 +216,11 @@ export interface TurnMessage {
    * a turn (no agent free for it, say). Absent once it is one.
    */
   readonly waiting?: true
+  /**
+   * On the agent's reply whose send waited on its cloud machine: each step
+   * it took, drawn as one folded line above the reply.
+   */
+  readonly setup?: MachineSetup
   /**
    * Set on the person's message when the gateway sent it again after a
    * restart or a failure cut its first try short. Its text is still the
@@ -490,9 +496,22 @@ export interface TranscriptLease {
  * streams in. A live tool run already shows the agent at work, so the
  * transcript draws this only where none does (`shownActivity`).
  */
+/** What a conversation runs on (`Transcript.runtime`). */
+export interface TranscriptRuntime {
+  /** The working directory on the gateway's machine, not this one's. */
+  readonly workspace: string
+  readonly modelName: string
+  readonly contextWindowTokens: number
+}
+
 export interface Activity {
   readonly label: string
   readonly since: number
+  /**
+   * Set when the label is a step of getting the chat's cloud machine ready
+   * (`machine-setup.ts`): every view says it, the compact one too.
+   */
+  readonly setup?: true
 }
 
 export interface Transcript {
@@ -534,6 +553,19 @@ export interface Transcript {
   readonly agent?: string
   /** Where its agent runs; absent until the gateway has recorded a lease. */
   readonly lease?: TranscriptLease
+  /**
+   * Getting its cloud machine ready, oldest first: the opening under way and
+   * the last that finished, as the source reported them. Absent where none.
+   */
+  readonly setups?: readonly MachineSetup[]
+  /**
+   * What it runs on, as the source configured it: the catalog's model name
+   * and context window, and the working directory on the gateway's machine.
+   * Absent while its agent has no runtime yet.
+   */
+  readonly runtime?: TranscriptRuntime
+  /** Files its agent published, newest first, as many as the view listed. */
+  readonly published?: readonly FilePart[]
   /** The approval preset its agent runs at; absent where the source did not say (`access.ts`). */
   readonly access?: SessionAccess
   /** The source's count of changes to this conversation; see `revision.ts`. */
@@ -551,7 +583,8 @@ export interface Transcript {
 export function atWork(transcript: Transcript | undefined): boolean {
   if (!transcript) return false
   return (
-    transcript.activity !== null ||
+    // Getting its machine ready is not a turn: nothing to stop yet.
+    (transcript.activity !== null && !transcript.activity.setup) ||
     transcript.approvals.length > 0 ||
     (transcript.questions?.length ?? 0) > 0 ||
     transcript.messages.some(

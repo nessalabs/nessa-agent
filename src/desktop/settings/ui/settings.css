@@ -996,6 +996,13 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   color: var(--background);
 }
 
+/* As specific as the plain button's hover and later, so a hovered primary
+   keeps its fill instead of taking the plain button's faint one under its
+   dark label. */
+.settings-button-primary:hover:not(:disabled) {
+  background: var(--settings-accent);
+}
+
 /* Rows holding the place of a list on its way. */
 .settings-skeleton {
   display: flex;
@@ -1589,6 +1596,46 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
+/* Codex's ChatGPT accounts, under its key: one line each, its actions at the end. */
+.settings-chatgpt {
+  display: grid;
+  gap: 8px;
+  padding-block-start: 6px;
+  border-block-start: 1px solid var(--border);
+}
+.settings-chatgpt-accounts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.settings-chatgpt-accounts > li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-block-size: 32px;
+}
+.settings-chatgpt-email {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-chatgpt-state,
+.settings-chatgpt-note {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.settings-chatgpt-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+.settings-chatgpt-waiting {
+  display: grid;
+  gap: 6px;
+}
 /* A token is one short paste: the field need not span the page. */
 .settings-boat-fields .settings-input {
   flex: 0 1 260px;
@@ -1605,6 +1652,45 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 /* Its row spans the line, so the lifetime's menu ends where every row's does. */
 .settings-boat-runtime > .settings-row {
   flex: 1 1 100%;
+}
+/* Auto-stop's length: an amount, then its unit's menu, ending the row. */
+.settings-boat-lifetime {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-boat-runtime .settings-boat-amount {
+  inline-size: 64px;
+  block-size: 32px;
+  padding-inline: 10px;
+  font-size: var(--desktop-text-body);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  /* Filled like the unit's menu beside it, not outlined. */
+  border-color: transparent;
+  background: var(--secondary);
+}
+.settings-boat-runtime .settings-boat-amount[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+/* Auto-pick's wait: an amount, then its unit's menu, as Auto-stop's length. */
+.settings-decisions-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-decisions-wait .settings-decisions-amount {
+  inline-size: 64px;
+  block-size: 32px;
+  padding-inline: 10px;
+  font-size: var(--desktop-text-body);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+  border-color: transparent;
+  background: var(--secondary);
+}
+.settings-decisions-wait .settings-decisions-amount[aria-invalid="true"] {
+  border-color: var(--destructive);
 }
 .settings-boat-select {
   width: auto;

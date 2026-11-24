@@ -59,9 +59,13 @@ export interface ChannelDraft {
   readonly access: AccessMode
   readonly coordinatorPlacement: ChannelPlace
   readonly threadPlacement: ChannelPlace
+  /** Whether the channel starts with a coordinator; on unless turned off. */
+  readonly coordinator: boolean
   readonly notes: string
   /** Absolute files and folders, in the order they were added, none twice. */
   readonly resources: readonly string[]
+  /** Owning gateway ID when creating a channel in a multi-gateway workspace. */
+  readonly gatewayId?: string
 }
 
 /** A draft before anything is answered, starting on `model`. */
@@ -71,6 +75,7 @@ export function emptyDraft(model: ModelRef): ChannelDraft {
     folder: null,
     coordinatorPlacement: "local",
     threadPlacement: "local",
+    coordinator: true,
     model,
     access: "ask",
     notes: "",

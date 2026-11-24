@@ -33,6 +33,7 @@ import {
   type ConversationTool,
   type ConversationView,
   type Channel as WireChannel,
+  type OwnerAsk as WireOwnerAsk,
 } from "@nessa/client"
 import {
   referencedContent,
@@ -53,6 +54,7 @@ import type {
   ApprovalOrigin,
   Message,
   MessageApp,
+  FilePart,
   Part,
   Transcript,
   TranscriptQuestion,
@@ -63,9 +65,15 @@ import {
   defaultModel,
   type Channel,
   type ModelRef,
+  type OwnerAsk,
   type Section,
   type SessionSummary,
 } from "../../model/workspace-index"
+import {
+  runningSetup,
+  setupStepLabel,
+  type MachineSetup,
+} from "../../model/machine-setup"
 import { toolStep } from "./gateway-steps"
 import { gatewayToolWidget } from "./tool-widget"
 
@@ -125,6 +133,7 @@ export function channelFrom(wire: WireChannel): Channel {
     ...(wire.coordinatorConversationId
       ? { coordinatorConversationId: wire.coordinatorConversationId }
       : {}),
+    coordinatorOn: wire.coordinatorOn,
     coordinatorPlacement: wire.coordinatorPlacement,
     threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
@@ -148,12 +157,47 @@ export function summaryFrom(
     channelId: channelIdFrom(row.channelId),
     title: row.title ?? "",
     model: context.model,
-    status: context.waitingOnPerson ? "needs-you" : row.running ? "running" : "idle",
+    // An ask waits on the person whether or not the window follows it: the
+    // row says so, unlike a review, which only a followed view shows.
+    status:
+      context.waitingOnPerson || row.ask ? "needs-you" : row.running ? "running" : "idle",
     startedAt: row.createdAtMs,
     updatedAt: row.updatedAtMs,
     preview: row.preview ?? "",
     pinned: false,
     unread: false,
+    ...(row.ask
+      ? {
+          ask: askFrom(row.ask),
+        }
+      : {}),
+  }
+}
+
+/**
+ * An agent's ask in the workspace's words: what the client checked, with each
+ * optional part only when the agent gave it. A list row and a decision read it
+ * the same way.
+ */
+export function askFrom(ask: WireOwnerAsk): OwnerAsk {
+  return {
+    askId: ask.askId,
+    question: ask.question,
+    choices: ask.choices.map(({ label, consequence, undo, effort, pros, cons }) => ({
+      label,
+      consequence,
+      ...(undo === undefined ? {} : { undo }),
+      ...(effort === undefined ? {} : { effort }),
+      ...(pros?.length ? { pros } : {}),
+      ...(cons?.length ? { cons } : {}),
+    })),
+    recommended: ask.recommended,
+    reason: ask.reason,
+    ...(ask.summary === undefined ? {} : { summary: ask.summary }),
+    ...(ask.autoPick === undefined ? {} : { autoPick: ask.autoPick }),
+    ...(ask.access
+      ? { access: { mode: ask.access.mode, grants: [...ask.access.grants] } }
+      : {}),
   }
 }
 
@@ -168,6 +212,7 @@ const sameField: {
 } = {
   id: Object.is,
   channelId: Object.is,
+  gatewayId: Object.is,
   title: Object.is,
   model: (a, b) => a.provider === b.provider && a.modelId === b.modelId,
   status: Object.is,
@@ -177,6 +222,8 @@ const sameField: {
   now: Object.is,
   pinned: Object.is,
   unread: Object.is,
+  // An ask is never changed in place: a new one has a new id.
+  ask: (a, b) => a?.askId === b?.askId,
 }
 
 /** Whether two summaries say the same, revisions aside. */
@@ -316,7 +363,7 @@ const carriedId = (id: string, index: number, reply: boolean) =>
 export const unreadableOverflowId = "/unreadable-more"
 
 /** A file the agent published, as the part a message shows it by. */
-function publishedPart(artifact: ConversationView["artifacts"][number]): Part {
+function publishedPart(artifact: ConversationView["artifacts"][number]): FilePart {
   return {
     kind: "file",
     name: artifact.name,
@@ -425,6 +472,26 @@ export function transcriptFrom(
     view.handoffs.filter((handoff) => handoff.kind === "switch"),
     listed,
     waitingIds,
+  )
+  // Getting its machine ready, on the window's clock, as the gateway's
+  // deadlines are put on it.
+  const setups: MachineSetup[] = (view.setup ?? []).map((setup) => ({
+    state: setup.state,
+    ...(setup.executionId === undefined ? {} : { executionId: setup.executionId }),
+    steps: setup.steps.map((step) => ({
+      step: step.step,
+      startedAtMs: clientDueAtMs(step.startedAtMs, view.serverNowMs, receivedAtMs),
+      ...(step.endedAtMs === undefined
+        ? {}
+        : { endedAtMs: clientDueAtMs(step.endedAtMs, view.serverNowMs, receivedAtMs) }),
+    })),
+  }))
+  const readyFor = new Map(
+    setups.flatMap((setup) =>
+      setup.state === "ready" && setup.executionId !== undefined
+        ? [[setup.executionId, setup] as const]
+        : [],
+    ),
   )
   const messages: Message[] = []
   const pushHandoffs = (left: readonly ConversationView["handoffs"][number][]) => {
@@ -566,11 +633,13 @@ export function transcriptFrom(
         : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
+      const ready = readyFor.get(turn.executionId)
       const agent: TurnMessage = {
         id: reply,
         role: "agent",
         at: seen(reply),
         parts,
+        ...(ready ? { setup: ready } : {}),
         // The turn's own status says whether its reply is still being written.
         ...(working ? { working: true as const } : {}),
       }
@@ -593,6 +662,16 @@ export function transcriptFrom(
     if (working && parts[parts.length - 1]?.kind !== "text")
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
+  // While its machine is made ready, that is what it is doing: named step by
+  // step, timed from the first, ahead of anything the agent says.
+  const setting = runningSetup(setups)
+  const step = setting?.steps.at(-1)
+  if (setting && step)
+    activity = {
+      label: setupStepLabel(step.step, view.runtime?.agent),
+      since: setting.steps[0]?.startedAtMs ?? step.startedAtMs,
+      setup: true,
+    }
   if (published.after.length > 0)
     messages.push({
       id: publishedAfterId,
@@ -681,6 +760,18 @@ export function transcriptFrom(
     approvals,
     revision,
     agent: view.runtime?.agent,
+    ...(view.runtime
+      ? {
+          runtime: {
+            workspace: view.runtime.workspace,
+            modelName: view.runtime.modelName,
+            contextWindowTokens: view.runtime.contextWindowTokens,
+          },
+        }
+      : {}),
+    // The view lists them oldest first; Chat context shows the newest first.
+    published: view.artifacts.map(publishedPart).reverse(),
+    ...(setups.length ? { setups } : {}),
     lease: view.lease && {
       state: view.lease.state,
       environment: view.lease.environment,

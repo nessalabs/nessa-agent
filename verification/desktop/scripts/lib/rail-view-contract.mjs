@@ -1,9 +1,8 @@
 /**
  * What `rail-corner` and `rail-view-inert` decide from boxes the page measured.
  *
- * Devices leaves the bottom-left corner clear (`studio: false` on its rail
- * item): its cards run under that corner, so "nessa Studio" there is the
- * regression. A full view's titlebar sits above the view and its free room is
+ * Devices keeps "nessa Studio" in the bottom-left corner, where Agents puts
+ * it, as every rail view does. A full view's titlebar sits above the view and its free room is
  * the window's drag region. A hit there is the window, not a workspace card.
  */
 
@@ -25,13 +24,15 @@ export function agentsStudioMissingFailure(label, studio) {
 }
 
 /**
- * Devices draws no "nessa Studio". The toggle stays on the place Agents used.
+ * Devices draws "nessa Studio" where Agents did (`studio`), and the toggle
+ * stays on the place Agents used.
  */
-export function devicesCornerFailures(label, inView, viewToggle, toggle) {
+export function devicesCornerFailures(label, inView, studio, viewToggle, toggle) {
   const failures = []
-  if (inView)
+  if (!inView) failures.push(`${label}: Devices draws no "nessa Studio"`)
+  else if (studio && inView.join() !== studio.join())
     failures.push(
-      `${label}: Devices draws "nessa Studio" at [${inView}]; that corner stays clear`,
+      `${label}: Devices draws "nessa Studio" at [${inView}], not where Agents does [${studio}]`,
     )
   if (!toggle || viewToggle?.join() !== toggle.join())
     failures.push(`${label}, Devices: the toggle is at [${viewToggle}], not [${toggle}]`)

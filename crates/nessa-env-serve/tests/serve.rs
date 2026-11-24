@@ -28,6 +28,10 @@ struct EchoLauncher {
     slow: Mutex<Duration>,
     deaf: AtomicBool,
     leisurely: AtomicBool,
+    /// Each login renewed for a lease's harnesses: (lease, agent, login).
+    renewed: Mutex<Vec<(String, String, String)>>,
+    /// Each lease told ended.
+    ended: Mutex<Vec<String>>,
 }
 
 struct EchoControl {
@@ -60,6 +64,17 @@ impl HarnessControl for EchoControl {
 impl HarnessLauncher for EchoLauncher {
     fn workspace(&self) -> &str {
         "/work"
+    }
+    fn renew_login(&self, lease: &str, agent: &str, login: &nessa_protocol::lease::Login) -> bool {
+        self.renewed.lock().unwrap().push((
+            lease.to_owned(),
+            agent.to_owned(),
+            login.expose().to_owned(),
+        ));
+        true
+    }
+    fn lease_ended(&self, lease: &str) {
+        self.ended.lock().unwrap().push(lease.to_owned());
     }
     fn runs(&self, agent: &str) -> bool {
         agent == "claude" || agent == "codex"
@@ -464,6 +479,8 @@ impl Gateway {
             slow: Mutex::new(Duration::ZERO),
             deaf: AtomicBool::new(false),
             leisurely: AtomicBool::new(false),
+            renewed: Mutex::new(Vec::new()),
+            ended: Mutex::new(Vec::new()),
         });
         let commands = Arc::new(FakeCommands::default());
         let runner = runs_commands.then(|| commands.clone() as Arc<dyn CommandRunner>);
@@ -662,6 +679,56 @@ async fn a_saved_login_reaches_the_harness_only_where_the_grant_takes_one() {
         }
     );
     assert_eq!(gateway.launcher.logins.lock().unwrap().len(), 1);
+    // Rows L1 and L5: a renewed login reaches the harnesses of a lease that
+    // takes one; one for a lease that takes none, or for no lease held, is
+    // not kept.
+    let renewed = || nessa_protocol::lease::Login::new("eyJh.eyJz.bmV3".into()).unwrap();
+    for lease in [LEASE, "next", "unheld"] {
+        gateway
+            .send(ToEnvironment::Renew {
+                lease: lease.into(),
+                login: renewed(),
+            })
+            .await;
+    }
+    // Frames are taken in order: once this echoes, the renewals were seen.
+    gateway
+        .send(ToEnvironment::Input {
+            lease: LEASE.into(),
+            channel: 1,
+            data: Data(b"pong\n".to_vec()),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Output { .. }
+    ));
+    assert_eq!(
+        *gateway.launcher.renewed.lock().unwrap(),
+        [(
+            LEASE.to_owned(),
+            "claude".to_owned(),
+            "eyJh.eyJz.bmV3".to_owned()
+        )]
+    );
+    // Row L4: its end tells the launcher, which removes its token file.
+    gateway
+        .send(ToEnvironment::End {
+            lease: LEASE.into(),
+        })
+        .await;
+    loop {
+        match gateway.next().await {
+            FromEnvironment::Ended { lease, .. } if lease == LEASE => break,
+            _ => continue,
+        }
+    }
+    assert!(gateway
+        .launcher
+        .ended
+        .lock()
+        .unwrap()
+        .contains(&LEASE.to_owned()));
 }
 
 /// Gate 1 and 2: a lease runs a harness whose bytes are carried both ways

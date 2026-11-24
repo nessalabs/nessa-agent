@@ -993,7 +993,7 @@ impl Resources {
             let record = super::load_conversation(service.inner.metadata.as_ref(), &self.id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
-            let place = service.agent_place(&self.id).await?;
+            let place = service.agent_brief(&self.id).await?;
             let configured = service
                 .inner
                 .agents
@@ -1001,7 +1001,7 @@ impl Resources {
                     record.agent().ok_or(ConversationError::AgentUnsupported)?,
                     record.model().as_str(),
                     record.approval_mode(),
-                    place.as_ref(),
+                    &place,
                 )
                 .await?;
             let manager = SessionManager::open(

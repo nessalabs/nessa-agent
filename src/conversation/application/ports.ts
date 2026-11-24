@@ -35,6 +35,7 @@ export interface ConversationGateway {
   openListed(
     tabs: LocalTabs,
     listed: { serverConversationId: string; title: string | null },
+    options?: { activate?: boolean },
   ): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs

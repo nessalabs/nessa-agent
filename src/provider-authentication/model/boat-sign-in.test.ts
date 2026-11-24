@@ -6,7 +6,10 @@ describe("Boat sign-in", () => {
     expect(signInAction("claude", "boat")).toBe("boat")
     for (const environment of ["here", "ssh", "peer", undefined] as const)
       expect(signInAction("claude", environment)).toBe("computer")
-    expect(signInAction("codex", "boat")).toBe("computer")
+    for (const environment of ["ssh", "peer", "boat"] as const)
+      expect(signInAction("codex", environment)).toBe("chatgpt")
+    for (const environment of ["here", undefined] as const)
+      expect(signInAction("codex", environment)).toBe("computer")
   })
 
   it("hands the minted token straight to the gateway", async () => {

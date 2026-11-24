@@ -825,6 +825,7 @@ fn summary_of(entry: &RetainedCatalogueEntry) -> Option<ConversationSummary> {
         running: false,
         archived: is_archived,
         channel_id: None,
+        ask: None,
     })
 }
 
@@ -1055,6 +1056,7 @@ mod tests {
                     running: false,
                     archived: false,
                     channel_id: None,
+                    ask: None,
                 }],
             })
         }
@@ -1506,6 +1508,7 @@ mod tests {
             running: false,
             archived: false,
             channel_id: None,
+            ask: None,
         };
         let mut rows: Vec<_> = (0..256)
             .map(|index| summary(&format!("local-{index}")))
@@ -1628,6 +1631,7 @@ mod tests {
             running: false,
             archived,
             channel_id: None,
+            ask: None,
         };
         let peers = || {
             vec![

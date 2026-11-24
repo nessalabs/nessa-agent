@@ -36,6 +36,45 @@ impl ConversationSummaries for HeldReplySummary {
         })
     }
 
+    fn decisions(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Vec<nessa_protocol::conversation::view::OwnerDecision>> {
+        ConversationSummaries::decisions(self.store.as_ref(), id)
+    }
+
+    fn auto_picks_waiting(
+        &self,
+    ) -> ConversationFuture<'_, Vec<crate::conversation::application::WaitingAutoPick>> {
+        self.store.auto_picks_waiting()
+    }
+
+    fn pause_auto_pick(
+        &self,
+        id: &ConversationId,
+        ask_id: &str,
+        paused_at_ms: Option<u64>,
+    ) -> ConversationFuture<'_, bool> {
+        self.store.pause_auto_pick(id, ask_id, paused_at_ms)
+    }
+
+    fn decision_settings(
+        &self,
+        organization: &nessa_auth::domain::OrganizationId,
+        owner: &nessa_auth::domain::PrincipalId,
+    ) -> ConversationFuture<'_, nessa_protocol::conversation::view::DecisionSettings> {
+        self.store.decision_settings(organization, owner)
+    }
+
+    fn save_decision_settings(
+        &self,
+        organization: &nessa_auth::domain::OrganizationId,
+        owner: &nessa_auth::domain::PrincipalId,
+        settings: nessa_protocol::conversation::view::DecisionSettings,
+    ) -> ConversationFuture<'_, ()> {
+        self.store.save_decision_settings(organization, owner, settings)
+    }
+
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         self.store.erase(id)
     }

@@ -25,7 +25,7 @@ mod environment;
 mod install;
 mod link;
 mod logins;
-pub use logins::SavedLogins;
+pub use logins::{HandedLogin, SavedLogins};
 mod open_ssh;
 mod peer;
 mod peer_update;

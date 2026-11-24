@@ -33,6 +33,7 @@ export function callElsewhere(snapshot: VoiceSnapshot, sessionId: string): boole
     case "listening":
     case "working":
     case "speaking":
+    case "paused":
       return snapshot.sessionId !== sessionId
     case "idle":
     case "failed":

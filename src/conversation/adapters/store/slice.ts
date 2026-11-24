@@ -97,6 +97,12 @@ export type SendDraftArg = {
   retryTurnId?: string
   steering?: boolean
   /**
+   * Send `content` alone and leave the draft as it is: an answer tapped on an
+   * agent's question is not the message the person is writing, so it takes
+   * none of the draft's text or files and does not clear it.
+   */
+  besideDraft?: boolean
+  /**
    * What the caller knows about the session, which this slice cannot see. False
    * declines the draft here, with a reason, like every other decline. A caller
    * with no session to consult leaves it out, and the effects' own
@@ -205,7 +211,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       if (decline.message) dispatch(showError({ id, message: decline.message }))
       return rejectWithValue({ kind: decline.kind })
     }
-    const content = draftMessage(conv, input.content)
+    const content = draftMessage(conv, input.content, input.besideDraft)
     const text = contentText(content)
     const images = storedImages(content)
     const files = messageFiles(content)
@@ -242,6 +248,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         conversationId: id,
         prepared,
         retryTurnId: input.retryTurnId,
+        besideDraft: input.besideDraft,
       }),
     )
     let admissionAttempted = false
@@ -761,6 +768,28 @@ export const controlConversation = createAsyncThunk<
     }
   },
 )
+/**
+ * Raises a conversation's access for an access request the person approved,
+ * and says what became of it: `taken` by the gateway, `changing` when another
+ * control is on its way (`controlConversation` would let this one go without
+ * a word), or `refused`, the conversation not begun or the gateway saying no.
+ * Never a quiet yes: the person's Approve is sent only after the access
+ * really changed.
+ */
+export const raiseAccess = createAsyncThunk<
+  "taken" | "changing" | "refused",
+  { id: string; mode: ApprovalMode },
+  ThunkConfig
+>("conversation/raiseAccess", async ({ id, mode }, { dispatch, getState }) => {
+  const current = getState().conversation.conversations.find((item) => item.id === id)
+  if (!current?.serverConversationId) return "refused"
+  if (current.controlPending) return "changing"
+  const finished = await dispatch(
+    controlConversation({ id, control: { kind: "setApprovalMode", mode } }),
+  )
+  return controlConversation.rejected.match(finished) ? "refused" : "taken"
+})
+
 function capturedTurn(turns: readonly Turn[]): string | undefined {
   const running = [...turns]
     .reverse()
@@ -877,6 +906,16 @@ const conversationSlice = createSlice({
     ) {
       return gateway.openListed(state, action.payload)
     },
+    /**
+     * A conversation an agent asked the person something in, opened as a tab
+     * at the end without being shown: whatever is in front stays there.
+     */
+    openAsked(
+      state,
+      action: PayloadAction<{ serverConversationId: string; title: string | null }>,
+    ) {
+      return gateway.openListed(state, action.payload, { activate: false })
+    },
     closeConversation(state, action: PayloadAction<string>) {
       return gateway.closeConversation(state, action.payload)
     },
@@ -894,6 +933,7 @@ const conversationSlice = createSlice({
         conversationId: string
         prepared: PreparedSubmission
         retryTurnId?: string
+        besideDraft?: boolean
       }>,
     ) {
       const { content, conversationId } = action.payload
@@ -907,6 +947,7 @@ const conversationSlice = createSlice({
           actionId: prepared.requestId,
           mode: prepared.mode,
           retryTurnId: action.payload.retryTurnId,
+          besideDraft: action.payload.besideDraft,
         },
       )
     },
@@ -1046,6 +1087,7 @@ export const {
   openConversation,
   chooseModel,
   openListed,
+  openAsked,
   closeConversation,
   bindConversation,
   conversationReady,

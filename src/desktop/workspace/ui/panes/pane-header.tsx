@@ -16,7 +16,7 @@ import { StatusGlyph } from "../chrome/status-glyph"
 import { PaneMenuItems } from "./pane-menu"
 import { ClosePaneButton, PaneHeaderFrame } from "./pane-header-frame"
 import { useRememberedSession } from "../../adapters/store/remembered-session"
-import { SessionAccessories } from "./session-accessories"
+import { ChatContextButton } from "./chat-context-button"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
 import { channelPlaceWords } from "../channel-place-words"
@@ -27,8 +27,9 @@ import {
 } from "../../../model/header-image"
 
 /**
- * A pane's title bar: the session's mark, title and state, what each widget
- * plugin draws for the session (`SessionAccessories`), then its "…" menu
+ * A pane's title bar: the session's mark, title and state, the button that
+ * shows its Chat context beside the chat (`ChatContextButton`, where what
+ * each widget plugin draws for the session now lives), then its "…" menu
  * and ×. At the top of a conversation the heading below already says it all,
  * so the name shows only once the heading has scrolled away; a new session's
  * home speaks for itself when alone, and says "New session" beside others. With one pane the bar moves the window; with more
@@ -40,11 +41,17 @@ export const PaneHeader = memo(function PaneHeader({
   sessionId,
   multi,
   titleShown,
+  context,
 }: {
   pane: PaneKey
   sessionId: string
   multi: boolean
   titleShown: boolean
+  /**
+   * Chat context's column in this pane: whether it can show (a new session's
+   * home has none), whether it shows, its id, and its toggle.
+   */
+  context: { available: boolean; shown: boolean; id: string; onToggle: () => void }
 }) {
   // Why a picture chosen from this pane's menu was not taken, said briefly in
   // its header: the menu that asked is gone by the time the file dialog answers.
@@ -105,7 +112,6 @@ export const PaneHeader = memo(function PaneHeader({
                   Main agent · {mainLocation}
                 </span>
               ) : null}
-              <SessionAccessories sessionId={sessionId} />
               {refusal ? (
                 <span className="workspace-pane-refusal" role="status">
                   {refusal}
@@ -115,6 +121,13 @@ export const PaneHeader = memo(function PaneHeader({
           }
           actions={
             <>
+              {context.available ? (
+                <ChatContextButton
+                  shown={context.shown}
+                  controls={context.id}
+                  onToggle={context.onToggle}
+                />
+              ) : null}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <IconButton

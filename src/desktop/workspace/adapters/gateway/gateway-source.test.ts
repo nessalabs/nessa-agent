@@ -571,7 +571,31 @@ describe("the index and the list subscription", () => {
       "c",
     ])
     expect(kinds(updates)).not.toContain("session-removed")
-    expect(gateway.count("observe")).toBe(1)
+    // The page cannot resume, so the walk starts again a few times, then
+    // keeps what it has. Nothing it left out is taken away.
+    expect(gateway.count("observe")).toBe(4)
+  })
+
+  it("a walk that cannot resume starts again and keeps a row the first page left out", async () => {
+    const { gateway, source, follow } = started()
+    follow()
+    gateway.rows.set(conversationA, row(conversationA, { updatedAtMs: 1 }))
+    await source.index()
+    gateway.complete = false
+    gateway.listLimit = 1
+    gateway.observePageSize = 10
+    gateway.once("observe", () =>
+      Promise.resolve({
+        conversations: [row(conversationA, { updatedAtMs: 1 })],
+        complete: false,
+      }),
+    )
+    gateway.rows.set("shared", row("shared", { updatedAtMs: 3, title: "Shared chat" }))
+    gateway.publishList()
+    await flush()
+    expect((await source.index()).sessions.map((session) => session.id).sort()).toEqual(
+      [conversationA, "shared"].sort(),
+    )
   })
 
   it("D9: a list subscription that ends is a gap: opened again on the retry clock, never at once, and its first frame resyncs once", async () => {
@@ -1606,6 +1630,9 @@ describe("a connection that could not be made says why (#419)", () => {
       reason: "not-ready",
     })
     await expect(
+      failing(new HostRefusalError("still-starting")).source.index(),
+    ).rejects.toMatchObject({ reason: "still-starting" })
+    await expect(
       failing(
         new HostRefusalError("wrong-stage", { bundle: "dev", requested: "prod" }),
       ).source.index(),
@@ -2619,6 +2646,84 @@ describe("writes", () => {
     expect(gateway.calls.find((call) => call.method === "create")?.args).toEqual([
       { conversationId: conversationS, agent: "codex", model: "gpt-5", channelId },
     ])
+  })
+
+  it("W1: a first message on a cloud machine is followed while its creation waits, so each setup step can be said", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    follow()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "cloud",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const sent = source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Hello",
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId, title: "Hello" },
+    })
+    await advance(timing.retryMs)
+    // Asked before its record was written: not there yet, and not gone.
+    expect(subscribesOf(gateway, conversationS)).toHaveLength(1)
+    expect(
+      updates.some(
+        (update) =>
+          update.kind === "session-removed" && update.sessionId === conversationS,
+      ),
+    ).toBe(false)
+    // Written: the next try follows it while the machine is still being made.
+    gateway.views.set(conversationS, view(conversationS))
+    await advance(timing.retryMs)
+    expect(subscribesOf(gateway, conversationS)).toHaveLength(2)
+    expect(transcriptsOf(updates, conversationS).length).toBeGreaterThan(0)
+    expect(gateway.count("send")).toBe(0)
+    made.resolve({ conversationId: conversationS })
+    await advance(0)
+    await sent
+    expect(gateway.count("send")).toBe(1)
+  })
+
+  it("W1: a first message whose creation failed after it was followed keeps its session, to send again", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    follow()
+    await gateway.client.channels.create({
+      requestId: "made",
+      name: "cloud",
+      agent: "codex",
+      model: "gpt-5",
+    })
+    const channelId = gateway.channels[0].channel.channelId
+    const made = deferred<unknown>()
+    gateway.once("create", () => made.promise)
+    const sent = source.send({
+      sessionId: conversationS,
+      messageId: "m",
+      text: "Hello",
+      model: { provider: "openai", modelId: "gpt-5" },
+      initiator: "person",
+      start: { channelId, title: "Hello" },
+    })
+    await advance(timing.retryMs)
+    expect(subscribesOf(gateway, conversationS)).toHaveLength(1)
+    made.reject(rpcCode("environment_unavailable"))
+    await expect(sent).rejects.toBeDefined()
+    await advance(timing.retryMs * 3)
+    expect(
+      updates.some(
+        (update) =>
+          update.kind === "session-removed" && update.sessionId === conversationS,
+      ),
+    ).toBe(false)
+    // Let go: not asked for again on every retry.
+    const asked = subscribesOf(gateway, conversationS).length
+    await advance(timing.retryMs * 3)
+    expect(subscribesOf(gateway, conversationS)).toHaveLength(asked)
   })
 
   it("W2: a message sent again goes under its turn's id, so the gateway takes it once, as a command of its own", async () => {

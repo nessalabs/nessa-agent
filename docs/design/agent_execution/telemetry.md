@@ -3,7 +3,12 @@
 Status: proposed. Research behind
 [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md), argued in
 [#195](https://github.com/nessalabs/nessa-agent/issues/195). The desktop
-startup log in section 2.3 is implemented. The rest of this design is not;
+startup log in section 2.3 is implemented, and so is a first, narrow OTLP
+export: the gateway sends each decision's `decision` span (target
+`nessa_conversation::decisions`, `decision_traces.rs`) and nothing else,
+only when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+is set (`nessa-gateway/src/core/logging.rs`); it still reads those through
+the exporter's own lookup until the env seam of slice 2 lands. The rest of this design is not;
 each slice in section 5 is a sub-issue of #195. Paths are relative to the
 repository root. Line numbers were read at `19d42ff1`.
 

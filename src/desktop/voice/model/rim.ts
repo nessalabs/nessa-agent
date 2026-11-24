@@ -30,7 +30,8 @@ const dark: RimLook = { glow: 0, level: 0, sweep: 0, spin: 0, hue: 0, grey: 1 }
  * The look for `phase`. While listening the rim follows the person's voice
  * (`input`); while the voice speaks it follows that (`output`) and turns
  * periwinkle. Connecting and working are one circling light, working's
- * slower and dimmer. With the microphone off, listening is a faint grey.
+ * slower and dimmer. With the microphone off, listening is a faint grey;
+ * a paused call is fainter still.
  */
 export function rimLook(
   phase: VoicePhase,
@@ -63,6 +64,9 @@ export function rimLook(
       }
     case "working":
       return { glow: 0.16, level: 0.12, sweep: 0.45, spin: 0.9, hue: 0.5, grey: 0 }
+    // Paused: a still, faint grey ring, kept so the call reads as held, not gone.
+    case "paused":
+      return { ...dark, glow: 0.06, level: 0.04 }
     case "idle":
     case "failed":
     case "dropped":
