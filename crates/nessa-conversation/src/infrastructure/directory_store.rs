@@ -77,9 +77,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 .open(&path)
                 .map_err(|error| DirectoryRefusal::Io(error.kind()))?;
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-                return Err(DirectoryRefusal::Io(
-                    std::io::Error::last_os_error().kind(),
-                ));
+                return Err(DirectoryRefusal::Io(std::io::Error::last_os_error().kind()));
             }
             Ok(Box::new(ShareFileLock { file }))
         }
