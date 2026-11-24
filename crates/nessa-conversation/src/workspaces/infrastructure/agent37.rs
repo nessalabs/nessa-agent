@@ -112,16 +112,11 @@ impl Agent37Provider {
             link,
             self.relay_socket.clone(),
             self.relay_program.clone(),
-            root.clone(),
+            root,
             vm,
             DATA_DIR,
         )?;
-        Ok(Arc::new(super::runtime::BoatRuntime {
-            access,
-            backend,
-            cloud: crate::workspaces::domain::Cloud::Agent37,
-            workspace_root: root,
-        }))
+        Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
 }
 

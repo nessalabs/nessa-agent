@@ -26,19 +26,6 @@ pub trait TerminalEngine: Send + Sync {
         spec: &StartSpec,
         events: Arc<dyn EngineEvents>,
     ) -> Result<Box<dyn RunningTerminal>, TerminalError>;
-
-    /// Drive a cloud VM terminal backed by workspace-sdk's `Terminals`
-    /// capability through the same Ghostty projection and multi-view rules.
-    #[cfg(unix)]
-    fn start_remote(
-        &self,
-        _id: &str,
-        _size: GridSize,
-        _remote: Box<dyn crate::workspaces::application::WorkspaceTerminal>,
-        _events: Arc<dyn EngineEvents>,
-    ) -> Result<Box<dyn RunningTerminal>, TerminalError> {
-        Err(TerminalError::Unavailable)
-    }
 }
 
 /// Milliseconds since the epoch, injected so tests can fix it.
@@ -64,8 +51,4 @@ pub trait TerminalHost: Send + Sync {
     fn folder(&self, folder: &Path) -> Option<PathBuf>;
     /// The person's login shell.
     fn login_shell(&self) -> PathBuf;
-    /// The OpenSSH client program used for SSH-host terminals.
-    fn ssh_program(&self) -> PathBuf {
-        PathBuf::from("/usr/bin/ssh")
-    }
 }
