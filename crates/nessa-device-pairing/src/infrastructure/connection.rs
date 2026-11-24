@@ -667,7 +667,8 @@ impl Admission {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&self.endpoint);
         Ok(PoolPermit {
-            endpoint: Some(self.endpoint.clone()),
+            endpoint: self.endpoint.clone(),
+            wake: self.wake.clone(),
             permit: Some(permit),
             drained: self.drained.clone(),
         })
@@ -675,14 +676,20 @@ impl Admission {
 }
 /// One product session's or environment's permit, held until it ends.
 pub(super) struct PoolPermit {
-    endpoint: Option<Arc<WakeEndpoint>>,
+    endpoint: Arc<WakeEndpoint>,
+    wake: Arc<Mutex<WakeEndpoints>>,
     permit: Option<OwnedSemaphorePermit>,
     drained: Arc<Notify>,
 }
 impl Drop for PoolPermit {
     fn drop(&mut self) {
-        drop(self.endpoint.take());
+        // The ingress completion may still hold this endpoint after the
+        // stream closes. Retire the exact membership before returning the
+        // slot, under the admission/shutdown lock.
+        let mut wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner);
+        wake.remove(&self.endpoint);
         drop(self.permit.take());
+        drop(wake);
         self.drained.notify_waiters();
     }
 }
@@ -741,14 +748,14 @@ impl PendingRecordCarrier<'_> {
                 return Err(error);
             }
         };
-        let mut owned = ProductOwned {
+        let mut owned = PoolOwned {
             io: self.channel,
             permit,
         };
         self.ingress.release_capacity();
         write_reply(&mut owned.io, wire::encode_record_carrier_accepted())?;
-        let ProductOwned { io, permit } = owned;
-        Ok(SelectedRecordCarrier(ProductOwned {
+        let PoolOwned { io, permit } = owned;
+        Ok(SelectedRecordCarrier(PoolOwned {
             io: io.into_transport(),
             permit,
         }))
@@ -757,13 +764,13 @@ impl PendingRecordCarrier<'_> {
 
 // Drop the physical stream before giving the pool its place back, including
 // when writing Accepted fails or the worker unwinds.
-struct ProductOwned<T> {
+struct PoolOwned<T> {
     io: T,
     permit: PoolPermit,
 }
 
 /// The selected byte stream and its inseparable existing Product pool permit.
-pub struct SelectedRecordCarrier(ProductOwned<NativeTransport<DeadlineStream>>);
+pub struct SelectedRecordCarrier(PoolOwned<NativeTransport<DeadlineStream>>);
 
 impl Read for SelectedRecordCarrier {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
@@ -838,18 +845,30 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
         Ok(Exchanged::EnvironmentSelected(permit)) => {
-            Ok(Served::Environment(Box::new(channel), permit))
+            let mut owned = PoolOwned {
+                io: channel,
+                permit,
+            };
+            write_reply(&mut owned.io, wire::encode_serving())
+                .map_err(|error| refuse_failed_exchange(&mut owned.io, error))?;
+            let PoolOwned { io, permit } = owned;
+            Ok(Served::Environment(Box::new(io), permit))
         }
         Ok(Exchanged::Finished) => Ok(Served::Enrollment),
-        Err(error) => {
-            if answers_with_refusal(error.failure) {
-                // Best effort: the primary failure is what this connection reports,
-                // whether or not the peer receives the refusal.
-                write_reply(&mut channel, wire::encode_refused()).ok();
-            }
-            Err(error)
-        }
+        Err(error) => Err(refuse_failed_exchange(&mut channel, error)),
     }
+}
+
+fn refuse_failed_exchange(
+    channel: &mut EnrollmentChannel<DeadlineStream>,
+    error: NativeConnectionError,
+) -> NativeConnectionError {
+    if answers_with_refusal(error.failure) {
+        // Best effort: report the primary failure whether or not the peer
+        // receives the refusal.
+        write_reply(channel, wire::encode_refused()).ok();
+    }
+    error
 }
 /// A decision the gateway made on a readable channel gets a redacted `Refused`
 /// reply; physical failures do not, because the channel may be unusable.
@@ -884,7 +903,7 @@ enum Exchanged {
     /// The first envelope selected the product session, admitted to its pool.
     ProductSelected(PoolPermit),
     /// The first envelope selected the environment phase, admitted to its
-    /// pool and answered `serving`.
+    /// pool. The stream owner will answer `serving`.
     EnvironmentSelected(PoolPermit),
 }
 /// One enrollment exchange. Only a first envelope can select the product
@@ -978,7 +997,6 @@ fn exchange<R: RngCore + CryptoRng>(
             let permit = environment
                 .pool
                 .admit(NativeConnectionFailure::EnvironmentCapacity)?;
-            write_reply(channel, wire::encode_serving())?;
             return Ok(Exchanged::EnvironmentSelected(permit));
         }
         NativePairingRequest::Status(public) => {
@@ -1137,4 +1155,77 @@ fn frame_error(error: NativeFrameError) -> NativeConnectionError {
         NativeFrameError::Wire(error) => NativeConnectionFailure::Wire(error),
     }
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        endpoint_of, Admission, ConnectionPermit, NativeConnectionFailure, Pool, PoolOwned,
+        PRODUCT_SESSION_CAPACITY,
+    };
+    use nessa_protocol::pairing::socket::WakeEndpoint;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
+
+    #[test]
+    fn a_closed_product_slot_can_be_reused_while_ingress_completion_still_owns_its_endpoint() {
+        let product = Pool::new(PRODUCT_SESSION_CAPACITY);
+        let ingress = Pool::new(PRODUCT_SESSION_CAPACITY);
+        let drained = Arc::new(Notify::new());
+        let arrive = |port| {
+            let endpoint = WakeEndpoint::new(([127, 0, 0, 1], port).into());
+            let permit = ingress.capacity.clone().try_acquire_owned().unwrap();
+            ingress.wake.lock().unwrap().register(&endpoint);
+            let completion = ConnectionPermit {
+                endpoint: Some(endpoint.clone()),
+                permit: Mutex::new(Some(permit)),
+                drained: drained.clone(),
+            };
+            let admission = Admission {
+                capacity: product.capacity.clone(),
+                wake: product.wake.clone(),
+                connections: ingress.wake.clone(),
+                endpoint,
+                drained: drained.clone(),
+            };
+            (completion, admission)
+        };
+        let finish_admission = |completion: &ConnectionPermit, admission: &Admission| {
+            let permit = admission
+                .admit(NativeConnectionFailure::ProductCapacity)
+                .unwrap();
+            completion.release_capacity();
+            PoolOwned { io: (), permit }
+        };
+        let peer = 12000;
+        let (prior_completion, first_opening) = arrive(peer);
+        let first = finish_admission(&prior_completion, &first_opening);
+        drop(first_opening);
+        let other_sessions = (1..PRODUCT_SESSION_CAPACITY as u16)
+            .map(|index| {
+                let (completion, admission) = arrive(peer + index);
+                finish_admission(&completion, &admission)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(product.capacity.available_permits(), 0);
+        assert!(ingress.drained());
+
+        // Closing the first stream returns Product capacity before the outer
+        // completion is consumed. A new connection can reuse its address,
+        // but it must occupy a different wake membership.
+        drop(first);
+        assert_eq!(product.capacity.available_permits(), 1);
+        let (replacement_completion, replacement_opening) = arrive(peer);
+        let replacement = finish_admission(&replacement_completion, &replacement_opening);
+        assert_eq!(product.capacity.available_permits(), 0);
+
+        product.close();
+        let report = product.report().unwrap();
+        assert_eq!(report.iter().count(), PRODUCT_SESSION_CAPACITY);
+        assert!(!endpoint_of(&prior_completion).woken());
+        assert!(endpoint_of(&replacement_completion).woken());
+        drop(replacement);
+        drop(other_sessions);
+        assert!(product.drained());
+    }
 }
