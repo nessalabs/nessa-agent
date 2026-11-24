@@ -642,8 +642,18 @@ impl DirectoryAccess {
     /// Read a file inside a subject's directory.
     pub fn read(&self, subject: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
         let (grant, resource, session) = self.prepare(subject, relative, "read")?;
-        let bytes = session.read(relative)?;
-        let facts = session.walk(relative)?;
+        let bytes = match session.read(relative) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(self.observed_refusal(&resource, subject, relative, "read", error))
+            }
+        };
+        let facts = match session.walk(relative) {
+            Ok(facts) => facts,
+            Err(error) => {
+                return Err(self.observed_refusal(&resource, subject, relative, "read", error))
+            }
+        };
         self.refuse_walk(&grant, &resource, facts, subject, relative, "read")?;
         Ok(bytes)
     }
@@ -656,8 +666,41 @@ impl DirectoryAccess {
         relative: &str,
         bytes: &[u8],
     ) -> Result<(), DirectoryRefusal> {
-        let (_grant, _resource, session) = self.prepare(subject, relative, "write")?;
-        session.write(relative, bytes)
+        let (_grant, resource, session) = self.prepare(subject, relative, "write")?;
+        match session.write(relative, bytes) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.observed_refusal(&resource, subject, relative, "write", error)),
+        }
+    }
+
+    /// A refusal the opened directory found while reading or writing, after the
+    /// preliminary walk had allowed the name. The adapter does not have the
+    /// audit sink, so this records the refusal and reports whether that record
+    /// was accepted.
+    fn observed_refusal(
+        &self,
+        resource: &StoredDirectoryResource,
+        subject: &str,
+        relative: &str,
+        capability: &str,
+        error: DirectoryRefusal,
+    ) -> DirectoryRefusal {
+        match error {
+            DirectoryRefusal::MarkerName { .. } => {
+                let audit_recorded =
+                    self.record_refusal(resource, subject, relative, capability, "marker-name");
+                DirectoryRefusal::MarkerName { audit_recorded }
+            }
+            DirectoryRefusal::Outside { leave, .. } => {
+                let audit_recorded =
+                    self.record_refusal(resource, subject, relative, capability, "path-leaves");
+                DirectoryRefusal::Outside {
+                    leave,
+                    audit_recorded,
+                }
+            }
+            other => other,
+        }
     }
 
     /// Admit exec. This does not spawn a process.

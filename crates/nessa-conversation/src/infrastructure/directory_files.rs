@@ -491,7 +491,17 @@ fn final_name(relative: &str) -> Result<String, DirectoryRefusal> {
 }
 
 fn open_marker_file(dir: RawFd) -> Result<File, DirectoryRefusal> {
-    let file = open_named(dir, MARKER_NAME)?;
+    let file = match open_named(dir, MARKER_NAME) {
+        Ok(file) => file,
+        Err(error) => {
+            // `O_NOFOLLOW` answers `ELOOP` for a symlink. That name is not the
+            // marker file, the same as a FIFO.
+            if c_name(MARKER_NAME).is_ok_and(|name| is_symlink(dir, &name)) {
+                return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
+            }
+            return Err(error);
+        }
+    };
     if is_regular(&file)? {
         Ok(file)
     } else {

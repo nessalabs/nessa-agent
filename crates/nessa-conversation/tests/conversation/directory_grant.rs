@@ -2231,6 +2231,172 @@ fn a_fifo_marker_revokes_the_grant_and_restoring_the_file_does_not() {
 }
 
 #[test]
+fn a_symlink_marker_revokes_the_grant_and_restoring_the_file_does_not() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let elsewhere = root.path().join("elsewhere");
+    fs::write(&elsewhere, [0; BINDING_LEN]).unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [23; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    let marker = shared.join(".nessa-binding");
+    fs::remove_file(&marker).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &marker).unwrap();
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-type"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&granted.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::remove_file(&marker).unwrap();
+    fs::write(&marker, [23; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+}
+
+struct LateMarker {
+    inner: LocalDirectoryFiles,
+}
+
+struct LateSession {
+    inner: Box<dyn DirectorySession>,
+}
+
+impl DirectoryFiles for LateMarker {
+    fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        self.inner.canonicalize(path)
+    }
+    fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {
+        self.inner.read_marker(canonical)
+    }
+    fn create_marker(
+        &self,
+        canonical: &str,
+        bytes: &[u8; BINDING_LEN],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.create_marker(canonical, bytes)
+    }
+    fn unlink_marker(&self, canonical: &str) -> Result<(), DirectoryRefusal> {
+        self.inner.unlink_marker(canonical)
+    }
+    fn release_created_marker(
+        &self,
+        canonical: &str,
+        binding: &[u8; BINDING_LEN],
+    ) -> Result<bool, DirectoryRefusal> {
+        self.inner.release_created_marker(canonical, binding)
+    }
+    fn walk(&self, canonical: &str, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        self.inner.walk(canonical, relative)
+    }
+    fn read_inside(&self, canonical: &str, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        self.inner.read_inside(canonical, relative)
+    }
+    fn write_inside(
+        &self,
+        canonical: &str,
+        relative: &str,
+        bytes: &[u8],
+    ) -> Result<(), DirectoryRefusal> {
+        self.inner.write_inside(canonical, relative, bytes)
+    }
+    fn hides_marker(&self, profile: SandboxKind) -> bool {
+        self.inner.hides_marker(profile)
+    }
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.inner.root_leave(canonical, roots)
+    }
+    fn open_session(&self, canonical: &str) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
+        Ok(Box::new(LateSession {
+            inner: self.inner.open_session(canonical)?,
+        }))
+    }
+}
+
+impl DirectorySession for LateSession {
+    fn marker(&self) -> Result<MarkerBytes, DirectoryRefusal> {
+        self.inner.marker()
+    }
+    fn walk(&self, relative: &str) -> Result<WalkFacts, DirectoryRefusal> {
+        self.inner.walk(relative)
+    }
+    fn read(&self, relative: &str) -> Result<Vec<u8>, DirectoryRefusal> {
+        if relative == "note.txt" {
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
+        }
+        self.inner.read(relative)
+    }
+    fn write(&self, relative: &str, bytes: &[u8]) -> Result<(), DirectoryRefusal> {
+        if relative == "note.txt" {
+            return Err(DirectoryRefusal::MarkerName {
+                audit_recorded: true,
+            });
+        }
+        self.inner.write(relative, bytes)
+    }
+    fn root_leave(&self, canonical: &str, roots: &[String]) -> Result<PathLeave, DirectoryRefusal> {
+        self.inner.root_leave(canonical, roots)
+    }
+}
+
+#[test]
+fn a_marker_found_while_reading_is_audited_with_the_real_delivery() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LateMarker {
+            inner: LocalDirectoryFiles,
+        }),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [24; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerName { audit_recorded } => assert!(audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = true;
+    let refused = access.write("peer", "note.txt", b"later").unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            DirectoryRefusal::MarkerName {
+                audit_recorded: false
+            }
+        ),
+        "{refused}"
+    );
+    assert!(
+        refused.to_string().contains("the audit was not recorded"),
+        "{refused}"
+    );
+    let lines = audit.lines.lock().unwrap();
+    assert!(lines
+        .iter()
+        .any(|line| { line.cause == "marker-name" && line.after.as_deref() == Some("note.txt") }));
+}
+
+#[test]
 fn a_share_keeps_its_audit_when_the_sink_is_down_until_restart() {
     let root = private();
     let shared = root.path().join("shared");
