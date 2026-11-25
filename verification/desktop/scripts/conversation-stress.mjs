@@ -7239,7 +7239,10 @@ const steps = {
       // agents are ready, so a click on either is a choice. The vault is
       // locked first, as after a restart: onboarding still asks for no
       // passphrase (`setupWindow` refuses a vault dialog).
-      // Through the native vault session that owns it, as the app would.
+      // Through the native vault session that owns it, as the app would. A
+      // gateway restarted by an earlier step ends that session; a status
+      // read reconnects it, as the app does, before the lock.
+      await run.stack.vault.command({ operation: "status" })
       const lock = await run.stack.vault.command({ operation: "lock" })
       if (!lock.ok) throw new Error(`the vault would not lock: ${JSON.stringify(lock)}`)
       let page

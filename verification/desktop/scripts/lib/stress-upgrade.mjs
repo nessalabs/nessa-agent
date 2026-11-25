@@ -18,10 +18,14 @@
  *   version 11  the build before decisions were kept: no `owner_decisions`
  *               and no `decision_settings`, when an ask waits in
  *               `summaries.ask` (the newer build brings it in again)
+ *   version 12  the build before app namespaces: no
+ *               `conversations.app_namespace`, when a decision is kept
  *
- * Each needs `owner_decisions` and `decision_settings` empty, which version
- * 12 added: a file with a row in either is left as it is, the newest
- * build's. Those before 11 also need no ask waiting in `summaries.ask`,
+ * Each needs every conversation in the default `nessa` namespace, which
+ * version 13 added: a file with one elsewhere is left as it is, the newest
+ * build's. Those before 12 also need `owner_decisions` and
+ * `decision_settings` empty, which version 12 added; those before 11 no
+ * ask waiting in `summaries.ask`,
  * those before 10 `closed_threads` empty, which version 10 added, and those
  * before 9 `agent_switches` empty, which version 9 added.
  *
@@ -64,11 +68,18 @@ export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
-    if (rows("owner_decisions") + rows("decision_settings") > 0)
+    if (rows("conversations WHERE app_namespace <> 'nessa'") > 0)
       return database.prepare("PRAGMA user_version").get().user_version
     const closed = rows("closed_threads")
     const switches = rows("agent_switches")
     database.exec("BEGIN IMMEDIATE")
+    database.exec("DROP INDEX conversations_by_owner_namespace")
+    database.exec("ALTER TABLE conversations DROP COLUMN app_namespace")
+    if (rows("owner_decisions") + rows("decision_settings") > 0) {
+      database.exec("PRAGMA user_version = 12")
+      database.exec("COMMIT")
+      return 12
+    }
     database.exec("DROP TABLE owner_decisions")
     database.exec("DROP TABLE decision_settings")
     if (rows("summaries WHERE ask IS NOT NULL") > 0) {

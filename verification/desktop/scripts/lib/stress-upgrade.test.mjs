@@ -39,7 +39,7 @@ function current(fill = "") {
   database.exec(definition)
   database.exec(`INSERT INTO catalogue_owners VALUES ('org', 'alice', 1);
     INSERT INTO conversations VALUES ('c1', 'org', 'alice', 'panel', 'create', 1, 'claude',
-      'm', 'ask', 1, 1);
+      'm', 'ask', 1, 1, 'nessa');
     ${fill}`)
   database.close()
   return { directory, path }
@@ -65,11 +65,20 @@ const tables = (path) => {
   return names
 }
 
+test("a file with a conversation outside the default namespace is left as the newest build's", (t) => {
+  const { directory, path } = current(
+    "UPDATE conversations SET app_namespace = 'other' WHERE id = 'c1';",
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  assert.equal(asOlderBuild(path), 13)
+  assert.equal(schemaVersion(path), 13)
+})
+
 test("a file with nothing in the newer tables goes back to version 6", (t) => {
   const { directory, path } = current()
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   assert.equal(metadataFile(directory), path)
-  assert.equal(schemaVersion(path), 12)
+  assert.equal(schemaVersion(path), 13)
   assert.equal(asOlderBuild(path), 6)
   assert.equal(schemaVersion(path), 6)
   assert.ok(!askColumn(path))
