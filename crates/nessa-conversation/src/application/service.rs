@@ -63,7 +63,7 @@ pub use channels::{
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{AppNamespace, AuthContext, OrganizationId, PrincipalId};
 use nessa_projection::{
     agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry, review_entry,
     CommittedCursor, IntoView, McpToolUis, NoMcpToolUis, Projection, MAX_TEXT,
@@ -5225,11 +5225,11 @@ impl ConversationService {
         })
     }
     /// Whether `caller` may list the catalogue `owner` holds. Cedar's
-    /// `owner.list` is the decision. A caller who is not that owner is
-    /// refused, the same way a list leaves out someone else's rows.
+    /// `owner.list` is the decision. This is the built-in catalogue that
+    /// holds the peer replicas.
     pub fn admits_shared_list(
         &self,
-        caller: &ConversationCaller,
+        caller: &AuthContext,
         organization: &OrganizationId,
         owner: &PrincipalId,
     ) -> Result<bool, ConversationError> {
@@ -5239,16 +5239,17 @@ impl ConversationService {
             AccessResource::Catalogue {
                 organization,
                 owner,
+                app_namespace: &AppNamespace::DEFAULT,
             },
         )
     }
 
     /// Whether `caller` may read a chat in `owner`'s catalogue. Cedar's
-    /// `owner.read` is the decision. The chat is not a local row; the
-    /// owner and organization are the local catalogue's.
+    /// `owner.read` checks the built-in catalogue's owner, organization and
+    /// namespace for this replica.
     pub fn admits_shared_read(
         &self,
-        caller: &ConversationCaller,
+        caller: &AuthContext,
         organization: &OrganizationId,
         owner: &PrincipalId,
     ) -> Result<bool, ConversationError> {
@@ -5258,6 +5259,7 @@ impl ConversationService {
             AccessResource::Conversation {
                 organization,
                 owner,
+                app_namespace: &AppNamespace::DEFAULT,
                 deleted: false,
                 // A replica is not a local thread, so who created it is not
                 // what this read asks.
@@ -5268,14 +5270,15 @@ impl ConversationService {
 
     fn admits_shared(
         &self,
-        caller: &ConversationCaller,
+        caller: &AuthContext,
         action: AccessAction,
         resource: AccessResource<'_>,
     ) -> Result<bool, ConversationError> {
         let ask = AccessAsk {
             subject: AccessSubject::Person {
-                organization: &caller.organization_id,
-                principal: &caller.principal_id,
+                organization: caller.organization_id(),
+                principal: caller.principal_id(),
+                app_namespace: caller.app_namespace(),
             },
             action,
             resource,

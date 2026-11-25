@@ -155,6 +155,7 @@ async fn admit_start(
             AccessSubject::Person {
                 organization: context.organization_id(),
                 principal: context.principal_id(),
+                app_namespace: context.app_namespace(),
             },
             context.organization_id(),
             context.principal_id(),
