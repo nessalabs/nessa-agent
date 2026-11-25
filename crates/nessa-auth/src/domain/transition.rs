@@ -26,6 +26,8 @@ pub enum IssuanceCause {
     Bootstrap,
     /// `credential.issue` by an authenticated admin.
     AdminIssue,
+    /// Owner-approved app credential; not an ordinary Product session.
+    AppIssue,
     /// Outbound webhook registration; never a product session.
     WebhookIssue,
     /// Exact approved native device enrollment published after receiver staging.

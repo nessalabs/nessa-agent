@@ -273,6 +273,13 @@ credential when a source is in use, opens a fresh socket, obtains a fresh challe
 and authenticates again. An explicitly supplied credential remains fixed for this
 `connect` call.
 
+Pass `pinGatewayIdentity: true` to `NessaClient.connect` when the client owns state
+for one gateway. Each recovered transport must report the `gatewayId` from the
+first authenticated handshake. A different ID closes the client permanently with
+`NessaGatewayIdentityError` before restoring subscriptions or accepting RPCs.
+Read the error in the `closed` connection state or through `onClose`. Identity
+pinning defaults to `false`.
+
 `connectionState` is `connected`, `reconnecting`, or `closed`.
 `onConnectionStateChange(handler)` reports subsequent transitions and returns an
 unsubscribe function. Read `connectionState` for the current snapshot.

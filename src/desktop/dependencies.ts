@@ -136,6 +136,8 @@ import {
   terminalGateway,
   type TerminalClient,
   createGatewayRegistry,
+  LOCAL_GATEWAY_ID,
+  parseQualifiedId,
   multiGatewaySource,
   multiTerminalGateway,
   multiChannelGateway,
@@ -294,6 +296,7 @@ export function createDesktopDependencies(
   const localTerminals = source
     ? terminalGateway({
         connected: () => source.connected(),
+        followClient: source.followClient,
         newId,
       })
     : undefined
@@ -447,7 +450,16 @@ export function createDesktopDependencies(
         ? sampleDecisions({ now })
         : undefined,
     heldFiles: source
-      ? heldFileReader(() => source.connected().then((client) => client.attachments))
+      ? (sessionId, file, signal) => {
+          const { gatewayId, rawId } = parseQualifiedId(sessionId)
+          const read = heldFileReader(async () => {
+            if (gatewayId === LOCAL_GATEWAY_ID)
+              return (await source.connected()).attachments
+            if (!gatewayRegistry) throw new HeldFileReadError("unavailable")
+            return gatewayRegistry.remoteAttachmentApi(gatewayId)
+          })
+          return read(rawId, file, signal)
+        }
       : // The sample's and a given source's sessions name no file anybody holds.
         async () => {
           throw new HeldFileReadError("not-held")

@@ -2,6 +2,7 @@
 //! ownership, tombstones and summaries that cannot stand without their record,
 //! rows refused rather than repaired, and a list that reads only its owner's.
 use super::store::{list_query, LocalConversationStore, UNFINISHED};
+use super::ConversationStoreOpenError;
 use crate::{
     application::{
         CatalogueChangeWatch, CatalogueKey, CataloguePageRequest, CatalogueWatchState,
@@ -17,6 +18,7 @@ use crate::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, Connection, StatementStatus};
+use nessa_local_database::{OpenError, Schema};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::conversation_catalogue_schema;
 use nessa_protocol::conversation::domain::{
@@ -86,6 +88,17 @@ fn owned_by(id: &ConversationId, organization: &str, owner: &str, at: u64) -> Co
 }
 fn owned(id: &ConversationId) -> Conversation {
     owned_by(id, "org", "alice", 1)
+}
+
+fn assert_refused_version(path: &Path, version: i64) {
+    let Err(ConversationStoreOpenError::Metadata(OpenError::Version { found, expected })) =
+        LocalConversationStore::open(path)
+    else {
+        panic!("metadata version {version} must be refused with a version error");
+    };
+    let current = Schema::new(include_str!("../../src/infrastructure/schema.sql")).unwrap();
+    assert_eq!(found, version);
+    assert_eq!(expected, current.version());
 }
 
 #[tokio::test]
@@ -224,15 +237,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         .unwrap();
     drop(connection);
 
-    assert!(matches!(
-        LocalConversationStore::open(&path),
-        Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
-            nessa_local_database::OpenError::Version {
-                found: 1,
-                expected: 13
-            }
-        ))
-    ));
+    assert_refused_version(&path, 1);
     let old_row: String = raw(&path)
         .query_row("SELECT id FROM conversations", [], |row| row.get(0))
         .unwrap();
@@ -253,15 +258,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         .execute("INSERT INTO conversations (id) VALUES ('retained')", [])
         .unwrap();
     drop(connection);
-    assert!(matches!(
-        LocalConversationStore::open(&path),
-        Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
-            nessa_local_database::OpenError::Version {
-                found: 2,
-                expected: 13
-            }
-        ))
-    ));
+    assert_refused_version(&path, 2);
     let retained: String = raw(&path)
         .query_row("SELECT id FROM conversations", [], |row| row.get(0))
         .unwrap();
@@ -2863,23 +2860,14 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         )
         .unwrap();
     drop(connection);
-    assert!(matches!(
-        LocalConversationStore::open(&path),
-        Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
-            nessa_local_database::OpenError::Version {
-                found: 4,
-                expected: 13
-            }
-        ))
-    ));
+    assert_refused_version(&path, 4);
     let kept: String = raw(&path)
         .query_row("SELECT receiver_id FROM read_grants", [], |row| row.get(0))
         .unwrap();
     assert_eq!(kept, "phone");
 }
 
-/// The previous metadata version, whose grants name a role, is refused and
-/// left untouched. This build reads version 8, and brings only 6 and 7 forward.
+/// A version 5 file, whose grants name a role, is refused and left untouched.
 #[test]
 fn a_version_5_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2902,15 +2890,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         )
         .unwrap();
     drop(connection);
-    assert!(matches!(
-        LocalConversationStore::open(&path),
-        Err(crate::infrastructure::ConversationStoreOpenError::Metadata(
-            nessa_local_database::OpenError::Version {
-                found: 5,
-                expected: 13
-            }
-        ))
-    ));
+    assert_refused_version(&path, 5);
     let kept: String = raw(&path)
         .query_row("SELECT role FROM share_grants", [], |row| row.get(0))
         .unwrap();

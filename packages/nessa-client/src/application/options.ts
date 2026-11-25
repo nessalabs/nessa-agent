@@ -47,6 +47,8 @@ export type CommonConnectOptions = {
  */
 export type ProductConnectOptions = CommonConnectOptions & {
   profile?: "product"
+  /** Require recovered transports to report the gateway ID from the first authenticated handshake. Defaults to false. */
+  pinGatewayIdentity?: boolean
   /**
    * Explicit evidence is sent only in `session.authenticate`. Browser cookies use
    * `/browser/session` over WSS, or numeric-loopback WS in dev/CI, and never load

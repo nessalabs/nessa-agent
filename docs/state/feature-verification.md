@@ -50,26 +50,22 @@ claim that every source statement, interleaving or operating system was tested.
 
 ## Coverage snapshot
 
-The feature owners below currently link **104 executable models**.
+The catalog links **108 executable models**.
 TLC results shown are the last saved bounded run. Source guards, policy evaluators,
 storage and process owners remain implementation authority; model exploration is
 design evidence. See [provenance](provenance.md) for executed checks and exclusions.
-The disposition counts were read from the catalog at source `f2d721112a96beeb4b335314d56a90083acde9e9`
-after the sync pages were added. Saved TLC results in the tables below were not re-run.
-Two implemented gateway pages remain unmapped, so `pnpm docs:state:coverage` still
-fails: [Call a gateway method from the CLI or MCP](services/gateway/call-a-method-from-the-cli-or-mcp.md)
-and [Pair a gateway as the same person](services/gateway/same-person.md). The sync
-pages did not change those owners.
+The catalog check accounts for all 189 pages. The CLI/MCP call and same-person
+pairing rows record the two new bounded checks. The owning pages hold the saved
+results for the other models. [Gateway model evidence](../reviews/gateway-coverage-models.md)
 
 | Disposition | Pages | Meaning |
 | --- | --- | --- |
 | Value or representation contract | 6 | Accounted for; this is not a TLC pass. |
-| Direct model | 104 | A unique linked spec/config and declared safety rules. |
+| Direct model | 108 | A unique linked spec/config and declared safety rules. |
 | External source boundary | 5 | Accounted for; this is not a TLC pass. |
 | Component/feature index | 21 | Accounted for; this is not a TLC pass. |
 | Reference guide | 16 | Accounted for; this is not a TLC pass. |
 | Shared owner; partial scope | 33 | Open the owner link for the modeled part; inspect the feature for exclusions. |
-| Unmapped stateful page | 2 | `docs:state:coverage` fails until each has a model or an explicit boundary. |
 
 ## Auth features
 
@@ -198,6 +194,8 @@ pages did not change those owners.
 | [Background tasks](services/gateway/background-tasks.md) | Direct model | 3 rules held; 40 states |
 | [Export a consistent backup cut](services/gateway/backup-export.md) | Direct model | 3 rules held; 10 states |
 | [Verify, quarantine and accept a backup](services/gateway/backup-restore.md) | Direct model | 3 rules held; 244 states |
+| [Call a gateway method from the CLI or MCP](services/gateway/call-a-method-from-the-cli-or-mcp.md) | Direct model | 5 rules held; 100 states |
+| [Put a persistent cloud gateway to sleep](services/gateway/cloud-box-sleep.md) | Direct model | 3 rules held; 52 states |
 | [Conversation identity and deletion](services/gateway/conversation.md) | Direct model | 3 rules held; 22 states |
 | [Approve and activate a linked device](services/gateway/device-pairing.md) | Direct model | 4 rules held; 82 states |
 | [Admit a Drive turn and its tool calls](services/gateway/drive-tool-admission.md) | Direct model | 3 rules held; 80 states |
@@ -207,8 +205,10 @@ pages did not change those owners.
 | [Stop the captured parent turn and descendants](services/gateway/parent-stop.md) | Direct model | 4 rules held; 132 states |
 | [Enroll, read and forget peer gateways](services/gateway/peer-gateways.md) | Direct model | 6 rules held; 11 states |
 | [Announce a paired gateway on the local network](services/gateway/peer-discovery.md) | Direct model | AnnounceOnlyInstalled and ExpiryKeepsPhase; Rust discovery tests hold the byte and reconnect rules |
+| [Release a native connection pool slot](services/gateway/pool-membership.md) | Direct model | See the owning page for results and scope |
 | [Wait for busy record discovery within one read](services/gateway/record-read-discovery.md) | Direct model | 4 rules held; 43 states |
 | [Bounded physical history reads](services/gateway/record-reads.md) | Direct model | 2 rules held; 8 states |
+| [Pair a gateway as the same person](services/gateway/same-person.md) | Direct model | 6 rules held; 20 states |
 | [Reach a gateway through a tunnel](services/gateway/tunnel-connectivity.md) | Direct model | 4 rules held; 12 states |
 | [Outbound webhook admission](services/gateway/webhook-admission.md) | Direct model | 3 rules held; 12 states |
 | [Outbound webhook foundation](services/gateway/webhook-foundation.md) | Direct model | 3 rules held; 78 states |

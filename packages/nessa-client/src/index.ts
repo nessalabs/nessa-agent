@@ -98,6 +98,7 @@ export {
   SessionCloseReason,
 } from "./generated/product.js"
 export {
+  NessaGatewayIdentityError,
   NessaSessionUnavailableError,
   type ConnectionState,
 } from "./application/managed-session.js"

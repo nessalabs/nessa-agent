@@ -18,7 +18,7 @@ import type {
   McpServersApi,
   PairingApi,
 } from "@nessa/client"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import { subagentsPluginId } from "./subagents"
 import {
@@ -29,7 +29,7 @@ import {
   WidgetRegistryError,
 } from "./widgets"
 import { deferred, fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
-import { sampleAppSession } from "./workspace"
+import { defaultGatewayTiming, qualifyEntityId, sampleAppSession } from "./workspace"
 import { fakeSource } from "./workspace/testing"
 
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
@@ -381,6 +381,136 @@ function gatewayWithApp() {
 }
 
 describe("the window's workspace", () => {
+  it("rebinds idle terminal panes when their workspace adopts a replacement client", async () => {
+    const local = fakeGateway()
+    const first = fakeGateway()
+    const replacement = fakeGateway()
+    const fit = { cols: 80, rows: 24 }
+    const terminal = await first.client.terminals.open({
+      requestId: "first-term",
+      ...fit,
+    })
+    const firstAttach = vi.spyOn(first.client.terminals, "attach")
+    const replacementList = vi
+      .spyOn(replacement.client.terminals, "list")
+      .mockResolvedValue([terminal])
+    const replacementAttach = vi
+      .spyOn(replacement.client.terminals, "attach")
+      .mockResolvedValue(undefined)
+    const replacementFocus = vi
+      .spyOn(replacement.client.terminals, "focus")
+      .mockResolvedValue(undefined)
+    const connectRemote = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...first.client,
+        productSession: { gatewayId: "cloud-1" },
+      })
+      .mockResolvedValueOnce({
+        ...replacement.client,
+        productSession: { gatewayId: "cloud-1" },
+      })
+    const newId = vi.fn(() => "desktop-view")
+    const { gatewayRegistry, terminals, workspace } = createDesktopDependencies({
+      gateway: async () => ({
+        ...local.client,
+        ...settingsParts,
+        mcpApps: {} as McpAppsApi,
+      }),
+      gatewayStore: { read: () => [], write: () => {} },
+      connectRemote,
+      newId,
+    })
+    if (!gatewayRegistry || !terminals) throw new Error("missing desktop gateway")
+    await gatewayRegistry.add({
+      label: "Cloud Box",
+      url: "wss://cloud.example",
+      credential: "test",
+    })
+    const terminalId = qualifyEntityId("cloud-1", terminal.terminalId)
+    const listed = vi.fn()
+    const stopWorkspace = workspace.subscribe(() => {})
+    const stop = terminals.follow(listed)
+    await vi.waitFor(() =>
+      expect(listed).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: terminalId }),
+      ]),
+    )
+    const view = terminals.view(terminalId)
+    view.focus(fit)
+    await vi.waitFor(() => expect(firstAttach).toHaveBeenCalledTimes(1))
+
+    vi.useFakeTimers()
+    try {
+      first.setState({ status: "closed", error: new Error("retry exhausted") })
+      await vi.advanceTimersByTimeAsync(defaultGatewayTiming.retryMs)
+    } finally {
+      vi.useRealTimers()
+    }
+    await vi.waitFor(() => expect(replacementFocus).toHaveBeenCalledTimes(1))
+    expect(newId).toHaveBeenCalledTimes(1)
+    expect(connectRemote).toHaveBeenCalledTimes(2)
+    expect(replacementList).toHaveBeenCalledTimes(1)
+    expect(replacementAttach).toHaveBeenCalledExactlyOnceWith({
+      terminalId: terminal.terminalId,
+      viewId: "desktop-view",
+      ...fit,
+    })
+    view.release()
+    stop()
+    stopWorkspace()
+    await settled()
+    gatewayRegistry.dispose()
+  })
+
+  it("reads held attachments from the conversation's owning gateway", async () => {
+    const local = fakeGateway()
+    const remote = fakeGateway()
+    const localBytes = new Blob(["local"])
+    const remoteBytes = new Blob(["remote"])
+    const localFetch = vi.fn(async () => localBytes)
+    const remoteFetch = vi.fn(async () => remoteBytes)
+    const { gatewayRegistry, heldFiles } = createDesktopDependencies({
+      gateway: async () => ({
+        ...local.client,
+        ...settingsParts,
+        mcpApps: {} as McpAppsApi,
+        attachments: { ...local.client.attachments, fetch: localFetch },
+      }),
+      gatewayStore: { read: () => [], write: () => {} },
+      connectRemote: async () => ({
+        ...remote.client,
+        productSession: { gatewayId: "cloud-1" },
+        attachments: { ...remote.client.attachments, fetch: remoteFetch },
+      }),
+    })
+    if (!gatewayRegistry) throw new Error("missing gateway registry")
+    await gatewayRegistry.add({
+      label: "Cloud Box",
+      url: "wss://cloud.example",
+      credential: "test",
+    })
+    const remoteConversation = qualifyEntityId("cloud-1", conversation)
+    const file = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 6 }
+    const signal = new AbortController().signal
+    await expect(heldFiles(remoteConversation, file, signal)).resolves.toBe(remoteBytes)
+    expect(remoteFetch).toHaveBeenCalledExactlyOnceWith(conversation, file, { signal })
+    expect(localFetch).not.toHaveBeenCalled()
+    await expect(heldFiles(conversation, file, signal)).resolves.toBe(localBytes)
+    expect(localFetch).toHaveBeenCalledExactlyOnceWith(conversation, file, { signal })
+
+    remote.setState({ status: "closed", error: new Error("offline") })
+    await expect(heldFiles(remoteConversation, file, signal)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
+    await gatewayRegistry.remove("cloud-1")
+    await expect(heldFiles(remoteConversation, file, signal)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
+    expect(remoteFetch).toHaveBeenCalledTimes(1)
+    expect(localFetch).toHaveBeenCalledTimes(1)
+  })
+
   it("is the gateway's when composition can connect to one, which it does on first need", async () => {
     const gateway = fakeGateway()
     let connects = 0

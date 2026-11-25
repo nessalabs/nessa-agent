@@ -18,14 +18,15 @@
  *   version 11  the build before decisions were kept: no `owner_decisions`
  *               and no `decision_settings`, when an ask waits in
  *               `summaries.ask` (the newer build brings it in again)
- *   version 12  the build before app namespaces: no
- *               `conversations.app_namespace`, when a decision is kept
  *
- * Each needs every conversation in the default `nessa` namespace, which
- * version 13 added: a file with one elsewhere is left as it is, the newest
- * build's. Those before 12 also need `owner_decisions` and
- * `decision_settings` empty, which version 12 added; those before 11 no
- * ask waiting in `summaries.ask`,
+ *   version 12  the build before app namespaces: no `app_namespace` column
+ *               or owner/namespace index, when all conversations are built-in
+ *               but a decision or decision setting must be kept
+ *   version 13  any non-built-in namespace stays as it is: an older build
+ *               could not represent that namespace
+ *
+ * Versions before 12 need `owner_decisions` and `decision_settings` empty.
+ * Versions before 11 also need no ask waiting in `summaries.ask`,
  * those before 10 `closed_threads` empty, which version 10 added, and those
  * before 9 `agent_switches` empty, which version 9 added.
  *
@@ -67,47 +68,43 @@ export function schemaVersion(path) {
 export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
-    const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
-    if (rows("conversations WHERE app_namespace <> 'nessa'") > 0)
-      return database.prepare("PRAGMA user_version").get().user_version
-    const closed = rows("closed_threads")
-    const switches = rows("agent_switches")
     database.exec("BEGIN IMMEDIATE")
+    const original = database.prepare("PRAGMA user_version").get().user_version
+    if (original !== 13)
+      throw new Error(`expected a version 13 metadata file, found ${original}`)
+    // Reverse schema_upgrades/12.sql only when older builds can represent every row.
+    if (
+      database
+        .prepare("SELECT 1 FROM conversations WHERE app_namespace <> 'nessa' LIMIT 1")
+        .get()
+    ) {
+      database.exec("ROLLBACK")
+      return original
+    }
     database.exec("DROP INDEX conversations_by_owner_namespace")
     database.exec("ALTER TABLE conversations DROP COLUMN app_namespace")
-    if (rows("owner_decisions") + rows("decision_settings") > 0) {
-      database.exec("PRAGMA user_version = 12")
+    const finish = (version) => {
+      database.exec(`PRAGMA user_version = ${version}`)
       database.exec("COMMIT")
-      return 12
+      return version
     }
+    const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
+    if (rows("owner_decisions") + rows("decision_settings") > 0) return finish(12)
+    const closed = rows("closed_threads")
+    const switches = rows("agent_switches")
     database.exec("DROP TABLE owner_decisions")
     database.exec("DROP TABLE decision_settings")
-    if (rows("summaries WHERE ask IS NOT NULL") > 0) {
-      database.exec("PRAGMA user_version = 11")
-      database.exec("COMMIT")
-      return 11
-    }
+    if (rows("summaries WHERE ask IS NOT NULL") > 0) return finish(11)
     database.exec("ALTER TABLE summaries DROP COLUMN ask")
-    if (closed > 0) {
-      database.exec("PRAGMA user_version = 10")
-      database.exec("COMMIT")
-      return 10
-    }
+    if (closed > 0) return finish(10)
     database.exec("DROP TABLE closed_threads")
-    if (switches > 0) {
-      database.exec("PRAGMA user_version = 9")
-      database.exec("COMMIT")
-      return 9
-    }
+    if (switches > 0) return finish(9)
     const models = rows("model_requests")
     const turns = rows("unfinished_turns")
     database.exec("DROP TABLE agent_switches")
     if (models === 0) database.exec("DROP TABLE model_requests")
     if (models === 0 && turns === 0) database.exec("DROP TABLE unfinished_turns")
-    const version = models === 0 && turns === 0 ? 6 : 7
-    database.exec(`PRAGMA user_version = ${version}`)
-    database.exec("COMMIT")
-    return version
+    return finish(models === 0 && turns === 0 ? 6 : 7)
   } finally {
     database.close()
   }

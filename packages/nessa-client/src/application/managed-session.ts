@@ -26,6 +26,14 @@ export class NessaSessionUnavailableError extends Error {
   }
 }
 
+/** A recovered transport authenticated as a different gateway from the pinned session. */
+export class NessaGatewayIdentityError extends Error {
+  constructor() {
+    super("Connected endpoint reported a different gateway identity.")
+    this.name = "NessaGatewayIdentityError"
+  }
+}
+
 /**
  * One still-held registration of a function for one event.
  *
@@ -59,6 +67,7 @@ export class ManagedSession implements RpcRequester {
       wait(ms: number, signal: AbortSignal): Promise<void>
       random(): number
     },
+    private readonly pinnedGatewayId?: string,
   ) {
     this.adopt(initial)
   }
@@ -255,6 +264,13 @@ export class ManagedSession implements RpcRequester {
         )
         if (this.lifetime.signal.aborted) return
         const session = await this.connect(this.lifetime.signal)
+        if (
+          this.pinnedGatewayId !== undefined &&
+          session.ready.gatewayId !== this.pinnedGatewayId
+        ) {
+          session.wire.close()
+          throw new NessaGatewayIdentityError()
+        }
         // A replacement that never became connected does not end recovery, and
         // does not get a fresh budget either: it is this attempt's outcome.
         const termination = this.adopt(session, true)

@@ -38,8 +38,9 @@ function current(fill = "") {
   const database = new DatabaseSync(path)
   database.exec(definition)
   database.exec(`INSERT INTO catalogue_owners VALUES ('org', 'alice', 1);
-    INSERT INTO conversations VALUES ('c1', 'org', 'alice', 'panel', 'create', 1, 'claude',
-      'm', 'ask', 1, 1, 'nessa');
+    INSERT INTO conversations (id, organization, owner, creator_surface, creation_action,
+      creation_requested_at_ms, agent, model, approval_mode, creation_revision, change_revision)
+      VALUES ('c1', 'org', 'alice', 'panel', 'create', 1, 'claude', 'm', 'ask', 1, 1);
     ${fill}`)
   database.close()
   return { directory, path }
@@ -65,21 +66,40 @@ const tables = (path) => {
   return names
 }
 
-test("a file with a conversation outside the default namespace is left as the newest build's", (t) => {
-  const { directory, path } = current(
-    "UPDATE conversations SET app_namespace = 'other' WHERE id = 'c1';",
-  )
-  t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 13)
-  assert.equal(schemaVersion(path), 13)
-})
+function namespaceShape(path) {
+  const database = new DatabaseSync(path, { readOnly: true })
+  try {
+    return {
+      column:
+        database
+          .prepare(
+            "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'app_namespace'",
+          )
+          .get() !== undefined,
+      index:
+        database
+          .prepare(
+            "SELECT 1 FROM pragma_index_list('conversations') WHERE name = 'conversations_by_owner_namespace'",
+          )
+          .get() !== undefined,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+function asLegacy(path) {
+  const version = asOlderBuild(path)
+  assert.deepEqual(namespaceShape(path), { column: false, index: false })
+  return version
+}
 
 test("a file with nothing in the newer tables goes back to version 6", (t) => {
   const { directory, path } = current()
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   assert.equal(metadataFile(directory), path)
   assert.equal(schemaVersion(path), 13)
-  assert.equal(asOlderBuild(path), 6)
+  assert.equal(asLegacy(path), 6)
   assert.equal(schemaVersion(path), 6)
   assert.ok(!askColumn(path))
   assert.ok(!tables(path).includes("closed_threads"))
@@ -96,7 +116,7 @@ test("a marked turn keeps its table, at version 7", (t) => {
     "INSERT INTO unfinished_turns (conversation_id) VALUES ('c1');",
   )
   t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 7)
+  assert.equal(asLegacy(path), 7)
   assert.ok(tables(path).includes("unfinished_turns"))
   assert.ok(!tables(path).includes("model_requests"))
 })
@@ -108,7 +128,7 @@ test("a model request keeps every table, at version 7", (t) => {
       prior_model, prior_mode, requested_model, state, requested_at_ms)
     VALUES ('c1', 'r1', 'alice', 'panel', 'p', 'c', 'p', 'c', 'm', 'ask', 'n', 'pending', 1);`)
   t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 7)
+  assert.equal(asLegacy(path), 7)
   assert.ok(tables(path).includes("unfinished_turns"))
   assert.ok(tables(path).includes("model_requests"))
 })
@@ -118,7 +138,7 @@ test("a file with an agent switch goes back to version 9", (t) => {
     current(`INSERT INTO agent_switches VALUES ('c1', 'r1', 'alice',
     'panel', 'claude', 'm', 'codex', 'n', 'applied', 1);`)
   t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 9)
+  assert.equal(asLegacy(path), 9)
   assert.equal(schemaVersion(path), 9)
   assert.ok(tables(path).includes("agent_switches"))
   assert.ok(!tables(path).includes("closed_threads"))
@@ -129,7 +149,7 @@ test("a file with a closed thread goes back to version 10", (t) => {
     "INSERT INTO closed_threads (conversation_id) VALUES ('c1');",
   )
   t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 10)
+  assert.equal(asLegacy(path), 10)
   assert.equal(schemaVersion(path), 10)
   assert.ok(tables(path).includes("closed_threads"))
   assert.ok(!askColumn(path))
@@ -141,7 +161,7 @@ test("a file with a waiting ask and no decisions goes back to version 11", (t) =
       VALUES ('c1', 1, 0, '{"askId":"a"}');`,
   )
   t.after(() => rmSync(directory, { recursive: true, force: true }))
-  assert.equal(asOlderBuild(path), 11)
+  assert.equal(asLegacy(path), 11)
   assert.equal(schemaVersion(path), 11)
   assert.ok(askColumn(path))
   assert.ok(!tables(path).includes("owner_decisions"))
@@ -149,22 +169,89 @@ test("a file with a waiting ask and no decisions goes back to version 11", (t) =
   assert.ok(tables(path).includes("closed_threads"))
 })
 
-for (const [kept, fill] of [
+for (const [kept, table, fill] of [
   [
     "a decision",
+    "owner_decisions",
     `INSERT INTO owner_decisions (conversation_id, ask_id, asked_at_ms, ask)
       VALUES ('c1', 'a', 1, '{"askId":"a"}');`,
   ],
-  ["decision settings", `INSERT INTO decision_settings VALUES ('org', 'alice', 0, 600);`],
+  [
+    "decision settings",
+    "decision_settings",
+    `INSERT INTO decision_settings VALUES ('org', 'alice', 0, 600);`,
+  ],
 ])
-  test(`a file with ${kept} is left as the newest build's`, (t) => {
+  test(`a built-in file with ${kept} keeps that row at version 12`, (t) => {
     const { directory, path } = current(fill)
     t.after(() => rmSync(directory, { recursive: true, force: true }))
-    assert.equal(asOlderBuild(path), 12)
+    assert.equal(asLegacy(path), 12)
     assert.equal(schemaVersion(path), 12)
     assert.ok(tables(path).includes("owner_decisions"))
     assert.ok(tables(path).includes("decision_settings"))
+    const database = new DatabaseSync(path, { readOnly: true })
+    try {
+      assert.equal(
+        database.prepare(`SELECT count(*) AS rows FROM ${table}`).get().rows,
+        1,
+      )
+    } finally {
+      database.close()
+    }
   })
+
+test("version 12 goes forward with the built-in namespace and index again", (t) => {
+  const { directory, path } = current(
+    "INSERT INTO decision_settings VALUES ('org', 'alice', 0, 600);",
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  assert.equal(asLegacy(path), 12)
+
+  const migration = readFileSync(
+    new URL(
+      "../../../../crates/nessa-conversation/src/infrastructure/schema_upgrades/12.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  )
+  const database = new DatabaseSync(path)
+  try {
+    database.exec(migration)
+    assert.equal(
+      database.prepare("SELECT app_namespace FROM conversations WHERE id = 'c1'").get()
+        .app_namespace,
+      "nessa",
+    )
+    assert.equal(
+      database.prepare("SELECT count(*) AS rows FROM decision_settings").get().rows,
+      1,
+    )
+  } finally {
+    database.close()
+  }
+  assert.equal(schemaVersion(path), 13)
+  assert.deepEqual(namespaceShape(path), { column: true, index: true })
+})
+
+test("a non-built-in namespace keeps the whole version 13 file unchanged", (t) => {
+  const { directory, path } = current(
+    "UPDATE conversations SET app_namespace = 'sample-extension';",
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const before = readFileSync(path)
+  assert.equal(asOlderBuild(path), 13)
+  assert.equal(schemaVersion(path), 13)
+  assert.deepEqual(namespaceShape(path), { column: true, index: true })
+  assert.deepEqual(readFileSync(path), before)
+})
+
+test("a schema this downgrade does not know is left unchanged", (t) => {
+  const { directory, path } = current("PRAGMA user_version = 14;")
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const before = readFileSync(path)
+  assert.throws(() => asOlderBuild(path), /expected a version 13 metadata file, found 14/)
+  assert.deepEqual(readFileSync(path), before)
+})
 
 test("place records turn back into an older build's placement and binding files", () => {
   const conversations = mkdtempSync(join(tmpdir(), "stress-places-"))

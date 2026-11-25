@@ -87,19 +87,24 @@ interface LiveView {
   readonly listeners: Set<(message: TerminalProtocolMessage) => void>
   /** The last fit; none until the view is first measured, so it is not attached. */
   fit: TerminalFit | null
-  /** Whether it took the keyboard last: said again on a new connection. */
-  focused: boolean
+  /** A fit that failed to reach a client also needs restoring once one is adopted. */
+  attachment: "waiting-for-client" | "requested" | null
 }
 
 export function terminalGateway(options: {
   readonly connected: () => Promise<TerminalClient>
+  readonly followClient?: (listener: (client: TerminalClient) => void) => () => void
   readonly newId: () => string
 }): TerminalSource {
   const views = new Map<string, LiveView>()
+  const focusedViews = new Map<string, LiveView>()
   const followers = new Set<(terminals: readonly TerminalEntry[]) => void>()
   let bound: TerminalClient | null = null
   let unbind: (() => void) | null = null
   let binding: Promise<TerminalClient> | null = null
+  let pendingRestore: TerminalClient | null = null
+  let stopFollowingClient: (() => void) | undefined
+  let connectionRevision = 0
 
   const route = (terminalId: string, viewId: string) => `${terminalId} ${viewId}`
   const tell = (terminals: readonly TerminalSummary[]) => {
@@ -108,68 +113,119 @@ export function terminalGateway(options: {
   }
   const warn = (what: string) => (error: unknown) =>
     console.warn(`A terminal ${what} was not taken`, error)
-
-  /** Says everything this window holds on the gateway again, on `client`. */
-  const restore = (client: TerminalClient) => {
-    if (followers.size > 0) void client.terminals.list().then(tell, warn("list"))
-    for (const view of views.values()) {
-      if (!view.fit) continue
-      const params = { terminalId: view.terminalId, viewId: view.viewId, ...view.fit }
-      void client.terminals
-        .attach(params)
-        .then(() => (view.focused ? client.terminals.focus(params) : undefined))
-        .catch(warn("view"))
-    }
+  const list = (client: TerminalClient) => {
+    const revision = connectionRevision
+    void client.terminals.list().then((entries) => {
+      if (bound === client && revision === connectionRevision) tell(entries)
+    }, warn("list"))
   }
 
-  /** The client, listened on once: a new one is listened on and told everything again. */
+  // The gateway runs requests side by side. Serialize view restoration with the
+  // writes that follow it, including keys and any fits measured during restoration.
+  let said: Promise<void> = Promise.resolve()
+  const queue = (what: string, act: () => Promise<void>) => {
+    said = said.then(act).catch(warn(what))
+  }
+
+  const restore = async (client: TerminalClient) => {
+    if (pendingRestore !== client) return
+    pendingRestore = null
+    const revision = connectionRevision
+    await Promise.all(
+      Array.from(views.values(), async (view) => {
+        if (!view.attachment || !view.fit) return
+        const id = { terminalId: view.terminalId, viewId: view.viewId }
+        try {
+          view.attachment = "requested"
+          await client.terminals.attach({ ...id, ...view.fit })
+          if (
+            revision === connectionRevision &&
+            focusedViews.get(view.terminalId) === view
+          ) {
+            await client.terminals.focus({ ...id, ...view.fit })
+          }
+        } catch (error) {
+          warn("view")(error)
+        }
+      }),
+    )
+  }
+
+  const scheduleRestore = (client: TerminalClient) => {
+    connectionRevision++
+    if (followers.size > 0) list(client)
+    pendingRestore = client
+    queue("restore", () => restore(client))
+  }
+
+  /** A client may arrive from a terminal operation or be adopted by the workspace first. */
+  const bind = (next: TerminalClient): TerminalClient => {
+    if (next === bound) return next
+    unbind?.()
+    bound = next
+    let lastStatus = "connected"
+    const stops = [
+      next.on("terminal.output", (output) => {
+        const view = views.get(route(output.terminalId, output.viewId))
+        if (!view) return
+        let message: TerminalProtocolMessage
+        try {
+          message = JSON.parse(output.message) as TerminalProtocolMessage
+        } catch {
+          return
+        }
+        for (const listener of view.listeners) listener(message)
+      }),
+      next.on("terminal.listed", (listed) => tell(listed.terminals)),
+      next.onConnectionStateChange((state) => {
+        // The client recovered its socket: the gateway's side is new.
+        if (state.status === "connected" && lastStatus !== "connected") {
+          scheduleRestore(next)
+        } else if (state.status !== "connected" && lastStatus === "connected") {
+          connectionRevision++
+          pendingRestore = null
+        }
+        lastStatus = state.status
+      }),
+    ]
+    unbind = () => stops.forEach((stop) => stop())
+    scheduleRestore(next)
+    return next
+  }
+
+  const followClient = () => {
+    stopFollowingClient ??= options.followClient?.(bind)
+  }
+
+  const stopFollowingIdleClient = () => {
+    if (views.size > 0 || followers.size > 0) return
+    stopFollowingClient?.()
+    stopFollowingClient = undefined
+  }
+
   const client = (): Promise<TerminalClient> => {
     binding ??= options
       .connected()
-      .then((next) => {
-        if (next === bound) return next
-        unbind?.()
-        bound = next
-        let lastStatus = "connected"
-        const stops = [
-          next.on("terminal.output", (output) => {
-            const view = views.get(route(output.terminalId, output.viewId))
-            if (!view) return
-            let message: TerminalProtocolMessage
-            try {
-              message = JSON.parse(output.message) as TerminalProtocolMessage
-            } catch {
-              return
-            }
-            for (const listener of view.listeners) listener(message)
-          }),
-          next.on("terminal.listed", (listed) => tell(listed.terminals)),
-          next.onConnectionStateChange((state) => {
-            // The client recovered its socket: the gateway's side is new.
-            if (state.status === "connected" && lastStatus !== "connected") restore(next)
-            lastStatus = state.status
-          }),
-        ]
-        unbind = () => stops.forEach((stop) => stop())
-        restore(next)
-        return next
-      })
+      .then(bind)
       .finally(() => {
         binding = null
       })
     return binding
   }
 
-  // One line for everything the window says about terminals, each waiting
-  // for the last one's answer: the gateway runs requests side by side, so
-  // two in flight can land in either order. Keys reach the shell in the
-  // order they were typed, and a view is attached before its first keys.
-  let said: Promise<void> = Promise.resolve()
-  const send = (what: string, act: (api: TerminalApi) => Promise<void>) => {
-    said = said
-      .then(() => client())
-      .then((current) => act(current.terminals))
-      .catch(warn(what))
+  const send = (
+    what: string,
+    act: (api: TerminalApi) => Promise<void>,
+    view?: LiveView,
+  ) => {
+    queue(what, async () => {
+      const current = await client().catch((error: unknown) => {
+        if (view && !view.attachment) view.attachment = "waiting-for-client"
+        throw error
+      })
+      await restore(current)
+      await act(current.terminals)
+    })
   }
 
   // Keys typed while earlier ones are still on their way go together, as
@@ -192,11 +248,15 @@ export function terminalGateway(options: {
 
   return {
     follow(onList) {
+      followClient()
       followers.add(onList)
       // A new follower on a bound client lists now; binding lists for it.
-      if (bound && !binding) void bound.terminals.list().then(tell, warn("list"))
+      if (bound && !binding) list(bound)
       else void client().catch(warn("list"))
-      return () => followers.delete(onList)
+      return () => {
+        followers.delete(onList)
+        stopFollowingIdleClient()
+      }
     },
     async open(request, requestId, fit) {
       let current: TerminalClient
@@ -221,12 +281,13 @@ export function terminalGateway(options: {
       }
     },
     view(terminalId): TerminalView {
+      followClient()
       const view: LiveView = {
         terminalId,
         viewId: options.newId(),
         listeners: new Set(),
         fit: null,
-        focused: false,
+        attachment: null,
       }
       const key = route(terminalId, view.viewId)
       views.set(key, view)
@@ -236,6 +297,10 @@ export function terminalGateway(options: {
         viewId: view.viewId,
         ...(view.fit as TerminalFit),
       })
+      const attach = (api: TerminalApi) => {
+        view.attachment = "requested"
+        return api.attach(params())
+      }
       return {
         subscribe(listener) {
           view.listeners.add(listener)
@@ -243,20 +308,31 @@ export function terminalGateway(options: {
         },
         fit(fit) {
           if (released) return
-          const first = view.fit === null
           view.fit = fit
-          send("view", (api) => (first ? api.attach(params()) : api.fit(params())))
+          send(
+            "view",
+            async (api) => {
+              if (released) return
+              if (view.attachment === "requested") await api.fit(params())
+              else await attach(api)
+            },
+            view,
+          )
         },
         focus(fit) {
           if (released) return
-          const first = view.fit === null
           view.fit = fit
-          view.focused = true
+          focusedViews.set(terminalId, view)
           // Focus names a view the gateway holds: a view not shown yet is attached first.
-          send("focus", async (api) => {
-            if (first) await api.attach(params())
-            await api.focus(params())
-          })
+          send(
+            "focus",
+            async (api) => {
+              if (released) return
+              if (view.attachment !== "requested") await attach(api)
+              if (!released) await api.focus(params())
+            },
+            view,
+          )
         },
         input(bytes) {
           if (!released) type(terminalId, bytes)
@@ -269,8 +345,12 @@ export function terminalGateway(options: {
           if (released) return
           released = true
           views.delete(key)
+          if (focusedViews.get(terminalId) === view) focusedViews.delete(terminalId)
           view.listeners.clear()
-          if (view.fit) send("release", (api) => api.detach(terminalId, view.viewId))
+          if (view.attachment === "requested") {
+            send("release", (api) => api.detach(terminalId, view.viewId))
+          }
+          stopFollowingIdleClient()
         },
       }
     },
