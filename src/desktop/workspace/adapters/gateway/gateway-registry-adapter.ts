@@ -20,6 +20,7 @@
  */
 import {
   NessaClient,
+  type AttachmentApi,
   type ConnectionState,
   type NessaClient as NessaClientType,
 } from "@nessa/client"
@@ -63,6 +64,7 @@ import type { ManagedChannelGateway } from "./multi-channel-gateway"
 
 export type RemoteClient = GatewayClient &
   TerminalClient & {
+    readonly attachments: AttachmentApi
     readonly productSession?: { readonly gatewayId: string }
     readonly connectionState?: ConnectionState
     onConnectionStateChange?(listener: (state: ConnectionState) => void): () => void
@@ -124,7 +126,7 @@ interface ManagedRemoteEntry {
   status: GatewayConnectionState
   detail?: string
   updatedAtMs: number
-  source: GatewaySource
+  source: GatewaySource<RemoteClient>
   terminals: TerminalSource
   channels: ChannelSource
   activeClient: RemoteClient | null
@@ -178,6 +180,7 @@ export type ManagedDesktopGateway = ManagedWorkspaceGateway &
 export interface DesktopGatewayRegistry extends GatewayRegistryPort {
   entries(): readonly ManagedDesktopGateway[]
   entry(gatewayId: string): ManagedDesktopGateway | undefined
+  remoteAttachmentApi(gatewayId: string): Promise<AttachmentApi>
   onTopologyChange(listener: () => void): () => void
 }
 
@@ -304,7 +307,7 @@ export function createGatewayRegistry(
           ? "Re-pair this gateway to reconnect."
           : undefined,
       updatedAtMs: options.now(),
-      source: undefined as unknown as GatewaySource,
+      source: undefined as unknown as GatewaySource<RemoteClient>,
       terminals: undefined as unknown as TerminalSource,
       channels: undefined as unknown as ChannelSource,
       activeClient: preconnected ?? null,
@@ -349,7 +352,7 @@ export function createGatewayRegistry(
       bindClientState(preconnected)
     }
 
-    const connect = async (): Promise<GatewayClient> => {
+    const connect = async (): Promise<RemoteClient> => {
       if (entry.disposed) {
         throw new GatewayRegistryError("offline", "Gateway was removed")
       }
@@ -420,7 +423,7 @@ export function createGatewayRegistry(
     })
     entry.source = source
     entry.terminals = terminalGateway({
-      connected: () => source.connected() as unknown as Promise<TerminalClient>,
+      connected: source.connected,
       newId,
     })
     entry.channels = channelGateway({
@@ -812,6 +815,18 @@ export function createGatewayRegistry(
         terminals: entry.terminals,
         channels: entry.channels,
       }
+    },
+
+    async remoteAttachmentApi(gatewayId) {
+      const entry = remotes.get(gatewayId)
+      if (!entry || entry.disposed || entry.status !== "connected") {
+        throw new GatewayRegistryError("offline", "Gateway is unavailable")
+      }
+      const client = await entry.source.connected()
+      if (entry.disposed || entry.status !== "connected") {
+        throw new GatewayRegistryError("offline", "Gateway is unavailable")
+      }
+      return client.attachments
     },
 
     onTopologyChange(listener: () => void) {

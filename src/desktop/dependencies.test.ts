@@ -18,7 +18,7 @@ import type {
   McpServersApi,
   PairingApi,
 } from "@nessa/client"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createDesktopDependencies } from "./dependencies"
 import { subagentsPluginId } from "./subagents"
 import {
@@ -29,7 +29,7 @@ import {
   WidgetRegistryError,
 } from "./widgets"
 import { deferred, fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
-import { sampleAppSession } from "./workspace"
+import { qualifyEntityId, sampleAppSession } from "./workspace"
 import { fakeSource } from "./workspace/testing"
 
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
@@ -381,6 +381,54 @@ function gatewayWithApp() {
 }
 
 describe("the window's workspace", () => {
+  it("reads held attachments from the conversation's owning gateway", async () => {
+    const local = fakeGateway()
+    const remote = fakeGateway()
+    const localBytes = new Blob(["local"])
+    const remoteBytes = new Blob(["remote"])
+    const localFetch = vi.fn(async () => localBytes)
+    const remoteFetch = vi.fn(async () => remoteBytes)
+    const { gatewayRegistry, heldFiles } = createDesktopDependencies({
+      gateway: async () => ({
+        ...local.client,
+        ...settingsParts,
+        mcpApps: {} as McpAppsApi,
+        attachments: { ...local.client.attachments, fetch: localFetch },
+      }),
+      gatewayStore: { read: () => [], write: () => {} },
+      connectRemote: async () => ({
+        ...remote.client,
+        productSession: { gatewayId: "cloud-1" },
+        attachments: { ...remote.client.attachments, fetch: remoteFetch },
+      }),
+    })
+    if (!gatewayRegistry) throw new Error("missing gateway registry")
+    await gatewayRegistry.add({
+      label: "Cloud Box",
+      url: "wss://cloud.example",
+      credential: "test",
+    })
+    const remoteConversation = qualifyEntityId("cloud-1", conversation)
+    const file = { digest: `sha256:${"a".repeat(64)}`, mimeType: "image/png", size: 6 }
+    const signal = new AbortController().signal
+    await expect(heldFiles(remoteConversation, file, signal)).resolves.toBe(remoteBytes)
+    expect(remoteFetch).toHaveBeenCalledExactlyOnceWith(conversation, file, { signal })
+    expect(localFetch).not.toHaveBeenCalled()
+    await expect(heldFiles(conversation, file, signal)).resolves.toBe(localBytes)
+    expect(localFetch).toHaveBeenCalledExactlyOnceWith(conversation, file, { signal })
+
+    remote.setState({ status: "closed", error: new Error("offline") })
+    await expect(heldFiles(remoteConversation, file, signal)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
+    await gatewayRegistry.remove("cloud-1")
+    await expect(heldFiles(remoteConversation, file, signal)).rejects.toMatchObject({
+      reason: "unavailable",
+    })
+    expect(remoteFetch).toHaveBeenCalledTimes(1)
+    expect(localFetch).toHaveBeenCalledTimes(1)
+  })
+
   it("is the gateway's when composition can connect to one, which it does on first need", async () => {
     const gateway = fakeGateway()
     let connects = 0

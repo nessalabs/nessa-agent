@@ -87,8 +87,6 @@ interface LiveView {
   readonly listeners: Set<(message: TerminalProtocolMessage) => void>
   /** The last fit; none until the view is first measured, so it is not attached. */
   fit: TerminalFit | null
-  /** Whether it took the keyboard last: said again on a new connection. */
-  focused: boolean
 }
 
 export function terminalGateway(options: {
@@ -96,6 +94,7 @@ export function terminalGateway(options: {
   readonly newId: () => string
 }): TerminalSource {
   const views = new Map<string, LiveView>()
+  const focusedViews = new Map<string, LiveView>()
   const followers = new Set<(terminals: readonly TerminalEntry[]) => void>()
   let bound: TerminalClient | null = null
   let unbind: (() => void) | null = null
@@ -117,7 +116,11 @@ export function terminalGateway(options: {
       const params = { terminalId: view.terminalId, viewId: view.viewId, ...view.fit }
       void client.terminals
         .attach(params)
-        .then(() => (view.focused ? client.terminals.focus(params) : undefined))
+        .then(() => {
+          if (focusedViews.get(view.terminalId) === view) {
+            return client.terminals.focus(params)
+          }
+        })
         .catch(warn("view"))
     }
   }
@@ -226,7 +229,6 @@ export function terminalGateway(options: {
         viewId: options.newId(),
         listeners: new Set(),
         fit: null,
-        focused: false,
       }
       const key = route(terminalId, view.viewId)
       views.set(key, view)
@@ -251,7 +253,7 @@ export function terminalGateway(options: {
           if (released) return
           const first = view.fit === null
           view.fit = fit
-          view.focused = true
+          focusedViews.set(terminalId, view)
           // Focus names a view the gateway holds: a view not shown yet is attached first.
           send("focus", async (api) => {
             if (first) await api.attach(params())
@@ -269,6 +271,7 @@ export function terminalGateway(options: {
           if (released) return
           released = true
           views.delete(key)
+          if (focusedViews.get(terminalId) === view) focusedViews.delete(terminalId)
           view.listeners.clear()
           if (view.fit) send("release", (api) => api.detach(terminalId, view.viewId))
         },

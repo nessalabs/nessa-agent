@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { NessaConnectionClosedError } from "@nessa/client"
 import type { TerminalProtocolMessage } from "../../application/ports"
 import type { TerminalEntry } from "../../model/terminal"
@@ -112,6 +112,34 @@ describe("the gateway's terminals", () => {
     expect(seen.length).toBeGreaterThan(before)
     expect(seen.at(-2)?.type).toBe("ready")
     view.release()
+  })
+
+  it("restores focus only to the last focused view after reconnect", async () => {
+    const { gateway, source } = setup()
+    const focus = vi.spyOn(gateway.client.terminals, "focus")
+    const opened = await source.open({ kind: "shell" }, "r1", { cols: 80, rows: 24 })
+    const first = source.view(opened.id)
+    const second = source.view(opened.id)
+    second.focus({ cols: 60, rows: 20 })
+    first.focus({ cols: 80, rows: 24 })
+    await drained()
+    focus.mockClear()
+
+    gateway.setState({
+      status: "reconnecting",
+      attempt: 1,
+      error: new NessaConnectionClosedError(1006, "closed"),
+    })
+    gateway.setState({ status: "connected" })
+    await settle()
+    expect(focus).toHaveBeenCalledExactlyOnceWith({
+      terminalId: opened.id,
+      viewId: "view-1",
+      cols: 80,
+      rows: 24,
+    })
+    first.release()
+    second.release()
   })
 
   it("say why a terminal did not open", async () => {
