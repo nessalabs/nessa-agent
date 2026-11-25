@@ -304,15 +304,16 @@ impl DirectoryStore for SqliteDirectoryStore {
             rows.collect::<Result<Vec<_>, _>>().map_err(store)?
         };
         if grants.is_empty() {
-            if let Some((stored_cause, stored_initiator, epoch)) = transaction
+            if let Some((stored_cause, stored_initiator, epoch, audit_done)) = transaction
                 .query_row(
-                    "SELECT cause, initiator, epoch FROM directory_open_audits WHERE resource_id = ?1",
+                    "SELECT cause, initiator, epoch, audit_done FROM directory_open_audits WHERE resource_id = ?1",
                     params![resource_id],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)? == 1,
                         ))
                     },
                 )
@@ -324,6 +325,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                     cause: stored_cause,
                     initiator: stored_initiator,
                     removed_now: false,
+                    audit_done,
                     epoch,
                 });
             }
@@ -338,6 +340,7 @@ impl DirectoryStore for SqliteDirectoryStore {
                 cause: cause.to_owned(),
                 initiator: initiator.to_owned(),
                 removed_now: true,
+                audit_done: false,
                 epoch: 1,
             });
         }
@@ -429,6 +432,7 @@ impl DirectoryStore for SqliteDirectoryStore {
             cause: cause.to_owned(),
             initiator: initiator.to_owned(),
             removed_now: true,
+            audit_done: false,
             epoch,
         })
     }

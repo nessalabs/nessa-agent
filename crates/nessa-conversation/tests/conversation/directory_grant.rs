@@ -2681,6 +2681,148 @@ fn a_file_where_the_directory_was_revokes_the_grant() {
 }
 
 #[test]
+fn sharing_a_stored_path_whose_directory_is_gone_or_a_file_revokes_the_grant() {
+    let root = private();
+    let missing = root.path().join("missing");
+    let replaced = root.path().join("replaced");
+    fs::create_dir(&missing).unwrap();
+    fs::create_dir(&replaced).unwrap();
+    fs::write(missing.join("note.txt"), b"hello").unwrap();
+    fs::write(replaced.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [30; BINDING_LEN],
+    );
+    let replaced_access = service(
+        Arc::new(LocalDirectoryFiles),
+        store.clone(),
+        Arc::new(RecordingAudit::new()),
+        [32; BINDING_LEN],
+    );
+    let gone = share_read(&access, missing.to_str().unwrap(), "peer");
+    fs::remove_dir_all(&missing).unwrap();
+    match access
+        .share(share_of(&gone.canonical_path, "peer"))
+        .unwrap_err()
+    {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "marker-missing"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&gone.resource_id)
+        .unwrap()
+        .is_empty());
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("note.txt"), b"hello").unwrap();
+    fs::write(missing.join(".nessa-binding"), [30; BINDING_LEN]).unwrap();
+    assert!(matches!(
+        access.read("peer", "note.txt").unwrap_err(),
+        DirectoryRefusal::NotFound
+    ));
+
+    let filed = share_read(&replaced_access, replaced.to_str().unwrap(), "other");
+    fs::remove_dir_all(&replaced).unwrap();
+    fs::write(&replaced, b"not a directory").unwrap();
+    match replaced_access
+        .share(share_of(&filed.canonical_path, "other"))
+        .unwrap_err()
+    {
+        DirectoryRefusal::MarkerMismatch { cause, .. } => assert_eq!(cause, "root-type"),
+        other => panic!("{other:?}"),
+    }
+    assert!(store
+        .grants_for_resource(&filed.resource_id)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_completed_mismatch_is_not_audited_again() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [31; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "peer");
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    match access.read("peer", "note.txt").unwrap_err() {
+        DirectoryRefusal::MarkerMismatch {
+            cause,
+            audit_recorded,
+        } => {
+            assert_eq!(cause, "marker-missing");
+            assert!(audit_recorded);
+        }
+        other => panic!("{other:?}"),
+    }
+    let first = audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.cause == "marker-missing")
+        .count();
+    assert_eq!(first, 1);
+    match access
+        .share(share_of(&granted.canonical_path, "peer"))
+        .unwrap_err()
+    {
+        DirectoryRefusal::MarkerMismatch {
+            cause,
+            audit_recorded,
+        } => {
+            assert_eq!(cause, "marker-missing");
+            assert!(audit_recorded);
+        }
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = true;
+    match access
+        .share(share_of(&granted.canonical_path, "peer"))
+        .unwrap_err()
+    {
+        DirectoryRefusal::MarkerMismatch { audit_recorded, .. } => assert!(audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        audit
+            .lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line.cause == "marker-missing")
+            .count(),
+        1
+    );
+}
+
+fn share_of(path: &str, subject: &str) -> ShareDirectory {
+    ShareDirectory {
+        environment: "local".into(),
+        path: path.into(),
+        subject: DirectorySubject {
+            principal_id: Some(subject.into()),
+            receiver_id: None,
+        },
+        capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+        rules: crate::domain::CommandRules::none(),
+        initiator: "owner".into(),
+    }
+}
+
+#[test]
 fn a_short_orphan_marker_is_audited_and_left_in_place() {
     let root = private();
     let shared = root.path().join("shared");

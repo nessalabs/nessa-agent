@@ -17,12 +17,14 @@ impl DirectoryFiles for LocalDirectoryFiles {
     fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal> {
         let absolute = absolute(path)?;
         let resolved = std::fs::canonicalize(&absolute).map_err(io)?;
-        let text = resolved
+        resolved
             .to_str()
-            .ok_or(DirectoryRefusal::Io(std::io::ErrorKind::InvalidData))?
-            .to_owned();
-        let _root = open_directory(&text)?;
-        Ok(text)
+            .map(str::to_owned)
+            .ok_or(DirectoryRefusal::Io(std::io::ErrorKind::InvalidData))
+    }
+
+    fn absolute_spelling(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        absolute(path)
     }
 
     fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal> {

@@ -144,6 +144,16 @@ enum RefusalKind {
     Capability,
 }
 
+/// A missing root, or a root that is no longer a directory. Anything else,
+/// including a permission or a busy filesystem, is not this fact.
+fn root_refusal_cause(error: &DirectoryRefusal) -> Option<&'static str> {
+    match error {
+        DirectoryRefusal::Io(std::io::ErrorKind::NotFound) => Some("marker-missing"),
+        DirectoryRefusal::Io(std::io::ErrorKind::NotADirectory) => Some("root-type"),
+        _ => None,
+    }
+}
+
 fn audit_note(recorded: bool) -> &'static str {
     if recorded {
         ""
@@ -248,6 +258,10 @@ pub trait DirectorySession: Send {
 pub trait DirectoryFiles: Send + Sync {
     /// The canonical directory, opened no-follow.
     fn canonicalize(&self, path: &str) -> Result<String, DirectoryRefusal>;
+    /// The absolute spelling of `path`, without requiring the directory to exist.
+    fn absolute_spelling(&self, path: &str) -> Result<String, DirectoryRefusal> {
+        Ok(path.to_owned())
+    }
     /// The marker, stopping at 33 bytes.
     fn read_marker(&self, canonical: &str) -> Result<MarkerBytes, DirectoryRefusal>;
     /// Create the marker exclusively with these bytes.
@@ -424,6 +438,8 @@ pub struct RevokeMismatch {
     pub initiator: String,
     /// Whether this call wrote the revoke.
     pub removed_now: bool,
+    /// The sink already accepted this revocation's audit.
+    pub audit_done: bool,
     /// The revocation this call observed. An acknowledgement names this epoch.
     pub epoch: i64,
 }
@@ -629,7 +645,14 @@ impl DirectoryAccess {
     /// Share one directory with one subject.
     pub fn share(&self, request: ShareDirectory) -> Result<SharedDirectory, DirectoryRefusal> {
         let owed = self.reconcile().err();
-        let canonical = self.files.canonicalize(&request.path)?;
+        let canonical = match self.files.canonicalize(&request.path) {
+            Ok(path) => path,
+            Err(error) => {
+                let _shared = self.store.share_lock()?;
+                let _lease = self.lease(&request.environment, &request.path);
+                return self.share_unusable_root(&request, &request.path, error);
+            }
+        };
         encoded_grant(
             &request.environment,
             &canonical,
@@ -640,7 +663,11 @@ impl DirectoryAccess {
         let _shared = self.store.share_lock()?;
         let _lease = self.lease(&request.environment, &canonical);
         self.finish_cleanup_held(&request.environment, &canonical)?;
-        match self.files.read_marker(&canonical)? {
+        let marker = match self.files.read_marker(&canonical) {
+            Ok(marker) => marker,
+            Err(error) => return self.share_unusable_root(&request, &canonical, error),
+        };
+        match marker {
             MarkerBytes::Other => self.refuse_sized_marker(&request, &canonical),
             MarkerBytes::Exact(bytes) => self.share_existing(request, canonical, bytes, owed),
             MarkerBytes::Absent => {
@@ -675,6 +702,45 @@ impl DirectoryAccess {
             return self.mismatch(&resource, cause, &request.initiator);
         }
         Err(bare)
+    }
+
+    /// The stored root is gone or is no longer a directory. One decision for
+    /// share, read, write, and exec: revoke when a resource is stored there,
+    /// and leave a transient I/O error when it is not that fact.
+    fn share_unusable_root(
+        &self,
+        request: &ShareDirectory,
+        path: &str,
+        error: DirectoryRefusal,
+    ) -> Result<SharedDirectory, DirectoryRefusal> {
+        if root_refusal_cause(&error).is_none() {
+            return Err(error);
+        }
+        let spelled = self
+            .files
+            .absolute_spelling(path)
+            .unwrap_or_else(|_| path.to_owned());
+        for candidate in [path, spelled.as_str()] {
+            if let Some(resource) = self.store.resource_at(&request.environment, candidate)? {
+                return Err(self.revoked_root(&resource, error, &request.initiator));
+            }
+        }
+        Err(error)
+    }
+
+    /// Revoke `resource` when `error` means its root is not a usable directory.
+    /// Any other error is returned as it is.
+    fn revoked_root(
+        &self,
+        resource: &StoredDirectoryResource,
+        error: DirectoryRefusal,
+        initiator: &str,
+    ) -> DirectoryRefusal {
+        let Some(cause) = root_refusal_cause(&error) else {
+            return error;
+        };
+        self.mismatch(resource, cause, initiator)
+            .expect_err("a missing or non-directory root revokes its grants")
     }
 
     /// An orphan marker that is not 32 bytes is refused and left in place.
@@ -999,19 +1065,7 @@ impl DirectoryAccess {
     ) -> Result<Box<dyn DirectorySession>, DirectoryRefusal> {
         match self.files.open_session(&resource.canonical_path) {
             Ok(session) => Ok(session),
-            Err(DirectoryRefusal::Io(
-                kind @ (std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory),
-            )) => {
-                let cause = if kind == std::io::ErrorKind::NotADirectory {
-                    "root-type"
-                } else {
-                    "marker-missing"
-                };
-                Err(self
-                    .mismatch(resource, cause, initiator)
-                    .expect_err("a missing or non-directory root revokes its grants"))
-            }
-            Err(error) => Err(error),
+            Err(error) => Err(self.revoked_root(resource, error, initiator)),
         }
     }
 
@@ -1166,6 +1220,12 @@ impl DirectoryAccess {
         let revoked = self
             .store
             .revoke_mismatch(&resource.resource_id, cause, initiator)?;
+        if !revoked.removed_now && revoked.audit_done {
+            return Err(DirectoryRefusal::MarkerMismatch {
+                cause: revoked.cause,
+                audit_recorded: true,
+            });
+        }
         let recorded = self
             .audit
             .record(&DirectoryAuditRecord {
