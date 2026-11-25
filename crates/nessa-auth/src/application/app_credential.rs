@@ -143,11 +143,19 @@ pub trait AppCredentials: Send + Sync {
 mod tests {
     use super::*;
     use crate::{
-        application::dto::CredentialTransitionDto,
-        domain::{
-            Credential, CredentialTransition, Membership, MembershipId, MembershipRole,
-            MembershipStatus, TransitionCause,
+        application::{
+            dto::CredentialTransitionDto,
+            ports::{Clock, Decision, PolicyEvaluator},
+            session::{AuthenticateAppSession, ReadCurrentAppSession},
         },
+        domain::{
+            Action, AuthContext, Credential, CredentialTransition, Membership, MembershipId,
+            MembershipRole, MembershipStatus, Resource, TransitionCause,
+        },
+    };
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
     };
 
     fn fixture(id: &str, receipt: Option<&str>, app: &str) -> (AccessSnapshot, ApprovedAppIssue) {
@@ -203,6 +211,130 @@ mod tests {
             origin,
         };
         (snapshot, approval)
+    }
+
+    struct Snapshots<'a> {
+        entry: &'a AppCredentialSnapshot,
+        current: &'a AppCredentialSnapshot,
+    }
+
+    fn copy_snapshot(snapshot: &AppCredentialSnapshot) -> AppCredentialSnapshot {
+        AppCredentialSnapshot {
+            access: snapshot.access.clone(),
+            binding: snapshot.binding.clone(),
+        }
+    }
+
+    impl AppCredentials for Snapshots<'_> {
+        fn verify_app<'a>(
+            &'a self,
+            _: &'a CredentialEvidence,
+            _: &'a AudienceId,
+        ) -> PortFuture<'a, AppCredentialSnapshot> {
+            Box::pin(async { Ok(copy_snapshot(self.entry)) })
+        }
+
+        fn read_app<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AppCredentialSnapshot> {
+            Box::pin(async move {
+                assert_eq!(id, self.entry.access.credential.id());
+                Ok(copy_snapshot(self.current))
+            })
+        }
+    }
+
+    struct AppEntry;
+    impl PolicyEvaluator for AppEntry {
+        fn evaluate(
+            &self,
+            _: &AuthContext,
+            action: &Action,
+            _: &Resource,
+            _: &AccessSnapshot,
+        ) -> Result<Decision, AccessError> {
+            assert_eq!(action.as_str(), "appCredential.enter");
+            Ok(Decision::Allow)
+        }
+    }
+
+    struct TestTime;
+    impl Clock for TestTime {
+        fn unix_milliseconds(&self) -> u64 {
+            15_000
+        }
+    }
+
+    fn ready<T>(future: impl Future<Output = T>) -> T {
+        match std::pin::pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("synthetic snapshots must finish without waiting"),
+        }
+    }
+
+    #[test]
+    fn current_app_session_refuses_each_change_to_the_admitted_binding() {
+        let snapshot = |receipt: &str, app: &str, operation: AppCapability, revision| {
+            let (mut access, mut approval) = fixture("fixture", Some(receipt), app);
+            access.revision = revision;
+            approval.capabilities = AppCapabilities::new(operation, &[]);
+            // Each pair is internally valid at its own revision. Only the
+            // admitted session's original facts distinguish the fresh cases.
+            let binding = AppCredentialBinding::lookup(&access, Some(&approval)).unwrap();
+            AppCredentialSnapshot { access, binding }
+        };
+        let initial = snapshot("approval", "notebook", AppCapability::Read, 2);
+        let original = Snapshots {
+            entry: &initial,
+            current: &initial,
+        };
+        let session = ready(
+            AuthenticateAppSession {
+                credentials: &original,
+                clock: &TestTime,
+                policy: &AppEntry,
+            }
+            .execute(
+                &CredentialEvidence::new(b"synthetic-app-proof".to_vec()).unwrap(),
+                initial.access.credential.audience_id(),
+            ),
+        )
+        .unwrap();
+        let reread = |current: &AppCredentialSnapshot| {
+            let supplied = Snapshots {
+                entry: &initial,
+                current,
+            };
+            ready(
+                ReadCurrentAppSession {
+                    credentials: &supplied,
+                    clock: &TestTime,
+                }
+                .execute(&session),
+            )
+        };
+        let unchanged = snapshot("approval", "notebook", AppCapability::Read, 3);
+        assert_eq!(reread(&unchanged), Ok(initial.binding.clone()));
+        for (field, fresh) in [
+            (
+                "origin",
+                snapshot("other-approval", "notebook", AppCapability::Read, 3),
+            ),
+            (
+                "namespace",
+                snapshot("approval", "calendar", AppCapability::Read, 3),
+            ),
+            (
+                "capabilities",
+                snapshot("approval", "notebook", AppCapability::List, 3),
+            ),
+        ] {
+            assert_eq!(
+                reread(&fresh),
+                Err(AccessError::IdentityMismatch),
+                "{field}"
+            );
+        }
+        let stale = snapshot("approval", "calendar", AppCapability::Read, 1);
+        assert_eq!(reread(&stale), Err(AccessError::StaleRevision));
     }
 
     #[test]
