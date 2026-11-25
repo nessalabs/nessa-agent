@@ -230,3 +230,75 @@ fn the_surface_wait_outlasts_an_archive_install() {
     assert!(budget >= Duration::from_millis(233_000));
     assert!(budget >= Duration::from_millis(300_000 + 60_000));
 }
+
+#[test]
+fn nessa_mcp_serves_drive_nessa_skill_with_verified_manifest() {
+    use nessa_sdk::domain::mcp_skills::{SkillFileUri, EXTENSION};
+
+    let input = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"skills/list","params":{}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":3,"method":"skills/get","params":{"uri":"skill://drive-nessa/SKILL.md"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"skill://drive-nessa/SKILL.md"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":5,"method":"resources/directory/read","params":{"uri":"skill://drive-nessa/references"}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":6,"method":"skills/get","params":{"uri":"skill://missing/SKILL.md"}}"#,
+        "\n",
+    );
+    let mut gateway = recording(Ok(json!({})));
+    let mut output = Vec::new();
+    serve_mcp(&mut gateway, Cursor::new(input), &mut output).unwrap();
+    let replies: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 6);
+
+    // 1. initialize advertises 2026-07-28, resources, and io.modelcontextprotocol/skills.
+    assert_eq!(replies[0]["result"]["protocolVersion"], "2026-07-28");
+    assert_eq!(
+        replies[0]["result"]["capabilities"]["extensions"][EXTENSION]["directoryRead"],
+        json!(true)
+    );
+    assert!(replies[0]["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("skill://drive-nessa/SKILL.md"));
+
+    // 2. skills/list returns drive-nessa with complete manifest.
+    assert_eq!(
+        replies[1]["result"]["skills"][0]["uri"],
+        "skill://drive-nessa/SKILL.md"
+    );
+    assert_eq!(replies[1]["result"]["resultType"], "complete");
+
+    // 3. skills/get matches skills/list.
+    assert_eq!(
+        replies[2]["result"]["skill"],
+        replies[1]["result"]["skills"][0]
+    );
+
+    // 4. resources/read returns SKILL.md bytes that verify against the catalog entry.
+    let skill_text = replies[3]["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap();
+    let entry = crate::cli::application::skills()
+        .get("skill://drive-nessa/SKILL.md")
+        .unwrap();
+    entry
+        .verify_file(&SkillFileUri::from(entry.uri()), skill_text.as_bytes())
+        .expect("served SKILL.md matches its manifest digest and frontmatter");
+
+    // 5. resources/directory/read lists the supporting references.
+    let refs = replies[4]["result"]["resources"].as_array().unwrap();
+    assert_eq!(refs.len(), 2);
+
+    // 6. Unknown skill URI returns JSON-RPC -32602.
+    assert_eq!(replies[5]["error"]["code"], -32602);
+    assert!(gateway.calls.is_empty());
+}

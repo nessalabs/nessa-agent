@@ -132,6 +132,28 @@ export const probes = [
       ),
   },
   {
+    document: "mcp-skills",
+    name: "Deliver a skill without verifying manifest approval",
+    expectedRules: ["LoadedMatchesRetainedAndApproved"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        "    /\\ approvedRev = retainedRev\n    /\\ serverRev = retainedRev",
+        "    /\\ serverRev = retainedRev",
+      ),
+  },
+  {
+    document: "mcp-skills",
+    name: "Call resources/directory/read without directoryRead capability",
+    expectedRules: ["NoDirReadWithoutCapability"],
+    mutate: (spec) =>
+      replaceExactlyOnce(
+        spec,
+        "ReadDirectory ==\n    /\\ capSkills\n    /\\ capDirRead\n    /\\ dirReadDone' = TRUE",
+        "ReadDirectory ==\n    /\\ capSkills\n    /\\ dirReadDone' = TRUE",
+      ),
+  },
+  {
     document: "storage-publication",
     name: "Remove an origin reservation replaced by a newer identity",
     expectedRules: ["NoNewerRemoval"],
