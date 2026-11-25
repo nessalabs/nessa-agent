@@ -4,7 +4,6 @@ use super::{
     ReadStop, ReaderAccess, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
     HANDSHAKE_MS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
-use crate::protected::DeadlineStream;
 use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
 use nessa_protocol::{
@@ -71,12 +70,12 @@ impl<S: RecordSource> RecordSource for PageCutSource<'_, S> {
     }
 }
 
-struct RecordIo<'a> {
-    transport: NativeTransport<DeadlineStream>,
+struct RecordIo<'a, S: Read + Write> {
+    transport: NativeTransport<S>,
     interrupt: Arc<dyn SessionInterrupt>,
     cut: Option<&'a Cell<CutState>>,
 }
-impl Read for RecordIo<'_> {
+impl<S: Read + Write> Read for RecordIo<'_, S> {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         if !bytes.is_empty() {
             if let Some(cut) = self.cut {
@@ -107,7 +106,7 @@ impl Read for RecordIo<'_> {
         self.transport.read(bytes)
     }
 }
-impl Write for RecordIo<'_> {
+impl<S: Read + Write> Write for RecordIo<'_, S> {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         self.transport.write(bytes)
     }
@@ -115,7 +114,7 @@ impl Write for RecordIo<'_> {
         self.transport.flush()
     }
 }
-impl InterruptibleSessionIo for RecordIo<'_> {
+impl<S: Read + Write> InterruptibleSessionIo for RecordIo<'_, S> {
     fn interrupt_handle(&self) -> Arc<dyn SessionInterrupt> {
         self.interrupt.clone()
     }
@@ -232,6 +231,15 @@ impl RetainedCache {
                 .ok_or(ReadFailure::Protocol)?,
             cut,
         };
+        self.page_on_selected_carrier(scope, io)
+    }
+
+    fn page_on_selected_carrier<S: Read + Write>(
+        &mut self,
+        scope: &Scope,
+        io: RecordIo<'_, S>,
+    ) -> Result<(u64, usize), ReadFailure> {
+        let cut = io.cut;
         let session = CapabilityRecordSession::connect(
             io,
             scope.clone(),
