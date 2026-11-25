@@ -5,7 +5,7 @@
 //! value does not check Cedar policy, verify a secret, or admit a session.
 use super::{
     origin::CredentialOrigin,
-    ports::{AccessError, AccessSnapshot},
+    ports::{AccessError, AccessSnapshot, CredentialEvidence, PortFuture},
 };
 use crate::domain::{
     AudienceId, CredentialId, ExtensionAppId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
@@ -116,6 +116,26 @@ impl AppCredentialBinding {
     pub fn capabilities(&self) -> &AppCapabilities {
         &self.capabilities
     }
+}
+
+/// Current access and approved app scope read from one committed revision.
+pub struct AppCredentialSnapshot {
+    pub(crate) access: AccessSnapshot,
+    pub(crate) binding: AppCredentialBinding,
+}
+
+/// App proof and revalidation, owned by the existing credential registry.
+pub trait AppCredentials: Send + Sync {
+    fn verify_app<'a>(
+        &'a self,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, AppCredentialSnapshot>;
+
+    fn read_app<'a>(
+        &'a self,
+        credential: &'a CredentialId,
+    ) -> PortFuture<'a, AppCredentialSnapshot>;
 }
 
 #[cfg(test)]

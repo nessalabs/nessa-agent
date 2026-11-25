@@ -151,6 +151,21 @@
           }
         }
       },
+      "appCredential.enter": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
       "conversation.read": {
         "appliesTo": {
           "principalTypes": [
