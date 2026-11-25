@@ -104,15 +104,6 @@ const choose = async (group: string, label: string) => {
   if (!option) throw new Error(`no ${label} in ${group}`)
   await click(option)
 }
-const type = async (input: HTMLInputElement, value: string) => {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
-      input,
-      value,
-    )
-    input.dispatchEvent(new Event("input", { bubbles: true }))
-  })
-}
 const submit = () => find<HTMLButtonElement>('[data-share-action="submit"]')
 const within = (scope: HTMLElement, selector: string) => {
   const found = scope.querySelector<HTMLElement>(selector)
