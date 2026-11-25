@@ -479,14 +479,14 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menuPanels') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menuPanels 1 --evidence "$STRESS_EVIDENCE/menu-panel-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-panel-webkit.log"
         timeout-minutes: 10
-      # Devices ships in WKWebView too: its titlebar's free room takes the
-      # press that moves the window, and its corner shows no "nessa Studio".
-      - name: Run the devices stress step in WebKit
+      # A linked gateway can act under its own grant, and the owner sees
+      # the note and turn in WebKit. Verify both audited uses of the grant.
+      - name: Run the linked peer stress step in WebKit
         shell: bash
         run: |
           set -o pipefail
-          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'devices') console.log('--' + k + '\n0')")
-          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --devices 1 --evidence "$STRESS_EVIDENCE/devices-webkit" 2>&1 | tee "$STRESS_EVIDENCE/devices-webkit.log"
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'peers') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --only peer --peers 1 --evidence "$STRESS_EVIDENCE/peer-webkit" --out "$STRESS_EVIDENCE/peer-webkit.json" 2>&1 | tee "$STRESS_EVIDENCE/peer-webkit.log"
         timeout-minutes: 10
       # The window's menus ship in WKWebView too: row height, icons, the
       # check before its number, and picking a filter choice by its number.
