@@ -2808,6 +2808,240 @@ fn a_completed_mismatch_is_not_audited_again() {
     );
 }
 
+struct Granted {
+    _root: tempfile::TempDir,
+    _store: tempfile::TempDir,
+    access: DirectoryAccess,
+    canonical: String,
+}
+
+fn read_and_write() -> Granted {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let store =
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        store,
+        Arc::new(RecordingAudit::new()),
+        [33; BINDING_LEN],
+    );
+    let granted = share_read(&access, shared.to_str().unwrap(), "writer");
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: granted.canonical_path.clone(),
+            subject: DirectorySubject {
+                principal_id: Some("reader".into()),
+                receiver_id: None,
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names(["read"]).unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    Granted {
+        _root: root,
+        _store: store_dir,
+        access,
+        canonical: granted.canonical_path,
+    }
+}
+
+fn review(access: &DirectoryAccess, subject: &str, name: &str, json: &str) -> Option<String> {
+    super::super::drive_tools::review_directory_tool(access, subject, name, json)
+}
+
+fn json_path(key: &str, path: &str) -> String {
+    serde_json::json!({ key: path }).to_string()
+}
+
+#[test]
+fn a_directory_grant_admits_a_read_of_a_file_inside() {
+    let granted = read_and_write();
+    let path = format!("{}/note.txt", granted.canonical);
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Read",
+        &json_path("file_path", &path)
+    )
+    .is_none());
+}
+
+#[test]
+fn a_directory_grant_refuses_a_read_of_the_marker_and_of_a_path_outside() {
+    let granted = read_and_write();
+    let marker = format!("{}/.nessa-binding", granted.canonical);
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Read",
+        &json_path("file_path", &marker)
+    )
+    .is_some());
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Read",
+        &json_path("file_path", "/etc/passwd")
+    )
+    .is_some());
+}
+
+#[test]
+fn a_directory_grant_admits_a_write_inside_and_refuses_it_for_a_read_only_grant() {
+    let granted = read_and_write();
+    let path = format!("{}/note.txt", granted.canonical);
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Write",
+        &json_path("file_path", &path)
+    )
+    .is_none());
+    assert!(review(
+        &granted.access,
+        "reader",
+        "Write",
+        &json_path("file_path", &path)
+    )
+    .is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_an_edit_path() {
+    let granted = read_and_write();
+    let path = format!("{}/note.txt", granted.canonical);
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Edit",
+        &json_path("file_path", &path)
+    )
+    .is_none());
+    assert!(review(
+        &granted.access,
+        "reader",
+        "Edit",
+        &json_path("file_path", &path)
+    )
+    .is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_every_multiedit_path() {
+    let granted = read_and_write();
+    let inside = format!("{}/note.txt", granted.canonical);
+    let both = serde_json::json!({"edits":[{"file_path": inside}, {"file_path": "/etc/passwd"}]})
+        .to_string();
+    assert!(review(&granted.access, "writer", "MultiEdit", &both).is_some());
+    let only = serde_json::json!({"edits":[{"file_path": inside}]}).to_string();
+    assert!(review(&granted.access, "writer", "MultiEdit", &only).is_none());
+}
+
+#[test]
+fn a_directory_grant_checks_a_notebook_path() {
+    let granted = read_and_write();
+    let path = format!("{}/note.ipynb", granted.canonical);
+    assert!(review(
+        &granted.access,
+        "writer",
+        "NotebookEdit",
+        &json_path("notebook_path", &path)
+    )
+    .is_none());
+    assert!(review(
+        &granted.access,
+        "writer",
+        "NotebookEdit",
+        &json_path("notebook_path", "/etc/passwd")
+    )
+    .is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_a_glob_path_and_refuses_one_that_names_none() {
+    let granted = read_and_write();
+    assert!(review(
+        &granted.access,
+        "writer",
+        "Glob",
+        &json_path("path", &granted.canonical)
+    )
+    .is_none());
+    assert!(review(&granted.access, "writer", "Glob", r#"{"pattern":"*.rs"}"#).is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_a_grep_path() {
+    let granted = read_and_write();
+    let body = serde_json::json!({"pattern": "hello", "path": granted.canonical}).to_string();
+    assert!(review(&granted.access, "writer", "Grep", &body).is_none());
+    assert!(review(&granted.access, "writer", "Grep", r#"{"pattern":"hello"}"#).is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_an_ls_path() {
+    let granted = read_and_write();
+    assert!(review(
+        &granted.access,
+        "writer",
+        "LS",
+        &json_path("path", &granted.canonical)
+    )
+    .is_none());
+    assert!(review(&granted.access, "writer", "LS", "{}").is_some());
+}
+
+#[test]
+fn a_directory_grant_checks_paths_in_an_apply_patch() {
+    let granted = read_and_write();
+    let inside = format!("{}/note.txt", granted.canonical);
+    let input = format!("*** Begin Patch\n*** Update File: {inside}\n*** End Patch");
+    let body = serde_json::json!({"input": input}).to_string();
+    assert!(review(&granted.access, "writer", "apply_patch", &body).is_none());
+    assert!(review(
+        &granted.access,
+        "writer",
+        "apply_patch",
+        r#"{"input":"*** Update File: /etc/passwd"}"#
+    )
+    .is_some());
+    assert!(review(&granted.access, "reader", "apply_patch", &body).is_some());
+}
+
+#[test]
+fn a_directory_grant_still_checks_a_command() {
+    let granted = read_and_write();
+    assert!(review(&granted.access, "writer", "Bash", r#"{"command":"ls -l"}"#).is_some());
+}
+
+#[test]
+fn a_directory_grant_refuses_an_unknown_tool() {
+    let granted = read_and_write();
+    let refused = review(
+        &granted.access,
+        "writer",
+        "WebFetch",
+        r#"{"url":"https://example.test"}"#,
+    );
+    assert_eq!(
+        refused.as_deref(),
+        Some("the tool is not admitted for this directory")
+    );
+    assert!(review(
+        &granted.access,
+        "stranger",
+        "WebFetch",
+        r#"{"url":"https://example.test"}"#
+    )
+    .is_none());
+}
+
 fn share_of(path: &str, subject: &str) -> ShareDirectory {
     ShareDirectory {
         environment: "local".into(),

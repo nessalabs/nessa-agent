@@ -38,7 +38,11 @@
 //! Only a call the agent asks about is a call this checks. In Ask mode
 //! Claude reads files and Codex runs commands inside its read-only, offline
 //! sandbox without asking: no policy takes those away, and a deny pattern
-//! naming a read tool does not stop them.
+//! naming a read tool does not stop them. A directory grant is the exception.
+//! Its turn is default-deny: a command is checked as a command, and a native
+//! file or search tool is checked against the directory boundary. A tool
+//! shape that is neither is refused. A call the harness makes without asking
+//! is still recorded afterwards, not admitted here.
 //!
 //! The owner's turns are never checked here, and a missing or unreadable
 //! policy refuses the call: nothing stands in for an answer the grant journal
@@ -314,9 +318,24 @@ fn directory_command(
     call: &ProposedToolCall<'_>,
 ) -> Option<String> {
     let directory = hook.directory.get()?;
-    match command_arguments(call.arguments_json()) {
-        ParsedCommand::Skip => None,
-        ParsedCommand::Unsafe(command) => {
+    review_directory_tool(directory, subject, call.name(), call.arguments_json())
+}
+
+/// Why a directory-granted tool review was refused, or `None` when it may run.
+/// A subject with no directory grant is unchanged. A subject with one is
+/// default-deny: a command is admitted as a command, a file or search tool is
+/// admitted only for paths inside the directory, and every other shape is refused.
+pub(crate) fn review_directory_tool(
+    directory: &super::DirectoryAccess,
+    subject: &str,
+    name: &str,
+    json: &str,
+) -> Option<String> {
+    match tool_shape(name, json) {
+        ToolShape::Command(ParsedCommand::Skip) | ToolShape::Unknown => {
+            deny_unknown(directory, subject)
+        }
+        ToolShape::Command(ParsedCommand::Unsafe(command)) => {
             if let Err(error) = directory.admit_shell(subject, &command, SandboxKind::None, &[]) {
                 return Some(error.to_string());
             }
@@ -326,13 +345,227 @@ fn directory_command(
                 Err(error) => Some(error.to_string()),
             }
         }
-        ParsedCommand::Run { program, arguments } => {
+        ToolShape::Command(ParsedCommand::Run { program, arguments }) => {
             match directory.admit_execution(subject, &program, &arguments, SandboxKind::None, &[]) {
                 Ok(()) => None,
                 Err(error) => Some(error.to_string()),
             }
         }
+        ToolShape::Files { capability, paths } => {
+            if paths.is_empty() {
+                return deny_unbounded(directory, subject);
+            }
+            for path in paths {
+                if let Err(error) = directory.admit_path(subject, &path, capability) {
+                    return Some(error.to_string());
+                }
+            }
+            None
+        }
+        ToolShape::Unbounded => deny_unbounded(directory, subject),
     }
+}
+
+fn deny_unknown(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
+    match directory.subject_has_directory(subject) {
+        Ok(false) => None,
+        Ok(true) => Some("the tool is not admitted for this directory".to_owned()),
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+fn deny_unbounded(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
+    match directory.subject_has_directory(subject) {
+        Ok(false) => None,
+        Ok(true) => Some("the tool does not name a path inside the directory".to_owned()),
+        Err(error) => Some(error.to_string()),
+    }
+}
+
+/// A review a directory grant can check, or a shape it cannot.
+enum ToolShape {
+    Command(ParsedCommand),
+    /// Each path is checked for `capability` (`read` or `write`).
+    Files {
+        capability: &'static str,
+        paths: Vec<String>,
+    },
+    /// A file or search tool that names no path, so the boundary cannot be checked.
+    Unbounded,
+    /// Not a command and not a file tool.
+    Unknown,
+}
+
+fn tool_shape(name: &str, json: &str) -> ToolShape {
+    let Some(value) = argument_object(json) else {
+        return ToolShape::Unknown;
+    };
+    if name != "apply_patch" && (value.get("argv").is_some() || value.get("command").is_some()) {
+        return ToolShape::Command(command_from_value(&value, json));
+    }
+    match name {
+        "Read" => files("read", file_path(&value)),
+        "Write" | "Edit" => files("write", file_path(&value)),
+        "NotebookEdit" => files("write", notebook_path(&value)),
+        "MultiEdit" => files("write", edit_paths(&value)),
+        "Glob" | "Grep" | "LS" => files("read", search_path(&value)),
+        "apply_patch" => files("write", patch_paths(&value)),
+        _ => {
+            if let Some(path) = text_at(&value, "file_path") {
+                ToolShape::Files {
+                    capability: "write",
+                    paths: vec![path],
+                }
+            } else if let Some(paths) = string_list(value.get("paths")) {
+                files("write", paths)
+            } else {
+                ToolShape::Unknown
+            }
+        }
+    }
+}
+
+fn files(capability: &'static str, paths: Vec<String>) -> ToolShape {
+    if paths.is_empty() {
+        ToolShape::Unbounded
+    } else {
+        ToolShape::Files { capability, paths }
+    }
+}
+
+fn argument_object(json: &str) -> Option<serde_json::Value> {
+    let value = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    if value.get("arguments").is_some()
+        && value.get("command").is_none()
+        && value.get("argv").is_none()
+        && value.get("file_path").is_none()
+    {
+        return value
+            .get("arguments")
+            .cloned()
+            .filter(|item| item.is_object());
+    }
+    Some(value)
+}
+
+fn command_from_value(value: &serde_json::Value, json: &str) -> ParsedCommand {
+    if let Some(argv) = value.get("argv").and_then(|item| item.as_array()) {
+        let mut parts = Vec::new();
+        for item in argv {
+            let Some(text) = item.as_str() else {
+                return ParsedCommand::Unsafe(json.to_owned());
+            };
+            parts.push(text.to_owned());
+        }
+        let Some(program) = parts.first().cloned() else {
+            return ParsedCommand::Unsafe(json.to_owned());
+        };
+        return ParsedCommand::Run {
+            program,
+            arguments: parts.into_iter().skip(1).collect(),
+        };
+    }
+    let Some(command) = value.get("command").and_then(|item| item.as_str()) else {
+        return ParsedCommand::Skip;
+    };
+    command_arguments(&serde_json::json!({ "command": command }).to_string())
+}
+
+fn file_path(value: &serde_json::Value) -> Vec<String> {
+    text_at(value, "file_path").into_iter().collect()
+}
+
+fn notebook_path(value: &serde_json::Value) -> Vec<String> {
+    text_at(value, "notebook_path")
+        .or_else(|| text_at(value, "file_path"))
+        .into_iter()
+        .collect()
+}
+
+fn search_path(value: &serde_json::Value) -> Vec<String> {
+    text_at(value, "path")
+        .or_else(|| text_at(value, "file_path"))
+        .into_iter()
+        .collect()
+}
+
+fn edit_paths(value: &serde_json::Value) -> Vec<String> {
+    let mut paths = file_path(value);
+    if let Some(edits) = value.get("edits").and_then(|item| item.as_array()) {
+        for edit in edits {
+            if let Some(path) = text_at(edit, "file_path") {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+fn patch_paths(value: &serde_json::Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    for key in ["path", "file_path"] {
+        if let Some(path) = text_at(value, key) {
+            paths.push(path);
+        }
+    }
+    if let Some(files) = value.get("files").and_then(|item| item.as_array()) {
+        for file in files {
+            if let Some(path) = file.as_str() {
+                paths.push(path.to_owned());
+            } else if let Some(path) = text_at(file, "path").or_else(|| text_at(file, "file_path"))
+            {
+                paths.push(path);
+            }
+        }
+    }
+    for key in ["input", "patch", "command"] {
+        if let Some(text) = text_at(value, key) {
+            paths.extend(paths_in_patch(&text));
+        }
+    }
+    paths
+}
+
+fn paths_in_patch(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        for prefix in [
+            "*** Update File: ",
+            "*** Add File: ",
+            "*** Delete File: ",
+            "*** Move to: ",
+        ] {
+            if let Some(path) = line.strip_prefix(prefix) {
+                let path = path.trim();
+                if !path.is_empty() {
+                    paths.push(path.to_owned());
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn text_at(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(|item| item.as_str())
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+
+fn string_list(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    let items = value?.as_array()?;
+    let mut paths = Vec::new();
+    for item in items {
+        let text = item.as_str().filter(|text| !text.is_empty())?;
+        paths.push(text.to_owned());
+    }
+    Some(paths)
 }
 
 /// What a permission review's arguments are, as a command.
