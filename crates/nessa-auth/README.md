@@ -97,7 +97,11 @@ The local auth store can commit an owner's app approval with a new credential.
 Cedar checks the current approving membership against the registry owner. The
 writer rechecks the same registry revision and the owner's deadline before
 recording the app namespace, exact operations, expiry and issuance receipt in
-one commit. Reopen validates the scope against that receipt.
+one commit. Reopen validates the scope against that receipt. Credentials
+issued for the same owner, organization, gateway and app reuse the same app
+principal, but each approval has its own scope, receipt and revocation. An
+ordinary principal with the same derived identifier is a conflict, not an
+app registration.
 
 This is an internal store operation, not a Product command. The ordinary Product
 bearer verifier rejects the distinct app proof, and Cedar's ordinary session

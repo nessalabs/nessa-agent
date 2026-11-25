@@ -22,10 +22,13 @@ use crate::{
         session::{AuthenticatedSession, ReadCurrentSession},
     },
     domain::{
-        Action, CredentialId, ExtensionAppId, MembershipId, PrincipalId, Resource, ResourceId,
+        Action, AudienceId, CredentialId, DomainError, ExtensionAppId, MembershipId,
+        OrganizationId, PrincipalId, Resource, ResourceId,
     },
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -92,7 +95,15 @@ impl LocalCredentialStore {
         if now >= approval.expires_at {
             return Err(LocalStoreError::Conflict);
         }
-        let principal = format!("app:{}", approval.credential_id.as_str());
+        let principal = app_principal(
+            context.principal_id(),
+            context.organization_id(),
+            context.audience_id(),
+            &approval.app,
+        )
+        .map_err(|_| LocalStoreError::Corrupt)?
+        .as_str()
+        .to_owned();
         let organization = context.organization_id().as_str();
         let audience = context.audience_id().as_str();
         self.commit_issue(
@@ -177,6 +188,68 @@ impl LocalCredentialStore {
     }
 }
 
+/// Registration is stable across credentials and scoped to this owner and
+/// deployment. A length-prefixed tuple keeps the derived ID bounded and
+/// separates its fields without imposing syntax on the opaque IDs.
+fn app_principal(
+    owner: &PrincipalId,
+    organization: &OrganizationId,
+    audience: &AudienceId,
+    app: &ExtensionAppId,
+) -> Result<PrincipalId, DomainError> {
+    let mut hash = Sha256::new();
+    hash.update(b"nessa.app-principal.v1");
+    for part in [
+        owner.as_str(),
+        organization.as_str(),
+        audience.as_str(),
+        app.as_str(),
+    ] {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part.as_bytes());
+    }
+    PrincipalId::new(format!("app:{}", URL_SAFE_NO_PAD.encode(hash.finalize())))
+}
+
+/// An existing subject must have retained approvals from this same
+/// registration. Its name alone does not make a legacy subject an app.
+pub(super) fn check_app_registration(
+    registry: &Registry,
+    request: &IssueCredentialRequest,
+    scope: &StoredAppScope,
+) -> Result<(), LocalStoreError> {
+    if !registry
+        .principals
+        .iter()
+        .any(|p| p.id == request.principal.id)
+    {
+        return Ok(());
+    }
+    let mut previous = registry
+        .credentials
+        .iter()
+        .filter(|stored| stored.metadata.principal_id == request.principal.id)
+        .peekable();
+    if previous.peek().is_none() {
+        return Err(LocalStoreError::Conflict);
+    }
+    for stored in previous {
+        if !matches!(stored.verifier, StoredProof::App(_)) {
+            return Err(LocalStoreError::Conflict);
+        }
+        let snapshot = access_snapshot(registry, stored).map_err(|_| LocalStoreError::Corrupt)?;
+        let binding = approved_app_binding(registry, stored, &snapshot)
+            .map_err(|_| LocalStoreError::Corrupt)?;
+        if binding.app().as_str() != scope.app_id
+            || snapshot.credential.organization_id().as_str() != request.membership.organization_id
+            || snapshot.credential.audience_id().as_str() != request.audience_id
+        {
+            return Err(LocalStoreError::Conflict);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn approved_app_binding(
     registry: &Registry,
     stored: &StoredCredential,
@@ -191,6 +264,7 @@ pub(super) fn approved_app_binding(
         .find(|member| member.id == registry.owner_membership_id)
         .ok_or(AccessError::Unavailable)?;
     let credential = &snapshot.credential;
+    let app = ExtensionAppId::new(&scope.app_id).map_err(|_| AccessError::Unavailable)?;
     let approver = PrincipalId::new(&owner.principal_id).map_err(|_| AccessError::Unavailable)?;
     let request_id = snapshot
         .origin
@@ -211,7 +285,16 @@ pub(super) fn approved_app_binding(
         .iter()
         .find(|m| m.id == snapshot.membership.id().as_str())
         .ok_or(AccessError::Unavailable)?;
-    if receipts.next().is_some()
+    let expected_principal = app_principal(
+        &approver,
+        credential.organization_id(),
+        credential.audience_id(),
+        &app,
+    )
+    .map_err(|_| AccessError::Unavailable)?;
+    if credential.principal_id() != &expected_principal
+        || member.id != expected_principal.as_str()
+        || receipts.next().is_some()
         || receipt.issuer_principal_id != approver.as_str()
         || receipt.request_id != request_id
         || owner.organization_id != credential.organization_id().as_str()
@@ -241,7 +324,7 @@ pub(super) fn approved_app_binding(
         return Err(AccessError::IdentityMismatch);
     }
     let approved = ApprovedAppIssue {
-        app: ExtensionAppId::new(&scope.app_id).map_err(|_| AccessError::Unavailable)?,
+        app,
         capabilities: AppCapabilities::restore(&scope.operations)?,
         organization: credential.organization_id().clone(),
         audience: credential.audience_id().clone(),
@@ -464,6 +547,182 @@ mod tests {
             reopened.app_binding(&app_a, 130),
             Err(AccessError::CredentialRevoked)
         ));
+    }
+
+    #[test]
+    fn app_registration_id_has_bounded_encoding_and_unambiguous_fields() {
+        let audience = AudienceId::new("same-gateway").unwrap();
+        let app = ExtensionAppId::new("calendar").unwrap();
+        let other_audience = AudienceId::new("another-gateway").unwrap();
+        let other_app = ExtensionAppId::new("notes").unwrap();
+        let derive = |owner, org, audience, app| {
+            app_principal(
+                &PrincipalId::new(owner).unwrap(),
+                &OrganizationId::new(org).unwrap(),
+                audience,
+                app,
+            )
+            .unwrap()
+        };
+        let first = derive("a", "bc", &audience, &app);
+        assert_ne!(first, derive("ab", "c", &audience, &app));
+        assert_ne!(first, derive("a", "bc", &other_audience, &app));
+        assert_ne!(first, derive("a", "bc", &audience, &other_app));
+        assert_eq!(first.as_str().len(), "app:".len() + 43);
+    }
+
+    #[test]
+    fn app_reissue_keeps_registration_and_each_credential_remains_independent() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        let bootstrap = store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let owner = ready(
+            AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            }
+            .execute(&bootstrap.evidence, &audience),
+        )
+        .unwrap();
+
+        let mut first_subject = None;
+        for (id, operation) in [
+            ("app-a", AppCapability::Read),
+            ("app-b", AppCapability::Stop),
+        ] {
+            let IssueCredentialOutcome::Issued {
+                metadata,
+                transitions,
+                ..
+            } = ready(store.issue_app(&owner, request(id, "calendar", operation), &clock, &policy))
+                .unwrap()
+            else {
+                panic!("each distinct credential has a fresh issue receipt")
+            };
+            assert_eq!(
+                transitions[0].correlation.as_deref(),
+                Some(format!("register-{id}").as_str())
+            );
+            assert_eq!(metadata.id, id);
+            if let Some(first) = &first_subject {
+                assert_eq!(&metadata.principal_id, first);
+            } else {
+                first_subject = Some(metadata.principal_id);
+            }
+        }
+        let mut ambiguous_retry = request("app-c", "calendar", AppCapability::Read);
+        ambiguous_retry.request_id = "register-app-a".into();
+        assert!(matches!(
+            ready(store.issue_app(&owner, ambiguous_retry, &clock, &policy)),
+            Err(LocalStoreError::Conflict)
+        ));
+        store
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-app-a".into(),
+                issuer_principal_id: owner.context().principal_id().as_str().into(),
+                credential_id: "app-a".into(),
+                revoked_at: 120,
+            })
+            .unwrap();
+        drop(store);
+        let store = open_store(&path).unwrap();
+        let first = CredentialId::new("app-a").unwrap();
+        let second = CredentialId::new("app-b").unwrap();
+        assert!(matches!(
+            store.app_binding(&first, 120),
+            Err(AccessError::CredentialRevoked)
+        ));
+        let preserved = store.app_binding(&second, 120).unwrap();
+        assert_eq!(preserved.app().as_str(), "calendar");
+        assert_eq!(
+            preserved.capabilities().iter().collect::<Vec<_>>(),
+            [AppCapability::Stop]
+        );
+        let current_first = ready(store.read(&first)).unwrap();
+        let current_second = ready(store.read(&second)).unwrap();
+        assert_eq!(
+            current_first.credential.principal_id(),
+            current_second.credential.principal_id()
+        );
+    }
+
+    #[test]
+    fn app_issue_does_not_adopt_a_colliding_legacy_principal() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        let bootstrap = store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let auth = AuthenticateSession {
+            policy: &policy,
+            verifier: &store,
+            access: &store,
+            clock: &clock,
+        };
+        let owner = ready(auth.execute(&bootstrap.evidence, &audience)).unwrap();
+        let proposal = request("app-new", "calendar", AppCapability::Read);
+        let context = owner.context();
+        let collision = app_principal(
+            context.principal_id(),
+            context.organization_id(),
+            &audience,
+            &proposal.app,
+        )
+        .unwrap()
+        .as_str()
+        .to_owned();
+        let organization = context.organization_id().as_str();
+        let IssueCredentialOutcome::Issued { evidence, .. } = store
+            .issue_sync(IssueCredentialRequest {
+                purpose: CredentialIssuePurpose::Product,
+                request_id: "ordinary-member".into(),
+                issuer_principal_id: context.principal_id().as_str().into(),
+                credential_id: "legacy-credential".into(),
+                principal: PrincipalInputDto {
+                    id: collision.clone(),
+                    kind: PrincipalKindDto::Integration,
+                },
+                membership: MembershipInputDto {
+                    id: collision.clone(),
+                    principal_id: collision,
+                    organization_id: organization.into(),
+                    role: MembershipRoleDto::Member,
+                    state: MembershipStateDto::Active,
+                },
+                audience_id: audience.as_str().into(),
+                issued_at: 105,
+                expires_at: Some(180),
+                grants: vec![CredentialGrantDto {
+                    action: "server.read".into(),
+                    resource: ResourceDto {
+                        organization_id: organization.into(),
+                        id: audience.as_str().into(),
+                    },
+                }],
+            })
+            .unwrap()
+        else {
+            panic!("ordinary credential can use the synthetic colliding legacy name")
+        };
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            ready(store.issue_app(&owner, proposal, &clock, &policy)),
+            Err(LocalStoreError::Conflict)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(ready(auth.execute(&evidence, &audience))
+            .unwrap()
+            .context()
+            .app_namespace()
+            .is_default());
     }
 
     struct BeforeCommit<'a> {

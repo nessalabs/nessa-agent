@@ -64,7 +64,9 @@ use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AdmissionRwLock};
 
 mod app_credentials;
 mod pairing;
-use app_credentials::{approved_app_binding, AppIssueCommit, AppProof, StoredAppScope};
+use app_credentials::{
+    approved_app_binding, check_app_registration, AppIssueCommit, AppProof, StoredAppScope,
+};
 pub use pairing::GrantorPeer;
 
 pub use pairing::DeviceCredentialVerifier;
@@ -679,6 +681,7 @@ impl LocalCredentialStore {
                 return Err(LocalStoreError::Conflict);
             }
             request.issued_at = now;
+            check_app_registration(current, &request, &app.scope)?;
         } else if current.credentials.iter().any(|entry| {
             entry.metadata.principal_id == request.principal.id
                 && matches!(entry.verifier, StoredProof::App(_))
@@ -727,14 +730,6 @@ impl LocalCredentialStore {
             || current.issue_receipts.len() >= self.config.max_receipts
         {
             return Err(LocalStoreError::Capacity);
-        }
-        if app.is_some()
-            && current
-                .principals
-                .iter()
-                .any(|principal| principal.id == request.principal.id)
-        {
-            return Err(LocalStoreError::Conflict);
         }
         validate_issue(self.grants.as_ref(), current, &request, path)?;
         let metadata = CredentialMetadataDto {
@@ -1955,6 +1950,12 @@ fn validate_registry(
             }
         }
     }
+    let app_subjects: HashSet<_> = registry
+        .credentials
+        .iter()
+        .filter(|record| matches!(record.verifier, StoredProof::App(_)))
+        .map(|record| &record.metadata.principal_id)
+        .collect();
     for credential in &registry.credentials {
         validate_metadata(&credential.metadata).map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
@@ -2014,7 +2015,9 @@ fn validate_registry(
                     }
                 )
             });
-        if app_origin != matches!(credential.verifier, StoredProof::App(_)) {
+        if app_origin != matches!(credential.verifier, StoredProof::App(_))
+            || (!app_origin && app_subjects.contains(&credential.metadata.principal_id))
+        {
             return Err(CredentialRegistryFault::InvalidState(
                 RegistryInvariant::CredentialBinding,
             ));
@@ -2346,6 +2349,7 @@ fn issue_fingerprint(
     }
     if let Some(app) = app {
         value["approvedApp"] = serde_json::to_value(app).map_err(|_| LocalStoreError::Corrupt)?;
+        value["approvedAppCredentialId"] = serde_json::json!(request.credential_id);
     }
     let bytes = serde_json::to_vec(&value).map_err(|_| LocalStoreError::Corrupt)?;
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)))
