@@ -38,7 +38,23 @@ async fn an_agentless_gateway_without_native_linking_opens_independent_grants_wi
     assert!(!gateway.private_directory().exists());
     assert_eq!(count(&gateway, "person_links"), 0);
     assert_eq!(count(&gateway, "share_grants"), 0);
-    assert!(tokio::task::block_in_place(|| server.stop()).success());
+    assert_clean_stop(&gateway, server);
+}
+
+fn assert_clean_stop(gateway: &Gateway, server: Server) {
+    let status = tokio::task::block_in_place(|| server.stop());
+    assert!(
+        status.success(),
+        "gateway shutdown failed: {status}\n{}",
+        std::fs::read_to_string(gateway.root.path().join("server.log")).unwrap_or_default(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agentless_gateway_can_stop_as_soon_as_its_endpoint_is_published() {
+    let mut gateway = Gateway::new(false);
+    let server = tokio::task::block_in_place(|| gateway.start());
+    assert_clean_stop(&gateway, server);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
