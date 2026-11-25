@@ -207,7 +207,10 @@ fn stored_many(
             ).unwrap();
             transaction
                 .execute(
-                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask', ?5, ?5)",
+                    "INSERT INTO conversations (id, organization, owner, creator_surface, creation_action,
+                        creation_requested_at_ms, agent, model, approval_mode, creation_revision,
+                        change_revision, app_namespace)
+                     VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask', ?5, ?5, 'nessa')",
                     params![conversation.to_string(), organization, principal, at(n) as i64, revision],
                 )
                 .unwrap();

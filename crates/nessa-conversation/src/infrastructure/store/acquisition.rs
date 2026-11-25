@@ -1,6 +1,6 @@
 //! Bounded SQLite text selection before UTF-8 conversion and owned acquisition.
 use crate::domain::Conversation;
-use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
+use nessa_auth::domain::{MAX_EXTENSION_APP_ID_BYTES, MAX_IDENTIFIER_BYTES};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationModelId, ConversationPreview, ConversationTitle,
@@ -45,6 +45,7 @@ pub(super) fn conversation(prefix: &str) -> String {
         format!("CASE WHEN typeof({agent}) != 'text' THEN X'' WHEN octet_length({agent}) > {} THEN NULL ELSE {agent} END", agent_max * 2),
         text(&column("model"), ConversationModelId::MAX_BYTES, false),
         text(&column("approval_mode"), mode_max, false),
+        text(&column("app_namespace"), MAX_EXTENSION_APP_ID_BYTES, false),
     ].join(", ")
 }
 

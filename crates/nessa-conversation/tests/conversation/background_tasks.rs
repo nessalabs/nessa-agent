@@ -569,7 +569,27 @@ async fn background_restart_records_unknown_cleanup_without_reexecuting_command(
     assert_eq!(outcome.cause, TaskCause::Interrupted);
     assert!(!outcome.cleanup_verified);
     assert!(recovered.lifecycle.retains_capacity());
-    assert!(service.shutdown().await.is_err());
+    // Deleting the conversation would forget a record whose cleanup nobody
+    // confirmed, so it is still refused, and the record stays.
+    assert!(service
+        .delete(target.clone(), caller("delete-recovered"))
+        .await
+        .is_err());
+    assert!(tasks
+        .read(&target, &BackgroundTaskId::new("recovered").unwrap())
+        .await
+        .unwrap()
+        .is_some());
+    // Retiring this gateway is not: no stop can confirm an end settled before
+    // it, so refusing would hold the older gateway in place for good.
+    service.shutdown().await.unwrap();
+    assert!(tasks
+        .read(&target, &BackgroundTaskId::new("recovered").unwrap())
+        .await
+        .unwrap()
+        .unwrap()
+        .lifecycle
+        .retains_capacity());
     drop(service);
     storage.shutdown().await.unwrap();
     drop(metadata);

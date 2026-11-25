@@ -88,6 +88,7 @@ impl ConversationService {
                     AccessResource::Catalogue {
                         organization: &caller.organization_id,
                         owner: &caller.principal_id,
+                        app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
                     },
                 )?;
                 self.channel_terminal_place(caller, channel.as_ref()).await
@@ -142,6 +143,7 @@ impl ConversationService {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
                 principal: &caller.principal_id,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action: AccessAction::TerminalUse,
             resource,

@@ -283,6 +283,7 @@ async fn webhook_cedar_subject_has_no_send_or_owner_authority() {
             AccessAction::List | AccessAction::Write => AccessResource::Catalogue {
                 organization: &f.target.organization,
                 owner: &f.target.owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             AccessAction::WorkspaceRead | AccessAction::WorkspaceControl => {
                 AccessResource::Workspace {

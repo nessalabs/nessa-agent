@@ -24,6 +24,7 @@ mod auth_context;
 mod error;
 mod identifiers;
 mod models;
+mod namespace;
 /// One-use native device enrollment rules and replayed causal evidence.
 pub mod pairing;
 mod transition;
@@ -37,6 +38,9 @@ pub use identifiers::{
 pub use models::{
     Credential, Grant, Membership, MembershipRole, MembershipStatus, Organization, Principal,
     PrincipalKind, Resource,
+};
+pub use namespace::{
+    AppNamespace, ExtensionAppId, DEFAULT_APP_NAMESPACE, MAX_EXTENSION_APP_ID_BYTES,
 };
 pub use transition::{
     CredentialLifecycle, CredentialTransition, Initiator, IssuanceCause, RevocationCause,

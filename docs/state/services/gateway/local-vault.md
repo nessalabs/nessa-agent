@@ -50,7 +50,9 @@ known common passwords or repeated text. Existing vaults keep their original
 twelve-character unlock bound. Protected GitHub
 use can ask later if setup was skipped. Unlock lasts across window reloads until
 Nessa quits, the gateway restarts, or the owning app explicitly locks the vault.
-Ordinary workspace use can continue while protected data is locked.
+Ordinary workspace use can continue while protected data is locked. The desktop
+window asks to unlock at launch only after its workspace's first read from the
+gateway succeeds, so the dialog never asks a gateway that is still starting.
 
 ```mermaid
 stateDiagram-v2

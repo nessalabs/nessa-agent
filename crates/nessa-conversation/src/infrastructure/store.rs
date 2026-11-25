@@ -34,7 +34,9 @@ use crate::domain::{
     ProviderSessionLink,
 };
 use cached::CachedSql;
-use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::{
+    AppNamespace, OrganizationId, PrincipalId, DEFAULT_APP_NAMESPACE, MAX_IDENTIFIER_BYTES,
+};
 use nessa_local_database::rusqlite::{
     params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
 };
@@ -128,13 +130,14 @@ const DEFINITION: &str = include_str!("schema.sql");
 
 /// What brings a file from an older build to [`DEFINITION`]'s version, one
 /// version at a time. Each only adds what that version added.
-static UPGRADES: [Upgrade; 6] = [
+static UPGRADES: [Upgrade; 7] = [
     Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
     Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
     Upgrade::new(8, include_str!("schema_upgrades/8.sql")),
     Upgrade::new(9, include_str!("schema_upgrades/9.sql")),
     Upgrade::new(10, include_str!("schema_upgrades/10.sql")),
     Upgrade::new(11, include_str!("schema_upgrades/11.sql")),
+    Upgrade::new(12, include_str!("schema_upgrades/12.sql")),
 ];
 
 /// The metadata schema, with the steps that bring an older file to it.
@@ -155,7 +158,7 @@ pub fn list_query() -> String {
     SELECT {}, {}, {}
     FROM conversations AS c
     JOIN summaries AS s ON s.conversation_id = c.id
-    WHERE c.organization = ?1 AND c.owner = ?2 AND s.archived = ?3
+    WHERE c.organization = ?1 AND c.owner = ?2 AND c.app_namespace = '{DEFAULT_APP_NAMESPACE}' AND s.archived = ?3
       AND NOT EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = c.id)
       AND (?5 IS NULL OR {})
     ORDER BY s.updated_at_ms DESC, c.id ASC
@@ -623,10 +626,11 @@ struct StoredConversation {
     agent: Option<String>,
     model: String,
     approval_mode: String,
+    app_namespace: String,
 }
 impl StoredConversation {
     const COLUMNS: &'static str = "id, organization, owner, creator_surface, creation_action, \
-                                   creation_requested_at_ms, agent, model, approval_mode";
+                                   creation_requested_at_ms, agent, model, approval_mode, app_namespace";
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get(0)?,
@@ -638,6 +642,7 @@ impl StoredConversation {
             agent: row.get(6)?,
             model: row.get(7)?,
             approval_mode: row.get(8)?,
+            app_namespace: row.get(9)?,
         })
     }
     /// A record naming an agent this server has no adapter for is read with
@@ -645,6 +650,7 @@ impl StoredConversation {
     /// to the agent named, and opening it is refused as `AgentUnsupported`. It
     /// is still its owner's to see in a list and to delete.
     fn read(self) -> Option<Conversation> {
+        let app_namespace = AppNamespace::parse(&self.app_namespace).ok()?;
         Conversation::restore(
             ConversationId::new(&self.id).ok()?,
             OrganizationId::new(self.organization).ok()?,
@@ -657,6 +663,7 @@ impl StoredConversation {
             ConversationApprovalMode::parse(&self.approval_mode)?,
         )
         .ok()
+        .map(|conversation| conversation.with_app_namespace(app_namespace))
     }
 }
 
@@ -959,10 +966,10 @@ type StoredDescriptor = (StoredConversation, i64, i64, bool, Option<String>);
 fn catalogue_descriptor(row: &Row<'_>) -> rusqlite::Result<StoredDescriptor> {
     Ok((
         StoredConversation::from_row(row)?,
-        row.get(9)?,
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
     ))
 }
 
@@ -994,6 +1001,7 @@ fn checked_descriptor(
         },
         revision,
         deleted,
+        app_namespace: conversation.app_namespace().clone(),
         held,
     })
 }
@@ -1268,7 +1276,7 @@ impl ConversationRepository for LocalConversationStore {
                 .cached_execute(
                     &format!(
                         "INSERT INTO conversations ({}, creation_revision, change_revision)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
                         StoredConversation::COLUMNS
                     ),
                     params![
@@ -1281,6 +1289,7 @@ impl ConversationRepository for LocalConversationStore {
                         agent.name(),
                         conversation.model().as_str(),
                         conversation.approval_mode().as_str(),
+                        conversation.app_namespace().as_str(),
                         revision,
                     ],
                 )
@@ -2151,11 +2160,11 @@ impl ConversationListing for LocalConversationStore {
                 let conversation = StoredConversation::from_row(row);
                 let summary = (|| {
                     Ok(StoredSummary {
-                        title: row.get(9)?,
-                        preview: row.get(10)?,
-                        updated_at_ms: row.get(11)?,
-                        archived: row.get(12)?,
-                        ask: row.get(13)?,
+                        title: row.get(10)?,
+                        preview: row.get(11)?,
+                        updated_at_ms: row.get(12)?,
+                        archived: row.get(13)?,
+                        ask: row.get(14)?,
                     })
                 })();
                 let conversation = cells(conversation)?;
@@ -2170,7 +2179,7 @@ impl ConversationListing for LocalConversationStore {
                     (Some(conversation), Some(summary)) => {
                         listed.conversations.push(ListedConversation {
                             held: share_grants::stored_capabilities(
-                                row.get(14).map_err(failed)?,
+                                row.get(15).map_err(failed)?,
                                 &conversation.id().to_string(),
                             )?,
                             conversation,
@@ -2411,6 +2420,7 @@ impl ConversationCatalogue for LocalConversationStore {
                         EXISTS (SELECT 1 FROM deletions AS d WHERE d.conversation_id = conversations.id),
                         {}
                  FROM conversations WHERE organization = ?1 AND owner = ?2
+                   AND app_namespace = '{DEFAULT_APP_NAMESPACE}'
                    AND creation_revision <= ?3 AND change_revision > ?4
                    AND (creation_revision > ?5 OR (creation_revision = ?5 AND id > ?6))
                    AND (?8 IS NULL OR {})
@@ -2463,6 +2473,7 @@ impl ConversationCatalogue for LocalConversationStore {
                         EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1),
                         {}
                  FROM conversations WHERE id = ?1 AND organization = ?2 AND owner = ?3
+                   AND app_namespace = '{DEFAULT_APP_NAMESPACE}'
                    AND (?4 IS NULL OR {})",
                         share_grants::held_capabilities("conversations.id", "?4"),
                         share_grants::granted("conversations.id", "?4")
@@ -2505,6 +2516,7 @@ impl ConversationCatalogue for LocalConversationStore {
                 },
                 revision: u64::try_from(revision).map_err(|_| ConversationError::Metadata)?,
                 deleted,
+                app_namespace: conversation.app_namespace().clone(),
                 held,
             };
             if descriptor.key.creation == 0 || descriptor.revision < descriptor.key.creation {

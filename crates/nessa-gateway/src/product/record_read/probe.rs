@@ -42,6 +42,7 @@ pub(in crate::product) fn serve(
     verifier: &dyn CredentialVerifier,
     selection: PendingRecordCarrier<'_>,
     opening: RecordCarrierOpen,
+    pair: bool,
 ) -> Result<(), NativeConnectionError> {
     let RecordCarrierOpen {
         credential,
@@ -74,7 +75,9 @@ pub(in crate::product) fn serve(
     }) else {
         return selection.refuse();
     };
-    let taken = Cell::new(false);
+    let page = mode == RecordCarrierMode::Page;
+    let pair = page && pair;
+    let remaining = Cell::new(if pair { 2 } else { 1 });
     let uncertain = Cell::new(false);
     let probe = Probe {
         runtime,
@@ -84,8 +87,9 @@ pub(in crate::product) fn serve(
         receiver,
         epoch,
         scope: &scope,
-        taken: &taken,
-        page: mode == RecordCarrierMode::Page,
+        remaining: &remaining,
+        page,
+        pair,
         uncertain: &uncertain,
     };
     let mut operations = probe;
@@ -130,8 +134,9 @@ struct Probe<'a> {
     receiver: &'a str,
     epoch: u64,
     scope: &'a Scope,
-    taken: &'a Cell<bool>,
+    remaining: &'a Cell<u8>,
     page: bool,
+    pair: bool,
     uncertain: &'a Cell<bool>,
 }
 
@@ -140,6 +145,18 @@ struct Probe<'a> {
 struct View<'a> {
     probe: Probe<'a>,
     permit: Option<Arc<OwnedSemaphorePermit>>,
+}
+
+impl Probe<'_> {
+    fn reserve(&self) -> Result<(), SourceError> {
+        let left = self
+            .remaining
+            .get()
+            .checked_sub(1)
+            .ok_or(SourceError::Denied)?;
+        self.remaining.set(left);
+        Ok(())
+    }
 }
 
 impl View<'_> {
@@ -274,8 +291,13 @@ impl RecordSource for View<'_> {
     }
 
     fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
-        if !self.probe.page || self.probe.taken.replace(true) {
+        if !self.probe.page {
             return Err(SourceError::Denied);
+        }
+        // The existing one-Page fixture spends its attempt even if the
+        // host rejects its limits. The pair reserves validated Pages only.
+        if !self.probe.pair {
+            self.probe.reserve()?;
         }
         if request.scope != *self.probe.scope {
             return Err(SourceError::IdentityChanged);
@@ -286,6 +308,9 @@ impl RecordSource for View<'_> {
         {
             return Err(SourceError::InvalidRequest);
         }
+        if self.probe.pair {
+            self.probe.reserve()?;
+        }
         match self.read(RecordReadOperation::Page(request.clone()))? {
             RecordReadValue::Page(page) if page.request == *request => Ok(page),
             _ => Err(SourceError::IdentityChanged),
@@ -295,9 +320,12 @@ impl RecordSource for View<'_> {
 
 impl RecordReadView for View<'_> {
     fn view_head(&mut self, scope: &Scope) -> Result<SourceHead, SourceError> {
-        // Head-only keeps its one-HEAD allowance. Page mode spends its one
-        // allowance on Page, whose capability response also reads Head.
-        if !self.probe.page && self.probe.taken.replace(true) {
+        if !self.probe.page {
+            self.probe.reserve()?;
+        }
+        // A Page view reads Head first. Reject an exhausted pair here, before
+        // reaching either physical source. The reservation is still Page's.
+        if self.probe.pair && self.probe.remaining.get() == 0 {
             return Err(SourceError::Denied);
         }
         if self.probe.scope.schema() != &physical_record_schema() {

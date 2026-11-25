@@ -39,7 +39,9 @@
 //! question and the write.
 use super::ConversationCaller;
 use crate::domain::{Capabilities, Conversation, ConversationRefusal, Setting};
-use nessa_auth::domain::{Grant, MembershipRole, OrganizationId, PrincipalId, Resource};
+use nessa_auth::domain::{
+    AppNamespace, Grant, MembershipRole, OrganizationId, PrincipalId, Resource,
+};
 use std::collections::HashMap;
 
 /// Who is asking.
@@ -53,11 +55,12 @@ pub enum AccessSubject<'a> {
         /// The thread the turn is in.
         conversation: &'a str,
     },
-    /// A person on one of their own surfaces, by the organization and
-    /// principal their session is in.
+    /// A person on one of their own surfaces, by the organization, principal,
+    /// and app namespace their session is in.
     Person {
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
+        app_namespace: &'a AppNamespace,
     },
     /// An unpaired authenticated review recipient, with its current role.
     /// Cedar decides whether that membership may reveal the conversation.
@@ -65,6 +68,7 @@ pub enum AccessSubject<'a> {
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
         membership: MembershipRole,
+        app_namespace: &'a AppNamespace,
     },
     /// A paired party reading through its receiver binding: a device signs
     /// in as `binding_owner`, a peer gateway as itself.
@@ -239,6 +243,7 @@ pub enum AccessResource<'a> {
     Conversation {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
+        app_namespace: &'a AppNamespace,
         /// Whether somebody deleted it.
         deleted: bool,
         /// The thread whose agent created it with `create_thread`, as the
@@ -250,6 +255,7 @@ pub enum AccessResource<'a> {
     Catalogue {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
+        app_namespace: &'a AppNamespace,
     },
     /// One owner's workspace: what their desktop windows show.
     Workspace {
@@ -276,6 +282,7 @@ impl<'a> AccessResource<'a> {
         Self::Conversation {
             organization: conversation.organization(),
             owner: conversation.owner(),
+            app_namespace: conversation.app_namespace(),
             deleted: conversation.deletion().is_some(),
             created_by: None,
         }
@@ -286,6 +293,7 @@ impl<'a> AccessResource<'a> {
         Self::Conversation {
             organization: conversation.organization(),
             owner: conversation.owner(),
+            app_namespace: conversation.app_namespace(),
             deleted: conversation.deletion().is_some(),
             created_by,
         }
@@ -332,18 +340,36 @@ pub struct AccessAsk<'a> {
 }
 
 impl<'a> AccessAsk<'a> {
-    /// A person's `action` on `conversation`, with no grant, request or
-    /// target to speak of.
+    /// A person's `action` on `conversation` in the default `nessa` namespace,
+    /// with no grant, request or target to speak of.
     pub fn person(
         action: AccessAction,
         conversation: &'a Conversation,
         organization: &'a OrganizationId,
         principal: &'a PrincipalId,
     ) -> Self {
+        Self::person_in(
+            action,
+            conversation,
+            organization,
+            principal,
+            &AppNamespace::DEFAULT,
+        )
+    }
+
+    /// A person's `action` on `conversation` in an explicit `app_namespace`.
+    pub fn person_in(
+        action: AccessAction,
+        conversation: &'a Conversation,
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        app_namespace: &'a AppNamespace,
+    ) -> Self {
         Self {
             subject: AccessSubject::Person {
                 organization,
                 principal,
+                app_namespace,
             },
             action,
             resource: AccessResource::of(conversation),
@@ -515,8 +541,8 @@ impl<'a> OwnerAccess<'a> {
 
     /// Which of `conversations` `caller` may act on, in order, each as
     /// [`Self::admits`] answers it. Within one call the ask varies by row
-    /// only in the conversation's organization, owner and deletion, so each
-    /// distinct three is asked once: a list of one owner's rows costs a
+    /// only in the conversation's organization, owner, app namespace and
+    /// deletion, so each distinct four is asked once: a list of one owner's rows costs a
     /// couple of evaluations however long it is.
     ///
     /// # Errors
@@ -728,6 +754,7 @@ impl<'a> PairedAccess<'a> {
         let resource = AccessResource::Catalogue {
             organization: self.party.organization,
             owner: self.party.binding_owner,
+            app_namespace: &AppNamespace::DEFAULT,
         };
         match answer(
             self.policy,

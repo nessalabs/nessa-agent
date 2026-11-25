@@ -125,6 +125,8 @@ pub(super) struct PreparedNative {
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
     record_carrier: bool,
+    #[cfg(test)]
+    record_page_pair: bool,
     /// The web tunnel, when one is on.
     #[cfg(unix)]
     tunnel: Option<super::tunnel::PreparedTunnel>,
@@ -156,6 +158,13 @@ impl PreparedNative {
     #[cfg(test)]
     pub(super) fn with_record_carrier(mut self) -> Self {
         self.record_carrier = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_record_page_pair(mut self) -> Self {
+        self.record_carrier = true;
+        self.record_page_pair = true;
         self
     }
 
@@ -271,6 +280,8 @@ pub(super) async fn prepare(
             advertised_address: config.advertised_address,
             bound_socket: None,
             record_carrier: false,
+            #[cfg(test)]
+            record_page_pair: false,
             #[cfg(unix)]
             tunnel: None,
         },
@@ -372,6 +383,8 @@ pub(super) async fn bind(
         advertised_address,
         bound_socket,
         record_carrier,
+        #[cfg(test)]
+        record_page_pair,
         #[cfg(unix)]
         tunnel,
     } = prepared;
@@ -405,10 +418,14 @@ pub(super) async fn bind(
                 .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
         }
     }
-    let sessions = Arc::new(NativeSessions::new(
-        product,
-        Arc::new(RegistryDevices(registry.clone())),
-    ));
+    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry.clone())));
+    #[cfg(test)]
+    let sessions = if record_page_pair {
+        sessions.with_record_page_pair_for_test()
+    } else {
+        sessions
+    };
+    let sessions = Arc::new(sessions);
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
         .with_protected_sessions(sessions.clone())
         .with_discovery(Arc::new(RegistryDiscovery {

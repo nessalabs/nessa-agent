@@ -1,0 +1,57 @@
+/* Over the workspace while the gateway connects; under the startup screen
+   (z-index 1100), which takes over if the gateway never answers. */
+.connecting-splash {
+  position: fixed;
+  z-index: 1090;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  background: var(--background);
+  opacity: 1;
+  transition: opacity 180ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+
+.connecting-splash[data-leaving] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The word comes in late, so a gateway that answers at once shows only the
+   window's own colour, never a flash of text. */
+.connecting-splash-text {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  animation: connecting-splash-in 400ms ease-out 600ms both;
+}
+
+@keyframes connecting-splash-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+:root[data-motion="reduced"] .connecting-splash {
+  transition: none;
+}
+
+/* The sweep's crest in Nessa's colours, the setup field's palette
+   (BloomField's magenta, violet, amber and blue), over the muted word. */
+.connecting-splash-text[data-slot="loading-text"] [data-shimmer="true"] {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 30%,
+    #e2457a 40%,
+    #8d5ad8 46%,
+    #f09a4a 53%,
+    #4b6cf0 60%,
+    var(--muted-foreground) 70%,
+    var(--muted-foreground) 100%
+  );
+}
