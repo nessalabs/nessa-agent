@@ -73,6 +73,7 @@ struct GatedRead {
     pages: AtomicUsize,
     heads: Arc<HeadHold>,
     budget_head: PathBuf,
+    pair_source_entries: Option<(PathBuf, AtomicUsize)>,
 }
 /// Live mode's held head read: the head reads counted so far, the one
 /// `hold` named (zero for none), and the `release` that lets it answer.
@@ -128,6 +129,10 @@ impl RecordReadSource for GatedRead {
     ) -> RecordReadFuture<'a, RecordReadResponse> {
         let page = matches!(&operation, RecordReadOperation::Page(_));
         Box::pin(async move {
+            if let Some((path, entries)) = &self.pair_source_entries {
+                let count = entries.fetch_add(1, Ordering::SeqCst) + 1;
+                super::private_write(&path.with_extension(count.to_string()), b"");
+            }
             let head = (!page).then(|| self.heads.count.fetch_add(1, Ordering::SeqCst) + 1);
             if !page && self.mode == "semantic" {
                 self.heads.trace("head_entered", head);
@@ -428,6 +433,8 @@ async fn gateway_child() {
         pages: AtomicUsize::new(0),
         heads: heads.clone(),
         budget_head: root.join("budget-head-entered"),
+        pair_source_entries: (mode == "record-page-pair")
+            .then(|| (root.join("pair-source-entries"), AtomicUsize::new(0))),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
@@ -462,13 +469,10 @@ async fn gateway_child() {
         )),
         None => prepared,
     };
-    let prepared = if matches!(
-        mode.as_str(),
-        "record-head-probe" | "record-head-probe-revoked"
-    ) {
-        prepared.with_record_carrier()
-    } else {
-        prepared
+    let prepared = match mode.as_str() {
+        "record-head-probe" | "record-head-probe-revoked" => prepared.with_record_carrier(),
+        "record-page-pair" => prepared.with_record_page_pair(),
+        _ => prepared,
     };
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
