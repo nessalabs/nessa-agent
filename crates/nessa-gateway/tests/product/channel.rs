@@ -45,14 +45,18 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "folder": "relative"}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": [absolute("/a"), absolute("/a")]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
-        // A channel names no computer: its agents run here (ADR 1417).
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "local"}),
     ] {
         assert!(
             channel_request(&params(refused.clone())).is_none(),
             "{refused}"
         );
     }
+    // A channel names no computer: its agents run here (ADR 1417), so a
+    // placement is not even read.
+    assert!(serde_json::from_value::<ChannelCreateParams>(
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "local"})
+    )
+    .is_err());
 }
 
 fn stored(n: u8, notes: &str) -> Channel {

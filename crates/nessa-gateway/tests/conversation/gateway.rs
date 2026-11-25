@@ -136,8 +136,6 @@ mod gateway {
         state.verifier = authority;
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
-                "environments": [],
-                "commandHosts": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",

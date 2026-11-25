@@ -3385,7 +3385,15 @@ impl ConversationService {
             }
         }
         let live = match opening {
-            ReadOpening::Open => self.resolve(&id, &caller).await?,
+            ReadOpening::Open => match self.resolve(&id, &caller).await {
+                Ok(live) => live,
+                // An earlier build placed it on another machine: its agent
+                // opens nowhere, and its history is still read (ADR 1417).
+                Err(ConversationError::EnvironmentNotConfigured) => {
+                    return self.read_unopened(&id, &caller).await;
+                }
+                Err(error) => return Err(error),
+            },
             ReadOpening::LiveOnly => match self.live_now(&id, &caller).await? {
                 Some(live) => live,
                 None => return self.read_unopened(&id, &caller).await,

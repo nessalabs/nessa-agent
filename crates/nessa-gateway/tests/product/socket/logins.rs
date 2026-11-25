@@ -11,7 +11,6 @@ use crate::secrets::{SecretStore, SecretUnavailable};
 use nessa_protocol::agents::AgentId;
 
 const LOGIN: &str = "sk-ant-oat01-route-test";
-const PEER: &str = "peer:0101010101010101010101010101010101010101010101010101010101010101";
 
 #[derive(Default)]
 struct Memory(Mutex<Option<Vec<u8>>>);
@@ -105,8 +104,6 @@ async fn the_logins_methods_need_credential_manage() {
     let save = with("1", "logins.save", json!({ "agent": "claude", "login": LOGIN }));
     assert_eq!(code_of(dispatch(&state, &session, save).await), "forbidden");
     assert!(claude.0.lock().unwrap().is_none());
-    let switch = with("2", "logins.setDevice", json!({ "environment": PEER, "on": true }));
-    assert_eq!(code_of(dispatch(&state, &session, switch).await), "forbidden");
 }
 
 #[tokio::test]
@@ -125,7 +122,6 @@ async fn a_saved_login_is_never_answered_and_shapes_are_checked_first() {
         ("2", "logins.save", json!({ "agent": "claude", "login": "" })),
         ("3", "logins.save", json!({ "agent": "gemini", "login": LOGIN })),
         ("4", "logins.save", json!({ "agent": "claude", "login": LOGIN, "extra": 1 })),
-        ("5", "logins.setDevice", json!({ "environment": "here", "on": true })),
         ("6", "logins.remove", json!({})),
     ] {
         assert_eq!(
@@ -147,15 +143,6 @@ async fn a_saved_login_is_never_answered_and_shapes_are_checked_first() {
     assert_eq!(saved["logins"][1], json!({ "agent": "codex", "saved": false }));
     assert!(!saved.to_string().contains(LOGIN));
     assert_eq!(claude.0.lock().unwrap().as_deref(), Some(LOGIN.as_bytes()));
-    let switched = payload(
-        dispatch(
-            &state,
-            &session,
-            with("8", "logins.setDevice", json!({ "environment": PEER, "on": true })),
-        )
-        .await,
-    );
-    assert_eq!(switched["devicesOn"], json!([PEER]));
     let removed = payload(
         dispatch(
             &state,
@@ -167,6 +154,6 @@ async fn a_saved_login_is_never_answered_and_shapes_are_checked_first() {
     assert_eq!(removed["logins"][0]["saved"], false);
     assert!(claude.0.lock().unwrap().is_none());
     let status = payload(dispatch(&state, &session, request("10", "logins.status")).await);
-    assert_eq!(status["devicesOn"], json!([PEER]));
+    assert_eq!(status["logins"][0]["saved"], false);
     assert!(!format!("{:?}", kept.0.lock().unwrap()).contains(LOGIN));
 }

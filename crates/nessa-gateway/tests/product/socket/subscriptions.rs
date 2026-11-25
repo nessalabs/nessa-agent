@@ -391,8 +391,6 @@ fn grants(authority: &Authority, actions: &[&str]) {
 /// one host.
 fn composed_catalog() -> AgentsListResult {
     serde_json::from_value(json!({
-        "environments": ["build.example"],
-        "commandHosts": [],
         "agents": [{
             "agent": "claude",
             "defaultModel": "test",
