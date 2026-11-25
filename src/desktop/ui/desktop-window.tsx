@@ -11,6 +11,7 @@ import { RailContentProvider, SessionsInSidebar, ThreeColumns } from "../workspa
 import { useWorkspaceSelector } from "../workspace/adapters/store/hooks"
 import { selectFailure } from "../workspace/adapters/store/selectors"
 import { startupFailureCode } from "../workspace/ui/startup-failure"
+import { ConnectingSplash, useConnecting } from "./connecting-splash"
 import { StartupFallback } from "./startup-fallback"
 
 /** What the side rail's items show, beside Agents (the workspace itself). */
@@ -43,13 +44,15 @@ export function DesktopWindow({
   useDriftInEffect()
   const settings = useSettingsOpening()
   const startup = startupFailureCode(useWorkspaceSelector(selectFailure))
+  const connecting = useConnecting()
   return (
     <>
       {/* Settings is modal: the window under it takes no focus or pointer while it is open.
-          A startup screen covers both and takes the pointer itself. */}
+          A startup screen, or the splash while the gateway connects, covers
+          both and takes the pointer itself. */}
       <div
         className="desktop-window-under"
-        inert={settings.open || startup !== null || undefined}
+        inert={settings.open || startup !== null || connecting || undefined}
       >
         <RailContentProvider views={railViews}>
           {layout === "sidebar" ? (
@@ -61,10 +64,11 @@ export function DesktopWindow({
       </div>
       <SettingsHost
         {...props}
-        open={settings.open && startup === null}
+        open={settings.open && startup === null && !connecting}
         tab={settings.tab}
         onClose={settings.close}
       />
+      <ConnectingSplash connecting={connecting} />
       <StartupFallback />
     </>
   )

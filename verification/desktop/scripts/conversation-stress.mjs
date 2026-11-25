@@ -249,7 +249,9 @@ import {
  *               conversation placed on it is answered; turning the tunnel off
  *               ends the cloudflared, and linking is turned off again
  *   launch      the window is reloaded while the host is still starting the
- *               gateway: the host holds the window's read, the startup
+ *               gateway: the host holds the window's read, a quiet
+ *               "Connecting" splash covers the window (no empty workspace,
+ *               no unlock dialog) and lifts once it lists, the startup
  *               screen never covers it, and once the gateway is up the
  *               window lists the conversation and the message sent after
  *               it is answered
@@ -4234,6 +4236,66 @@ async function enrollPeer(run, profile, code, invitationId) {
   }
 }
 
+/** How long the connecting splash may take to fade once the window lists. */
+const SPLASH_LEAVE_MS = 2_000
+
+/**
+ * The `launch` step's first look after a reload while the gateway starts:
+ * the splash is up and on top at the window's centre, nothing of the empty
+ * workspace shows through, and no unlock dialog asked yet. A sentence when
+ * one of those fails; null when all hold.
+ */
+async function connectingSplash(page) {
+  const shown = await page
+    .locator(css.connectingSplash)
+    .waitFor({ timeout: LAUNCH_STARTING_MS })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown)
+    return "the window showed no connecting splash while the gateway was starting"
+  const look = await page.evaluate(
+    ([splashSelector, vaultSelector]) => {
+      const splash = document.querySelector(splashSelector)
+      const centre = document.elementFromPoint(innerWidth / 2, innerHeight / 2)
+      const corner = document.elementFromPoint(innerWidth - 4, innerHeight - 4)
+      return {
+        on: Boolean(
+          splash &&
+          centre &&
+          splash.contains(centre) &&
+          corner &&
+          splash.contains(corner),
+        ),
+        word: splash?.textContent?.trim() ?? "",
+        vault: document.querySelectorAll(vaultSelector).length,
+        empty: [...document.querySelectorAll("body *")].some(
+          (node) =>
+            node.childElementCount === 0 &&
+            node.textContent?.trim() === "No sessions yet" &&
+            !splash?.contains(node) &&
+            (() => {
+              const box = node.getBoundingClientRect()
+              const top = document.elementFromPoint(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              )
+              return Boolean(top && node.contains(top))
+            })(),
+        ),
+      }
+    },
+    [css.connectingSplash, css.vaultDialog],
+  )
+  if (!look.on)
+    return "the connecting splash did not cover the window while the gateway was starting"
+  if (!look.word.includes("Connecting"))
+    return `the connecting splash said ${JSON.stringify(look.word)}, not "Connecting"`
+  if (look.empty)
+    return "the empty workspace showed through while the gateway was starting"
+  if (look.vault > 0) return "the unlock dialog opened before the gateway was up"
+  return null
+}
+
 /**
  * The `launch` step's slow launch: the host's startup outlasts its hold of
  * the window's read, so the window is refused as still starting. True when
@@ -4249,6 +4311,7 @@ async function slowLaunch(run, failures) {
   )
   let covered
   let refused
+  let splashed
   try {
     await page.reload()
     // Wait until the host has refused at least once as still starting.
@@ -4265,6 +4328,8 @@ async function slowLaunch(run, failures) {
       .waitFor({ timeout: LAUNCH_STARTING_MS })
       .then(() => true)
       .catch(() => false)
+    // Refused as still starting is no failure: the splash stays up.
+    splashed = (await page.locator(css.connectingSplash).count()) > 0
   } finally {
     await removeKey().catch(() => removeKey().catch(() => {}))
   }
@@ -4275,6 +4340,12 @@ async function slowLaunch(run, failures) {
   if (covered) {
     failures.push(
       "the window showed the startup screen for a startup still running past the host's hold",
+    )
+    return false
+  }
+  if (!splashed) {
+    failures.push(
+      "the connecting splash lifted while the host still said the gateway was starting",
     )
     return false
   }
@@ -7827,8 +7898,13 @@ const steps = {
       await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING.key)
       let covered
       let askedWhileStarting
+      let splash
       try {
         await page.reload()
+        // Meanwhile the window shows its quiet splash over everything: no
+        // empty workspace ("No sessions yet") and no unlock dialog, which
+        // would ask a gateway that is not there yet.
+        splash = await connectingSplash(page)
         // Whatever the window shows meanwhile, it is never the startup
         // screen: the gateway did not fail, it is starting.
         covered = await page
@@ -7855,6 +7931,10 @@ const steps = {
         failures.push("the window did not ask for the gateway while it was starting")
         return
       }
+      if (splash) {
+        failures.push(splash)
+        return
+      }
       const started = Date.now()
       const listed = await page
         .locator(selectorFor.sessionListRowFor(run.main.id))
@@ -7868,6 +7948,15 @@ const steps = {
         return
       }
       log(`launch: listed ${Date.now() - started}ms after the gateway was up`)
+      const lifted = await page
+        .locator(css.connectingSplash)
+        .waitFor({ state: "detached", timeout: SPLASH_LEAVE_MS })
+        .then(() => true)
+        .catch(() => false)
+      if (!lifted) {
+        failures.push("the connecting splash still covers the window after it listed")
+        return
+      }
       if ((await page.locator(css.startupScreen).count()) > 0) {
         failures.push("the startup screen covers the window after the gateway was up")
         return
