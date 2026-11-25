@@ -242,8 +242,12 @@ impl RetainedEnrollmentClient {
         expires_ms: u64,
         received: Option<DisclosedConsent>,
     ) -> Result<RetainedEnrollmentStatus, NativeClientError> {
-        let route = super::joined_status::JoinedStatusRoute::new(relay, pin)
-            .map_err(|error| NativeClientError::Io(error.kind()))?;
+        let route = super::joined_status::JoinedStatusRoute::new(
+            relay,
+            pin,
+            Arc::new(super::TokioJoinedDial),
+        )
+        .map_err(|error| NativeClientError::Io(error.kind()))?;
         let begin = self.store.clone();
         let finish = self.store.clone();
         self.client

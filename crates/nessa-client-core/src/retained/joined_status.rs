@@ -10,6 +10,7 @@ use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result, Write},
     net::{SocketAddr, TcpStream},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -53,19 +54,36 @@ fn remaining(
         .ok_or_else(|| ErrorKind::TimedOut.into())
 }
 
+// A dial transfers one exact connected socket. Orchestration chooses when and
+// how long to poll it, while composition supplies the physical connector.
+pub(crate) type JoinedDialFuture = Pin<Box<dyn Future<Output = Result<TcpStream>> + Send>>;
+pub(crate) trait JoinedStatusDial: Send + Sync {
+    fn dial(&self, address: SocketAddr) -> JoinedDialFuture;
+}
+
 pub(crate) struct JoinedStatusRoute {
     address: SocketAddr,
     pin: [u8; 44],
     key: GatewayKey,
+    dial: Arc<dyn JoinedStatusDial>,
 }
 
 impl JoinedStatusRoute {
-    pub(crate) fn new(address: SocketAddr, pin: [u8; 44]) -> Result<Self> {
+    pub(crate) fn new(
+        address: SocketAddr,
+        pin: [u8; 44],
+        dial: Arc<dyn JoinedStatusDial>,
+    ) -> Result<Self> {
         if address.port() == 0 {
             return Err(ErrorKind::InvalidInput.into());
         }
         let key = relay_key(&pin).ok_or(ErrorKind::InvalidInput)?;
-        Ok(Self { address, pin, key })
+        Ok(Self {
+            address,
+            pin,
+            key,
+            dial,
+        })
     }
 
     pub(crate) fn address(&self) -> SocketAddr {
@@ -88,15 +106,16 @@ impl JoinedStatusRoute {
         // caller runtime is driving status_completed. Do not create a runtime,
         // spawn a second reader, or move a pending dial out of this owner.
         let raw = reactor.block_on(async {
+            // Refuse even the port invocation before budget/stop admission.
+            remaining(clock.as_ref(), expires_ms, &stop, &wake)?;
             await_dial(
-                tokio::net::TcpStream::connect(self.address),
+                self.dial.dial(self.address),
                 clock.as_ref(),
                 expires_ms,
                 &stop,
                 &wake,
             )
-            .await?
-            .into_std()
+            .await
         })?;
         raw.set_nonblocking(false)?;
         let handle = stop.register(&Arc::new(()), &raw)?;
@@ -217,7 +236,8 @@ mod tests {
             assert!(!matches!(socket.read(&mut byte), Ok(1)));
         });
         let stop = ReadStop::new();
-        let route = JoinedStatusRoute::new(addr, pin).unwrap();
+        let route =
+            JoinedStatusRoute::new(addr, pin, Arc::new(crate::retained::TokioJoinedDial)).unwrap();
         let reactor = tokio::runtime::Handle::current();
         let worker_stop = stop.clone();
         let (mut joined, _) = tokio::task::spawn_blocking(move || {
@@ -243,50 +263,6 @@ mod tests {
         peer.join().unwrap();
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn stop_drops_the_one_pending_dial() {
-        use std::{
-            future::poll_fn,
-            sync::atomic::{AtomicBool, Ordering},
-            task::Poll,
-        };
-        struct DropFlag(Arc<AtomicBool>);
-        impl Drop for DropFlag {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-        let addr = "127.0.0.1:9".parse().unwrap();
-        let stop = ReadStop::new();
-        let wake = WakeEndpoint::new(addr);
-        let dropped = Arc::new(AtomicBool::new(false));
-        let polled = Arc::new(tokio::sync::Notify::new());
-        let on_poll = polled.clone();
-        let witness = DropFlag(dropped.clone());
-        let worker_stop = stop.clone();
-        let worker = tokio::spawn(async move {
-            await_dial(
-                poll_fn(move |_| {
-                    let _keep = &witness;
-                    on_poll.notify_one();
-                    Poll::<Result<()>>::Pending
-                }),
-                &Time,
-                1_000,
-                &worker_stop,
-                &wake,
-            )
-            .await
-        });
-        polled.notified().await;
-        stop.stop();
-        assert_eq!(
-            worker.await.unwrap().unwrap_err().kind(),
-            ErrorKind::ConnectionAborted
-        );
-        assert!(dropped.load(Ordering::SeqCst));
-    }
-
     #[tokio::test]
     async fn expired_or_stopped_attempt_cannot_dial_or_send_relay_preamble() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -299,7 +275,9 @@ mod tests {
             let pin = NativeIdentity::generate(&mut OsEntropy)
                 .unwrap()
                 .public_spki();
-            let route = JoinedStatusRoute::new(addr, pin).unwrap();
+            let route =
+                JoinedStatusRoute::new(addr, pin, Arc::new(crate::retained::TokioJoinedDial))
+                    .unwrap();
             let stop = ReadStop::new();
             if is_stopped {
                 stop.stop();

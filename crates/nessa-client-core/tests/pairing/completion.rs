@@ -409,7 +409,7 @@ async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes(
 #[cfg(feature = "test-support")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay() {
-    use crate::retained::{joined_status::JoinedStatusRoute, ReadStop};
+    use crate::retained::{joined_status::JoinedStatusRoute, ReadStop, TokioJoinedDial};
     use nessa_auth::adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy};
     use nessa_protocol::{
         pairing::{
@@ -448,7 +448,7 @@ async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay(
         .public_spki();
     let wrong = client
         .status_joined_completed(
-            JoinedStatusRoute::new(address, other).unwrap(),
+            JoinedStatusRoute::new(address, other, Arc::new(TokioJoinedDial)).unwrap(),
             ReadStop::new(),
             3_000,
             None,
@@ -493,7 +493,7 @@ async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay(
     let refusal = timeout(
         Duration::from_secs(5),
         client.status_joined_completed(
-            JoinedStatusRoute::new(address, pin).unwrap(),
+            JoinedStatusRoute::new(address, pin, Arc::new(TokioJoinedDial)).unwrap(),
             ReadStop::new(),
             3_000,
             None,
@@ -506,4 +506,107 @@ async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay(
     .unwrap();
     assert!(matches!(refusal, Err(NativeClientError::Refused)));
     peer.join().unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn joined_selected_owner_injects_one_dial_and_drains_on_stop() {
+    use crate::retained::{
+        joined_status::{JoinedDialFuture, JoinedStatusDial, JoinedStatusRoute},
+        ReadStop,
+    };
+    use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
+    use std::{
+        future::poll_fn,
+        io::{Error, ErrorKind},
+        net::SocketAddr,
+        sync::atomic::AtomicBool,
+        task::Poll,
+    };
+
+    struct DropWitness(Arc<AtomicBool>);
+    impl Drop for DropWitness {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    struct Dialogue {
+        address: SocketAddr,
+        calls: AtomicUsize,
+        pending: bool,
+        polled: Arc<Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl JoinedStatusDial for Dialogue {
+        fn dial(&self, address: SocketAddr) -> JoinedDialFuture {
+            assert_eq!(address, self.address);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.pending {
+                return Box::pin(async { Err(Error::from(ErrorKind::ConnectionRefused)) });
+            }
+            let witness = DropWitness(self.dropped.clone());
+            let polled = self.polled.clone();
+            Box::pin(poll_fn(move |_| {
+                let _retained = &witness;
+                polled.notify_one();
+                Poll::Pending
+            }))
+        }
+    }
+    let address = "127.0.0.1:9".parse().unwrap();
+    let pin = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let client = NativeEnrollmentClient::new(
+        Arc::new(DiscoverySaved {
+            intent,
+            pin,
+            credential: CredentialId::new("issued").unwrap(),
+        }),
+        Arc::new(Time),
+    );
+    for (expires, pend, expected_calls, expected_kind) in [
+        (0, false, 0, ErrorKind::TimedOut),
+        (1_000, false, 1, ErrorKind::ConnectionRefused),
+        (1_000, true, 1, ErrorKind::ConnectionAborted),
+    ] {
+        let stop = ReadStop::new();
+        let port = Arc::new(Dialogue {
+            address,
+            calls: AtomicUsize::new(0),
+            pending: pend,
+            polled: Arc::new(Notify::new()),
+            dropped: Arc::new(AtomicBool::new(false)),
+        });
+        let route = JoinedStatusRoute::new(address, pin, port.clone()).unwrap();
+        let action =
+            client.status_joined_completed(route, stop.clone(), expires, None, || {}, |r| r);
+        let result = if pend {
+            let stop_after_poll = async {
+                port.polled.notified().await;
+                stop.stop();
+            };
+            timeout(Duration::from_secs(3), async {
+                tokio::join!(action, stop_after_poll).0
+            })
+            .await
+            .unwrap()
+        } else {
+            timeout(Duration::from_secs(3), action).await.unwrap()
+        };
+        assert!(
+            matches!(result.unwrap(), Err(NativeClientError::Io(kind)) if kind == expected_kind)
+        );
+        assert_eq!(port.calls.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(port.dropped.load(Ordering::SeqCst), pend);
+    }
 }

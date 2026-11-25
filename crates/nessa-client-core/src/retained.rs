@@ -79,6 +79,8 @@ use nessa_sync::replication::{
     domain::{Id, Limits, Scope},
 };
 pub(crate) use relay::race;
+#[cfg(feature = "test-support")]
+pub(crate) use relay::TokioJoinedDial;
 use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
