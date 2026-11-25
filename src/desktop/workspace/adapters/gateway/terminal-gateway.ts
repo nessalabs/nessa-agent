@@ -87,8 +87,8 @@ interface LiveView {
   readonly listeners: Set<(message: TerminalProtocolMessage) => void>
   /** The last fit; none until the view is first measured, so it is not attached. */
   fit: TerminalFit | null
-  /** A view whose first attach reached the client needs restoring on a new socket. */
-  attachRequested: boolean
+  /** A fit that failed to reach a client also needs restoring once one is adopted. */
+  attachment: "waiting-for-client" | "requested" | null
 }
 
 export function terminalGateway(options: {
@@ -133,9 +133,10 @@ export function terminalGateway(options: {
     const revision = connectionRevision
     await Promise.all(
       Array.from(views.values(), async (view) => {
-        if (!view.attachRequested || !view.fit) return
+        if (!view.attachment || !view.fit) return
         const id = { terminalId: view.terminalId, viewId: view.viewId }
         try {
+          view.attachment = "requested"
           await client.terminals.attach({ ...id, ...view.fit })
           if (
             revision === connectionRevision &&
@@ -212,9 +213,16 @@ export function terminalGateway(options: {
     return binding
   }
 
-  const send = (what: string, act: (api: TerminalApi) => Promise<void>) => {
+  const send = (
+    what: string,
+    act: (api: TerminalApi) => Promise<void>,
+    view?: LiveView,
+  ) => {
     queue(what, async () => {
-      const current = await client()
+      const current = await client().catch((error: unknown) => {
+        if (view && !view.attachment) view.attachment = "waiting-for-client"
+        throw error
+      })
       await restore(current)
       await act(current.terminals)
     })
@@ -279,7 +287,7 @@ export function terminalGateway(options: {
         viewId: options.newId(),
         listeners: new Set(),
         fit: null,
-        attachRequested: false,
+        attachment: null,
       }
       const key = route(terminalId, view.viewId)
       views.set(key, view)
@@ -290,7 +298,7 @@ export function terminalGateway(options: {
         ...(view.fit as TerminalFit),
       })
       const attach = (api: TerminalApi) => {
-        view.attachRequested = true
+        view.attachment = "requested"
         return api.attach(params())
       }
       return {
@@ -301,22 +309,30 @@ export function terminalGateway(options: {
         fit(fit) {
           if (released) return
           view.fit = fit
-          send("view", async (api) => {
-            if (released) return
-            if (view.attachRequested) await api.fit(params())
-            else await attach(api)
-          })
+          send(
+            "view",
+            async (api) => {
+              if (released) return
+              if (view.attachment === "requested") await api.fit(params())
+              else await attach(api)
+            },
+            view,
+          )
         },
         focus(fit) {
           if (released) return
           view.fit = fit
           focusedViews.set(terminalId, view)
           // Focus names a view the gateway holds: a view not shown yet is attached first.
-          send("focus", async (api) => {
-            if (released) return
-            if (!view.attachRequested) await attach(api)
-            if (!released) await api.focus(params())
-          })
+          send(
+            "focus",
+            async (api) => {
+              if (released) return
+              if (view.attachment !== "requested") await attach(api)
+              if (!released) await api.focus(params())
+            },
+            view,
+          )
         },
         input(bytes) {
           if (!released) type(terminalId, bytes)
@@ -331,7 +347,7 @@ export function terminalGateway(options: {
           views.delete(key)
           if (focusedViews.get(terminalId) === view) focusedViews.delete(terminalId)
           view.listeners.clear()
-          if (view.attachRequested) {
+          if (view.attachment === "requested") {
             send("release", (api) => api.detach(terminalId, view.viewId))
           }
           stopFollowingIdleClient()

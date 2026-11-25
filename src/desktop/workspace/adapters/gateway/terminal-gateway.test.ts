@@ -4,7 +4,7 @@ import type { TerminalProtocolMessage } from "../../application/ports"
 import type { TerminalEntry } from "../../model/terminal"
 import { settle } from "../../testing"
 import { deferred, fakeGateway } from "./fake-gateway"
-import { terminalGateway } from "./terminal-gateway"
+import { terminalGateway, type TerminalClient } from "./terminal-gateway"
 
 /** Past every queued send: they wait in line, so a few microtasks are not enough. */
 const drained = () => new Promise((resolve) => setTimeout(resolve, 30))
@@ -154,6 +154,42 @@ describe("the gateway's terminals", () => {
       viewId: "view-1",
       ...fit,
     })
+    view.release()
+  })
+
+  it("attaches using the saved fit when the workspace adopts a client after a refused first fit", async () => {
+    const gateway = fakeGateway()
+    const fit = { cols: 80, rows: 24 }
+    const terminal = await gateway.client.terminals.open({ requestId: "r1", ...fit })
+    const attach = vi.spyOn(gateway.client.terminals, "attach")
+    const initial = deferred<TerminalClient>()
+    const connected = vi
+      .fn()
+      .mockReturnValueOnce(initial.promise)
+      .mockResolvedValue(gateway.client)
+    const followClient = vi
+      .fn<(adopt: (client: TerminalClient) => void) => () => void>()
+      .mockReturnValue(() => {})
+    const source = terminalGateway({ connected, followClient, newId: () => "view-1" })
+    const view = source.view(terminal.terminalId)
+    const output: string[] = []
+    view.subscribe((message) => output.push(message.type))
+    view.fit(fit)
+    await settle()
+    expect(connected).toHaveBeenCalledTimes(1)
+    initial.reject(new Error("unavailable"))
+    await settle(20)
+    expect(attach).not.toHaveBeenCalled()
+
+    followClient.mock.calls[0][0](gateway.client)
+    await settle(20)
+    expect(connected).toHaveBeenCalledTimes(1)
+    expect(attach).toHaveBeenCalledExactlyOnceWith({
+      terminalId: terminal.terminalId,
+      viewId: "view-1",
+      ...fit,
+    })
+    expect(output).toEqual(["ready", "frame"])
     view.release()
   })
 
