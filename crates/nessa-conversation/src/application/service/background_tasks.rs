@@ -430,6 +430,9 @@ impl ConversationService {
         stop: watch::Receiver<Option<TaskStop>>,
         withdrawal: watch::Receiver<bool>,
     ) -> Result<(), BackgroundTaskError> {
+        // Only the owner that ran the command can report its cleanup. One that
+        // only delivers a recovered outcome stopped nothing, so it claims none.
+        let ran = execute.is_some();
         if let Some(target) = execute {
             let outcome = tasks
                 .runner
@@ -491,10 +494,11 @@ impl ConversationService {
             self.deliver_background_task(tasks, &record, withdrawal)
                 .await?;
         }
-        if record
-            .lifecycle
-            .outcome()
-            .is_some_and(|o| !o.cleanup_verified)
+        if ran
+            && record
+                .lifecycle
+                .outcome()
+                .is_some_and(|o| !o.cleanup_verified)
         {
             return Err(BackgroundTaskError::CleanupUnverified);
         }
@@ -675,9 +679,9 @@ impl ConversationService {
             return true;
         }
         match tasks.store.pending().await {
-            Ok(records) => records
-                .iter()
-                .any(|r| r.lifecycle.outcome().is_none_or(|o| !o.cleanup_verified)),
+            // A record settled with unconfirmed cleanup names nothing this
+            // gateway holds or could release (see `stop_background_tasks`).
+            Ok(records) => records.iter().any(|r| r.lifecycle.outcome().is_none()),
             Err(_) => true,
         }
     }
@@ -784,9 +788,29 @@ impl ConversationService {
         }
         match tasks.store.pending().await {
             Ok(records) => {
-                for record in records.into_iter().filter(|r| {
-                    conversation.is_none_or(|id| id == &r.source.conversation)
-                        && r.lifecycle.outcome().is_none_or(|o| !o.cleanup_verified)
+                for record in records.into_iter().filter(|r| match conversation {
+                    // Deleting a conversation forgets its records, so any
+                    // unknown cleanup among them refuses the deletion.
+                    Some(id) => {
+                        id == &r.source.conversation
+                            && r.lifecycle.outcome().is_none_or(|o| !o.cleanup_verified)
+                    }
+                    // A gateway stop answers for the tasks it stopped: their
+                    // owners were joined above. A record settled before this
+                    // stop, with cleanup it could not confirm, stays saved for
+                    // the next gateway as it is. No stop can confirm it, so
+                    // counting it here would refuse every retirement for good
+                    // and keep an older gateway in place of every update.
+                    None => {
+                        if r.lifecycle.outcome().is_some_and(|o| !o.cleanup_verified) {
+                            tracing::warn!(
+                                conversation = %r.source.conversation,
+                                task = r.id.as_str(),
+                                "a background task settled earlier with unconfirmed cleanup; its record is kept"
+                            );
+                        }
+                        r.lifecycle.outcome().is_none()
+                    }
                 }) {
                     failures.push(BackgroundCleanupFailure {
                         conversation: Some(record.source.conversation),
