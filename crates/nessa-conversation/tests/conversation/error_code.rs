@@ -38,7 +38,7 @@ fn configuration_mismatch_is_not_a_transient_outage() {
 }
 
 #[test]
-fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
+fn a_remote_hosts_refusals_are_unavailable_and_never_this_gateways_configuration() {
     use nessa_sdk::domain::agent_execution::leases::LeaseRefusal;
     for (refusal, code) in [
         (
@@ -59,15 +59,15 @@ fn an_ssh_hosts_refusals_are_the_hosts_and_never_this_gateways_configuration() {
         ),
         (
             LeaseRefusal::EnvironmentVersionMismatch,
-            ConversationErrorCode::EnvironmentVersionMismatch,
+            ConversationErrorCode::EnvironmentUnavailable,
         ),
         (
             LeaseRefusal::EnvironmentPlatformUnsupported,
-            ConversationErrorCode::EnvironmentPlatformUnsupported,
+            ConversationErrorCode::EnvironmentUnavailable,
         ),
         (
             LeaseRefusal::EnvironmentInstallFailed,
-            ConversationErrorCode::EnvironmentInstallFailed,
+            ConversationErrorCode::EnvironmentUnavailable,
         ),
         (
             LeaseRefusal::SandboxUnavailable,

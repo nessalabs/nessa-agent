@@ -1,6 +1,6 @@
 /**
- * A `SharingSource` held in memory: the sample workspace's linked devices
- * and command hosts, and the grants made on its sessions while the window
+ * A `SharingSource` held in memory: the sample workspace's linked devices,
+ * and the grants made on its sessions while the window
  * lives. What the window shares through without a gateway — previews and
  * tests — and nothing a gateway would not say: its bounds are the ones the
  * schema publishes (`toolPolicyBounds`); its policy revisions, as the
@@ -22,9 +22,6 @@ export const sampleShareTargets: readonly ShareTarget[] = [
   { credentialId: "sample-tablet", issuedAt: 1_759_000_000, fullAccess: false },
 ]
 
-/** The sample's hosts the owner's turns may run commands on. */
-export const sampleCommandHosts: readonly string[] = ["devbox", "me@build.example"]
-
 type Method = "grants" | "choices" | "share" | "unshare"
 
 export interface InMemorySharing extends SharingSource {
@@ -40,14 +37,12 @@ export interface InMemorySharing extends SharingSource {
 
 export function inMemorySharing(options: {
   readonly targets?: readonly ShareTarget[]
-  readonly commandHosts?: readonly string[]
   /** The window's clock, which composition injects; tests pass their own. */
   readonly now: () => number
   /** A refusal for a call, when a test asks for one; nothing is changed then. */
   readonly refuse?: (method: Method) => SharingFailure | undefined
 }): InMemorySharing {
   const targets = options.targets ?? sampleShareTargets
-  const commandHosts = options.commandHosts ?? sampleCommandHosts
   const now = options.now
   let grants: Readonly<Record<string, readonly ShareGrant[]>> = {}
   // The last revision handed out, for every grant of every session.
@@ -76,7 +71,7 @@ export function inMemorySharing(options: {
     async choices() {
       calls.push({ method: "choices" })
       refused("choices")
-      return { targets, commandHosts, limits: toolPolicyBounds }
+      return { targets, limits: toolPolicyBounds }
     },
     async share(sessionId, request, requestId) {
       calls.push({

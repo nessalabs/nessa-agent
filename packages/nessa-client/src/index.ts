@@ -260,22 +260,6 @@ export {
   type VoiceCall,
   type VoiceStatus,
 } from "./generated/product.js"
-export { type LoginsApi } from "./presentation/logins-api.js"
-export {
-  NessaLoginsError,
-  LoginsRefusalCode,
-  type LoginsMethod,
-} from "./application/logins-error.js"
-export {
-  ChatgptSignInEnd,
-  LoginAgent,
-  LoginsErrorCode,
-  type ChatgptAccount,
-  type ChatgptLogins,
-  type ChatgptSignIn,
-  type LoginsStatus,
-  type SavedLogin,
-} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,

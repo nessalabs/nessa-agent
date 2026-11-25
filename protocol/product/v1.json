@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 152,
+          "maxItems": 145,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -3431,7 +3431,7 @@
     "ConversationToolPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. An allowed run goes only to a host commandHosts names and the gateway grants commands on, and runs only a program the gateway allows. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
+      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
       "properties": {
         "preset": {
           "$ref": "#/$defs/ConversationToolPreset",
@@ -3458,17 +3458,6 @@
             "x-utf8MaxBytes": 48
           },
           "description": "Tools the holder's turns may never call. Present with allow, without preset."
-        },
-        "commandHosts": {
-          "type": "array",
-          "maxItems": 16,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 253,
-            "x-utf8MaxBytes": 253
-          },
-          "description": "The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host."
         }
       },
       "required": []
@@ -5008,9 +4997,6 @@
         "sandbox_unavailable",
         "environment_not_configured",
         "environment_unavailable",
-        "environment_version_mismatch",
-        "environment_platform_unsupported",
-        "environment_install_failed",
         "model_unavailable",
         "approval_mode_unavailable",
         "approval_mode_not_applied",
@@ -5075,7 +5061,7 @@
         "unavailable_after_save",
         "channel_not_found"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. agent_sign_in_required means the agent could not start because it is not signed in where the conversation runs (the provider answered that it needs authentication): nothing was sent to it, and signing it in there is what changes the answer; a switchAgent refused so leaves the conversation on its agent. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming any environment other than here, or a command on a conversation an older build placed on another computer: every gateway runs only its own agents (ADR 1417), so nothing ran, and the conversation's history stays readable. environment_unavailable is a workspace that could not be opened: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once it is available. environment_version_mismatch, environment_platform_unsupported and environment_install_failed are refusals older builds recorded for a conversation placed on another computer; this build states none of them, and reads them in a lease's history. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. agent_sign_in_required means the agent could not start because it is not signed in where the conversation runs (the provider answered that it needs authentication): nothing was sent to it, and signing it in there is what changes the answer; a switchAgent refused so leaves the conversation on its agent. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming any environment other than here, or a command on a conversation an older build placed on another computer: every gateway runs only its own agents (ADR 1417), so nothing ran, and the conversation's history stays readable. environment_unavailable is a workspace that could not be opened: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once it is available. A lease refusal an older build recorded for a conversation placed on another computer is read in its lease history (ConversationLeaseRefusal), not answered as a code here. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged."
     },
     "ConversationAnswerOption": {
       "type": "object",
@@ -9803,217 +9789,6 @@
         }
       },
       "required": ["requestId", "receiptId", "scope", "position", "appliedAtMs"]
-    },
-    "LoginAgent": {
-      "type": "string",
-      "enum": ["claude", "codex", "opencode"],
-      "description": "An agent whose sign-in the gateway can keep as a saved login."
-    },
-    "SavedLogin": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Whether one agent has a saved login. The login itself is never returned.",
-      "properties": {
-        "agent": { "$ref": "#/$defs/LoginAgent", "description": "The agent." },
-        "saved": {
-          "type": "boolean",
-          "description": "Whether a login is saved in the gateway's vault for it."
-        }
-      },
-      "required": ["agent", "saved"]
-    },
-    "LoginsStatus": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Result of every logins method: which agents have a saved login, handed to agents on the cloud boxes this gateway makes; this gateway's own machine never is.",
-      "properties": {
-        "logins": {
-          "type": "array",
-          "minItems": 3,
-          "maxItems": 3,
-          "items": { "$ref": "#/$defs/SavedLogin" },
-          "description": "One entry per agent, in the order claude, codex, opencode."
-        },
-        "chatgpt": {
-          "$ref": "#/$defs/ChatgptLogins",
-          "description": "The ChatGPT accounts Codex can use on other machines in place of its API key, and the sign-in. Absent when this gateway keeps none (ChatGPT sign-in is off this run)."
-        }
-      },
-      "required": ["logins"]
-    },
-    "LoginsSaveParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with.",
-      "properties": {
-        "agent": {
-          "$ref": "#/$defs/LoginAgent",
-          "description": "The agent the login is for."
-        },
-        "login": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 16384,
-          "pattern": "^[!-~]+$",
-          "description": "The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces."
-        }
-      },
-      "required": ["agent", "login"]
-    },
-    "LoginsRemoveParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close.",
-      "properties": {
-        "agent": { "$ref": "#/$defs/LoginAgent", "description": "The agent." }
-      },
-      "required": ["agent"]
-    },
-    "ChatgptAccount": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "One ChatGPT account kept for Codex. Its tokens are never returned.",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uuid",
-          "description": "The account, as the other ChatGPT methods name it."
-        },
-        "email": {
-          "type": "string",
-          "maxLength": 320,
-          "description": "The email the account signed in with, as OpenAI's ID token gave it; empty when it gave none."
-        },
-        "inUse": {
-          "type": "boolean",
-          "description": "Whether Codex on other machines is handed this account's token. At most one account is."
-        },
-        "needsSignIn": {
-          "type": "boolean",
-          "description": "Whether OpenAI refused to refresh it, so it must be signed in again before it is used."
-        }
-      },
-      "required": ["id", "email", "inUse", "needsSignIn"]
-    },
-    "ChatgptSignInEnd": {
-      "type": "string",
-      "enum": [
-        "signed_in",
-        "declined",
-        "incomplete",
-        "wrong_account",
-        "exchange_failed",
-        "invalid_identity",
-        "plan_not_enabled",
-        "too_many_accounts",
-        "not_saved",
-        "timed_out",
-        "cancelled",
-        "replaced",
-        "listen_failed"
-      ],
-      "description": "How a ChatGPT sign-in ended. signed_in: the account is kept. declined: it was declined in the browser. incomplete: the browser came back without what a sign-in gives. wrong_account: signing an account in again came back as another account. exchange_failed: OpenAI did not give tokens for the sign-in. invalid_identity: OpenAI's ID token did not verify. plan_not_enabled: the account's plan did not grant use of ChatGPT tokens. too_many_accounts: as many accounts as are kept already are. not_saved: the tokens could not be kept in the vault. timed_out: the browser did not come back in time. cancelled: it was cancelled. replaced: another sign-in started in its place. listen_failed: this computer could not listen for the browser's return."
-    },
-    "ChatgptSignIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Where the ChatGPT sign-in stands: waiting for the browser to come back from authorizeUrl, or idle with how the last one this run ended.",
-      "properties": {
-        "state": {
-          "type": "string",
-          "enum": ["idle", "waiting"],
-          "description": "Whether a sign-in waits for the browser."
-        },
-        "attempt": {
-          "type": "string",
-          "format": "uuid",
-          "description": "While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it."
-        },
-        "authorizeUrl": {
-          "type": "string",
-          "maxLength": 8192,
-          "description": "While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to."
-        },
-        "accountId": {
-          "type": "string",
-          "format": "uuid",
-          "description": "While waiting: the account signing in again; absent for a new account."
-        },
-        "last": {
-          "$ref": "#/$defs/ChatgptSignInEnd",
-          "description": "While idle: how the last sign-in this run ended, if one did."
-        }
-      },
-      "required": ["state"]
-    },
-    "ChatgptLogins": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "The ChatGPT accounts kept for Codex, and the sign-in.",
-      "properties": {
-        "accounts": {
-          "type": "array",
-          "maxItems": 8,
-          "items": { "$ref": "#/$defs/ChatgptAccount" },
-          "description": "The accounts, in the order they were first signed in."
-        },
-        "signIn": { "$ref": "#/$defs/ChatgptSignIn", "description": "The sign-in." },
-        "started": {
-          "type": "string",
-          "format": "uuid",
-          "description": "Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile."
-        }
-      },
-      "required": ["accounts", "signIn"]
-    },
-    "LoginsChatgptSignInParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced.",
-      "properties": {
-        "accountId": {
-          "type": "string",
-          "format": "uuid",
-          "description": "The account to sign in again; absent for a new account."
-        }
-      },
-      "required": []
-    },
-    "LoginsChatgptUseParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Choose the ChatGPT account Codex on other machines uses (logins.chatgptUse), or none, so its API key is used again. Applies to agents opened after it.",
-      "properties": {
-        "accountId": {
-          "type": ["string", "null"],
-          "format": "uuid",
-          "description": "The account, or null for none."
-        }
-      },
-      "required": ["accountId"]
-    },
-    "LoginsChatgptRemoveParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "description": "Forget a ChatGPT account (logins.chatgptRemove), revoking its refresh token at OpenAI when it can. Agents already open keep the token they opened with until it is renewed.",
-      "properties": {
-        "accountId": { "type": "string", "format": "uuid", "description": "The account." }
-      },
-      "required": ["accountId"]
-    },
-    "LoginsErrorCode": {
-      "type": "string",
-      "enum": [
-        "logins_not_configured",
-        "logins_storage_unavailable",
-        "logins_audit_unavailable",
-        "logins_change_unrecorded",
-        "logins_too_many_devices",
-        "logins_unknown_account",
-        "logins_chatgpt_not_configured",
-        "vault_locked"
-      ],
-      "description": "Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. logins_unknown_account: no ChatGPT account has that id. logins_chatgpt_not_configured: ChatGPT sign-in is off this run. vault_locked: unlock Nessa first."
     },
     "VoiceStatus": {
       "type": "object",

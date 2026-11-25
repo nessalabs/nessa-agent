@@ -28,7 +28,6 @@ pub enum RestoreFault {
     Rollback,
     LiveOccupied,
     QuarantineOccupied,
-    ExecutorsUnfenced,
     Audit,
     Denied,
     /// The tree is not an accepted live restore. A gateway must not serve it.
@@ -61,7 +60,6 @@ impl RestoreFault {
             Self::Rollback => "rollback",
             Self::LiveOccupied => "live-occupied",
             Self::QuarantineOccupied => "quarantine-occupied",
-            Self::ExecutorsUnfenced => "executors-unfenced",
             Self::Audit => "audit",
             Self::Denied => "denied",
             Self::NotAccepted => "not-accepted",
@@ -81,34 +79,6 @@ impl RestoreFault {
             Self::NamespaceOccupied => "namespace-occupied",
         }
     }
-}
-
-/// What one lease line did, in file order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LeaseMark {
-    /// `granted` or `command_granted`.
-    Opened,
-    /// `ended`.
-    Closed,
-    /// Any other line. It does not open or close a lease.
-    Noted,
-}
-
-/// Lease ids that are still open after `events`, in the order they opened.
-pub fn leases_to_interrupt(events: &[(String, LeaseMark)]) -> Vec<String> {
-    let mut open = Vec::new();
-    for (id, mark) in events {
-        match mark {
-            LeaseMark::Opened => {
-                if !open.iter().any(|existing: &String| existing == id) {
-                    open.push(id.clone());
-                }
-            }
-            LeaseMark::Closed => open.retain(|existing| existing != id),
-            LeaseMark::Noted => {}
-        }
-    }
-    open
 }
 
 /// Whether the later inventory may replace the cut's fence set.
@@ -569,15 +539,10 @@ pub fn deferred_for_open(
 pub struct Journal {
     pub freshness: Freshness,
     pub seal: Fingerprint,
-    pub leases: Vec<String>,
     pub files: Vec<SealedFile>,
 }
 
-pub fn encode_journal(
-    freshness: Freshness,
-    leases: &[String],
-    files: &[SealedFile],
-) -> Result<String, RestoreFault> {
+pub fn encode_journal(freshness: Freshness, files: &[SealedFile]) -> Result<String, RestoreFault> {
     let seal = seal_files(files)?;
     let mut ordered = files.to_vec();
     ordered.sort_by(|left, right| left.path.cmp(&right.path));
@@ -590,12 +555,6 @@ pub fn encode_journal(
     text.push_str("seal ");
     text.push_str(&seal.hex());
     text.push('\n');
-    for lease in leases {
-        checked_identity(lease.clone()).map_err(|_| RestoreFault::Unreadable)?;
-        text.push_str("lease ");
-        text.push_str(&encode_identity(lease));
-        text.push('\n');
-    }
     for file in &ordered {
         text.push_str("file ");
         text.push_str(&encode_identity(&file.path));
@@ -630,15 +589,16 @@ pub fn read_journal(text: &str) -> Result<Journal, RestoreFault> {
             .ok_or(RestoreFault::Tamper)?,
     )
     .map_err(|_| RestoreFault::Tamper)?;
-    let mut leases = Vec::new();
     let mut files = Vec::new();
     for line in lines {
         if line.is_empty() {
             continue;
         }
+        // A lease an older build staged, open in a remote worker's ledger
+        // (ADR 1417). No worker runs for it any more, so nothing is fenced
+        // for it; the seal covers files alone.
         if let Some(encoded) = line.strip_prefix("lease ") {
-            leases
-                .push(decode_identity(encoded, MAX_NAME_BYTES).map_err(|_| RestoreFault::Tamper)?);
+            decode_identity(encoded, MAX_NAME_BYTES).map_err(|_| RestoreFault::Tamper)?;
             continue;
         }
         let rest = line.strip_prefix("file ").ok_or(RestoreFault::Tamper)?;
@@ -659,7 +619,6 @@ pub fn read_journal(text: &str) -> Result<Journal, RestoreFault> {
     Ok(Journal {
         freshness,
         seal,
-        leases,
         files,
     })
 }
@@ -679,10 +638,6 @@ pub fn posture(at_live_path: bool) -> Posture {
     }
 }
 
-pub fn receipt_is_usable(text: &str) -> bool {
-    !text.is_empty() && text.len() <= MAX_NAME_BYTES && text.bytes().all(|byte| byte >= 0x20)
-}
-
 /// The audit spelling of a path.
 ///
 /// `Path::display` replaces bytes that are not Unicode, so two roots can share
@@ -691,14 +646,6 @@ pub fn audit_path(path: &Path) -> Result<String, RestoreFault> {
     path.to_str()
         .map(ToOwned::to_owned)
         .ok_or(RestoreFault::Paths)
-}
-
-/// One lease and the receipt that covered it.
-///
-/// Each value is percent-encoded. A space in either value is not the separator,
-/// so `a b` with `c` is a different line from `a` with `b c`.
-pub fn attested_pair(lease: &str, receipt: &str) -> String {
-    format!("{} {}\n", encode_identity(lease), encode_identity(receipt))
 }
 
 /// The sealed effect names this journal digest and this one staging.
@@ -976,18 +923,6 @@ mod tests {
     }
 
     #[test]
-    fn an_open_lease_is_interrupted_and_a_closed_one_is_not() {
-        let events = [
-            ("live".into(), LeaseMark::Opened),
-            ("done".into(), LeaseMark::Opened),
-            ("done".into(), LeaseMark::Closed),
-            ("live".into(), LeaseMark::Noted),
-            ("live".into(), LeaseMark::Opened),
-        ];
-        assert_eq!(leases_to_interrupt(&events), vec!["live".to_owned()]);
-    }
-
-    #[test]
     fn an_older_inventory_is_a_rollback() {
         let cut = fence_log(vec![DeletionFence::conversation("conv-1").unwrap()]);
         let empty = DeletionLog::default();
@@ -1103,15 +1038,33 @@ mod tests {
             path: "identity.txt".into(),
             fingerprint: Fingerprint::of(b"re-pair\n"),
         }];
-        let text = encode_journal(Freshness::Cut, &[], &files).unwrap();
+        let text = encode_journal(Freshness::Cut, &files).unwrap();
         let journal = read_journal(&text).unwrap();
         assert_eq!(journal.files, files);
         let tampered = text.replace(&files[0].fingerprint.hex(), &Fingerprint::of(b"x").hex());
         assert_eq!(read_journal(&tampered).unwrap_err(), RestoreFault::Tamper);
     }
 
+    /// A quarantine an older build staged named each lease still open in a
+    /// remote worker's ledger. No worker runs for one any more (ADR 1417), so
+    /// the line is read past and the journal is the same files.
     #[test]
-    fn paths_and_receipts_are_constrained() {
+    fn a_lease_an_older_build_journaled_is_read_past() {
+        let files = vec![SealedFile {
+            path: "identity.txt".into(),
+            fingerprint: Fingerprint::of(b"re-pair\n"),
+        }];
+        let text = encode_journal(Freshness::Cut, &files).unwrap();
+        assert!(!text.contains("lease "));
+        let older = text.replacen("\nfile ", "\nlease lease-drill\nfile ", 1);
+        assert_ne!(older, text);
+        assert_eq!(read_journal(&older).unwrap(), read_journal(&text).unwrap());
+        let damaged = text.replacen("\nfile ", "\nlease a%zz\nfile ", 1);
+        assert_eq!(read_journal(&damaged).unwrap_err(), RestoreFault::Tamper);
+    }
+
+    #[test]
+    fn paths_are_constrained() {
         let root = if cfg!(windows) {
             PathBuf::from(r"C:\")
         } else {
@@ -1240,13 +1193,6 @@ mod tests {
         assert!(session_sidecar("sessions/conv-bulk.sqlite3.partial").is_none());
         assert!(session_sidecar("sessions/conv-bulk.sqlite3.partial.rejected").is_none());
         assert!(session_sidecar("records/share-grants/revoked.publication").is_none());
-        assert_eq!(
-            attested_pair("lease-9", "host-stopped"),
-            "lease-9 host-stopped\n"
-        );
-        assert_eq!(attested_pair("a b", "c"), "a%20b c\n");
-        assert_eq!(attested_pair("a", "b c"), "a b%20c\n");
-        assert_ne!(attested_pair("a b", "c"), attested_pair("a", "b c"));
         assert_eq!(audit_path(Path::new("/live")).unwrap(), "/live");
         #[cfg(unix)]
         {
@@ -1260,9 +1206,6 @@ mod tests {
                 RestoreFault::Paths
             );
         }
-        assert!(receipt_is_usable("stopped-host-1"));
-        assert!(!receipt_is_usable(""));
-        assert!(!receipt_is_usable("has\nline"));
         assert_eq!(posture(false), Posture::Quarantined);
         assert_eq!(posture(true), Posture::Live);
     }

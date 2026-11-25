@@ -3949,7 +3949,6 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest 0.13.4",
- "ring",
  "rustls",
  "security-framework",
  "security-framework-sys",

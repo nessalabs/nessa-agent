@@ -254,8 +254,8 @@ pub struct MachineRoutes {
     pub cloud_boxes: Option<Arc<crate::workspaces::application::CloudBoxes>>,
 }
 
-/// Credentials and accounts: credential admin, webhooks, GitHub, saved
-/// logins, voice and the vault.
+/// Credentials and accounts: credential admin, webhooks, GitHub, voice and
+/// the vault.
 #[derive(Clone, Default)]
 pub struct AccountRoutes {
     pub admin: Option<Arc<dyn CredentialAdmin>>,
@@ -263,9 +263,6 @@ pub struct AccountRoutes {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub github: Option<Arc<super::GithubRoutes>>,
-    /// The saved logins (`logins.*`). `None` answers
-    /// `logins_not_configured`.
-    pub logins: Option<Arc<crate::logins::application::SavedLoginsService>>,
     /// The voice key and calls (`voice.*`). `None` answers
     /// `voice_not_configured`.
     pub voice: Option<Arc<crate::voice::application::VoiceCalls>>,
@@ -539,15 +536,6 @@ impl ProductRouteState {
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.accounts.github = Some(github);
-        self
-    }
-
-    /// Register the saved logins the logins methods answer for.
-    pub fn with_logins(
-        mut self,
-        logins: Arc<crate::logins::application::SavedLoginsService>,
-    ) -> Self {
-        self.accounts.logins = Some(logins);
         self
     }
 

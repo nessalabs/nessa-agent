@@ -54,7 +54,6 @@ import {
   NativeHooksProvider,
   DecisionSettingsProvider,
   PermissionRulesProvider,
-  SavedLoginsProvider,
   VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
@@ -190,7 +189,6 @@ const dependencies = createDesktopDependencies({
   providerLoginAvailable,
   // The window's navigation policy hands an http(s) address to the person's
   // browser and keeps the window where it is (src-tauri/src/links.rs).
-  openInBrowser: hasNativeHost() ? (url) => window.location.assign(url) : undefined,
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
@@ -358,45 +356,41 @@ function DesktopRoot() {
                                                     <VoiceKeyProvider
                                                       gateway={dependencies.voiceKey}
                                                     >
-                                                      <SavedLoginsProvider
-                                                        gateway={dependencies.savedLogins}
+                                                      <VoiceProvider
+                                                        controller={voice}
+                                                        title={(sessionId) => {
+                                                          const sessions =
+                                                            store.getState().workspace
+                                                              .sessions
+                                                          return Object.hasOwn(
+                                                            sessions,
+                                                            sessionId,
+                                                          )
+                                                            ? sessions[sessionId].title
+                                                            : null
+                                                        }}
+                                                        showChat={(sessionId) =>
+                                                          void store.dispatch(
+                                                            openSession({ sessionId }),
+                                                          )
+                                                        }
                                                       >
-                                                        <VoiceProvider
-                                                          controller={voice}
-                                                          title={(sessionId) => {
-                                                            const sessions =
-                                                              store.getState().workspace
-                                                                .sessions
-                                                            return Object.hasOwn(
-                                                              sessions,
-                                                              sessionId,
-                                                            )
-                                                              ? sessions[sessionId].title
-                                                              : null
-                                                          }}
-                                                          showChat={(sessionId) =>
-                                                            void store.dispatch(
-                                                              openSession({ sessionId }),
-                                                            )
-                                                          }
-                                                        >
-                                                          {/* The window is dark only (desktop.html's
+                                                        {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                                          <CodeBlockProvider mode="dark">
-                                                            <DesktopWindow
-                                                              hostKind={host.kind}
-                                                              browserSurface={
-                                                                host.kind === "browser"
-                                                              }
-                                                              inspectable={
-                                                                import.meta.env.DEV
-                                                              }
-                                                            />
-                                                          </CodeBlockProvider>
-                                                        </VoiceProvider>
-                                                      </SavedLoginsProvider>
+                                                        <CodeBlockProvider mode="dark">
+                                                          <DesktopWindow
+                                                            hostKind={host.kind}
+                                                            browserSurface={
+                                                              host.kind === "browser"
+                                                            }
+                                                            inspectable={
+                                                              import.meta.env.DEV
+                                                            }
+                                                          />
+                                                        </CodeBlockProvider>
+                                                      </VoiceProvider>
                                                     </VoiceKeyProvider>
                                                   </GithubProvider>
                                                 </Agent37Provider>

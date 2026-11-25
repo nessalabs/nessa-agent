@@ -1,11 +1,10 @@
 /**
  * Sharing a session with a linked device (nessa_ui#128, #129): who it is
- * shared with, what each may do, and the room a Drive grant's tool policy
- * has for the hosts it may run commands on. The gateway owns every rule
- * here — whether a device may be granted, what a policy may hold — and
- * refuses past them; this model holds what it answered, and budgets the
- * hosts a person may pick against the host bound the gateway's schema
- * publishes (`SharingLimits`), never numbers of its own.
+ * shared with, and what each may do. The gateway owns every rule here —
+ * whether a device may be granted, what a policy may hold — and refuses
+ * past them; this model holds what it answered, and budgets a custom
+ * policy's patterns against the bound the gateway's schema publishes
+ * (`SharingLimits`), never numbers of its own.
  *
  * Words a person reads for each failure are the UI's
  * (`ui/share/share-copy.ts`); state keeps the kind.
@@ -18,22 +17,16 @@ export type ShareRole = "read" | "comment" | "drive"
 /** A named tool policy. */
 export type ToolPreset = "read_only_tools" | "no_shell" | "ask_everything" | "all"
 
-/**
- * The tools a Drive grant's turns may call, and the hosts they may run
- * commands on. Hosts not named run nothing: a grant naming none runs
- * commands nowhere.
- */
+/** The tools a Drive grant's turns may call. */
 export type ToolPolicy =
   | {
       readonly kind: "preset"
       readonly preset: ToolPreset
-      readonly commandHosts: readonly string[]
     }
   | {
       readonly kind: "rules"
       readonly allow: readonly string[]
       readonly deny: readonly string[]
-      readonly commandHosts: readonly string[]
     }
 
 /** One grant on the session, as the gateway lists it. */
@@ -57,13 +50,10 @@ export type ShareTarget = LinkedDevice
 
 /**
  * A tool policy's bounds as the gateway's schema publishes them: each of
- * allow and deny holds at most `patterns`; at most `hosts` hosts of at most
- * `hostBytes` UTF-8 bytes. Hosts are apart from the patterns.
+ * allow and deny holds at most `patterns`.
  */
 export interface SharingLimits {
   readonly patterns: number
-  readonly hosts: number
-  readonly hostBytes: number
 }
 
 /**
@@ -72,11 +62,6 @@ export interface SharingLimits {
  */
 export interface SharingChoices {
   readonly targets: readonly ShareTarget[]
-  /**
-   * The hosts the owner's own turns may run commands on (`agents.list`'s
-   * `commandHosts`): the only ones a grant could use.
-   */
-  readonly commandHosts: readonly string[]
   readonly limits: SharingLimits
 }
 
@@ -138,13 +123,6 @@ export function patternCount(policy: ToolPolicy): number {
   return policy.kind === "rules" ? policy.allow.length + policy.deny.length : 0
 }
 
-const utf8 = new TextEncoder()
-
-/** Whether a host's name fits a grant: an SSH destination can be longer than one may hold. */
-export function hostFits(limits: SharingLimits, host: string): boolean {
-  return utf8.encode(host).byteLength <= limits.hostBytes
-}
-
 /**
  * The patterns a person typed, between commas or one per line, each with
  * the spaces around it taken off and blanks dropped. What a pattern may be
@@ -202,16 +180,9 @@ export interface ShareDraft {
   readonly deny: string
   /** The patterns of the grant the draft started from (`patternsFrom`'s `kept`). */
   readonly kept: readonly string[]
-  /**
-   * The hosts checked, in the list's order. A host the grant holds that the
-   * gateway does not offer now is kept, and shown, until it is unchecked:
-   * a host offline for a moment is not taken out of a grant by a change to
-   * its tools.
-   */
-  readonly hosts: readonly string[]
 }
 
-/** A new draft for a device holding no grant: Read, the read-only preset for Drive, no host. */
+/** A new draft for a device holding no grant: Read, the read-only preset for Drive. */
 export function emptyDraft(credentialId: string | null): ShareDraft {
   return {
     credentialId,
@@ -221,7 +192,6 @@ export function emptyDraft(credentialId: string | null): ShareDraft {
     allow: "",
     deny: "",
     kept: [],
-    hosts: [],
   }
 }
 
@@ -234,15 +204,13 @@ function draftPatterns(draft: ShareDraft): { allow: string[]; deny: string[] } {
 }
 
 /** Why a draft cannot be sent yet. */
-export type DraftHold =
-  "no-target" | "changed" | "no-pattern" | "too-many-patterns" | "too-many-hosts"
+export type DraftHold = "no-target" | "changed" | "no-pattern" | "too-many-patterns"
 
 /**
  * The grant a draft asks for, or why it cannot be sent yet: no device; the
  * device's grant changed since the draft started from it; a custom policy
- * naming no pattern, or more in one list than the schema allows; more hosts
- * than the host bound allows. Nothing else is checked here: the gateway
- * says the rest.
+ * naming no pattern, or more in one list than the schema allows. Nothing
+ * else is checked here: the gateway says the rest.
  */
 export function requestFrom(
   draft: ShareDraft,
@@ -261,17 +229,15 @@ export function requestFrom(
       ok: true,
       request: { credentialId: draft.credentialId, role: draft.role, ...expected },
     }
-  const commandHosts = [...draft.hosts]
   const policy: ToolPolicy =
     draft.preset === "custom"
-      ? { kind: "rules", ...draftPatterns(draft), commandHosts }
-      : { kind: "preset", preset: draft.preset, commandHosts }
+      ? { kind: "rules", ...draftPatterns(draft) }
+      : { kind: "preset", preset: draft.preset }
   if (policy.kind === "rules") {
     if (patternCount(policy) === 0) return { ok: false, reason: "no-pattern" }
     if (Math.max(policy.allow.length, policy.deny.length) > limits.patterns)
       return { ok: false, reason: "too-many-patterns" }
   }
-  if (commandHosts.length > limits.hosts) return { ok: false, reason: "too-many-hosts" }
   return {
     ok: true,
     request: { credentialId: draft.credentialId, role: "drive", policy, ...expected },
@@ -288,7 +254,7 @@ export function draftFromGrant(grant: ShareGrant): ShareDraft {
   const policy = grant.policy
   if (!policy) return base
   return policy.kind === "preset"
-    ? { ...base, preset: policy.preset, hosts: policy.commandHosts }
+    ? { ...base, preset: policy.preset }
     : {
         ...base,
         preset: "custom",
@@ -296,7 +262,6 @@ export function draftFromGrant(grant: ShareGrant): ShareDraft {
         allow: policy.allow.join(", "),
         deny: policy.deny.join(", "),
         kept: [...policy.allow, ...policy.deny],
-        hosts: policy.commandHosts,
       }
 }
 

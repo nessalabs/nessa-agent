@@ -1,5 +1,4 @@
 import type { TerminalEntry } from "../model/terminal"
-import type { CodexChatgptSignIn } from "../../../provider-authentication/model/chatgpt-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { WindowChange, WindowChangeOutcome } from "../model/window-change"
@@ -509,8 +508,6 @@ export interface WorkspaceDependencies {
   /** Opens the provider login flow; resolution confirms launch, not sign-in. */
   readonly providerLoginAvailable?: () => Promise<boolean>
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
-  /** Signs a ChatGPT account in for Codex on other computers, kept by the gateway. */
-  readonly codexChatgptSignIn?: CodexChatgptSignIn
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

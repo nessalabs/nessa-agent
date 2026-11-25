@@ -18,7 +18,7 @@
  * not know, an answer the client's own validation refused, or a connection
  * that could not be made is `unanswered`, and is logged.
  *
- * The grants are read apart from the devices and hosts, so a failure in
+ * The grants are read apart from the devices, so a failure in
  * those leaves the grant list and its Revoke (D4).
  *
  * A session's id is its conversation's (`gateway-source.ts`).
@@ -89,9 +89,6 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.SandboxUnavailable]: "other",
   [ConversationErrorCode.EnvironmentNotConfigured]: "other",
   [ConversationErrorCode.EnvironmentUnavailable]: "other",
-  [ConversationErrorCode.EnvironmentVersionMismatch]: "other",
-  [ConversationErrorCode.EnvironmentPlatformUnsupported]: "other",
-  [ConversationErrorCode.EnvironmentInstallFailed]: "other",
   [ConversationErrorCode.ModelUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeNotApplied]: "other",
@@ -183,27 +180,22 @@ export function failureOf(error: unknown): SharingFailure {
   return "unanswered"
 }
 
-/** A listed policy in the model's words; hosts absent are none. */
+/** A listed policy in the model's words. */
 function policyOf(policy: ConversationToolPolicy): ToolPolicy {
-  const commandHosts = policy.commandHosts ?? []
   return policy.preset !== undefined
-    ? { kind: "preset", preset: policy.preset, commandHosts }
+    ? { kind: "preset", preset: policy.preset }
     : {
         kind: "rules",
         allow: policy.allow ?? [],
         deny: policy.deny ?? [],
-        commandHosts,
       }
 }
 
-/** A policy as the wire takes it: hosts only when it names one. */
+/** A policy as the wire takes it. */
 export function wirePolicy(policy: ToolPolicy): ConversationToolPolicy {
-  const hosts = policy.commandHosts.length
-    ? { commandHosts: [...policy.commandHosts] }
-    : {}
   return policy.kind === "preset"
-    ? { preset: policy.preset, ...hosts }
-    : { allow: [...policy.allow], deny: [...policy.deny], ...hosts }
+    ? { preset: policy.preset }
+    : { allow: [...policy.allow], deny: [...policy.deny] }
 }
 
 /** The wire set for one of the three choices the dialog offers. */
@@ -258,9 +250,6 @@ function choicesOf([session, credentials]: Awaited<
       const device = linkedDeviceOf(credential, session.credentialId)
       return device && !device.fullAccess ? [device] : []
     }),
-    // Every gateway runs only its own agents (ADR 1417): no other host is
-    // left for a grant to run commands on.
-    commandHosts: [],
     limits: toolPolicyBounds,
   }
 }

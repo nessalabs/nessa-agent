@@ -44,10 +44,9 @@ function storeWith(sharing: SharingSource | undefined) {
   })
 }
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
+const limits = { patterns: 16 }
 const choices: SharingChoices = {
   targets: [{ credentialId: "sample-phone", issuedAt: 1, fullAccess: false }],
-  commandHosts: [],
   limits,
 }
 
@@ -226,7 +225,7 @@ describe("sharing from the store", () => {
       {
         credentialId: "sample-phone",
         role: "drive",
-        policy: { kind: "preset", preset: "all", commandHosts: [] },
+        policy: { kind: "preset", preset: "all" },
         expectedPolicyRevision: read!.policyRevision,
       },
       "other",
@@ -286,7 +285,7 @@ describe("sharing from the store", () => {
       {
         credentialId: "sample-phone",
         role: "drive",
-        policy: { kind: "preset", preset: "all", commandHosts: [] },
+        policy: { kind: "preset", preset: "all" },
         expectedPolicyRevision: 0,
       },
       "other",

@@ -1596,46 +1596,6 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
-/* Codex's ChatGPT accounts, under its key: one line each, its actions at the end. */
-.settings-chatgpt {
-  display: grid;
-  gap: 8px;
-  padding-block-start: 6px;
-  border-block-start: 1px solid var(--border);
-}
-.settings-chatgpt-accounts {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.settings-chatgpt-accounts > li {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-block-size: 32px;
-}
-.settings-chatgpt-email {
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.settings-chatgpt-state,
-.settings-chatgpt-note {
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-.settings-chatgpt-actions {
-  display: inline-flex;
-  gap: 6px;
-  margin-inline-start: auto;
-}
-.settings-chatgpt-waiting {
-  display: grid;
-  gap: 6px;
-}
 /* A token is one short paste: the field need not span the page. */
 .settings-boat-fields .settings-input {
   flex: 0 1 260px;

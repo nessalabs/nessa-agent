@@ -27,7 +27,7 @@ pub use conversation_deletion::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
 };
 pub use share_access::{
-    Capabilities, Capability, CommandHosts, ShareAccess, ShareAccessError, ToolChoice, ToolPolicy,
+    Capabilities, Capability, ShareAccess, ShareAccessError, ToolChoice, ToolPolicy,
     ToolPolicyError, ToolPreset, ToolRules,
 };
 pub use tool_call::{ToolCall, ToolSource};

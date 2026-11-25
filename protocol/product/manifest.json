@@ -662,41 +662,6 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
-    "logins.status": {
-      "params": null,
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.save": {
-      "params": "LoginsSaveParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.remove": {
-      "params": "LoginsRemoveParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptSignIn": {
-      "params": "LoginsChatgptSignInParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptCancel": {
-      "params": null,
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptUse": {
-      "params": "LoginsChatgptUseParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptRemove": {
-      "params": "LoginsChatgptRemoveParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
     "voice.status": {
       "params": null,
       "grant": "credential.manage",

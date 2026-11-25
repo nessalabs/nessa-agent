@@ -164,14 +164,10 @@ export type CommandFailure =
    */
   | "environment-not-configured"
   /**
-   * The rest are answered only by builds that still ran agents on other
-   * computers: the computer could not be reached, ran another build, had no
-   * build for its platform, or could not install one. Nothing was sent.
+   * Answered only by builds that still ran agents on other computers: the
+   * computer could not run the agent. Nothing was sent.
    */
   | "environment-unavailable"
-  | "environment-version-mismatch"
-  | "environment-platform-unsupported"
-  | "environment-install-failed"
   | "conversation-state-unreadable"
   /**
    * A restored conversation's recorded source is gone. The command was not

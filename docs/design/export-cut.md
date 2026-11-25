@@ -97,7 +97,7 @@ sorted by identity. A missing directory's watermark is `absent`.
 | Worker enrollments | A worker's local pairing, public facts only |
 | Environment grants | Per-peer grant file, copied under `grants.lock` in the same snapshot as `grants-audit.jsonl` |
 | Relay configuration | The gateway relay address and each peer's relay. A peer file that does not parse is named `skipped ... unreadable` |
-| Lease records | `environment/leases.jsonl`, one record per readable line |
+| Lease records | Always cut empty. A remote worker's lease ledger, which no gateway writes any more (ADR 1417); the manifest still names the store so every build reads every cut, and an older `environment/leases.jsonl` is not read |
 | Artifact holds | Hold identity and digest |
 | Device credentials | Public id, revocation, fingerprint |
 | Peer credentials | The same, for a reading peer |
@@ -237,11 +237,9 @@ Decision-log growth and rewrite cost remain a known performance limitation.
 ### Recovery
 
 Quarantined restore verifies the bundle again, leaves out grants, credentials,
-and live metadata named by the authenticated inventory, and appends an `ended`
-line with cleanup `uncertain` for each environment lease still open. The sealed
-directory is not the live root. Acceptance renames it onto an empty live path
-after Cedar allows the principal and, when a lease was open, an operator receipt
-is present. A failed or partial stage deletes that tree. Historical outbox bytes
+and live metadata named by the authenticated inventory, and leaves out an older
+cut's lease ledger. The sealed directory is not the live root. Acceptance
+renames it onto an empty live path after Cedar allows the principal. A failed or partial stage deletes that tree. Historical outbox bytes
 stay, and `replay.blocked` stays `blocked\n`, so this use case does not run them.
 The private key is not restored; acceptance writes `identity.txt` as `re-pair`.
 
