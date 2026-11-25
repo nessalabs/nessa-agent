@@ -886,6 +886,7 @@ impl ConversationRepository for MemoryRepository {
                 ConversationAdmissionSnapshot::new(
                     conversation,
                     ConversationAdmissionToken::new(incarnation, id, change_revision),
+                    Some(std::num::NonZeroU64::MIN),
                 )
             })),
         };

@@ -176,7 +176,7 @@ mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub use metadata_target::ConversationMetadataReader;
-pub use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken};
+pub use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken, ReviewNoticeClaim};
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;

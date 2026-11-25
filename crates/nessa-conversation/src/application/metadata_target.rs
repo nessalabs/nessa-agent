@@ -90,4 +90,17 @@ impl ConversationMetadataReader {
             .as_ref()
             .is_some_and(|snapshot| snapshot.token() == token))
     }
+
+    /// Reconfirm only the resource facts and identity used by audited review
+    /// selection. A missing row or unknown creation identity cannot match.
+    pub async fn review_claim_current(
+        &self,
+        claim: &super::ReviewNoticeClaim,
+    ) -> Result<bool, ConversationError> {
+        let fresh = self.load_admission(claim.conversation_id()).await?;
+        Ok(fresh
+            .and_then(|snapshot| snapshot.review_claim())
+            .as_ref()
+            .is_some_and(|current| current == claim))
+    }
 }

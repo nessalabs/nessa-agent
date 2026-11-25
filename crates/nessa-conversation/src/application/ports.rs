@@ -3,7 +3,7 @@ use super::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState, Reader,
 };
 use crate::domain::{Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{AppNamespace, OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationSummary,
 };
@@ -12,7 +12,7 @@ use nessa_protocol::conversation::view::MAX_DECISIONS_KEPT;
 use nessa_protocol::conversation::view::{DecisionSettings, OwnerDecision};
 use nessa_sdk::application::agent_execution::sessions::PublishedFile;
 use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
-use std::{future::Future, pin::Pin};
+use std::{future::Future, num::NonZeroU64, pin::Pin};
 
 pub type ConversationFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, ConversationError>> + Send + 'a>>;
@@ -52,14 +52,39 @@ impl ConversationAdmissionToken {
 pub struct ConversationAdmissionSnapshot {
     conversation: Conversation,
     token: ConversationAdmissionToken,
+    creation_revision: Option<NonZeroU64>,
 }
 
 impl ConversationAdmissionSnapshot {
-    pub fn new(conversation: Conversation, token: ConversationAdmissionToken) -> Self {
+    pub fn new(
+        conversation: Conversation,
+        token: ConversationAdmissionToken,
+        creation_revision: Option<NonZeroU64>,
+    ) -> Self {
         Self {
             conversation,
             token,
+            creation_revision,
         }
+    }
+
+    /// The exact resource facts used to select and audit an unpaired review.
+    /// The identity is stored with those facts; catalogue content churn does
+    /// not change it. No other admission uses this narrower proof.
+    pub fn review_claim(&self) -> Option<ReviewNoticeClaim> {
+        if self.token.incarnation.is_empty() || self.token.conversation_id != *self.conversation.id() {
+            return None;
+        }
+        let conversation = &self.conversation;
+        Some(ReviewNoticeClaim {
+            incarnation: self.token.incarnation.clone(),
+            conversation_id: conversation.id().clone(),
+            creation_revision: self.creation_revision?,
+            organization: conversation.organization().clone(),
+            owner: conversation.owner().clone(),
+            app_namespace: conversation.app_namespace().clone(),
+            deleted: conversation.deletion().is_some(),
+        })
     }
 
     pub fn conversation(&self) -> &Conversation {
@@ -72,6 +97,25 @@ impl ConversationAdmissionSnapshot {
 
     pub fn token(&self) -> &ConversationAdmissionToken {
         &self.token
+    }
+}
+
+/// Review-specific evidence for the checked resource and its stored identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewNoticeClaim {
+    incarnation: String,
+    conversation_id: ConversationId,
+    creation_revision: NonZeroU64,
+    organization: OrganizationId,
+    owner: PrincipalId,
+    app_namespace: AppNamespace,
+    deleted: bool,
+}
+
+impl ReviewNoticeClaim {
+    /// Conversation whose checked facts were selected.
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
     }
 }
 
@@ -264,7 +308,7 @@ pub trait ConversationRepository: Send + Sync {
     /// The conversation and its admission token from one read.
     ///
     /// Custom stores must take catalogue incarnation, conversation identity
-    /// and the row's monotonic `change_revision` together. A first tombstone
+    /// and the row's creation and monotonic change revisions together. A first tombstone
     /// advances that revision before inventory work. Replacing the catalogue
     /// changes the incarnation. There is no second policy check here.
     fn load_admission_snapshot(

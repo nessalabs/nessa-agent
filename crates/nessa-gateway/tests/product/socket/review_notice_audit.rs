@@ -2178,6 +2178,36 @@ async fn replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_me
     assert_eq!(task.await.unwrap(), Ok(()));
 }
 
+#[tokio::test]
+async fn a_summary_revision_during_audited_selection_does_not_force_another_answer() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .repository
+        .change_revisions
+        .lock()
+        .unwrap()
+        .insert(ConversationId::new(TARGET).unwrap(), 3);
+    assert!(receive.try_recv().is_err());
+    release.send(()).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 1);
+    assert_eq!(audit.records.lock().unwrap().len(), 1);
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
 /// Another connection commits the tombstone after this read has the live row
 /// and before it reads `change_revision`. Promoting the recipient does not
 /// publish that row.
