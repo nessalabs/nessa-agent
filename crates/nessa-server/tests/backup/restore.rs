@@ -22,12 +22,12 @@ use nessa_backup::application::{
     accept_quarantine, current_staging_id, open_deferred_conversation, ordered_roots, root_posture,
     stage_quarantine, AcceptRequest, AdmissionFailure, AdmissionLease, AnchoredRoot, Authenticator,
     DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
-    InventoryDecision, JournalFields, LeaseReceipts, LoadedTree, MacKey, ManifestPublisher,
-    MutationAdmission, OpenReport, OpenRequest, Promoted, PublicationIds, PublishedRecord,
-    PublishedSession, QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestoreHold, RestorePolicyEvaluator, SealFields, SessionAttempt, SessionCut,
-    SessionSourceError, StageReport, StageRequest, StagedTreeOwner, Staging, StagingIds,
-    VerificationFailure, VerificationLimits, VerificationSource,
+    InventoryDecision, JournalFields, LoadedTree, MacKey, ManifestPublisher, MutationAdmission,
+    OpenReport, OpenRequest, Promoted, PublicationIds, PublishedRecord, PublishedSession,
+    QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestoreHold,
+    RestorePolicyEvaluator, SealFields, SessionAttempt, SessionCut, SessionSourceError,
+    StageReport, StageRequest, StagedTreeOwner, Staging, StagingIds, VerificationFailure,
+    VerificationLimits, VerificationSource,
 };
 use nessa_backup::domain::{
     encode_journal, read_journal, seal_staging_id, AuthenticatedManifest, CapturedRecord,
@@ -77,25 +77,6 @@ struct Quiet;
 
 impl FetchProgress for Quiet {
     fn report(&mut self, _read: u64, _total: u64) {}
-}
-
-struct NoReceipts;
-
-impl LeaseReceipts for NoReceipts {
-    fn receipt(&self, _lease_id: &str) -> Option<String> {
-        None
-    }
-}
-
-struct MapReceipts<'a>(&'a [(&'a str, &'a str)]);
-
-impl LeaseReceipts for MapReceipts<'_> {
-    fn receipt(&self, lease_id: &str) -> Option<String> {
-        self.0
-            .iter()
-            .find(|(id, _)| *id == lease_id)
-            .map(|(_, text)| (*text).to_owned())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -771,7 +752,7 @@ async fn a_failed_cleanup_removes_the_journal() {
         .lines()
         .iter()
         .all(|line| !(line.before == "verified" && line.after == "absent")));
-    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let accepted = accept(&place, &MemoryAudit::open()).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
 }
@@ -885,7 +866,7 @@ async fn a_failed_spend_retires_the_readiness_marker() {
     );
     assert!(audit.lines().iter().any(|line| line.cause == "sealed"));
     assert!(audit.lines().iter().all(|line| line.cause != "spent"));
-    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let accepted = accept(&place, &MemoryAudit::open()).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
 }
@@ -930,10 +911,7 @@ async fn a_marker_that_survives_a_failed_spend_is_retained() {
     // Both physical retirement and the invalidating audit failed; the intent
     // alone must never make this still-present readiness marker authoritative.
     let resumed = audit.checkpoint();
-    assert_eq!(
-        accept(&place, &resumed, &NoReceipts).unwrap_err(),
-        RestoreFault::Tamper
-    );
+    assert_eq!(accept(&place, &resumed).unwrap_err(), RestoreFault::Tamper);
     let deferred = FakeSource::matching(&session);
     assert_eq!(
         open_deferred_conversation(
@@ -963,7 +941,7 @@ async fn a_marker_that_survives_a_failed_spend_is_retained() {
         None,
     )
     .unwrap();
-    accept(&recovered, &resumed, &NoReceipts).unwrap();
+    accept(&recovered, &resumed).unwrap();
     assert!(
         !open_one(&recovered, "conv-bulk", &deferred, &resumed)
             .unwrap()
@@ -972,17 +950,12 @@ async fn a_marker_that_survives_a_failed_spend_is_retained() {
     assert_eq!(*deferred.writes.lock().unwrap(), 1);
 }
 
-fn accept(
-    place: &Roots,
-    audit: &dyn RestoreAudit,
-    receipts: &dyn LeaseReceipts,
-) -> Result<(), RestoreFault> {
+fn accept(place: &Roots, audit: &dyn RestoreAudit) -> Result<(), RestoreFault> {
     accept_quarantine(
         &AcceptRequest {
             facts: person(RestoreAction::Accept),
             quarantine: &place.quarantine,
             live: &place.live,
-            receipts,
         },
         &policy(),
         audit,
@@ -1160,7 +1133,7 @@ async fn an_occupied_live_root_is_not_replaced() {
     .unwrap();
     fs::create_dir(&place.live).unwrap();
     fs::write(place.live.join("sentinel"), b"live-bytes").unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::LiveOccupied);
     assert_eq!(
         fs::read(place.live.join("sentinel")).unwrap(),
@@ -1362,7 +1335,7 @@ async fn a_tampered_quarantine_is_not_promoted() {
     let last = bytes.len() - 1;
     bytes[last] ^= 0xff;
     fs::write(&sealed, bytes).unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(place.quarantine.join("journal.txt").is_file());
@@ -1406,7 +1379,7 @@ async fn an_injected_publication_suffix_is_not_promoted() {
         .join("records/share-grants/revoked.publication");
     fs::create_dir_all(injected.parent().unwrap()).unwrap();
     fs::write(&injected, b"not-a-session\n").unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(injected.is_file());
@@ -1443,7 +1416,7 @@ async fn a_resealed_quarantine_is_not_promoted() {
         })
         .collect::<Vec<_>>();
     assert!(replaced);
-    let rewritten = encode_journal(parsed.freshness, &parsed.leases, &files).unwrap();
+    let rewritten = encode_journal(parsed.freshness, &files).unwrap();
     fs::write(&journal_path, &rewritten).unwrap();
     let sealed = audit
         .lines()
@@ -1454,7 +1427,7 @@ async fn a_resealed_quarantine_is_not_promoted() {
         sealed.attestations,
         Fingerprint::of(rewritten.as_bytes()).hex()
     );
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(journal_path.is_file());
@@ -1602,7 +1575,7 @@ async fn a_spent_staging_id_is_not_promoted() {
         fs::read(place.quarantine.join("accept-ready")).unwrap(),
         b"stage-fixed\n"
     );
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     assert_eq!(
         fs::metadata(place.quarantine.join("accept-ready"))
             .unwrap()
@@ -1626,7 +1599,7 @@ async fn a_spent_staging_id_is_not_promoted() {
         fs::read(place.quarantine.join("accept-ready")).unwrap(),
         b"stage-fixed\n"
     );
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(place.quarantine.join("journal.txt").is_file());
@@ -1667,7 +1640,7 @@ async fn a_constant_ready_marker_is_not_a_generation() {
         nessa_local_storage::release_file_writes(&metadata_authority).unwrap();
     }
     fs::write(&marker, b"ready\n").unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
 }
@@ -1690,7 +1663,7 @@ async fn quarantine_records_posture_and_repair_markers() {
         root_posture(&place.quarantine, &place.live, &DirectoryQuarantine).unwrap(),
         Posture::Quarantined
     );
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     assert_eq!(
         fs::read(place.live.join("replay.blocked")).unwrap(),
         b"blocked\n"
@@ -1704,7 +1677,7 @@ async fn quarantine_records_posture_and_repair_markers() {
         Posture::Live
     );
     let before = fs::read(place.live.join("records/notes/note-1")).unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert_eq!(
         fs::read(place.live.join("records/notes/note-1")).unwrap(),
@@ -2267,7 +2240,7 @@ async fn a_failed_readiness_mark_records_whether_the_tree_remains() {
         format!("{staging_id}\n"),
     )
     .unwrap();
-    let accepted = accept(&kept, &kept_audit, &NoReceipts).unwrap_err();
+    let accepted = accept(&kept, &kept_audit).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!kept.live.exists());
 }
@@ -2427,7 +2400,7 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
         None,
     )
     .unwrap();
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
 
     let session = place.live.join("sessions/conv-one.sqlite3");
     nessa_local_storage::create_directory(session.parent().unwrap()).unwrap();
@@ -2471,14 +2444,18 @@ async fn an_unaudited_deferred_session_is_not_copied_into_the_serving_store() {
     assert_eq!(count, 1);
 }
 
+/// A cut an older gateway took holds a remote worker's lease ledger, one
+/// lease still open (ADR 1417). It is checked with the rest of the cut, and
+/// not placed: nothing reads it, no worker runs for it, and acceptance asks
+/// for no receipt.
 #[tokio::test]
-async fn an_open_lease_is_interrupted_in_quarantine() {
-    let lease = br#"{"kind":"granted","lease":"lease-1"}"#;
+async fn an_older_cuts_lease_ledger_is_checked_and_not_placed() {
+    let granted = br#"{"kind":"granted","lease":"lease-1"}"#;
     let bundle = publish(
         vec![Row {
             store: StoreKind::LeaseRecords,
             identity: "line-1".into(),
-            bytes: Bytes::Public(lease.to_vec()),
+            bytes: Bytes::Public(granted.to_vec()),
         }],
         vec![],
         None,
@@ -2486,7 +2463,7 @@ async fn an_open_lease_is_interrupted_in_quarantine() {
     .await;
     let place = roots();
     let audit = MemoryAudit::open();
-    let report = stage(
+    stage(
         &bundle,
         &place.quarantine,
         &place.live,
@@ -2495,121 +2472,23 @@ async fn an_open_lease_is_interrupted_in_quarantine() {
         None,
     )
     .unwrap();
-    assert_eq!(report.leases, vec!["lease-1".to_owned()]);
-    let restored = fs::read(place.quarantine.join("records/lease-records/line-1")).unwrap();
-    let text = String::from_utf8(restored).unwrap();
-    assert!(text.contains("\"kind\":\"granted\""));
-    assert!(text.contains("\"kind\":\"ended\""));
-    assert!(text.contains("\"outcome\":\"uncertain\""));
-    assert!(text.contains("\"cause\":\"lost\""));
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
-    assert_eq!(error, RestoreFault::ExecutorsUnfenced);
-    assert!(!place.live.exists());
-    accept(
-        &place,
-        &audit,
-        &MapReceipts(&[("lease-1", "stopped-host-1")]),
-    )
-    .unwrap();
-    assert!(place.live.join("records/lease-records/line-1").is_file());
-    assert_eq!(
-        fs::metadata(place.quarantine.join("accept-ready"))
-            .unwrap()
-            .len(),
-        0
-    );
-    assert!(audit.lines().iter().any(|line| line.after == "spent"));
-}
-
-#[tokio::test]
-async fn a_closed_lease_across_lines_needs_no_receipt() {
-    let granted = br#"{"kind":"granted","lease":"lease-closed"}"#;
-    let ended = br#"{"kind":"ended","lease":"lease-closed","cleanup":{"outcome":"uncertain"},"cause":"lost"}"#;
-    let bundle = publish(
-        vec![
-            Row {
-                store: StoreKind::LeaseRecords,
-                identity: "line-1".into(),
-                bytes: Bytes::Public(granted.to_vec()),
-            },
-            Row {
-                store: StoreKind::LeaseRecords,
-                identity: "line-2".into(),
-                bytes: Bytes::Public(ended.to_vec()),
-            },
-        ],
-        vec![],
-        None,
-    )
-    .await;
-    let place = roots();
-    let audit = MemoryAudit::open();
-    let report = stage(
-        &bundle,
-        &place.quarantine,
-        &place.live,
-        &audit,
-        person(RestoreAction::Stage),
-        None,
-    )
-    .unwrap();
-    assert!(report.leases.is_empty());
-    assert_eq!(
-        fs::read(place.quarantine.join("records/lease-records/line-1")).unwrap(),
-        granted
-    );
-    accept(&place, &audit, &NoReceipts).unwrap();
-    assert!(place.live.join("records/lease-records/line-2").is_file());
-}
-
-#[tokio::test]
-async fn a_reopened_lease_is_closed_on_its_last_line() {
-    let granted = br#"{"kind":"granted","lease":"lease-again"}"#;
-    let ended = br#"{"kind":"ended","lease":"lease-again","cleanup":{"outcome":"uncertain"},"cause":"lost"}"#;
-    let bundle = publish(
-        vec![
-            Row {
-                store: StoreKind::LeaseRecords,
-                identity: "line-1".into(),
-                bytes: Bytes::Public(granted.to_vec()),
-            },
-            Row {
-                store: StoreKind::LeaseRecords,
-                identity: "line-2".into(),
-                bytes: Bytes::Public(ended.to_vec()),
-            },
-            Row {
-                store: StoreKind::LeaseRecords,
-                identity: "line-3".into(),
-                bytes: Bytes::Public(granted.to_vec()),
-            },
-        ],
-        vec![],
-        None,
-    )
-    .await;
-    let place = roots();
-    let audit = MemoryAudit::open();
-    let report = stage(
-        &bundle,
-        &place.quarantine,
-        &place.live,
-        &audit,
-        person(RestoreAction::Stage),
-        None,
-    )
-    .unwrap();
-    assert_eq!(report.leases, vec!["lease-again".to_owned()]);
-    assert_eq!(
-        fs::read(place.quarantine.join("records/lease-records/line-1")).unwrap(),
-        granted
-    );
-    let last = fs::read(place.quarantine.join("records/lease-records/line-3")).unwrap();
-    let text = String::from_utf8(last).unwrap();
-    assert!(text.contains("\"kind\":\"granted\""));
-    assert!(text.contains("\"kind\":\"ended\""));
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
-    assert_eq!(error, RestoreFault::ExecutorsUnfenced);
+    assert!(!place.quarantine.join("records/lease-records").exists());
+    let journal = fs::read_to_string(place.quarantine.join("journal.txt")).unwrap();
+    assert!(!journal.contains("\nlease "));
+    accept(&place, &audit).unwrap();
+    assert!(!place.live.join("records/lease-records").exists());
+    let expected_cause = if cfg!(windows) {
+        "unsynced"
+    } else {
+        "accepted"
+    };
+    let accepted = audit
+        .lines()
+        .into_iter()
+        .find(|line| line.cause == expected_cause)
+        .unwrap();
+    assert_eq!(accepted.attestations, "");
+    assert_eq!(accepted.after, "live");
 }
 
 #[tokio::test]
@@ -2637,7 +2516,7 @@ async fn a_fenced_deferred_conversation_is_not_listed() {
     .unwrap();
     let text = fs::read_to_string(place.quarantine.join("deferred.txt")).unwrap();
     assert!(!text.contains("conv-bulk"));
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     let source = FakeSource::unused();
     let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
@@ -2667,52 +2546,9 @@ async fn a_changed_session_file_is_not_promoted() {
     let session = place.quarantine.join("sessions/conv-bulk.sqlite3");
     nessa_local_storage::create_directory(session.parent().unwrap()).unwrap();
     fs::write(&session, b"not-the-session").unwrap();
-    let error = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let error = accept(&place, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert!(!place.live.exists());
-}
-
-#[tokio::test]
-async fn an_unfenced_executor_blocks_acceptance() {
-    let bundle = publish(
-        vec![Row {
-            store: StoreKind::LeaseRecords,
-            identity: "line-1".into(),
-            bytes: Bytes::Public(br#"{"kind":"command_granted","lease":"lease-9"}"#.to_vec()),
-        }],
-        vec![],
-        None,
-    )
-    .await;
-    let place = roots();
-    let audit = MemoryAudit::open();
-    stage(
-        &bundle,
-        &place.quarantine,
-        &place.live,
-        &audit,
-        person(RestoreAction::Stage),
-        None,
-    )
-    .unwrap();
-    let error = accept(&place, &audit, &MapReceipts(&[("lease-9", "bad\nreceipt")])).unwrap_err();
-    assert_eq!(error, RestoreFault::ExecutorsUnfenced);
-    assert!(!place.live.exists());
-    let error = accept(&place, &audit, &MapReceipts(&[("lease-9", "")])).unwrap_err();
-    assert_eq!(error, RestoreFault::ExecutorsUnfenced);
-    accept(&place, &audit, &MapReceipts(&[("lease-9", "host-stopped")])).unwrap();
-    let expected_cause = if cfg!(windows) {
-        "unsynced"
-    } else {
-        "accepted"
-    };
-    let accepted = audit
-        .lines()
-        .into_iter()
-        .find(|line| line.cause == expected_cause)
-        .unwrap();
-    assert_eq!(accepted.attestations, "lease-9 host-stopped\n");
-    assert_eq!(accepted.after, "live");
 }
 
 struct SealedSession {
@@ -2808,7 +2644,7 @@ async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots, MemoryAud
         None,
     )
     .unwrap();
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     (bundle, place, audit.checkpoint())
 }
 
@@ -2876,7 +2712,7 @@ fn replace_deferred_session(root: &Path, session: &SealedSession) {
     sealed.fingerprint = Fingerprint::of(deferred.as_bytes());
     fs::write(
         journal_path,
-        encode_journal(journal.freshness, &journal.leases, &files).unwrap(),
+        encode_journal(journal.freshness, &files).unwrap(),
     )
     .unwrap();
 }
@@ -2946,7 +2782,7 @@ async fn a_resealed_deferred_line_is_not_fetched_after_acceptance() {
         None,
     )
     .unwrap();
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     replace_deferred_session(&place.live, &replacement);
     let source = FakeSource::matching(&replacement);
     assert_eq!(
@@ -3607,15 +3443,8 @@ async fn a_session_over_64_mib_is_restored_when_opened() {
         Posture::Quarantined
     );
     assert!(!holds(&place.quarantine, kept));
-    let blocked = accept(&place, &audit, &NoReceipts).unwrap_err();
-    assert_eq!(blocked, RestoreFault::ExecutorsUnfenced);
-    assert!(!place.live.exists());
-    accept(
-        &place,
-        &audit,
-        &MapReceipts(&[("lease-drill", "stopped-host-1")]),
-    )
-    .unwrap();
+    // The ledger an older gateway left is not cut, so no lease waits on a receipt.
+    accept(&place, &audit).unwrap();
     assert_eq!(
         fs::read(place.live.join("replay.blocked")).unwrap(),
         b"blocked\n"
@@ -3628,9 +3457,7 @@ async fn a_session_over_64_mib_is_restored_when_opened() {
         root_posture(&place.live, &place.live, &DirectoryQuarantine).unwrap(),
         Posture::Live
     );
-    let restored_lease =
-        fs::read_to_string(place.live.join("records/lease-records/line-1")).unwrap();
-    assert!(restored_lease.contains("\"outcome\":\"uncertain\""));
+    assert!(!place.live.join("records/lease-records").exists());
 
     let source = SqliteDeferredSource::new(&database_path);
     let opened = open_one(&place, "conv-bulk", &source, &audit).unwrap();
@@ -3911,7 +3738,6 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
                 facts: person(RestoreAction::Accept),
                 quarantine: &accept_root,
                 live: &accept_live,
-                receipts: &NoReceipts,
             },
             &policy(),
             &MemoryAudit::open(),
@@ -3994,7 +3820,6 @@ async fn accept_holds_the_live_lock_across_promotion() {
                 facts: person(RestoreAction::Accept),
                 quarantine: &quarantine,
                 live: &accept_live,
-                receipts: &NoReceipts,
             },
             &policy(),
             &audit,
@@ -4112,7 +3937,7 @@ async fn a_failed_stage_cleanup_still_refuses_acceptance() {
     assert!(place.quarantine.join("journal.txt").is_file());
     let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
     assert!(DirectoryQuarantine.ready(&quarantine).unwrap().is_none());
-    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    let accepted = accept(&place, &MemoryAudit::open()).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
 }
@@ -4305,7 +4130,6 @@ async fn a_promoted_tree_stays_live_when_the_parent_sync_fails() {
             facts: person(RestoreAction::Accept),
             quarantine: &place.quarantine,
             live: &place.live,
-            receipts: &NoReceipts,
         },
         &policy(),
         &audit,
@@ -4501,7 +4325,7 @@ async fn a_fetch_in_quarantine_stays_available_after_accept() {
     assert_eq!(fetched.digest, session.digest);
     let published = fs::read(place.quarantine.join("sessions/conv-bulk.sqlite3")).unwrap();
     assert!(!published.is_empty());
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     assert_eq!(
         fs::read(place.live.join("sessions/conv-bulk.sqlite3")).unwrap(),
         published
@@ -4576,7 +4400,7 @@ async fn an_unaudited_session_is_not_promoted() {
         .quarantine
         .join("sessions/conv-bulk.sqlite3")
         .is_file());
-    let accepted = accept(&place, &audit, &NoReceipts).unwrap_err();
+    let accepted = accept(&place, &audit).unwrap_err();
     assert_eq!(accepted, RestoreFault::Tamper);
     assert!(!place.live.exists());
     assert!(place
@@ -5079,7 +4903,7 @@ async fn a_deferred_line_changed_after_loading_is_not_fetched() {
         None,
     )
     .unwrap();
-    accept(&place, &audit, &NoReceipts).unwrap();
+    accept(&place, &audit).unwrap();
     let mut lines = nessa_backup::domain::decode_deferred(
         &fs::read_to_string(place.live.join("deferred.txt")).unwrap(),
     )
@@ -5214,7 +5038,6 @@ async fn a_retained_source_does_not_make_the_live_rename_unchanged() {
                 facts: person(RestoreAction::Accept),
                 quarantine: &place.quarantine,
                 live: &place.live,
-                receipts: &NoReceipts,
             },
             &policy(),
             &audit,
@@ -5813,7 +5636,7 @@ async fn a_failed_fetch_audit_retires_the_held_directory_after_an_ancestor_swap(
             None,
         )
         .unwrap();
-        accept(&place, &audit, &NoReceipts).unwrap();
+        accept(&place, &audit).unwrap();
         let original_ancestor = ancestor.clone();
         let retained_ancestor = saved.clone();
         let replacement = other.clone();
@@ -6470,7 +6293,7 @@ async fn restoring_every_old_live_byte_after_a_failed_new_acceptance_does_not_re
             None,
         )
         .unwrap();
-        accept(&place, &audit, &NoReceipts).unwrap();
+        accept(&place, &audit).unwrap();
         let old_bytes = snapshot_tree_files(&place.live);
         let old_generation = fs::read(place.live.join("accept-ready")).unwrap();
         let parked_old = place._keep.path().join("parked-old");
@@ -6497,7 +6320,7 @@ async fn restoring_every_old_live_byte_after_a_failed_new_acceptance_does_not_re
             failed: Mutex::new(false),
         };
         assert_eq!(
-            accept(&place, &failed_audit, &NoReceipts).unwrap_err(),
+            accept(&place, &failed_audit).unwrap_err(),
             RestoreFault::Audit
         );
         assert!(
@@ -6539,7 +6362,7 @@ async fn restoring_every_old_live_byte_after_a_failed_new_acceptance_does_not_re
             None,
         )
         .unwrap();
-        accept(&place, &resumed_audit, &NoReceipts).unwrap();
+        accept(&place, &resumed_audit).unwrap();
         assert!(
             !open_one(&place, "conv-bulk", &source, &resumed_audit)
                 .unwrap()
@@ -6728,7 +6551,6 @@ async fn a_failed_postpromotion_audit_cannot_publish_a_retained_generation_twice
                 facts: person(RestoreAction::Accept),
                 quarantine: &place.quarantine,
                 live: &place.live,
-                receipts: &NoReceipts,
             },
             &policy(),
             &failed_audit,
@@ -6767,7 +6589,6 @@ async fn a_failed_postpromotion_audit_cannot_publish_a_retained_generation_twice
                 facts: person(RestoreAction::Accept),
                 quarantine: &place.quarantine,
                 live: &another_live,
-                receipts: &NoReceipts,
             },
             &policy(),
             &resumed,
@@ -6788,7 +6609,7 @@ async fn a_failed_postpromotion_audit_cannot_publish_a_retained_generation_twice
         &FixedStage("stage-fresh"),
     )
     .unwrap();
-    accept(&fresh, &resumed, &NoReceipts).unwrap();
+    accept(&fresh, &resumed).unwrap();
     assert_eq!(fs::read(fresh.live.join("journal.txt")).unwrap(), journal);
 }
 
@@ -6880,7 +6701,6 @@ async fn acceptance_audit_failures_before_promotion_preserve_the_consumption_bou
                     facts: person(RestoreAction::Accept),
                     quarantine: &place.quarantine,
                     live: &place.live,
-                    receipts: &NoReceipts
                 },
                 &policy(),
                 &hooked,
@@ -6908,17 +6728,14 @@ async fn acceptance_audit_failures_before_promotion_preserve_the_consumption_bou
         let resumed = audit.checkpoint();
         if fail_live_intent {
             assert_eq!(resumed.sealed(&label, &digest).unwrap(), None);
-            assert_eq!(
-                accept(&place, &resumed, &NoReceipts).unwrap_err(),
-                RestoreFault::Tamper
-            );
+            assert_eq!(accept(&place, &resumed).unwrap_err(), RestoreFault::Tamper);
             assert!(!place.live.exists());
         } else {
             assert_eq!(
                 resumed.sealed(&label, &digest).unwrap().as_deref(),
                 Some("stage-before-effects")
             );
-            accept(&place, &resumed, &NoReceipts).unwrap();
+            accept(&place, &resumed).unwrap();
             assert_eq!(fs::read(place.live.join("journal.txt")).unwrap(), journal);
         }
         let fresh = roots();
@@ -6930,7 +6747,7 @@ async fn acceptance_audit_failures_before_promotion_preserve_the_consumption_bou
             &FixedStage("stage-recovered"),
         )
         .unwrap();
-        accept(&fresh, &resumed, &NoReceipts).unwrap();
+        accept(&fresh, &resumed).unwrap();
         assert_eq!(fs::read(fresh.live.join("journal.txt")).unwrap(), journal);
     }
 }
