@@ -17,6 +17,7 @@ import {
   TerminalOpenError,
   type TerminalFit,
   type TerminalOpenRequest,
+  type TerminalProtocolMessage,
   type TerminalSource,
   type TerminalView,
 } from "../../application/ports"
@@ -59,14 +60,104 @@ function qualifyTerminal(
   }
 }
 
-function offlineTerminalView(): TerminalView {
+/** Hold the pane's view across changes to its owning gateway's connection. */
+function reconnectingTerminalView(
+  backing: MultiGatewayTerminalBacking,
+  gatewayId: string,
+  rawId: string,
+  focusedViews: Map<string, symbol>,
+): TerminalView {
+  const listeners = new Set<(message: TerminalProtocolMessage) => void>()
+  const terminalId = qualifyEntityId(gatewayId, rawId)
+  const viewOwner = Symbol()
+  const focused = () => focusedViews.get(terminalId) === viewOwner
+  interface Binding {
+    readonly source: TerminalSource
+    readonly view: TerminalView
+    stopOutput?: () => void
+  }
+  let binding: Binding | undefined
+  let fit: TerminalFit | undefined
+  let pending: "fit" | "focus" | undefined
+  let released = false
+
+  const availableSource = () => {
+    const gateway = backing.entry(gatewayId)
+    return gateway?.status === "connected" ? gateway.terminals : undefined
+  }
+  const activeView = () =>
+    binding?.source === availableSource() ? binding?.view : undefined
+
+  const unbind = () => {
+    const old = binding
+    binding = undefined
+    old?.stopOutput?.()
+    old?.view.release()
+  }
+
+  const bindOutput = (current: Binding) => {
+    const stop = current.view.subscribe((message) => {
+      if (binding !== current || !activeView()) return
+      for (const listener of listeners) listener(message)
+    })
+    if (binding === current) current.stopOutput = stop
+    else stop()
+  }
+
+  const sync = () => {
+    if (released) return
+    const source = availableSource()
+    if (binding?.source !== source) {
+      unbind()
+      if (source) {
+        binding = { source, view: source.view(rawId) }
+        pending = focused() ? "focus" : "fit"
+        if (listeners.size > 0) bindOutput(binding)
+      }
+    }
+    if (!binding || !fit || !pending) return
+    const needsFocus = pending === "focus" && focused()
+    pending = undefined
+    if (needsFocus) binding.view.focus(fit)
+    else binding.view.fit(fit)
+  }
+
+  const stopTopology = backing.onTopologyChange(sync)
+  sync()
   return {
-    subscribe: () => () => {},
-    fit: () => {},
-    focus: () => {},
-    input: () => {},
-    history: () => {},
-    release: () => {},
+    subscribe(listener) {
+      if (released) return () => {}
+      listeners.add(listener)
+      if (binding && !binding.stopOutput) bindOutput(binding)
+      return () => listeners.delete(listener)
+    },
+    fit(next) {
+      if (released) return
+      fit = next
+      pending ??= "fit"
+      if (activeView()) sync()
+    },
+    focus(next) {
+      if (released) return
+      fit = next
+      focusedViews.set(terminalId, viewOwner)
+      pending = "focus"
+      if (activeView()) sync()
+    },
+    input(bytes) {
+      activeView()?.input(bytes)
+    },
+    history(start, count) {
+      activeView()?.history(start, count)
+    },
+    release() {
+      if (released) return
+      released = true
+      stopTopology()
+      listeners.clear()
+      if (focused()) focusedViews.delete(terminalId)
+      unbind()
+    },
   }
 }
 
@@ -76,6 +167,8 @@ function offlineTerminalView(): TerminalView {
 export function multiTerminalGateway(
   backing: MultiGatewayTerminalBacking,
 ): TerminalSource {
+  const focusedViews = new Map<string, symbol>()
+
   function resolveOwner(qualifiedId: string): {
     gateway: ManagedTerminalGateway
     rawId: string
@@ -138,7 +231,7 @@ export function multiTerminalGateway(
           if (existing && existing.terminals !== entry.terminals) {
             existing.unsub()
             childUnsubs.delete(entry.gatewayId)
-            rawListsByGateway.delete(entry.gatewayId)
+            // The replacement confirms which terminals it still holds on its first list.
             changed = true
           }
           if (!childUnsubs.has(entry.gatewayId)) {
@@ -198,17 +291,11 @@ export function multiTerminalGateway(
 
     view(terminalId: string): TerminalView {
       const { gatewayId, rawId } = parseQualifiedId(terminalId)
-      const gateway = backing.entry(gatewayId)
-      if (
-        !gateway ||
-        (gateway.gatewayId !== LOCAL_GATEWAY_ID &&
-          (gateway.status === "auth-refused" ||
-            gateway.status === "disconnected" ||
-            gateway.status === "refused"))
-      ) {
-        return offlineTerminalView()
+      if (gatewayId === LOCAL_GATEWAY_ID) {
+        const local = backing.entry(gatewayId)
+        if (local) return local.terminals.view(rawId)
       }
-      return gateway.terminals.view(rawId)
+      return reconnectingTerminalView(backing, gatewayId, rawId, focusedViews)
     },
 
     input(terminalId: string, bytes: Uint8Array): void {

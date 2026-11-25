@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { NessaConnectionClosedError } from "@nessa/client"
 import type { TerminalProtocolMessage } from "../../application/ports"
 import type { TerminalEntry } from "../../model/terminal"
 import { settle } from "../../testing"
-import { fakeGateway } from "./fake-gateway"
-import { terminalGateway } from "./terminal-gateway"
+import { deferred, fakeGateway } from "./fake-gateway"
+import { terminalGateway, type TerminalClient } from "./terminal-gateway"
 
 /** Past every queued send: they wait in line, so a few microtasks are not enough. */
 const drained = () => new Promise((resolve) => setTimeout(resolve, 30))
@@ -17,6 +17,15 @@ function setup() {
     newId: () => `view-${++next}`,
   })
   return { gateway, source }
+}
+
+function reconnect(gateway: ReturnType<typeof fakeGateway>) {
+  gateway.setState({
+    status: "reconnecting",
+    attempt: 1,
+    error: new NessaConnectionClosedError(1006, "closed"),
+  })
+  gateway.setState({ status: "connected" })
 }
 
 describe("the gateway's terminals", () => {
@@ -102,17 +111,136 @@ describe("the gateway's terminals", () => {
     view.fit({ cols: 40, rows: 5 })
     await settle()
     const before = seen.length
-    gateway.setState({
-      status: "reconnecting",
-      attempt: 1,
-      error: new NessaConnectionClosedError(1006, "closed"),
-    } as never)
-    gateway.setState({ status: "connected" })
+    reconnect(gateway)
     await settle()
     expect(seen.length).toBeGreaterThan(before)
     expect(seen.at(-2)?.type).toBe("ready")
     view.release()
   })
+
+  it("restores focus only to the last focused view after reconnect", async () => {
+    const { gateway, source } = setup()
+    const focus = vi.spyOn(gateway.client.terminals, "focus")
+    const opened = await source.open({ kind: "shell" }, "r1", { cols: 80, rows: 24 })
+    const first = source.view(opened.id)
+    const second = source.view(opened.id)
+    second.focus({ cols: 60, rows: 20 })
+    first.focus({ cols: 80, rows: 24 })
+    await drained()
+    focus.mockClear()
+
+    reconnect(gateway)
+    await settle()
+    expect(focus).toHaveBeenCalledExactlyOnceWith({
+      terminalId: opened.id,
+      viewId: "view-1",
+      cols: 80,
+      rows: 24,
+    })
+    first.release()
+    second.release()
+  })
+
+  it("attaches a first fit once when that fit also needs to bind the client", async () => {
+    const { gateway, source } = setup()
+    const fit = { cols: 80, rows: 24 }
+    const terminal = await gateway.client.terminals.open({ requestId: "r1", ...fit })
+    const attach = vi.spyOn(gateway.client.terminals, "attach")
+    const view = source.view(terminal.terminalId)
+    view.fit(fit)
+    await settle(20)
+    expect(attach).toHaveBeenCalledExactlyOnceWith({
+      terminalId: terminal.terminalId,
+      viewId: "view-1",
+      ...fit,
+    })
+    view.release()
+  })
+
+  it("attaches using the saved fit when the workspace adopts a client after a refused first fit", async () => {
+    const gateway = fakeGateway()
+    const fit = { cols: 80, rows: 24 }
+    const terminal = await gateway.client.terminals.open({ requestId: "r1", ...fit })
+    const attach = vi.spyOn(gateway.client.terminals, "attach")
+    const initial = deferred<TerminalClient>()
+    const connected = vi
+      .fn()
+      .mockReturnValueOnce(initial.promise)
+      .mockResolvedValue(gateway.client)
+    const followClient = vi
+      .fn<(adopt: (client: TerminalClient) => void) => () => void>()
+      .mockReturnValue(() => {})
+    const source = terminalGateway({ connected, followClient, newId: () => "view-1" })
+    const view = source.view(terminal.terminalId)
+    const output: string[] = []
+    view.subscribe((message) => output.push(message.type))
+    view.fit(fit)
+    await settle()
+    expect(connected).toHaveBeenCalledTimes(1)
+    initial.reject(new Error("unavailable"))
+    await settle(20)
+    expect(attach).not.toHaveBeenCalled()
+
+    followClient.mock.calls[0][0](gateway.client)
+    await settle(20)
+    expect(connected).toHaveBeenCalledTimes(1)
+    expect(attach).toHaveBeenCalledExactlyOnceWith({
+      terminalId: terminal.terminalId,
+      viewId: "view-1",
+      ...fit,
+    })
+    expect(output).toEqual(["ready", "frame"])
+    view.release()
+  })
+
+  it.each(["fit", "release"] as const)(
+    "orders a pane's %s behind a delayed restoration attach",
+    async (action) => {
+      const { gateway, source } = setup()
+      const initial = { cols: 80, rows: 24 }
+      const latest = { cols: 100, rows: 30 }
+      const opened = await source.open({ kind: "shell" }, "r1", initial)
+      const view = source.view(opened.id)
+      const focus = vi.spyOn(gateway.client.terminals, "focus")
+      view.focus(initial)
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledTimes(1))
+      focus.mockClear()
+      const started = deferred<void>()
+      const acknowledge = deferred<void>()
+      const restoreAttach = gateway.client.terminals.attach
+      vi.spyOn(gateway.client.terminals, "attach").mockImplementationOnce(
+        async (params) => {
+          started.resolve()
+          await acknowledge.promise
+          await restoreAttach(params)
+        },
+      )
+      const fit = vi.spyOn(gateway.client.terminals, "fit")
+      const detach = vi.spyOn(gateway.client.terminals, "detach")
+      reconnect(gateway)
+      await started.promise
+      if (action === "fit") view.fit(latest)
+      else view.release()
+      await settle(20)
+      expect(fit).not.toHaveBeenCalled()
+      expect(detach).not.toHaveBeenCalled()
+
+      acknowledge.resolve()
+      await settle(20)
+      if (action === "fit") {
+        expect(focus).toHaveBeenCalledExactlyOnceWith({
+          terminalId: opened.id,
+          viewId: "view-1",
+          ...latest,
+        })
+        expect(fit).toHaveBeenCalledTimes(1)
+        view.release()
+      } else {
+        expect(detach).toHaveBeenCalledExactlyOnceWith(opened.id, "view-1")
+        expect(focus).not.toHaveBeenCalled()
+      }
+    },
+  )
 
   it("say why a terminal did not open", async () => {
     const { gateway, source } = setup()

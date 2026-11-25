@@ -3,6 +3,39 @@
 // Expected invariant names come from pinned TLC counterexamples; the harness checks them again.
 export const probes = [
   {
+    document: "desktop-terminal-views",
+    name: "Let a view other than the owner resize the terminal",
+    expectedRules: ["OnlyOwnerResizes", "SizeFollowsOwner"],
+    mutate: (spec) =>
+      spec.replace(
+        "ELSE UNCHANGED <<seq, sizeAt, queue, size, resizedByOwner>>",
+        "ELSE /\\ Publish(f) /\\ size' = f /\\ resizedByOwner' = FALSE",
+      ),
+  },
+  {
+    document: "desktop-terminal-views",
+    name: "Keep size ownership when its view closes",
+    expectedRules: ["OwnerAttached"],
+    mutate: (spec) => spec.replace("IF owner = v THEN None ELSE owner", "owner"),
+  },
+  {
+    document: "desktop-terminal-views",
+    name: "Queue an old checkpoint after delivering the latest terminal frame",
+    expectedRules: ["QueueAhead"],
+    mutate: (spec) =>
+      spec.replace(
+        "Tail(queue[v])",
+        [
+          "IF Head(queue[v]).seq = MaxSeq /\\ v = owner /\\ attached = Views",
+          "   /\\ shown[v].seq = MaxSeq - 1",
+          "   /\\ (\\A w \\in Views \\ {v} : shown[w].seq = MaxSeq)",
+          "   /\\ (\\A w \\in Views : fit[w] = StartFit)",
+          "   /\\ (\\A n \\in 0..MaxSeq : sizeAt[n] = StartFit)",
+          "THEN <<Frame(0)>> ELSE Tail(queue[v])",
+        ].join("\n                     "),
+      ),
+  },
+  {
     document: "desktop-mcp-app-view",
     name: "AppMount safety weakening",
     expectedRules: ["InlineCannotTeardown"],

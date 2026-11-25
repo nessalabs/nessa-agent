@@ -3,19 +3,24 @@ id: desktop-terminal-views
 title: Share a terminal between views
 kind: statechart
 status: proposed
+sourceRevision: "63ac610251872f1014071d93c8e4469ce34c203b"
 summary: One terminal session drawn by several views at once. The last focused
   view sets the size, every view paints the server's frames in order, and each
   view keeps its own scroll position.
 parent: desktop-workspace
 sources:
   - docs/design/terminals.md
+  - src/desktop/workspace/adapters/gateway/multi-terminal-gateway.ts
+  - src/desktop/workspace/adapters/gateway/multi-terminal-gateway.test.ts
+  - src/desktop/workspace/adapters/gateway/terminal-gateway.ts
 diagramLinks: {}
 model:
   spec: tla/services/desktop/workspace/share-a-terminal-between-views.tla
   config: tla/services/desktop/workspace/share-a-terminal-between-views.cfg
 modelCheck:
+  sourceRevision: "63ac610251872f1014071d93c8e4469ce34c203b"
   checker: tlc-1.7.4
-  date: 2026-11-21T00:43:04.643Z
+  date: 2026-11-25T07:09:48.375Z
   config: tla/services/desktop/workspace/share-a-terminal-between-views.cfg
   modelDigest: ae5604995093e2e1669a739977fb792f618fafd3670bcb5c496c86ebba5e68bb
   states: 1716
@@ -62,12 +67,24 @@ stateDiagram-v2
 | Owner closes | none | kept | none | unchanged |
 | Other view closes | unchanged | unchanged | its queue dropped | unchanged |
 
+## Reconnect a remote terminal view
+
+A mounted pane for a listed remote terminal keeps its latest measured fit while the gateway is offline. The list retains the gateway's last confirmed terminals through a connection replacement. The next successful list confirms which terminals still exist, and removing a gateway clears its entries immediately. When the gateway connects, the view attaches to the same terminal using its raw ID. An idle pane also reconnects when the workspace adopts a replacement client. The last focused view restores its size ownership. A pending restoration attaches before a later resize or detach reaches the gateway. Keys typed while the owner was offline are discarded. Closing the pane stops future restoration.
+
+The adapter regressions cover opening a pane offline, receipt of the first output, replacement of the owner's terminal source and adopted client, retention of the last focus owner, and closure before or during recovery. [Composite adapter tests](../../../../../src/desktop/workspace/adapters/gateway/multi-terminal-gateway.test.ts) · [Terminal gateway tests](../../../../../src/desktop/workspace/adapters/gateway/terminal-gateway.test.ts) · [Desktop composition tests](../../../../../src/desktop/dependencies.test.ts)
+
 ## Bounded rule model
 
-Two views, two fits and up to two frames after the first, starting with both views at the same fit (`StartFit`); a refit reaches the other fit. Transport is a FIFO queue per view, and delivery happens in any order across views. The model checks that the owner is always an open view, that the size is the owner's fit whenever there is an owner, that only the owner ever resizes, that a view never paints an older frame after a newer one, that what a view paints has the server's size for that frame, and that a closed view holds nothing. A failure probe that lets any view resize breaks `OnlyOwnerResizes` and `SizeFollowsOwner`. Not modelled: scrolling (each view's scroll position is its own field, which no other view's action writes), input bytes, history trimming (a scrolled view re-anchors from `total`/`scrollback` in each history reply), parking, and the phone. The model checks design safety, not the implementation, and makes no progress claim.
+Two views, two fits and up to two frames after the first, starting with both views at the same fit (`StartFit`); a refit reaches the other fit. Transport is a FIFO queue per view, and delivery happens in any order across views. The model checks that the owner is always an open view, that the size is the owner's fit whenever there is an owner, that only the owner ever resizes, that a view never paints an older frame after a newer one, that what a view paints has the server's size for that frame, and that a closed view holds nothing. Not modelled: scrolling (each view's scroll position is its own field, which no other view's action writes), input bytes, history trimming (a scrolled view re-anchors from `total`/`scrollback` in each history reply), parking, and the phone. The model checks design safety, not the implementation, and makes no progress claim.
+
+TLC 1.7.4 checked all seven configured rules across 1,716 distinct states.
+The repository probes let another view resize the terminal, keep the owner after
+it detaches, and queue an old checkpoint after the latest frame is painted. They
+break `OnlyOwnerResizes` and `SizeFollowsOwner`, `OwnerAttached`, and `QueueAhead`,
+respectively. [Probe command](../../../../../scripts/state-docs/README.md)
 
 ## Model coverage
 
 Disposition: direct model. The bounded rule model section names the modeled owner slice and finite abstraction.
 
-Excluded: All exclusions stated in the owning Bounded rule model section remain outside verification.
+The bounded rule model covers the terminal after its views have attached. Gateway outages and source replacement remain outside its bound.

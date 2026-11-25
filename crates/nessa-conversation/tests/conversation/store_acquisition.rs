@@ -1,7 +1,7 @@
 //! Actual SQLite projections refuse oversized text before selecting its bytes.
 use super::{conversation, summary, text};
 use crate::domain::Conversation;
-use nessa_auth::domain::{AppNamespace, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::{DEFAULT_APP_NAMESPACE, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, types::Value, Connection};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -101,7 +101,13 @@ fn required_types_and_nullable_summary_use_one_projection() {
 #[test]
 fn conversation_projection_consumes_supported_name_owner_and_compacts_unknown() {
     let connection = Connection::open_in_memory().unwrap();
-    connection.execute("CREATE TABLE saved (id, organization, owner, creator_surface, creation_action, creation_requested_at_ms, agent, model, approval_mode, app_namespace)", []).unwrap();
+    connection
+        .execute(
+            "CREATE TABLE saved (id, organization, owner, creator_surface, creation_action,
+                creation_requested_at_ms, agent, model, approval_mode, app_namespace)",
+            [],
+        )
+        .unwrap();
     connection
         .execute(
             "INSERT INTO saved VALUES (?1, ?2, ?2, ?3, ?3, 1, 'claude', ?4, 'full', ?5)",
@@ -110,7 +116,7 @@ fn conversation_projection_consumes_supported_name_owner_and_compacts_unknown() 
                 "é".repeat(MAX_IDENTIFIER_BYTES / 2),
                 "é".repeat(Conversation::MAX_CREATOR_CONTEXT_BYTES / 2),
                 "é".repeat(ConversationModelId::MAX_BYTES / 2),
-                AppNamespace::DEFAULT.as_str()
+                DEFAULT_APP_NAMESPACE,
             ],
         )
         .unwrap();
@@ -118,7 +124,7 @@ fn conversation_projection_consumes_supported_name_owner_and_compacts_unknown() 
         connection
             .execute("UPDATE saved SET agent = ?1", [agent.name()])
             .unwrap();
-        let (selected, app_namespace): (Option<String>, String) = connection
+        let (selected, namespace): (Option<String>, String) = connection
             .query_row(
                 &format!("SELECT {} FROM saved", conversation("")),
                 [],
@@ -126,7 +132,7 @@ fn conversation_projection_consumes_supported_name_owner_and_compacts_unknown() 
             )
             .unwrap();
         assert_eq!(selected.as_deref().and_then(AgentId::parse), Some(*agent));
-        assert_eq!(app_namespace, AppNamespace::DEFAULT.as_str());
+        assert_eq!(namespace, DEFAULT_APP_NAMESPACE);
     }
     connection
         .execute("UPDATE saved SET agent = ?1", ["unknown".repeat(1_000_000)])

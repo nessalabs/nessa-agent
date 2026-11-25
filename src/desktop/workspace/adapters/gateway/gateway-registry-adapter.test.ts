@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
-import { NessaConnectionClosedError, NessaRpcError } from "@nessa/client"
+import {
+  NessaClient,
+  NessaConnectionClosedError,
+  NessaGatewayIdentityError,
+  NessaRpcError,
+} from "@nessa/client"
 import { LOCAL_GATEWAY_ID, type PersistedRemoteGateway } from "../../model/gateway-id"
 import {
   inMemoryGatewayCredentialStore,
@@ -297,6 +302,47 @@ describe("createGatewayRegistry (ADR 1417 G3, G4, G7, G8, G9, G11)", () => {
     expect(registry.list().find((g) => g.gatewayId === "gw-original")?.status).toBe(
       "refused",
     )
+    registry.dispose()
+  })
+
+  it("pins remote recovery and withholds the attachment API after an identity refusal", async () => {
+    const remote = fakeRemoteClient("gw-original")
+    const registry = createGatewayRegistry({
+      local: localStub,
+      store: memoryStore().store,
+      now: () => 1000,
+      after: () => () => {},
+    })
+    const connect = vi
+      .spyOn(NessaClient, "connect")
+      .mockResolvedValueOnce(remote.client as unknown as NessaClient)
+    try {
+      await registry.add({
+        label: "Box",
+        url: "wss://box.example.com",
+        credential: "tok",
+      })
+      expect(connect).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ pinGatewayIdentity: true }),
+      )
+    } finally {
+      connect.mockRestore()
+    }
+    const before = registry.entry("gw-original")
+    const topology = vi.fn()
+    registry.onTopologyChange(topology)
+
+    remote.emitState({ status: "closed", error: new NessaGatewayIdentityError() })
+
+    expect(topology).toHaveBeenCalledTimes(1)
+    expect(registry.entry("gw-original")).toMatchObject({
+      status: "refused",
+      gatewayId: "gw-original",
+      terminals: before?.terminals,
+    })
+    await expect(registry.remoteAttachmentApi("gw-original")).rejects.toMatchObject({
+      reason: "offline",
+    })
     registry.dispose()
   })
 

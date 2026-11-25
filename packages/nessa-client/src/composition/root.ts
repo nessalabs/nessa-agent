@@ -152,6 +152,7 @@ export async function establishManagedSession(
           signal.addEventListener("abort", abort, { once: true })
         }),
     },
+    prepared.pinGatewayIdentity ? initial.session.ready.gatewayId : undefined,
   )
   return {
     managed,

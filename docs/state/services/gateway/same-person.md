@@ -4,8 +4,9 @@ title: Pair a gateway as the same person
 kind: flow
 status: implemented
 parent: gateway
-summary: An immutable invitation choice adds credential-bound attribution after activation, without granting access.
-sourceRevision: "311ad40ca846a09689e6ccaea29c2cebdcfe758e"
+summary: An immutable invitation choice adds credential-bound attribution after
+  activation, without granting access.
+sourceRevision: "9a3253951826e2ae0e5666f34298a8c9093ca9d7"
 sources:
   - crates/nessa-gateway/src/product/pairing.rs
   - packages/nessa-client/src/protocol/pairing-validate.ts
@@ -24,6 +25,7 @@ sources:
   - crates/nessa-device-pairing/src/application/activation.rs
   - crates/nessa-conversation/src/infrastructure/store/person_links.rs
   - crates/nessa-conversation/src/infrastructure/store/grant_database.rs
+  - crates/nessa-conversation/src/infrastructure/store/share_grants.rs
   - crates/nessa-server/tests/device_pairing/infrastructure/person_links.rs
   - crates/nessa-conversation/tests/conversation/grant_database.rs
   - crates/nessa-peer-gateways/src/infrastructure/records.rs
@@ -31,7 +33,34 @@ sources:
   - crates/nessa-server/tests/device_pairing/owner_routes.rs
   - crates/nessa-server/tests/peer_gateways/same_person.rs
   - crates/nessa-gateway/tests/backup/deletion.rs
+model:
+  spec: tla/services/gateway/SamePerson.tla
+  config: tla/services/gateway/SamePerson.cfg
+  steps:
+    Init: Begin before the owner records a choice.
+    SaveChoice: Store the invitation choice and its owner provenance.
+    Activate: Commit the credential and receiver before any attribution.
+    CommitLink: Commit the credential-bound attribution and its audit together.
+    EndCredential: Observe revocation or exclusive expiry.
+    CommitRemoval: Remove the link and record the original removal cause.
+    LinkAfterClockRollback: Reconcile attribution after a clock rollback.
 diagramLinks: {}
+modelCheck:
+  sourceRevision: "9a3253951826e2ae0e5666f34298a8c9093ca9d7"
+  checker: tlc-1.7.4
+  date: 2026-11-25T06:39:50.793Z
+  config: tla/services/gateway/SamePerson.cfg
+  modelDigest: 050b404fe60ad038d93613382c3c625154168a6abcaf0550f34610a2d1910f07
+  states: 20
+  held:
+    - HumanChoiceOnly
+    - LinkNeedsActivationAndAudit
+    - RemovalKeepsCause
+    - RetiredChoiceStaysConsumed
+    - AttributionNeverGrantsRead
+    - AttributionMatchesBinding
+  broke: []
+  unchecked: []
 ---
 # Pair a gateway as the same person
 
@@ -112,14 +141,16 @@ has its independent subject, capabilities and epoch throughout this flow.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ChoiceSaved: create gateway invitation
+    [*] --> BeforeChoice
+    BeforeChoice --> ChoiceSaved: create gateway invitation
     ChoiceSaved --> NoLink: activate with false choice
     ChoiceSaved --> LinkOwed: commit Active with true choice
     LinkOwed --> LinkOwed: link or audit write fails
     LinkOwed --> Linked: retry commits link and audit
-    LinkOwed --> Removed: revoked before a link commits
+    LinkOwed --> RemovalOwed: credential ends before a link commits
     Linked --> RemovalOwed: credential revoke, expiry or enrollment revoke
     RemovalOwed --> Removed: retry commits removal and audit
+    RemovalOwed --> Linked: observation precedes expiry and no receipt committed
     RemovalOwed --> RemovalOwed: write fails or replacement activation waits
 ```
 
@@ -164,8 +195,20 @@ include that kind, so equal text in the two namespaces cannot collide.
 
 This page traces the source at the checkpoint above and the focused regression
 fixtures listed in Sources. Execution receipts and deliberate failure probes are
-recorded in the pull request and its linked review evidence. The chart has no
-formal model; the older device activation model does not cover these two-store
-link obligations. No real device, account grant, live credential, physical phone
-or deployed gateway was used to verify this flow. Peer subscriptions, desktop
-choice controls and unrelated gateway lifecycle models are outside this change.
+recorded in the pull request and its linked review evidence. Peer subscriptions
+and desktop choice controls remain outside this review.
+
+## Model coverage
+
+The model follows one gateway invitation from saved choice through activation,
+attribution and removal. The Active receipt and attribution write are separate.
+A failed write or restart can leave the model at the same durable state. The
+removal receipt preserves the original cause and prevents an expired choice
+from being linked after a clock rollback. Read admission starts with an
+independent grant decision. The returned person additionally requires a
+committed link for the grant's credential and organization.
+
+The model omits invitation exchange, replacement enrollment, concurrent links,
+exact clock and revocation ordering, initiator correlation, and grant epochs.
+It checks safety within those bounds. Source review and counterexamples are
+recorded in the [gateway model evidence](../../../reviews/gateway-coverage-models.md).
