@@ -64,9 +64,10 @@ the domain, chains from the previous state of its credential, and ends at the
 lifecycle the registry actually stores. A file edited by hand fails the same
 way a bad live write would.
 
-Causes are exactly the commands that exist: bootstrap, admin issue, surface
-provisioning, exact device pairing, owner recovery, explicit revocation, and supersession by
-provisioning or by owner recovery. Expiry is not a cause; nothing happens at
+The journal names the command that occurred: bootstrap, admin issue, app
+approval and issue, outbound webhook issue, surface provisioning, exact device
+pairing, owner recovery, explicit revocation, or supersession by provisioning
+or owner recovery. Expiry is not a cause; nothing happens at
 expiry and the instant is already in the issuance record. Automatic
 revocations carry the initiator of the command that triggered them, and their
 cause says they were automatic. The registry file is schema 2; earlier files
@@ -89,6 +90,25 @@ The local refusal sink addresses every directory and record beneath the verified
 auth root and refuses symbolic-link ancestry. Unix syncs each parent after
 creating its child; Windows revalidates the tree, flushes the record file, and
 uses a write-through move because it has no directory-fsync equivalent.
+
+## App credential approval
+
+The local auth store can commit an owner's app approval with a new credential.
+Cedar checks the current approving membership against the registry owner. The
+writer rechecks the same registry revision and the owner's deadline before
+recording the app namespace, exact operations, expiry and issuance receipt in
+one commit. Reopen validates the scope against that receipt.
+
+This is an internal store operation, not a Product command. The ordinary Product
+bearer verifier rejects the distinct app proof, and Cedar's ordinary session
+entry does not admit its issuance cause. Reading the recorded app scope is not
+authorization to run any app operation. Product method and resource admission
+must be wired separately before apps can use the scope.
+
+An older build does not recognize new app-issue records. Before mounting an
+issuer, qualify upgrades and rollback with a registry that contains app
+credentials. The unmounted change does not write an app record during a normal
+launch, authentication, or ordinary credential command.
 
 ## Authentication is not ongoing authorization
 

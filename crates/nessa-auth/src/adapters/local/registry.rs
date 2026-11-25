@@ -34,6 +34,7 @@ use crate::{
             CredentialEvidence, CredentialVerifier, Decision, GrantPolicyEvaluator, IssuePath,
             PortFuture, VerifiedCredential,
         },
+        revocation::CredentialRevocation,
     },
     domain::{
         pairing::{validate_pairing_collection, InvitationId, PairingError, PEER_PRINCIPAL_PREFIX},
@@ -61,7 +62,9 @@ use std::{
 use subtle::ConstantTimeEq;
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AdmissionRwLock};
 
+mod app_credentials;
 mod pairing;
+use app_credentials::{approved_app_binding, AppIssueCommit, AppProof, StoredAppScope};
 pub use pairing::GrantorPeer;
 
 pub use pairing::DeviceCredentialVerifier;
@@ -144,7 +147,10 @@ impl fmt::Display for LocalStoreError {
                     .to_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("{path:?}"));
-                write!(formatter, "credential registry at {path} was refused: {fault}. The file was left unchanged. ")?;
+                write!(
+                    formatter,
+                    "credential registry at {path} was refused: {fault}. The file was left unchanged. "
+                )?;
                 match fault {
                     CredentialRegistryFault::UnsafeStorage(
                         CredentialRegistryStorageRole::Registry,
@@ -235,6 +241,7 @@ struct StoredCredential {
 #[serde(untagged)]
 enum StoredProof {
     Bearer(String),
+    App(AppProof),
     Device(DeviceProofBinding),
 }
 
@@ -638,18 +645,46 @@ impl LocalCredentialStore {
         self.issue_internal(request, path)
     }
 
-    /// Issue over the ProductIssue, WebhookIssue or SurfaceProvision path.
-    /// Provisioning rotates; product and webhook issuance only add. The
-    /// existing grant-policy owner decides the restrictions on each path.
     fn issue_internal(
         &self,
         request: IssueCredentialRequest,
         path: IssuePath,
     ) -> Result<IssueCredentialOutcome, LocalStoreError> {
+        self.commit_issue(request, path, None)
+    }
+
+    /// Provisioning rotates; the other issuing paths only add. Cedar is the
+    /// grant-policy owner for each path.
+    fn commit_issue(
+        &self,
+        mut request: IssueCredentialRequest,
+        path: IssuePath,
+        app: Option<AppIssueCommit<'_>>,
+    ) -> Result<IssueCredentialOutcome, LocalStoreError> {
+        if (path == IssuePath::AppIssue) != app.is_some() {
+            return Err(LocalStoreError::Corrupt);
+        }
         let provisioning = path == IssuePath::SurfaceProvision;
-        let fingerprint = issue_fingerprint(&request)?;
+        let fingerprint = issue_fingerprint(&request, app.as_ref().map(|app| &app.scope))?;
         let mut slot = self.slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
+        if let Some(app) = &app {
+            let now = app.clock.unix_seconds();
+            if current.revision != app.observed_revision
+                || app
+                    .approval_deadline
+                    .is_some_and(|deadline| now >= deadline)
+                || request.expires_at.is_none_or(|deadline| now >= deadline)
+            {
+                return Err(LocalStoreError::Conflict);
+            }
+            request.issued_at = now;
+        } else if current.credentials.iter().any(|entry| {
+            entry.metadata.principal_id == request.principal.id
+                && matches!(entry.verifier, StoredProof::App(_))
+        }) {
+            return Err(LocalStoreError::Conflict);
+        }
         if current.revoke_receipts.iter().any(|receipt| {
             receipt.issuer_principal_id == request.issuer_principal_id
                 && receipt.request_id == request.request_id
@@ -692,6 +727,14 @@ impl LocalCredentialStore {
             || current.issue_receipts.len() >= self.config.max_receipts
         {
             return Err(LocalStoreError::Capacity);
+        }
+        if app.is_some()
+            && current
+                .principals
+                .iter()
+                .any(|principal| principal.id == request.principal.id)
+        {
+            return Err(LocalStoreError::Conflict);
         }
         validate_issue(self.grants.as_ref(), current, &request, path)?;
         let metadata = CredentialMetadataDto {
@@ -748,9 +791,10 @@ impl LocalCredentialStore {
         let cause = match path {
             IssuePath::WebhookIssue => IssuanceCause::WebhookIssue,
             IssuePath::SurfaceProvision => IssuanceCause::SurfaceProvision,
+            IssuePath::AppIssue => IssuanceCause::AppIssue,
             IssuePath::ProductIssue => IssuanceCause::AdminIssue,
             IssuePath::Bootstrap | IssuePath::OwnerRecovery | IssuePath::StoredOnLoad => {
-                return Err(LocalStoreError::Corrupt)
+                return Err(LocalStoreError::Corrupt);
             }
         };
         record_transition(
@@ -774,7 +818,13 @@ impl LocalCredentialStore {
         }
         next.credentials.push(StoredCredential {
             metadata: metadata.clone(),
-            verifier: StoredProof::Bearer(verifier),
+            verifier: match app {
+                Some(app) => StoredProof::App(AppProof::AppBearer {
+                    verifier,
+                    scope: app.scope,
+                }),
+                None => StoredProof::Bearer(verifier),
+            },
         });
         next.issue_receipts.push(IssueReceipt {
             issuer_principal_id: request.issuer_principal_id,
@@ -1324,47 +1374,48 @@ impl AccessReader for LocalCredentialStore {
                     .iter()
                     .find(|entry| entry.metadata.id == id.as_str())
                     .ok_or(AccessError::InvalidCredential)?;
-                let credential = Credential::try_from(stored.metadata.clone())
-                    .map_err(|_| AccessError::Unavailable)?;
-                let membership = registry
-                    .memberships
-                    .iter()
-                    .find(|membership| {
-                        membership.principal_id == stored.metadata.principal_id
-                            && membership.organization_id == stored.metadata.organization_id
-                    })
-                    .cloned()
-                    .ok_or(AccessError::IdentityMismatch)?;
-                let origin = credential_origin(registry, &credential)?;
-                let revocation = if credential.revoked_at().is_some() {
-                    let record = registry
-                        .transitions
-                        .iter()
-                        .rev()
-                        .find(|record| record.credential_id == credential.id().as_str())
-                        .ok_or(AccessError::Unavailable)?;
-                    Some(
-                        crate::application::revocation::CredentialRevocation::restore(
-                            record.clone(),
-                            &credential,
-                        )?,
-                    )
-                } else {
-                    None
-                };
-                let snapshot = AccessSnapshot {
-                    origin,
-                    revocation,
-                    credential,
-                    membership: Membership::try_from(membership)
-                        .map_err(|_| AccessError::Unavailable)?,
-                    revision: registry.revision,
-                };
-                snapshot.revocation_fact()?;
-                Ok(snapshot)
+                access_snapshot(registry, stored)
             })
         })
     }
+}
+
+fn access_snapshot(
+    registry: &Registry,
+    stored: &StoredCredential,
+) -> Result<AccessSnapshot, AccessError> {
+    let credential =
+        Credential::try_from(stored.metadata.clone()).map_err(|_| AccessError::Unavailable)?;
+    let membership = registry
+        .memberships
+        .iter()
+        .find(|membership| {
+            membership.principal_id == stored.metadata.principal_id
+                && membership.organization_id == stored.metadata.organization_id
+        })
+        .cloned()
+        .ok_or(AccessError::IdentityMismatch)?;
+    let origin = credential_origin(registry, &credential)?;
+    let revocation = if credential.revoked_at().is_some() {
+        let record = registry
+            .transitions
+            .iter()
+            .rev()
+            .find(|record| record.credential_id == credential.id().as_str())
+            .ok_or(AccessError::Unavailable)?;
+        Some(CredentialRevocation::restore(record.clone(), &credential)?)
+    } else {
+        None
+    };
+    let snapshot = AccessSnapshot {
+        origin,
+        revocation,
+        credential,
+        membership: Membership::try_from(membership).map_err(|_| AccessError::Unavailable)?,
+        revision: registry.revision,
+    };
+    snapshot.revocation_fact()?;
+    Ok(snapshot)
 }
 
 impl CredentialAdmin for LocalCredentialStore {
@@ -1936,6 +1987,9 @@ fn validate_registry(
                 Some(TransitionCauseDto::Issued {
                     cause: IssuanceCauseDto::WebhookIssue,
                 }) => IssuePath::WebhookIssue,
+                Some(TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::AppIssue,
+                }) => IssuePath::AppIssue,
                 Some(TransitionCauseDto::Issued { .. }) => IssuePath::StoredOnLoad,
                 _ => return Err(LocalStoreError::Corrupt),
             };
@@ -1950,7 +2004,30 @@ fn validate_registry(
         .map_err(|_| {
             CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
         })?;
+        let app_origin = original_issuance
+            .get(credential.metadata.id.as_str())
+            .is_some_and(|record| {
+                matches!(
+                    record.cause,
+                    TransitionCauseDto::Issued {
+                        cause: IssuanceCauseDto::AppIssue
+                    }
+                )
+            });
+        if app_origin != matches!(credential.verifier, StoredProof::App(_)) {
+            return Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialBinding,
+            ));
+        }
         let valid_proof = match &credential.verifier {
+            StoredProof::App(AppProof::AppBearer { verifier, .. }) => {
+                URL_SAFE_NO_PAD
+                    .decode(verifier)
+                    .is_ok_and(|bytes| bytes.len() == 32)
+                    && access_snapshot(registry, credential)
+                        .and_then(|snapshot| approved_app_binding(registry, credential, &snapshot))
+                        .is_ok()
+            }
             StoredProof::Bearer(verifier) => URL_SAFE_NO_PAD
                 .decode(verifier)
                 .is_ok_and(|bytes| bytes.len() == 32),
@@ -2250,7 +2327,10 @@ fn validate_grants(
     Ok(())
 }
 
-fn issue_fingerprint(request: &IssueCredentialRequest) -> Result<String, LocalStoreError> {
+fn issue_fingerprint(
+    request: &IssueCredentialRequest,
+    app: Option<&StoredAppScope>,
+) -> Result<String, LocalStoreError> {
     let mut value = serde_json::json!({
         "principal": request.principal,
         "membership": request.membership,
@@ -2263,6 +2343,9 @@ fn issue_fingerprint(request: &IssueCredentialRequest) -> Result<String, LocalSt
     // cannot replay its receipt (or bypass its Cedar path) as product issuance.
     if request.purpose == CredentialIssuePurpose::Webhook {
         value["purpose"] = serde_json::json!("webhook");
+    }
+    if let Some(app) = app {
+        value["approvedApp"] = serde_json::to_value(app).map_err(|_| LocalStoreError::Corrupt)?;
     }
     let bytes = serde_json::to_vec(&value).map_err(|_| LocalStoreError::Corrupt)?;
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)))
@@ -3992,7 +4075,12 @@ mod tests {
         store.bootstrap(bootstrap()).unwrap();
         let before = fs::read(&path).unwrap();
         let mut refused: Vec<(&str, IssueCredentialRequest)> = Vec::new();
-        for action in ["credential.manage", "environment.serve", "anything.else"] {
+        for action in [
+            "credential.manage",
+            "environment.serve",
+            "anything.else",
+            "app.identity",
+        ] {
             let mut request = member_issue(action, &format!("credential-{action}"));
             request.grants = vec![grant("org-1", action)];
             refused.push((action, request));

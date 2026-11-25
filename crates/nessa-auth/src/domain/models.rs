@@ -146,6 +146,7 @@ impl Membership {
 pub struct Resource {
     organization_id: OrganizationId,
     id: ResourceId,
+    owner_membership: Option<MembershipId>,
 }
 
 impl Resource {
@@ -156,7 +157,18 @@ impl Resource {
         Self {
             organization_id,
             id,
+            owner_membership: None,
         }
+    }
+
+    /// Attach the owning membership read from the resource's authority.
+    pub(crate) fn with_owner_membership(mut self, owner: MembershipId) -> Self {
+        self.owner_membership = Some(owner);
+        self
+    }
+
+    pub(crate) fn owner_membership(&self) -> Option<&MembershipId> {
+        self.owner_membership.as_ref()
     }
 
     /// Organization that owns this record or resource.
