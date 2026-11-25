@@ -1,4 +1,8 @@
 //! One selected relay socket from the Join preamble through pinned status.
+#[cfg(test)]
+use crate::pairing::NativeClientError;
+#[cfg(test)]
+use nessa_protocol::pairing::wire::NativePairingStatus;
 use super::{ReadStop, StopSocket};
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_protocol::{
@@ -152,6 +156,36 @@ impl JoinedStatusRoute {
                 .map_or_else(|| Error::from(ErrorKind::InvalidData), Error::from)),
         }
     }
+}
+
+// Synthetic composition only until the retained cache-owning entry point
+// can consume this proof. Successful validation does not itself grant access.
+#[cfg(test)]
+pub(crate) fn join_after_active_for_test(
+    status: std::result::Result<NativePairingStatus, NativeClientError>,
+    state: &dyn nessa_auth::application::pairing::ClientPendingStore,
+    trusted_scope: &super::Scope,
+    requested_scope: &super::Scope,
+    route: JoinedStatusRoute,
+    episode: JoinedEpisode,
+    wake: Arc<WakeEndpoint>,
+    reactor: &tokio::runtime::Handle,
+) -> std::result::Result<(JoinedStream, super::RetainedDeviceReader), NativeClientError> {
+    use nessa_protocol::conversation::read_scope::validate_passive_read_selector;
+
+    let status = status?;
+    let reader = super::RetainedDeviceReader::from_current(&status, state)?
+        .ok_or(NativeClientError::Refused)?;
+    let access = reader.access(route.address(), "joined-record-fixture");
+    if &access.pin != route.pin() || trusted_scope != requested_scope {
+        return Err(NativeClientError::Refused);
+    }
+    validate_passive_read_selector(access.receiver, access.access_epoch, trusted_scope)
+        .map_err(|_| NativeClientError::Refused)?;
+    let joined = route
+        .join(&episode, wake, reactor)
+        .map_err(|error| NativeClientError::Io(error.kind()))?;
+    Ok((joined, reader))
 }
 
 // The enrollment worker owns this exact socket and registration from Connect

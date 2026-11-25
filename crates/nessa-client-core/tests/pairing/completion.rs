@@ -610,3 +610,145 @@ async fn joined_selected_owner_injects_one_dial_and_drains_on_stop() {
         assert_eq!(port.dropped.load(Ordering::SeqCst), pend);
     }
 }
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn joined_record_selection_admits_one_dial_only_for_current_matching_authority() {
+    use crate::retained::{
+        joined_status::{
+            join_after_active_for_test, JoinedDialFuture, JoinedEpisode, JoinedStatusDial,
+            JoinedStatusRoute,
+        },
+        ReadStop,
+    };
+    use nessa_auth::{
+        adapters::pairing::{NativeIdentity, OsEntropy},
+        domain::{pairing::DisclosedConsent, AudienceId, OrganizationId, Resource},
+    };
+    use nessa_protocol::{
+        pairing::{socket::WakeEndpoint, wire::NativePairingStatus},
+        tunnel::TunnelSecret,
+    };
+    use nessa_sync::replication::domain::{Id, Scope};
+    use std::{io, net::SocketAddr};
+
+    struct CountDial(AtomicUsize);
+    impl JoinedStatusDial for CountDial {
+        fn dial(&self, _: SocketAddr) -> JoinedDialFuture {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
+        }
+    }
+    let address = "127.0.0.1:9".parse().unwrap();
+    let pin = NativeIdentity::generate(&mut OsEntropy).unwrap().public_spki();
+    let other_pin = NativeIdentity::generate(&mut OsEntropy).unwrap().public_spki();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let scope = |receiver: &str, epoch: &str, incarnation: &str| {
+        let id = |value: &str| Id::new(value).unwrap();
+        Scope::new(
+            id(receiver),
+            id("origin"),
+            id("conversation"),
+            id(incarnation),
+            id("schema"),
+            id(epoch),
+        )
+    };
+    for case in [
+        "match", "refused", "pending", "pin", "scope", "receiver", "epoch",
+        "credential", "stop", "expiry",
+    ] {
+        let credential = CredentialId::new("issued").unwrap();
+        let state = DiscoverySaved {
+            intent,
+            pin,
+            credential: credential.clone(),
+        };
+        let status = match case {
+            "refused" => Err(NativeClientError::Refused),
+            "pending" => Ok(NativePairingStatus::Pending(intent)),
+            _ => Ok(NativePairingStatus::Active {
+                consent: Box::new(
+                    DisclosedConsent::new(
+                        intent,
+                        AudienceId::new("gateway").unwrap(),
+                        ConsentClass::DeviceRead
+                            .grant(Resource::new(
+                                OrganizationId::new("org").unwrap(),
+                                ResourceId::new("owner").unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                ),
+                credential: if case == "credential" {
+                    CredentialId::new("other").unwrap()
+                } else {
+                    credential
+                },
+                receiver: ResourceId::new("receiver").unwrap(),
+                access_epoch: 13,
+                tunnel_secret: TunnelSecret::new([9; 32]),
+            }),
+        };
+        let trusted = scope(
+            if case == "receiver" { "other" } else { "receiver" },
+            if case == "epoch" { "epoch-14" } else { "epoch-13" },
+            "incarnation",
+        );
+        let requested = if case == "scope" {
+            scope("receiver", "epoch-13", "other-incarnation")
+        } else {
+            trusted.clone()
+        };
+        let dial = Arc::new(CountDial(AtomicUsize::new(0)));
+        let route = JoinedStatusRoute::new(
+            address,
+            if case == "pin" { other_pin } else { pin },
+            dial.clone(),
+        )
+        .unwrap();
+        let stop = ReadStop::new();
+        if case == "stop" {
+            stop.stop();
+        }
+        let episode = JoinedEpisode::new(
+            Arc::new(Time),
+            stop,
+            if case == "expiry" { 0 } else { 1_000 },
+        );
+        let reactor = tokio::runtime::Handle::current();
+        let result = tokio::task::spawn_blocking(move || {
+            join_after_active_for_test(
+                status,
+                &state,
+                &trusted,
+                &requested,
+                route,
+                episode,
+                WakeEndpoint::new(address),
+                &reactor,
+            )
+        })
+        .await
+        .unwrap();
+        match (case, result) {
+            ("match", Err(NativeClientError::Io(io::ErrorKind::ConnectionRefused)))
+            | ("stop", Err(NativeClientError::Io(io::ErrorKind::ConnectionAborted)))
+            | ("expiry", Err(NativeClientError::Io(io::ErrorKind::TimedOut)))
+            | ("credential", Err(NativeClientError::Storage(PrivateStateError::Conflict))) => {}
+            (_, Err(NativeClientError::Refused)) if !matches!(case, "match" | "stop" | "expiry" | "credential") => {}
+            _ => panic!("unexpected admission result for {case}"),
+        }
+        let calls = if case == "match" { 1 } else { 0 };
+        assert_eq!(dial.0.load(Ordering::SeqCst), calls, "{case}");
+    }
+}
