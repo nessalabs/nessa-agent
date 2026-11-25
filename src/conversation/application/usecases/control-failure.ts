@@ -127,9 +127,6 @@ function nothingWasDone(
       return "An older version of Nessa ran this conversation on another computer, and each computer now runs only its own agents, so nothing was done. Its history stays readable; start a new conversation to carry on."
     // Answered only by builds that still ran agents on other computers.
     case "environment-unavailable":
-    case "environment-version-mismatch":
-    case "environment-platform-unsupported":
-    case "environment-install-failed":
       return "The computer this conversation ran on could not run its agent, so nothing was done."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."

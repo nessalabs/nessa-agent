@@ -197,9 +197,6 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   sandbox_unavailable: "sandbox-unavailable",
   environment_not_configured: "environment-not-configured",
   environment_unavailable: "environment-unavailable",
-  environment_version_mismatch: "environment-version-mismatch",
-  environment_platform_unsupported: "environment-platform-unsupported",
-  environment_install_failed: "environment-install-failed",
   conversation_state_unreadable: "conversation-state-unreadable",
   // Opening a restored conversation asks for its recorded version before any
   // message is taken. The source is gone, or it no longer matches, so the
@@ -293,9 +290,6 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   // The same for an SSH host: whether it answers later is the host's matter.
   environment_not_configured: "unavailable",
   environment_unavailable: "unavailable",
-  environment_version_mismatch: "unavailable",
-  environment_platform_unsupported: "unavailable",
-  environment_install_failed: "unavailable",
   attachment_capacity: "unavailable",
   attachment_cleanup_unavailable: "unavailable",
   attachment_not_found: "unavailable",
