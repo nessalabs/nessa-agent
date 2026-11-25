@@ -129,6 +129,8 @@ pub struct CredentialLifecycleDto {
 pub enum IssuanceCauseDto {
     Bootstrap,
     AdminIssue,
+    /// Owner-approved app credential; not an ordinary Product session.
+    AppIssue,
     /// Outbound webhook registration; never a product session.
     WebhookIssue,
     /// Native device enrollment with exact owner consent and staged receiver.
