@@ -61,6 +61,7 @@ use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
 pub use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{future::Future, pin::Pin};
@@ -886,7 +887,7 @@ impl ConversationRepository for MemoryRepository {
                 ConversationAdmissionSnapshot::new(
                     conversation,
                     ConversationAdmissionToken::new(incarnation, id, change_revision),
-                    Some(std::num::NonZeroU64::MIN),
+                    Some(NonZeroU64::MIN),
                 )
             })),
         };

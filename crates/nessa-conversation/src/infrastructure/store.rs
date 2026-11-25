@@ -56,6 +56,7 @@ use nessa_sync::replication::catalogue::{
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(any(test, feature = "test-support"))]
@@ -941,7 +942,7 @@ fn read_admission(
         ConversationAdmissionToken::new(incarnation, id.clone(), change_revision),
         u64::try_from(creation_revision)
             .ok()
-            .and_then(std::num::NonZeroU64::new),
+            .and_then(NonZeroU64::new),
     )))
 }
 

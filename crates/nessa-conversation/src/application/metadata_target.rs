@@ -3,7 +3,7 @@
 
 use super::{
     ConversationAdmissionSnapshot, ConversationAdmissionToken, ConversationError,
-    ConversationRepository,
+    ConversationRepository, ReviewNoticeClaim,
 };
 use crate::domain::Conversation;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -95,7 +95,7 @@ impl ConversationMetadataReader {
     /// selection. A missing row or unknown creation identity cannot match.
     pub async fn review_claim_current(
         &self,
-        claim: &super::ReviewNoticeClaim,
+        claim: &ReviewNoticeClaim,
     ) -> Result<bool, ConversationError> {
         let fresh = self.load_admission(claim.conversation_id()).await?;
         Ok(fresh
