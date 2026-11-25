@@ -6783,7 +6783,9 @@ const steps = {
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-        log(`upgrade: restarted on a version ${older} file and one seeded legacy placement`)
+        log(
+          `upgrade: restarted on a version ${older} file and one seeded legacy placement`,
+        )
         if (older === CURRENT_METADATA_VERSION)
           failures.push(
             "the conversation metadata could not be downgraded without losing its app namespace",
@@ -13703,7 +13705,9 @@ async function strandedStaysReadable(run, step, id, text) {
     if (before && JSON.stringify(after) !== JSON.stringify(before))
       failures.push("the refused send changed the conversation placed on a worker")
   } catch (error) {
-    failures.push(`the conversation placed on a worker cannot be re-read: ${explain(error)}`)
+    failures.push(
+      `the conversation placed on a worker cannot be re-read: ${explain(error)}`,
+    )
   }
   return failures
 }
