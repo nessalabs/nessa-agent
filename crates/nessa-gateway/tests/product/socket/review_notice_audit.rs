@@ -2179,6 +2179,22 @@ async fn replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_me
 }
 
 #[tokio::test]
+async fn review_notice_refuses_unknown_catalogue_before_disclosure_or_audit() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    fixture.repository.catalogue_incarnation.lock().unwrap().clear();
+    let (task, mut receive, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    assert_eq!(
+        timeout(Duration::from_secs(2), task).await.unwrap().unwrap(),
+        Err(ReviewNoticePublicationFailure::Audit(
+            ReviewNoticeAuditFailure::Unavailable
+        ))
+    );
+    assert!(receive.recv().await.is_none());
+    assert!(audit.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_summary_revision_during_audited_selection_does_not_force_another_answer() {
     let audit = Arc::new(RecordingReviewNoticeAudit::default());
     let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
