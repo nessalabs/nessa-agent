@@ -18,12 +18,14 @@
  *   version 11  the build before decisions were kept: no `owner_decisions`
  *               and no `decision_settings`, when an ask waits in
  *               `summaries.ask` (the newer build brings it in again)
+ *   version 12  the build before app namespaces: no `conversations.app_namespace`,
+ *               when decisions or their settings are kept
  *
- * Each needs `owner_decisions` and `decision_settings` empty, which version
- * 12 added: a file with a row in either is left as it is, the newest
- * build's. Those before 11 also need no ask waiting in `summaries.ask`,
- * those before 10 `closed_threads` empty, which version 10 added, and those
- * before 9 `agent_switches` empty, which version 9 added.
+ * All these versions need every conversation in the built-in `nessa`
+ * namespace, which the 12-to-13 migration restores. Earlier than version
+ * 12 also needs empty `owner_decisions` and `decision_settings`, earlier
+ * than 11 no waiting ask in `summaries.ask`, earlier than 10 empty
+ * `closed_threads`, and earlier than 9 empty `agent_switches`.
  *
  * The gateway must be stopped: this writes the file it holds.
  */
@@ -59,44 +61,54 @@ export function schemaVersion(path) {
   }
 }
 
-/** Rewrites `path` as the oldest build it can be without losing a row; returns that version. */
+/** Rewrites current metadata as the oldest version that preserves its data. */
 export function asOlderBuild(path) {
   const database = new DatabaseSync(path)
   try {
+    database.exec("BEGIN IMMEDIATE")
+    const current = database.prepare("PRAGMA user_version").get().user_version
+    if (current !== 13)
+      throw new Error(`expected version 13 conversation metadata, got ${current}`)
+    if (
+      database
+        .prepare("SELECT 1 FROM conversations WHERE app_namespace IS NOT 'nessa' LIMIT 1")
+        .get()
+    ) {
+      database.exec("ROLLBACK")
+      return current
+    }
+    const commitAs = (version) => {
+      database.exec(`PRAGMA user_version = ${version}`)
+      database.exec("COMMIT")
+      return version
+    }
+    database.exec(`
+      DROP INDEX conversations_by_owner_namespace;
+      ALTER TABLE conversations DROP COLUMN app_namespace;
+    `)
     const rows = (table) => database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n
-    if (rows("owner_decisions") + rows("decision_settings") > 0)
-      return database.prepare("PRAGMA user_version").get().user_version
+    if (rows("owner_decisions") + rows("decision_settings") > 0) return commitAs(12)
     const closed = rows("closed_threads")
     const switches = rows("agent_switches")
-    database.exec("BEGIN IMMEDIATE")
     database.exec("DROP TABLE owner_decisions")
     database.exec("DROP TABLE decision_settings")
     if (rows("summaries WHERE ask IS NOT NULL") > 0) {
-      database.exec("PRAGMA user_version = 11")
-      database.exec("COMMIT")
-      return 11
+      return commitAs(11)
     }
     database.exec("ALTER TABLE summaries DROP COLUMN ask")
     if (closed > 0) {
-      database.exec("PRAGMA user_version = 10")
-      database.exec("COMMIT")
-      return 10
+      return commitAs(10)
     }
     database.exec("DROP TABLE closed_threads")
     if (switches > 0) {
-      database.exec("PRAGMA user_version = 9")
-      database.exec("COMMIT")
-      return 9
+      return commitAs(9)
     }
     const models = rows("model_requests")
     const turns = rows("unfinished_turns")
     database.exec("DROP TABLE agent_switches")
     if (models === 0) database.exec("DROP TABLE model_requests")
     if (models === 0 && turns === 0) database.exec("DROP TABLE unfinished_turns")
-    const version = models === 0 && turns === 0 ? 6 : 7
-    database.exec(`PRAGMA user_version = ${version}`)
-    database.exec("COMMIT")
-    return version
+    return commitAs(models === 0 && turns === 0 ? 6 : 7)
   } finally {
     database.close()
   }

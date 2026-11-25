@@ -28,6 +28,14 @@ const definition = readFileSync(
   ),
   "utf8",
 )
+const migration = (version) =>
+  readFileSync(
+    new URL(
+      `../../../../crates/nessa-conversation/src/infrastructure/schema_upgrades/${version}.sql`,
+      import.meta.url,
+    ),
+    "utf8",
+  )
 
 /** A current metadata file, as the gateway creates it, under a data directory. */
 function current(fill = "") {
@@ -38,8 +46,9 @@ function current(fill = "") {
   const database = new DatabaseSync(path)
   database.exec(definition)
   database.exec(`INSERT INTO catalogue_owners VALUES ('org', 'alice', 1);
-    INSERT INTO conversations VALUES ('c1', 'org', 'alice', 'panel', 'create', 1, 'claude',
-      'm', 'ask', 1, 1);
+    INSERT INTO conversations (id, organization, owner, creator_surface, creation_action,
+      creation_requested_at_ms, agent, model, approval_mode, creation_revision, change_revision)
+    VALUES ('c1', 'org', 'alice', 'panel', 'create', 1, 'claude', 'm', 'ask', 1, 1);
     ${fill}`)
   database.close()
   return { directory, path }
@@ -65,11 +74,40 @@ const tables = (path) => {
   return names
 }
 
+function namespaceShape(path) {
+  const database = new DatabaseSync(path, { readOnly: true })
+  try {
+    return {
+      column: Boolean(
+        database
+          .prepare(
+            "SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'app_namespace'",
+          )
+          .get(),
+      ),
+      index: Boolean(
+        database
+          .prepare(
+            "SELECT 1 FROM pragma_index_list('conversations') WHERE name = 'conversations_by_owner_namespace'",
+          )
+          .get(),
+      ),
+    }
+  } finally {
+    database.close()
+  }
+}
+
 test("a file with nothing in the newer tables goes back to version 6", (t) => {
   const { directory, path } = current()
-  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const database = new DatabaseSync(path)
+  t.after(() => {
+    database.close()
+    rmSync(directory, { recursive: true, force: true })
+  })
+  const before = database.prepare("SELECT * FROM conversations").all()
   assert.equal(metadataFile(directory), path)
-  assert.equal(schemaVersion(path), 12)
+  assert.equal(schemaVersion(path), 13)
   assert.equal(asOlderBuild(path), 6)
   assert.equal(schemaVersion(path), 6)
   assert.ok(!askColumn(path))
@@ -80,6 +118,12 @@ test("a file with nothing in the newer tables goes back to version 6", (t) => {
   assert.ok(!tables(path).includes("owner_decisions"))
   assert.ok(!tables(path).includes("decision_settings"))
   assert.ok(tables(path).includes("conversations"))
+  assert.deepEqual(namespaceShape(path), { column: false, index: false })
+
+  for (let version = 6; version < 13; version++) database.exec(migration(version))
+  assert.equal(schemaVersion(path), 13)
+  assert.deepEqual(database.prepare("SELECT * FROM conversations").all(), before)
+  assert.deepEqual(namespaceShape(path), { column: true, index: true })
 })
 
 test("a marked turn keeps its table, at version 7", (t) => {
@@ -148,14 +192,63 @@ for (const [kept, fill] of [
   ],
   ["decision settings", `INSERT INTO decision_settings VALUES ('org', 'alice', 0, 600);`],
 ])
-  test(`a file with ${kept} is left as the newest build's`, (t) => {
+  test(`a file with ${kept} goes back to version 12 and keeps its data`, (t) => {
     const { directory, path } = current(fill)
-    t.after(() => rmSync(directory, { recursive: true, force: true }))
+    const database = new DatabaseSync(path)
+    t.after(() => {
+      database.close()
+      rmSync(directory, { recursive: true, force: true })
+    })
+    const decisionsAndSettings = () => [
+      database.prepare("SELECT * FROM owner_decisions").all(),
+      database.prepare("SELECT * FROM decision_settings").all(),
+    ]
+    const before = decisionsAndSettings()
     assert.equal(asOlderBuild(path), 12)
     assert.equal(schemaVersion(path), 12)
-    assert.ok(tables(path).includes("owner_decisions"))
-    assert.ok(tables(path).includes("decision_settings"))
+    assert.deepEqual(namespaceShape(path), { column: false, index: false })
+    assert.deepEqual(decisionsAndSettings(), before)
+
+    database.exec(migration(12))
+    assert.equal(schemaVersion(path), 13)
+    assert.deepEqual(namespaceShape(path), { column: true, index: true })
+    assert.equal(
+      database.prepare("SELECT app_namespace FROM conversations WHERE id = 'c1'").get()
+        .app_namespace,
+      "nessa",
+    )
+    assert.deepEqual(decisionsAndSettings(), before)
   })
+
+test("a non-default app namespace keeps the whole file at version 13", (t) => {
+  const { directory, path } = current(
+    "UPDATE conversations SET app_namespace = 'extension-demo' WHERE id = 'c1'",
+  )
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const before = readFileSync(path)
+  assert.equal(asOlderBuild(path), 13)
+  assert.equal(schemaVersion(path), 13)
+  assert.deepEqual(readFileSync(path), before)
+})
+
+test("an unknown version is refused before rewriting metadata", (t) => {
+  const { directory, path } = current("PRAGMA user_version = 14")
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const before = readFileSync(path)
+  assert.throws(
+    () => asOlderBuild(path),
+    /expected version 13 conversation metadata, got 14/,
+  )
+  assert.deepEqual(readFileSync(path), before)
+})
+
+test("a downgrade error rolls back earlier schema changes", (t) => {
+  const { directory, path } = current("DROP TABLE decision_settings")
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  assert.throws(() => asOlderBuild(path), /no such table: decision_settings/)
+  assert.equal(schemaVersion(path), 13)
+  assert.deepEqual(namespaceShape(path), { column: true, index: true })
+})
 
 test("place records turn back into an older build's placement and binding files", () => {
   const conversations = mkdtempSync(join(tmpdir(), "stress-places-"))

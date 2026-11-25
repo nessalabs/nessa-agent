@@ -7858,6 +7858,10 @@ const steps = {
         log(
           `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
         )
+        if (older === CURRENT_METADATA_VERSION)
+          failures.push(
+            "the conversation metadata could not be downgraded without losing its app namespace",
+          )
         if (!earlier.includes(run.main.id))
           failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
