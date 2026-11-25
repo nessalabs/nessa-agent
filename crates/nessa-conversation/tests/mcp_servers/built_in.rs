@@ -334,3 +334,120 @@ async fn a_stand_in_handed_out_for_another_configuration_or_line_too_long_is_tur
         .unwrap();
     assert_eq!(client.next().await, None, "the connection ends");
 }
+
+#[tokio::test]
+async fn a_built_in_server_with_skills_serves_sep2640_and_binds_its_digest() {
+    use crate::mcp_servers::conversation_tools::ConversationTools;
+    use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile, EXTENSION};
+
+    struct WithSkills {
+        catalog: SkillCatalog,
+    }
+    impl BuiltInServer for WithSkills {
+        fn name(&self) -> &str {
+            "with-skills"
+        }
+        fn configuration(&self) -> Vec<String> {
+            vec!["v1".into()]
+        }
+        fn tools(&self) -> Vec<Value> {
+            vec![]
+        }
+        fn skills(&self) -> Option<&SkillCatalog> {
+            Some(&self.catalog)
+        }
+        fn call(
+            &self,
+            _: &SessionId,
+            _: String,
+            _: String,
+            _: Value,
+            _: watch::Receiver<bool>,
+        ) -> BuiltInFuture {
+            Box::pin(async { json!({"content": []}).into() })
+        }
+    }
+
+    let make = |body: &str| {
+        Arc::new(WithSkills {
+            catalog: SkillCatalog::new(vec![SkillDefinition {
+                skill_path: "demo".to_owned(),
+                files: vec![SkillFile::markdown(
+                    "SKILL.md",
+                    format!("---\nname: demo\ndescription: Demo skill.\n---\n\n{body}\n"),
+                )],
+            }])
+            .unwrap(),
+        })
+    };
+
+    // Changing skill content changes built_in_digest automatically.
+    let v1 = make("First version");
+    let v2 = make("Second version");
+    assert_ne!(
+        built_in_digest(&key(), v1.as_ref()),
+        built_in_digest(&key(), v2.as_ref())
+    );
+
+    // ConversationTools (nessa-agents) ships its embedded skills through built_in::serve.
+    let agents: Arc<dyn BuiltInServer> = ConversationTools::new();
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new("session-agents").unwrap());
+    let token = grant.environment()[0].1.clone();
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key()).with_built_in(agents.clone()));
+    let digest = built_in_digest(&key(), agents.as_ref());
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let served = tokio::spawn(async move { relay.serve(server).await });
+    let (from, mut to) = tokio::io::split(client);
+    let mut from = BufReader::new(from);
+    let hello = Hello {
+        server: agents.name().to_owned(),
+        configuration: digest,
+        session: token,
+    };
+    write_line(&mut to, &hello).await.unwrap();
+    assert_eq!(
+        read_line::<Answer>(&mut from).await.unwrap(),
+        Answer::Accepted
+    );
+    let mut client = Client { from, to, served };
+
+    let init = client
+        .ask(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2026-07-28"}}))
+        .await;
+    assert_eq!(init["result"]["protocolVersion"], "2026-07-28");
+    assert_eq!(
+        init["result"]["capabilities"]["extensions"][EXTENSION]["directoryRead"],
+        json!(true)
+    );
+
+    let listed = client
+        .ask(json!({"jsonrpc": "2.0", "id": 2, "method": "skills/list", "params": {}}))
+        .await;
+    assert_eq!(
+        listed["result"]["skills"][0]["uri"],
+        "skill://nessa-agents/SKILL.md"
+    );
+
+    let read_ref = client
+        .ask(json!({"jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": "skill://nessa-agents/references/workflows.md"}}))
+        .await;
+    assert!(read_ref["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("arrange_window"));
+
+    let missing = client
+        .ask(json!({"jsonrpc": "2.0", "id": 4, "method": "skills/get", "params": {"uri": "skill://nope/SKILL.md"}}))
+        .await;
+    assert_eq!(missing["error"]["code"], -32602);
+
+    client.to.shutdown().await.unwrap();
+    drop(client.from);
+    tokio::time::timeout(Duration::from_secs(5), client.served)
+        .await
+        .expect("served to its end")
+        .unwrap();
+    let _ = grant;
+}

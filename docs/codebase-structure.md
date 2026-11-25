@@ -1318,12 +1318,16 @@ All additional Nessa tools use this MCP boundary. See the
 Nessa is also an MCP client, holding the connection to each configured server
 for each harness session (ADR 344, [design](design/mcp-connections.md)). The
 SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
-bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
+bounds), `domain/mcp_skills/` (SEP-2640 Agent Skills value objects, YAML
+frontmatter parser, manifest/digest verification, and static `SkillCatalog`),
+and `infrastructure/mcp/` (`connection` for ids, answers and
 cancellation, `stand_in` for what a harness sees, and for keeping a
 forwarded `tools/call` result's `structuredContent` for the ACP worker to
 attach, `servers` for the live configured set (replaced whole, read at each
 opening), the open sessions and their tool lists, and a session opened once
-for no conversation (`open_once`, a host's look at a server), `process` for a
+for no conversation (`open_once`, a host's look at a server), `skills` for
+SEP-2640 wire codecs and the shared server-side JSON-RPC dispatcher used by
+`BuiltInServer` and `nessa mcp`, `process` for a
 server's process group, `wire` for MCP's JSON, and `http` for remote identity,
 bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
 HTTP replacement handoff and immutable peer-reply binding use `connection`'s

@@ -27,7 +27,12 @@ async fn the_handshake_declares_the_mcp_apps_extension_and_lists_the_tools() {
     assert_eq!(initialize["params"]["protocolVersion"], "2025-06-18");
     assert_eq!(
         initialize["params"]["capabilities"],
-        json!({ "extensions": { "io.modelcontextprotocol/ui": { "mimeTypes": [APP_MIME_TYPE] } } })
+        json!({
+            "extensions": {
+                "io.modelcontextprotocol/ui": { "mimeTypes": [APP_MIME_TYPE] },
+                "io.modelcontextprotocol/skills": {}
+            }
+        })
     );
     assert_eq!(initialize["params"]["clientInfo"]["name"], "nessa");
     // Initialized once, before anything else is asked.
@@ -93,7 +98,7 @@ async fn an_unsupported_version_or_a_refused_initialize_is_a_handshake_failure()
         launcher.server(0).stopped().await;
     }
     // Each version this client accepts.
-    for version in ["2025-06-18", "2025-03-26", "2024-11-05"] {
+    for version in ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"] {
         let (servers, _, _) = servers(Behaviour {
             version: Some(version),
             ..Behaviour::default()

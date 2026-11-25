@@ -106,6 +106,28 @@ impl BuiltInServer for BackgroundTools {
     fn configuration(&self) -> Vec<String> {
         vec!["background-tasks".into()]
     }
+    fn skills(&self) -> Option<&nessa_sdk::domain::mcp_skills::SkillCatalog> {
+        static SKILLS: std::sync::OnceLock<nessa_sdk::domain::mcp_skills::SkillCatalog> =
+            std::sync::OnceLock::new();
+        Some(SKILLS.get_or_init(|| {
+            use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile};
+            SkillCatalog::new(vec![SkillDefinition {
+                skill_path: "nessa-background".to_owned(),
+                files: vec![SkillFile::markdown(
+                    "SKILL.md",
+                    "---\n\
+name: nessa-background\n\
+description: Start, inspect, and cancel long-running background shell tasks whose completion resumes the conversation.\n\
+---\n\n\
+# Managing background shell tasks\n\n\
+1. Use `start` with a stable `taskId` when a command should run asynchronously without blocking the current turn. Reuse the same `taskId`, command, and timeout only to recover from a lost reply.\n\
+2. Do not poll `status` in a loop: task completion automatically continues the session with the outcome.\n\
+3. Call `status` only when you need to inspect retained output mid-run, and `cancel` to stop an active task cleanly.\n",
+                )],
+            }])
+            .expect("built-in nessa-background skill catalog is valid")
+        }))
+    }
     fn tools(&self) -> Vec<Value> {
         let id = json!({"type":"string", "minLength":BackgroundTaskId::MIN_CHARACTERS, "maxLength":BackgroundTaskId::MAX_CHARACTERS, "pattern":BackgroundTaskId::PATTERN, "description":"Choose a stable task identity. Reuse it with the same command and timeout to recover the original task after a lost reply; choose a new identity to run again."});
         vec![

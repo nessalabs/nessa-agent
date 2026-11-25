@@ -64,12 +64,11 @@ pub fn launch_digest(key: &ConfigurationKey, launch: &McpServerLaunch) -> String
 /// ([`BuiltInServer::configuration`]), so a stand-in handed out under
 /// another is refused `configuration-changed`.
 pub fn built_in_digest(key: &ConfigurationKey, server: &dyn BuiltInServer) -> String {
-    configuration_digest(
-        key,
-        Path::new(server.name()),
-        &server.configuration(),
-        &BTreeMap::new(),
-    )
+    let mut inputs = server.configuration();
+    if let Some(skills) = server.skills() {
+        inputs.extend(skills.digest_inputs());
+    }
+    configuration_digest(key, Path::new(server.name()), &inputs, &BTreeMap::new())
 }
 
 /// What a stand-in says first.

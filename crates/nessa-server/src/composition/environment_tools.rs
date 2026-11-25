@@ -75,6 +75,28 @@ impl BuiltInServer for EnvironmentTools {
         configuration
     }
 
+    fn skills(&self) -> Option<&nessa_sdk::domain::mcp_skills::SkillCatalog> {
+        static SKILLS: OnceLock<nessa_sdk::domain::mcp_skills::SkillCatalog> = OnceLock::new();
+        Some(SKILLS.get_or_init(|| {
+            use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile};
+            SkillCatalog::new(vec![SkillDefinition {
+                skill_path: "nessa-environments".to_owned(),
+                files: vec![SkillFile::markdown(
+                    "SKILL.md",
+                    "---\n\
+name: nessa-environments\n\
+description: Discover local, SSH, and paired environments, run leased commands, and exchange artifacts across them.\n\
+---\n\n\
+# Working with Nessa environments\n\n\
+1. Call `environments_list` first to see `here`, configured SSH hosts, and connected paired machines (including load, `poolPlace`, and whether each environment accepts `run`).\n\
+2. Use `run` with an explicit `argv` array (no shell interpolation) on an environment that accepts commands.\n\
+3. Exchange build outputs or logs between environments using `artifacts_publish` and `artifacts_fetch`.\n",
+                )],
+            }])
+            .expect("built-in nessa-environments skill catalog is valid")
+        }))
+    }
+
     fn tools(&self) -> Vec<Value> {
         vec![
             json!({
