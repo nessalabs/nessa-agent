@@ -1,4 +1,3 @@
-import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { FollowConversationChoices } from "../adapters/agent-choices"
@@ -118,7 +117,6 @@ export function App({
   agentInstallations,
   onProviderSignIn,
   canSignInToProvider,
-  chatgptSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -140,8 +138,6 @@ export function App({
   followConversationChoices: FollowConversationChoices
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
-  /** A ChatGPT account for Codex on another computer. */
-  chatgptSignIn?: CodexChatgptSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -604,7 +600,6 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
-                  chatgptSignIn={chatgptSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }

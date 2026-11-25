@@ -862,7 +862,6 @@ test("the stress check and its companion checks run on two runners with the same
     "drag.mjs",
     "--webhooks 3",
     "--menuPanels 1",
-    "--devices 1",
     "--menus 1",
     "--composers 1 --voices 1",
     "--githubs 1",

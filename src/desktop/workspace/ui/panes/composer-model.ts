@@ -28,7 +28,7 @@ export function modelPickerNote(
       tone: "warning",
       text:
         choice.code === "agent_sign_in_required"
-          ? `${agentName(agentOf(choice.model))} isn’t signed in where this chat runs. Save its login in Settings › Saved logins, then choose it again.`
+          ? `${agentName(agentOf(choice.model))} isn’t signed in where this chat runs. Sign it in there, then choose it again.`
           : choice.code === "model_change_not_applied"
             ? "Model didn’t change. Choose again to try."
             : "The model change wasn’t made. Choose again to try.",

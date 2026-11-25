@@ -6,15 +6,15 @@ use std::path::PathBuf;
 pub const RESTORE_HELP: &str = "\
 Usage:
   nessa-backup-restore stage --bundle ABSOLUTE_PATH --mac-key-file ABSOLUTE_PATH --destination ABSOLUTE_PATH [--later-inventory ABSOLUTE_PATH] [--source ABSOLUTE_PATH]
-  nessa-backup-restore accept --destination ABSOLUTE_PATH [--namespace ABSOLUTE_PATH] [--receipt LEASE=TEXT]
+  nessa-backup-restore accept --destination ABSOLUTE_PATH [--namespace ABSOLUTE_PATH]
   nessa-backup-restore list --destination ABSOLUTE_PATH
   nessa-backup-restore open --destination ABSOLUTE_PATH --conversation ID
   nessa-backup-restore prepare --destination ABSOLUTE_PATH --namespace ABSOLUTE_PATH [--count N]
 
 Stages an authenticated backup into destination/quarantine. The live path stays
 absent, and this command starts no gateway, harness, or command. accept renames
-that quarantine onto the empty destination/live path after Cedar allows it and,
-when a lease was still open, every --receipt is present. The restored gateway
+that quarantine onto the empty destination/live path after Cedar allows it.
+The restored gateway
 does not keep the old private key. open fetches one deferred conversation from
 the source recorded at stage, and refuses when that source is gone. Other
 conversations are not written. prepare writes one accepted restore the
@@ -36,7 +36,6 @@ pub enum RestoreCommand {
     Accept {
         destination: PathBuf,
         namespace: Option<PathBuf>,
-        receipts: Vec<(String, String)>,
     },
     List {
         destination: PathBuf,
@@ -107,7 +106,6 @@ fn parse_stage(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUsageErr
 fn parse_accept(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUsageError> {
     let mut destination = None;
     let mut namespace = None;
-    let mut receipts = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
         let flag = arguments[index].to_str().ok_or(RestoreUsageError)?;
@@ -115,18 +113,13 @@ fn parse_accept(arguments: &[OsString]) -> Result<RestoreCommand, RestoreUsageEr
         match flag {
             "--destination" if destination.is_none() => destination = Some(absolute(value)?),
             "--namespace" if namespace.is_none() => namespace = Some(absolute(value)?),
-            "--receipt" => receipts.push(receipt(value)?),
             _ => return Err(RestoreUsageError),
         }
         index += 2;
     }
-    if receipts.is_empty() && arguments.iter().any(|arg| arg == "--receipt") {
-        return Err(RestoreUsageError);
-    }
     Ok(RestoreCommand::Accept {
         destination: destination.ok_or(RestoreUsageError)?,
         namespace,
-        receipts,
     })
 }
 
@@ -200,21 +193,6 @@ fn absolute(value: &OsString) -> Result<PathBuf, RestoreUsageError> {
     }
 }
 
-fn receipt(value: &OsString) -> Result<(String, String), RestoreUsageError> {
-    let text = value.to_str().ok_or(RestoreUsageError)?;
-    let Some((lease, receipt)) = text.split_once('=') else {
-        return Err(RestoreUsageError);
-    };
-    if lease.is_empty()
-        || receipt.is_empty()
-        || lease.contains([' ', '\n', '\0'])
-        || receipt.contains(['\n', '\0'])
-    {
-        return Err(RestoreUsageError);
-    }
-    Ok((lease.to_owned(), receipt.to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,32 +236,15 @@ mod tests {
     }
 
     #[test]
-    fn a_receipt_is_one_lease_and_its_text() {
+    fn a_receipt_is_no_longer_taken() {
         let destination = if cfg!(windows) { r"C:\dest" } else { "/dest" };
-        let parsed = parse_restore(&[
-            arg("accept"),
-            arg("--destination"),
-            arg(destination),
-            arg("--receipt"),
-            arg("lease-drill=stopped host"),
-        ])
-        .unwrap();
-        match parsed {
-            RestoreCommand::Accept { receipts, .. } => {
-                assert_eq!(
-                    receipts,
-                    vec![("lease-drill".to_owned(), "stopped host".to_owned())]
-                );
-            }
-            other => panic!("{other:?}"),
-        }
         assert_eq!(
             parse_restore(&[
                 arg("accept"),
                 arg("--destination"),
                 arg(destination),
                 arg("--receipt"),
-                arg("=missing"),
+                arg("lease-drill=stopped host"),
             ]),
             Err(RestoreUsageError)
         );

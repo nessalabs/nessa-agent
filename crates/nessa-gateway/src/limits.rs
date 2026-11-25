@@ -9,7 +9,7 @@ use crate::conversation::application::{
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
 use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
-use crate::conversation::domain::{CommandHosts, ToolRules};
+use crate::conversation::domain::ToolRules;
 use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
@@ -304,18 +304,6 @@ fn catalogue() -> &'static [Limit] {
             meaning: "the longest tool policy pattern, in UTF-8 bytes; a conversation.share with a longer one is refused invalid_request",
         },
         Limit {
-            id: "conversation.tool_policy_command_hosts",
-            tier: "fixed",
-            owner: "CommandHosts::MAX_HOSTS in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the hosts a drive grant's policy names for its turns' commands, apart from its allow and deny patterns; a conversation.share with more is refused invalid_request, and a grant naming none runs commands nowhere",
-        },
-        Limit {
-            id: "conversation.tool_policy_command_host_bytes",
-            tier: "fixed",
-            owner: "CommandHosts::MAX_HOST_BYTES in crates/nessa-conversation/src/domain/value_objects/share_access.rs, the schema's ConversationToolPolicy",
-            meaning: "the longest command host a drive grant's policy names, in bytes, the longest SSH destination config.json accepts; a conversation.share with a longer one is refused invalid_request",
-        },
-        Limit {
             id: "record.read_work_budget",
             tier: "configured",
             owner: "config.json limits.readWorkBudgetMs",
@@ -575,14 +563,6 @@ pub fn effective_json(
     put(
         "conversation.tool_policy_rule_bytes",
         count(ToolRules::MAX_RULE_BYTES),
-    );
-    put(
-        "conversation.tool_policy_command_hosts",
-        count(CommandHosts::MAX_HOSTS),
-    );
-    put(
-        "conversation.tool_policy_command_host_bytes",
-        count(CommandHosts::MAX_HOST_BYTES),
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));

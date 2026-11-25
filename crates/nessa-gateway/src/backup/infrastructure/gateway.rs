@@ -219,10 +219,7 @@ pub async fn capture_namespace(
         Box::new(RelayStore {
             namespace: namespace.to_path_buf(),
         }),
-        Box::new(JsonlFile {
-            kind: StoreKind::LeaseRecords,
-            path: namespace.join("environment").join("leases.jsonl"),
-        }),
+        Box::new(RetiredStore(StoreKind::LeaseRecords)),
         Box::new(DirectoryStore {
             kind: StoreKind::ArtifactHolds,
             roots: vec![plain_root(namespace.join("attachments").join("holds"))],
@@ -1154,82 +1151,28 @@ impl PinnedStore for EnvironmentGrantPin {
     }
 }
 
-struct JsonlFile {
-    kind: StoreKind,
-    path: PathBuf,
-}
+/// A store the manifest still names so every build reads every cut, whose
+/// writer is gone: a remote worker's lease ledger (ADR 1417). It is cut
+/// empty, and whatever an older gateway left on disk is not read.
+struct RetiredStore(StoreKind);
+
+struct RetiredPin(StoreKind);
 
 #[async_trait]
-impl ExportSource for JsonlFile {
+impl ExportSource for RetiredStore {
     fn kind(&self) -> StoreKind {
-        self.kind
+        self.0
     }
 
     async fn pin(&self) -> Result<Box<dyn PinnedStore>, ()> {
-        let kind = self.kind;
-        let path = self.path.clone();
-        let pinned = tokio::task::spawn_blocking(move || pin_jsonl(kind, &path))
-            .await
-            .map_err(|_| ())?;
-        Ok(Box::new(JsonlPin { pinned }))
+        Ok(Box::new(RetiredPin(self.0)))
     }
-}
-
-enum PinnedJsonl {
-    Absent(StoreKind),
-    File(StoreKind, FrozenFile),
-}
-
-struct JsonlPin {
-    pinned: PinnedJsonl,
 }
 
 #[async_trait]
-impl PinnedStore for JsonlPin {
+impl PinnedStore for RetiredPin {
     async fn read(&mut self) -> Result<SourceCut, ()> {
-        let pinned = std::mem::replace(
-            &mut self.pinned,
-            PinnedJsonl::Absent(StoreKind::LeaseRecords),
-        );
-        tokio::task::spawn_blocking(move || read_jsonl(pinned))
-            .await
-            .map_err(|_| ())?
-    }
-}
-
-fn pin_jsonl(kind: StoreKind, path: &Path) -> PinnedJsonl {
-    if !path.exists() {
-        return PinnedJsonl::Absent(kind);
-    }
-    PinnedJsonl::File(kind, freeze_one(file_name(path), path, true))
-}
-
-fn read_jsonl(pinned: PinnedJsonl) -> Result<SourceCut, ()> {
-    let (kind, file) = match pinned {
-        PinnedJsonl::Absent(kind) => return absent(kind),
-        PinnedJsonl::File(kind, file) => (kind, file),
-    };
-    let mut records = Vec::new();
-    let mut skipped = Vec::new();
-    match read_frozen(&file)? {
-        FrozenRead::Unreadable => Err(()),
-        FrozenRead::Bounded => finish(
-            kind,
-            "bounded",
-            vec![],
-            vec![SkippedRecord::new(kind, &file.identity, SkipReason::Bounded).map_err(|_| ())?],
-        ),
-        FrozenRead::Bytes(bytes) => {
-            if content_is_secret(&bytes) {
-                withhold(kind, &file.identity, bytes, &mut records, &mut skipped);
-                finish(kind, "secret", records, skipped)
-            } else {
-                let Ok(text) = String::from_utf8(bytes) else {
-                    return Err(());
-                };
-                jsonl_cut(kind, &text).map_err(|_| ())
-            }
-        }
+        absent(self.0)
     }
 }
 

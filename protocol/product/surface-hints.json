@@ -495,34 +495,6 @@
     "readOnly": false,
     "destructive": false
   },
-  "logins.status": {
-    "readOnly": true,
-    "destructive": false
-  },
-  "logins.save": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "logins.remove": {
-    "readOnly": false,
-    "destructive": true
-  },
-  "logins.chatgptSignIn": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "logins.chatgptCancel": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "logins.chatgptUse": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "logins.chatgptRemove": {
-    "readOnly": false,
-    "destructive": true
-  },
   "replyStyle.read": {
     "readOnly": true,
     "destructive": false

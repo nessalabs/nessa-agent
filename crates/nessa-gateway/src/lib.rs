@@ -21,7 +21,6 @@ pub mod github;
 pub mod github_relay;
 pub mod health;
 pub mod limits;
-pub mod logins;
 pub mod mcp_servers;
 pub mod product;
 pub mod relay;

@@ -41,7 +41,7 @@ continues to identify paired admission; a principal-only row has no receiver.
 The only sets are `read`, `read` and `comment`, and those plus `drive`.
 What they used to be called — Read, Comment, Drive — is that set. A set
 that includes `drive`, and only that set, also carries constraints: the
-tool policy and the command hosts (see [Capabilities and
+tool policy (see [Capabilities and
 constraints](#capabilities-and-constraints)). The grant epoch is the
 column and wire field `policyRevision`: the journal sequence of the change
 that last set the capabilities or the constraints. The device is
@@ -242,23 +242,21 @@ tools](#checking-a-drive-turns-tools)).
   absent.
 - **The tool policy** is `ToolPolicy`: which tools, a preset
   (`read_only_tools`, `no_shell`, `ask_everything`, `all`) or allow and deny
-  patterns, and the command hosts its turns may run commands on
-  (`CommandHosts`). It is checked for shape and size only: at most 16
-  patterns in each list, at least one pattern in one of them, each 1 to 48
-  bytes, plain text; at most 16 hosts, each a name `run` could take, once,
-  and at most 253 bytes, the longest SSH destination `config.json` accepts.
-  Hosts are apart from the patterns: a policy may name 16 hosts however full
-  its allow and deny lists are. Whether one page of `conversation.shares`
-  still fits one frame is measured, not argued: row J10's test builds a full
-  page at that largest policy, hosts and all, and checks it. What it allows
+  patterns. It is checked for shape and size only: at most 16 patterns in
+  each list, at least one pattern in one of them, each 1 to 48 bytes, plain
+  text. Whether one page of `conversation.shares` still fits one frame is
+  measured, not argued: row J10's test builds a full page at that largest
+  policy and checks it. What it allows
   is decided by Cedar
   ([below](#what-a-tool-policy-allows)).
   `ShareAccess` holds the capability set and the constraints together, so a
   set that includes `drive` always has a policy and one that does not never
   has one (row J3). The store
   keeps the policy as JSON and reads it back through the same constructors;
-  `commandHosts` is written only when it names a host, so a policy stored
-  before hosts were names none.
+  a policy an older build stored with `commandHosts`, the hosts its turns
+  could run commands on before every gateway ran only its own agents
+  (ADR 1417), reads as the same tools on no host and is written again
+  without them. A share naming `commandHosts` is refused `invalid_request`.
 - **Changing a grant** is sharing again with another capability set or
   constraints. It is applied, journaled with the capabilities and
   constraints before and after, and moves the grant epoch; sharing the same
@@ -478,7 +476,9 @@ policy (`conversation/application/drive_tools.rs`).
   does not stop Codex running a read-only command. Everything that writes,
   reaches the network or runs outside that sandbox is asked about, and so
   checked. The protocol's description of a tool policy says this too.
-- **An allowed `run` reaches only the grant's own hosts.** Whether a turn may
+- **An allowed `run` reaches only the grant's own hosts.** (Retired with
+  ADR 1417: no gateway runs commands on another computer, and a grant names
+  no hosts. Kept as the record of how it worked.) Whether a turn may
   call `run` is its tool policy's; where the command goes and which program
   runs is the command policy's (`CommandPolicyEvaluator`, `commands.cedar`),
   asked by `admit_command` for the turn's initiator. The owner's turns use
@@ -816,7 +816,8 @@ Every rule stays with the gateway; the dialog only reads what it publishes:
   (`src/desktop/adapters/linked-device.ts`, the rule Settings › Linked
   devices reads too). `conversation.share` still decides, and refuses
   anything else `share_target_not_paired`.
-- **Which hosts are offered.** `agents.list` answers `commandHosts`: the
+- **Which hosts are offered.** (Retired with ADR 1417; the dialog offers
+  none.) `agents.list` answers `commandHosts`: the
   places among `environments` that take commands and that the gateway's
   command policy (Cedar) lets the owner run commands on, in their order. A
   Drive grant's `run` goes only to a host its policy names *and* the gateway

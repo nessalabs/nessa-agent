@@ -2288,25 +2288,21 @@ use.
 `share-dialog.mjs` opens the dev server's page with `?gateway` against a
 scripted product session that lists one conversation already shared Drive
 with one linked device, and answers `conversation.shares` a page at a time,
-`.share`, `.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+`.share`, `.unshare`, `credential.list` and `agents.list`. It runs
 in Chromium and WebKit. The rules are the gateway's; the dialog's order is
 the table in `docs/design/read-grants.md` › "Dialog state and order".
 
 - [ ] **Share… on a session's menu opens one dialog for it, focus inside,
   each grant said in words.** _Check:_ `share-dialog.mjs` (`open`). The title
-  names the session; the existing grant reads "Drive · Read-only tools,
-  commands on devbox".
+  names the session; the existing grant reads "Drive · Read-only tools".
 - [ ] **A Drive grant is sent as the wire takes it, and listed as the
   gateway reads it back.** _Check:_ `drive`. One `conversation.share` with
-  `{ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] }` and a
-  request id and `expectedPolicyRevision` 0 (a first grant); the count reads
-  "2 of 16"; the notice says "Shared."; the
-  notes say what a policy does not stop (unasked calls, hosts named and
-  allowed or nowhere, Ask mode / hooks off / not OpenCode).
-- [ ] **The hosts keep their own bound however full the tool patterns are.**
-  _Check:_ `budget`. Both pattern lists full (16 and 16): "4 of 16", Share
-  able to send; nothing sent. A host past the byte bound stays unavailable
-  in `share-dialog.test.tsx`.
+  `{ preset: "no_shell" }` and a request id and `expectedPolicyRevision` 0
+  (a first grant), and no host list offered (every gateway runs only its
+  own agents, ADR 1417); the notice says "Shared."; the new grant reads
+  "Drive · No shell"; the notes say what a policy does not stop.
+- [ ] **Full tool patterns can still be sent.** _Check:_ `budget`. Both
+  pattern lists full (16 and 16), Share able to send; nothing sent.
 - [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
   and every step's scan for codes.
 - [ ] **While a change is on its way, and the read after it, the form,
@@ -2623,8 +2619,8 @@ vault dialog blocking the main conversation click.
 
 - [ ] **Every agent runs on this gateway's own machine (ADR 1417).** No composer
   offers Run on, no channel is made or set up with a location, and Settings has
-  no auto-stop for VMs, no thread order and no device switches for saved
-  logins. A conversation an older build placed on another computer stays listed
+  no auto-stop for VMs, no thread order and no saved logins or ChatGPT
+  accounts. A conversation an older build placed on another computer stays listed
   and readable, and a new message to it is refused `environment_not_configured`.
   _Check:_ the conversation stress `channel` step (no location question, no
   placement in the listing) and `upgrade` step (the stranded conversation).

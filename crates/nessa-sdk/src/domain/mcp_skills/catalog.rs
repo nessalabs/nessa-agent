@@ -58,6 +58,7 @@ pub struct SkillCatalog {
     by_uri: BTreeMap<String, usize>,
     resources: BTreeMap<String, StoredResource>,
     directories: BTreeMap<String, Vec<DirectoryChild>>,
+    digest_inputs: Vec<String>,
 }
 
 impl SkillCatalog {
@@ -67,6 +68,7 @@ impl SkillCatalog {
         let mut by_uri = BTreeMap::new();
         let mut resources = BTreeMap::new();
         let mut dir_sets: BTreeMap<String, BTreeMap<String, DirectoryChild>> = BTreeMap::new();
+        let mut digest_inputs = BTreeSet::new();
 
         for def in definitions {
             let skill_uri = SkillUri::new(format!(
@@ -95,6 +97,12 @@ impl SkillCatalog {
                 let file_uri = skill_uri.resolve_relative(&file.relative_path)?;
                 let digest = SkillDigest::from_bytes(&file.bytes);
                 let size = file.bytes.len() as u64;
+                digest_inputs.insert(format!(
+                    "skill:{}:{}:{}",
+                    skill_uri.as_str(),
+                    file_uri.as_str(),
+                    digest.as_str()
+                ));
                 manifest.push(SkillResourceEntry::new(file_uri.clone(), digest, size));
 
                 let (name, description) = if file.relative_path == SKILL_FILE_NAME {
@@ -150,6 +158,7 @@ impl SkillCatalog {
             by_uri,
             resources,
             directories,
+            digest_inputs: digest_inputs.into_iter().collect(),
         })
     }
 
@@ -205,20 +214,7 @@ impl SkillCatalog {
     /// `BuiltInServer::configuration`): changes whenever any skill URI,
     /// resource URI, or file digest changes.
     pub fn digest_inputs(&self) -> Vec<String> {
-        let mut out = BTreeSet::new();
-        for entry in &self.entries {
-            if let SkillResources::Manifest(files) = entry.resources() {
-                for file in files {
-                    out.insert(format!(
-                        "skill:{}:{}:{}",
-                        entry.uri().as_str(),
-                        file.uri().as_str(),
-                        file.digest().as_str()
-                    ));
-                }
-            }
-        }
-        out.into_iter().collect()
+        self.digest_inputs.clone()
     }
 }
 

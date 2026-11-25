@@ -1,15 +1,15 @@
 /**
  * The owner's share dialog (nessa_ui#128, #129): who a session is shared
  * with, a Revoke for each, and the form that grants a linked device a role —
- * for Drive, its tool policy and the hosts it may run commands on. The kit
- * draws every control (`Dialog`, `Choices`, `SegmentedControl`,
- * `CheckboxList`, `SettingsGroup`, `Input`, `Button`); this wires them to the
+ * for Drive, its tool policy. The kit draws every control (`Dialog`,
+ * `Choices`, `SegmentedControl`, `SettingsGroup`, `Input`, `Button`); this
+ * wires them to the
  * workspace's share state (`usecases/sharing.ts`) and says each outcome in
  * words (`share-copy.ts`).
  *
- * The rules are the gateway's. The dialog holds the hosts a person may check
- * to the host bound the schema publishes and lets the gateway refuse the
- * rest; after every change it shows the list as the gateway reads it again,
+ * The rules are the gateway's. The dialog holds a custom policy's patterns
+ * to the bound the schema publishes and lets the gateway refuse the rest;
+ * after every change it shows the list as the gateway reads it again,
  * never a guess from the outcome. Change and Revoke name the revision they
  * were built on, so a grant changed in another window is refused rather than
  * overwritten.
@@ -18,7 +18,6 @@
  */
 import { shallowEqual } from "react-redux"
 import { Button } from "@nessa-ui/react/button"
-import { CheckboxList } from "@nessa-ui/react/checkbox-list"
 import { Choices } from "@nessa-ui/react/choices"
 import { Dialog } from "@nessa-ui/react/dialog"
 import { Input } from "@nessa-ui/react/input"
@@ -50,7 +49,6 @@ import {
 import {
   draftFromGrant,
   emptyDraft,
-  hostFits,
   requestFrom,
   type ShareDraft,
   type ShareGrant,
@@ -261,7 +259,7 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
 }
 
 /** The bounds before anything has been read: no room for anything. */
-const noRoom = { patterns: 0, hosts: 0, hostBytes: 0 }
+const noRoom = { patterns: 0 }
 
 function Grants({
   grants,
@@ -439,27 +437,19 @@ function Form({
         ))}
       </SegmentedControl>
       <p className="share-quiet nessa-text-2">{roleCopy[draft.role].description}</p>
-      {draft.role === "drive" ? (
-        <DriveFields choices={choices} draft={draft} onDraft={onDraft} />
-      ) : null}
+      {draft.role === "drive" ? <DriveFields draft={draft} onDraft={onDraft} /> : null}
     </section>
   )
 }
 
 function DriveFields({
-  choices,
   draft,
   onDraft,
 }: {
-  choices: SharingChoices
   draft: ShareDraft
   onDraft: (draft: ShareDraft) => void
 }) {
   const custom = draft.preset === "custom"
-  const room = choices.limits.hosts
-  // The hosts on offer, then any the grant holds that are not on offer now:
-  // shown, so they can be kept or unchecked, never dropped unseen.
-  const away = draft.hosts.filter((host) => !choices.commandHosts.includes(host))
   return (
     <div className="share-drive" data-share-drive="">
       <h3 className="share-heading nessa-text-2">Tools</h3>
@@ -503,32 +493,6 @@ function DriveFields({
           </p>
         </div>
       ) : null}
-      <CheckboxList
-        label="Hosts it may run commands on"
-        data-share-hosts=""
-        options={[
-          ...choices.commandHosts.map((host) => {
-            const fits = hostFits(choices.limits, host)
-            return {
-              value: host,
-              label: host,
-              disabled: !fits,
-              disabledReason: fits ? undefined : "Name too long for a grant",
-            }
-          }),
-          ...away.map((host) => ({
-            value: host,
-            label: host,
-            description: "Not taking your commands now",
-          })),
-        ]}
-        value={draft.hosts}
-        onValueChange={(next) => onDraft({ ...draft, hosts: next })}
-        max={room}
-        count={({ selected, max }) => `${selected} of ${max} selected`}
-        limitReason="No more room for hosts"
-        emptyMessage="The gateway runs your commands on no host, so this grant can’t run any."
-      />
       <p className="share-quiet nessa-text-2" data-share-notes="">
         {driveNote}
       </p>

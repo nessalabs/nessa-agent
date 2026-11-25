@@ -608,3 +608,184 @@ fn frontmatter_edge_cases_directory_children_and_error_display_are_covered() {
         assert!(!err.to_string().is_empty());
     }
 }
+
+#[test]
+fn frontmatter_blocks_sequences_and_scalars_cover_every_layout() {
+    let parse = |body: &str| {
+        parse_frontmatter(&format!(
+            "---\nname: code-review\ndescription: d\n{body}---\n"
+        ))
+    };
+    let field = |body: &str, key: &str| parse(body).unwrap().fields()[key].clone();
+    let invalid = |message: &str| Err(McpSkillError::InvalidFrontmatter(message.to_owned()));
+    let string = |text: &str| FrontmatterValue::String(text.to_owned());
+
+    let nested = BTreeMap::from([("b".to_owned(), FrontmatterValue::Integer(1))]);
+    assert_eq!(
+        field("a:\n\n  b: 1\n", "a"),
+        FrontmatterValue::Mapping(nested)
+    );
+    assert_eq!(field("last:\n", "last"), FrontmatterValue::Null);
+    assert_eq!(
+        field("last:\n\n# trailing comment\n", "last"),
+        FrontmatterValue::Null
+    );
+    assert_eq!(
+        field("a:\n  - x\n\n  - y\n", "a"),
+        FrontmatterValue::Sequence(vec![string("x"), string("y")])
+    );
+    let dedent = parse("a:\n  - x\nb: 1\n").unwrap();
+    assert_eq!(
+        dedent.fields()["a"],
+        FrontmatterValue::Sequence(vec![string("x")])
+    );
+    assert_eq!(dedent.fields()["b"], FrontmatterValue::Integer(1));
+    let flat = parse("a:\n- x\nb: 1\n").unwrap();
+    assert_eq!(
+        flat.fields()["a"],
+        FrontmatterValue::Sequence(vec![string("x")])
+    );
+    assert_eq!(flat.fields()["b"], FrontmatterValue::Integer(1));
+    assert_eq!(
+        parse("a:\n  - x\n    - y\n"),
+        invalid("unexpected sequence indentation at line 6")
+    );
+    assert_eq!(
+        parse("a:\n  - x\n  b: 1\n"),
+        invalid("unexpected indentation at line 6")
+    );
+    let tabs = "tabs are not permitted for YAML indentation";
+    assert_eq!(parse("a:\n\tb: 1\n"), invalid(tabs));
+    assert_eq!(parse("a:\n  - x\n\t- y\n"), invalid(tabs));
+
+    assert_eq!(
+        parse("a: |\n    x\n  y\nb: 1\n"),
+        invalid("unexpected indentation at line 6")
+    );
+    let block = parse("a: |\n  x\n\n\nb: 1\n").unwrap();
+    assert_eq!(block.fields()["a"], string("x\n"));
+    assert_eq!(block.fields()["b"], FrontmatterValue::Integer(1));
+    assert_eq!(field("a: >-\n  x\n  y\n", "a"), string("x y"));
+    assert_eq!(field("a: >\n  x\n  y\n", "a"), string("x y\n"));
+    assert_eq!(field("a: |-\n  x\n  y\n", "a"), string("x\ny"));
+
+    assert_eq!(
+        field("a: [\"q\\\"r\", 's']\n", "a"),
+        FrontmatterValue::Sequence(vec![string("q\"r"), string("s")])
+    );
+    assert_eq!(field("a:b: c\n", "a:b"), string("c"));
+
+    let unterminated = "unterminated quote in frontmatter value";
+    assert_eq!(parse("\"a\\\": 1\n"), invalid(unterminated));
+    assert_eq!(parse("a: \"x\\\"\n"), invalid(unterminated));
+    assert_eq!(parse("a: [\"x]\n"), invalid(unterminated));
+    assert_eq!(parse("a:\n  - \"x\\\"\n"), invalid(unterminated));
+    assert_eq!(
+        field("\"q\\tk\": 1\n", "q\tk"),
+        FrontmatterValue::Integer(1)
+    );
+    assert_eq!(parse("a: |\n\tx\n"), invalid(tabs));
+    assert_eq!(parse("a:\n  -\n\t  x: 1\n"), invalid(tabs));
+    assert_eq!(
+        parse("a:\n  b: 1\n  b: 2\n"),
+        invalid("duplicate frontmatter key 'b'")
+    );
+    assert_eq!(
+        parse_frontmatter("---\nname: Bad_Name\ndescription: d\n---\n"),
+        Err(McpSkillError::InvalidSkillName)
+    );
+}
+
+#[test]
+fn skill_uris_catalog_paths_and_manifest_sizes_reject_edge_cases() {
+    for bad in [
+        String::new(),
+        "skill:///SKILL.md".to_owned(),
+        format!("skill://{}/SKILL.md", "a".repeat(5000)),
+    ] {
+        assert_eq!(SkillUri::new(bad), Err(McpSkillError::InvalidSkillUri));
+    }
+    let computed = SkillDigest::from_bytes(SAMPLE_CHECKLIST.as_bytes());
+    assert_eq!(SkillDigest::parse(computed.as_str()), Ok(computed.clone()));
+    assert_eq!(
+        SkillDigest::parse(format!("sha256:{}", "0".repeat(63))),
+        Err(McpSkillError::InvalidDigest)
+    );
+
+    let file = SkillFileUri::new("skill://code-review/SKILL.md").unwrap();
+    assert_eq!(file.relative_to("skill:"), None);
+    assert_eq!(file.relative_to("skill://code-rev"), None);
+    assert!(SkillUri::new("my+skill.v-1://code-review/SKILL.md").is_ok());
+    assert_eq!(
+        SkillUri::new("my_skill://code-review/SKILL.md"),
+        Err(McpSkillError::InvalidSkillUri)
+    );
+
+    let catalog = |skill_path: &str| {
+        SkillCatalog::new(vec![SkillDefinition {
+            skill_path: skill_path.to_owned(),
+            files: vec![SkillFile::markdown("SKILL.md", SAMPLE_SKILL_MD)],
+        }])
+        .map(|_| ())
+    };
+    assert_eq!(catalog("has space"), Err(McpSkillError::InvalidSkillUri));
+    let catalog_of = |files: Vec<SkillFile>| {
+        SkillCatalog::new(vec![SkillDefinition {
+            skill_path: "code-review".to_owned(),
+            files,
+        }])
+        .map(|_| ())
+    };
+    assert!(matches!(
+        catalog_of(vec![SkillFile::markdown("SKILL.md", "no frontmatter")]),
+        Err(McpSkillError::InvalidFrontmatter(_))
+    ));
+    assert_eq!(
+        catalog_of(vec![
+            SkillFile::markdown("SKILL.md", SAMPLE_SKILL_MD),
+            SkillFile::markdown("../escape.md", SAMPLE_CHECKLIST),
+        ]),
+        Err(McpSkillError::InvalidRelativePath)
+    );
+    assert_eq!(
+        catalog("other"),
+        Err(McpSkillError::NameMismatch {
+            uri_name: "other".to_owned(),
+            frontmatter_name: "code-review".to_owned(),
+        })
+    );
+
+    let uri = SkillUri::new("skill://code-review/SKILL.md").unwrap();
+    let frontmatter = parse_frontmatter(SAMPLE_SKILL_MD).unwrap();
+    let digest = SkillDigest::from_bytes(b"");
+    let manifest = vec![
+        SkillResourceEntry::new(SkillFileUri::from(&uri), digest.clone(), 1),
+        SkillResourceEntry::new(
+            uri.resolve_relative("references/big.md").unwrap(),
+            digest,
+            u64::MAX,
+        ),
+    ];
+    let unparsable = b"no frontmatter";
+    let listed = SkillEntry::new(
+        uri.clone(),
+        frontmatter.clone(),
+        SkillResources::Manifest(vec![SkillResourceEntry::new(
+            SkillFileUri::from(&uri),
+            SkillDigest::from_bytes(unparsable),
+            unparsable.len() as u64,
+        )]),
+    )
+    .unwrap();
+    assert!(matches!(
+        listed.verify_file(&SkillFileUri::from(&uri), unparsable),
+        Err(McpSkillError::InvalidFrontmatter(_))
+    ));
+    assert_eq!(
+        SkillEntry::new(uri, frontmatter, SkillResources::Manifest(manifest)).map(|_| ()),
+        Err(McpSkillError::TotalSizeExceeded {
+            bytes: u64::MAX,
+            max: MAX_SKILL_TOTAL_BYTES,
+        })
+    );
+}

@@ -7,8 +7,7 @@
 //!   followed ──▶ touched now
 //!   untouched for park_after ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
-//!   its agent closed its thread, or a handed login past its renewal (a
-//!     ChatGPT token) ──▶ parked once idle, watched or not
+//!   its agent closed its thread ──▶ parked once idle, watched or not
 //! the next message ──▶ opens the conversation ──▶ session/resume
 //! an opening past the bound on live agents ──▶ the parkable one touched
 //!   longest ago is parked now (`make_room`)
@@ -205,9 +204,8 @@ impl ConversationService {
     /// session, idle and with no app call waiting on a review may be parked;
     /// one that cannot resume would lose its session's context, and a
     /// permission review or a question belongs to a running turn. One whose
-    /// handed login is past renewal waits for nothing, watched or not
-    /// (`docs/design/chatgpt-sign-in.md`), and nor does one whose agent
-    /// closed its thread, while no background command of it runs. Otherwise
+    /// agent closed its thread waits for nothing, watched or not, while no
+    /// background command of it runs. Otherwise
     /// it waits `park_after` while nobody follows it.
     async fn idle_limit(
         &self,
@@ -226,20 +224,6 @@ impl ConversationService {
             .background_tasks
             .get()
             .is_some_and(|tasks| tasks.running_for(id));
-        // A login handed to its lease that must be renewed by now (a
-        // ChatGPT access token): parked now that it is idle, watched or not,
-        // so the next message starts it with a fresh one.
-        let renew = live
-            .lease
-            .renew_by()
-            .is_some_and(|by| by <= self.inner.clock.unix_milliseconds());
-        if renew {
-            return if running {
-                Idle::InUse
-            } else {
-                Idle::After(Duration::ZERO)
-            };
-        }
         if slot.closing.load(Ordering::SeqCst) {
             // Its agent closed its thread: parked now that it is idle.
             return if running {

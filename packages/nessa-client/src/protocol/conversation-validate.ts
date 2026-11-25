@@ -1826,16 +1826,13 @@ export function conversationObserve(
 /**
  * A Drive grant's tool policy bounds, as the product schema publishes them:
  * each of allow and deny holds at most `patterns` patterns of at most
- * `patternBytes` UTF-8 bytes, and `commandHosts` holds at most `hosts` hosts
- * of at most `hostBytes` bytes, apart from the patterns. The gateway refuses
+ * `patternBytes` UTF-8 bytes. The gateway refuses
  * past them (`invalid_request`); a surface budgets its choices against these
  * rather than numbers of its own.
  */
 export const toolPolicyBounds = {
   patterns: bounds.maxToolPolicyPatterns,
   patternBytes: bounds.maxToolPatternBytes,
-  hosts: bounds.maxCommandHosts,
-  hostBytes: bounds.maxCommandHostBytes,
 } as const
 
 /**
@@ -1879,7 +1876,7 @@ function policyNames(
 /** A Drive grant's tool policy as `conversation.shares` lists it, within the published bounds. */
 function toolPolicy(value: unknown) {
   const policy = record(value)
-  exact(policy, ["preset", "allow", "deny", "commandHosts"])
+  exact(policy, ["preset", "allow", "deny"])
   if (policy.preset !== undefined) {
     if (policy.allow !== undefined || policy.deny !== undefined)
       throw new Error("Invalid conversation share policy")
@@ -1899,18 +1896,6 @@ function toolPolicy(value: unknown) {
         toolPolicyBounds.patternBytes,
       ).length
     if (patterns === 0) throw new Error("Invalid conversation share policy")
-  }
-  if (policy.commandHosts !== undefined) {
-    const hosts = policyNames(
-      policy,
-      "commandHosts",
-      toolPolicyBounds.hosts,
-      toolPolicyBounds.hostBytes,
-    )
-    // Listed only when it names a host, each once. Hosts are apart from the
-    // patterns: a full allow and deny list may still name every host.
-    if (!hosts.length || new Set(hosts).size !== hosts.length)
-      throw new Error("Invalid conversation share commandHosts")
   }
 }
 

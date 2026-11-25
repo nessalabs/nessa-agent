@@ -23,9 +23,9 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use super::ports::{
-    DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
-    PublicationIds, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SessionCut, SessionSourceError, StagingIds,
+    DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, PublicationIds,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    SessionSourceError, StagingIds,
 };
 use super::verification::{
     authenticated_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits,
@@ -33,11 +33,11 @@ use super::verification::{
 };
 use super::verification_format::VerificationFormat;
 use crate::domain::{
-    attested_pair, audit_path, decode_deferred, deferred_for_open, deferred_session_name,
-    encode_journal, extra_session_allowed, host_volume, path_identity, paths_conflict_on, posture,
-    read_journal, receipt_is_usable, relative_path_is_safe, restore_lock_path, seal_attestation,
-    session_sidecar, staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness,
-    Journal, ManifestListing, Posture, RestoreFault, SealedFile, VolumeCase, VolumeProbe,
+    audit_path, decode_deferred, deferred_for_open, deferred_session_name, encode_journal,
+    extra_session_allowed, host_volume, path_identity, paths_conflict_on, posture, read_journal,
+    relative_path_is_safe, restore_lock_path, seal_attestation, session_sidecar,
+    staging_id_is_usable, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
+    ManifestListing, Posture, RestoreFault, SealedFile, VolumeCase, VolumeProbe,
 };
 
 /// Drop releases the restore-root lock.
@@ -272,20 +272,13 @@ pub trait SealedInventoryReader {
 
 pub struct PreparedCut {
     pub files: Vec<(String, Vec<u8>)>,
-    pub leases: Vec<String>,
     pub deferred: Vec<DeferredLine>,
     pub freshness: Freshness,
 }
 
 #[derive(Debug)]
 pub struct StageReport {
-    pub leases: Vec<String>,
     pub freshness: Freshness,
-}
-
-#[derive(Debug)]
-pub struct AcceptReport {
-    pub leases: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -393,7 +386,7 @@ pub fn stage_quarantine(
             fingerprint: Fingerprint::of(bytes),
         })
         .collect::<Vec<_>>();
-    let journal = match encode_journal(prepared.freshness, &prepared.leases, &hashes) {
+    let journal = match encode_journal(prepared.freshness, &hashes) {
         Ok(journal) => journal,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -495,7 +488,6 @@ pub fn stage_quarantine(
         ));
     }
     Ok(StageReport {
-        leases: prepared.leases,
         freshness: prepared.freshness,
     })
 }
@@ -504,13 +496,12 @@ pub struct AcceptRequest<'a> {
     pub facts: RestoreFacts<'a>,
     pub quarantine: &'a Path,
     pub live: &'a Path,
-    pub receipts: &'a dyn LeaseReceipts,
 }
 
 /// Rename a verified quarantine onto an empty live path.
 ///
 /// # Errors
-/// The seal does not match, a receipt is missing, the live path exists, or
+/// The seal does not match, the live path exists, or
 /// the rename fails. An audit failure after a successful rename returns
 /// [`RestoreFault::Audit`] and leaves the tree at the live path. Once source
 /// consumption is stored, any later failure requires a fresh stage before retry.
@@ -519,7 +510,7 @@ pub fn accept_quarantine(
     policy: &dyn RestorePolicyEvaluator,
     audit: &dyn RestoreAudit,
     layout: &dyn QuarantineLayout,
-) -> Result<AcceptReport, RestoreFault> {
+) -> Result<(), RestoreFault> {
     let facts = entry_facts(&request.facts, RestoreAction::Accept);
     let (quarantine, label) = resolve_root(
         layout,
@@ -590,10 +581,6 @@ pub fn accept_quarantine(
         Ok(_) => return Err(recorded.stop(RestoreFault::Tamper)),
         Err(error) => return Err(recorded.stop(error)),
     }
-    let attestations = match attested(&journal, request.receipts) {
-        Ok(text) => text,
-        Err(error) => return Err(recorded.stop(error)),
-    };
     match layout.occupied(&live) {
         Ok(true) => {
             return Err(recorded.stop(RestoreFault::LiveOccupied));
@@ -624,7 +611,7 @@ pub fn accept_quarantine(
         .at(&live_label)
         .with_journal(&digest)
         .with_generation(&staging_id)
-        .record("verified", "live", cause, "effect", &attestations)
+        .record("verified", "live", cause, "effect", "")
         .is_err()
     {
         return Err(RestoreFault::Audit);
@@ -632,9 +619,7 @@ pub fn accept_quarantine(
     if promoted.source_retirement_failed || promoted.publication_restricted {
         return Err(RestoreFault::Retained);
     }
-    Ok(AcceptReport {
-        leases: journal.leases,
-    })
+    Ok(())
 }
 
 pub struct OpenRequest<'a> {
@@ -956,19 +941,6 @@ fn deferred_lines(
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| RestoreFault::Tamper)?;
     decode_deferred(text)
-}
-
-fn attested(journal: &Journal, receipts: &dyn LeaseReceipts) -> Result<String, RestoreFault> {
-    let mut text = String::new();
-    for lease in &journal.leases {
-        match receipts.receipt(lease) {
-            Some(receipt) if receipt_is_usable(&receipt) => {
-                text.push_str(&attested_pair(lease, &receipt));
-            }
-            _ => return Err(RestoreFault::ExecutorsUnfenced),
-        }
-    }
-    Ok(text)
 }
 
 fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
