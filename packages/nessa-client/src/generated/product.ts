@@ -4028,6 +4028,101 @@ export interface CloudChoice {
   /** The cloud chosen for new thread VMs. */
   cloud: Cloud
 }
+/** Lifecycle state of a persistent cloud gateway VM. */
+export const CloudBoxState = {
+  Provisioning: "provisioning",
+  Running: "running",
+  Sleeping: "sleeping",
+  Refused: "refused",
+  Deleted: "deleted",
+} as const
+export type CloudBoxState = (typeof CloudBoxState)[keyof typeof CloudBoxState]
+/** Secret-free summary of a persistent cloud gateway VM. */
+export interface CloudBoxSummary {
+  /** Stable UUID identifying this cloud box. */
+  boxId: string
+  /** Human-readable display name for this cloud box. */
+  name: string
+  /** Cloud provider hosting this persistent gateway VM. */
+  cloud: Cloud
+  /** Provider-assigned VM identifier. */
+  vm: string
+  /** Current wss:// endpoint URL for connecting to the cloud box gateway. */
+  url: string
+  /** Current lifecycle state of the cloud box VM. */
+  state: CloudBoxState
+  /** Unix epoch timestamp in milliseconds when provisioning was requested. */
+  createdAtMs: number
+  /** Unix epoch timestamp in milliseconds of the latest state transition. */
+  updatedAtMs: number
+}
+/** Create and bootstrap a persistent cloud gateway VM, or finish the creation of the one the caller already named. */
+export interface CloudBoxCreateParams {
+  /** UUID the caller chose for this cloud box. Asking again with the same boxId resumes the same creation (a lost answer, a failed enrollment) instead of making a second VM; a box already admitted answers with a fresh credential. */
+  boxId: string
+  /** Display name for the new persistent cloud gateway VM. */
+  name: string
+  /** Connected cloud provider on which to create the VM. */
+  cloud: Cloud
+}
+/** Identify a persistent cloud gateway VM by its box ID. */
+export interface CloudBoxIdParams {
+  /** UUID identifying the target cloud box. */
+  boxId: string
+}
+/** Rename a persistent cloud gateway VM. */
+export interface CloudBoxRenameParams {
+  /** UUID identifying the cloud box to rename. */
+  boxId: string
+  /** New display name for the cloud box. */
+  name: string
+}
+/** All active persistent cloud gateway VMs. */
+export interface CloudBoxesListResult {
+  /** Active persistent cloud gateway VMs ordered by creation time. */
+  boxes: CloudBoxSummary[]
+}
+/** Newly created cloud gateway VM summary and one-time enrollment credential. */
+export interface CloudBoxCreateResult {
+  /** Summary of the newly created cloud gateway VM. */
+  cloudBox: CloudBoxSummary
+  /** Enrollment credential the box's gateway issued for this answer, so the caller can pair immediately. Never the gateway's owner token. */
+  credential: string
+}
+/** Endpoint returned after waking a persistent cloud gateway VM; which gateway answers there is checked from its own handshake. */
+export interface CloudBoxWakeResult {
+  /** UUID of the woken cloud box. */
+  boxId: string
+  /** Current wss:// endpoint URL, refreshed if rotated on wake. */
+  url: string
+}
+/** Updated persistent cloud gateway VM summary. */
+export interface CloudBoxResult {
+  /** Updated cloud box summary. */
+  cloudBox: CloudBoxSummary
+}
+/** Confirmation that a persistent cloud gateway VM was deleted. */
+export interface CloudBoxDeleteResult {
+  /** UUID of the deleted cloud box. */
+  boxId: string
+  /** True once the cloud box VM has been destroyed and marked deleted. */
+  deleted: boolean
+}
+/** Typed refusal codes for persistent cloud gateway VM lifecycle operations. */
+export const CloudBoxErrorCode = {
+  InvalidRequest: "invalid_request",
+  VaultLocked: "vault_locked",
+  CloudNotConfigured: "cloud_not_configured",
+  CloudBoxNotFound: "cloud_box_not_found",
+  CloudBoxAlreadyExists: "cloud_box_already_exists",
+  CloudBoxNotActive: "cloud_box_not_active",
+  CloudBoxActiveWork: "cloud_box_active_work",
+  CloudBoxAdmissionRefused: "cloud_box_admission_refused",
+  CloudBoxBootstrapFailed: "cloud_box_bootstrap_failed",
+  CloudBoxProviderFailed: "cloud_box_provider_failed",
+  CloudBoxStorageUnavailable: "cloud_box_storage_unavailable",
+} as const
+export type CloudBoxErrorCode = (typeof CloudBoxErrorCode)[keyof typeof CloudBoxErrorCode]
 /** Disable automatic stop or stop after a positive duration, including active work. */
 export const VmLifetimeMode = { Never: "never", After: "after" } as const
 export type VmLifetimeMode = (typeof VmLifetimeMode)[keyof typeof VmLifetimeMode]
@@ -4548,7 +4643,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 156,
+  maxReadyMethods: 162,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4903,6 +4998,12 @@ export const ProductMethod = {
   Agent37Disconnect: "agent37.disconnect",
   CloudRead: "cloud.read",
   CloudChoose: "cloud.choose",
+  CloudBoxesList: "cloud.boxes.list",
+  CloudBoxesCreate: "cloud.boxes.create",
+  CloudBoxesWake: "cloud.boxes.wake",
+  CloudBoxesSleep: "cloud.boxes.sleep",
+  CloudBoxesRename: "cloud.boxes.rename",
+  CloudBoxesDelete: "cloud.boxes.delete",
   DevicesPool: "devices.pool",
   DevicesSetPool: "devices.setPool",
   BoatRuntimeSettings: "boat.runtimeSettings",
@@ -5077,6 +5178,12 @@ export const productReadyMethods = [
   "agent37.disconnect",
   "cloud.read",
   "cloud.choose",
+  "cloud.boxes.list",
+  "cloud.boxes.create",
+  "cloud.boxes.wake",
+  "cloud.boxes.sleep",
+  "cloud.boxes.rename",
+  "cloud.boxes.delete",
   "devices.pool",
   "devices.setPool",
   "boat.runtimeSettings",
@@ -5237,6 +5344,12 @@ export const productMethodGrants = {
   "agent37.disconnect": "credential.manage",
   "cloud.read": "credential.manage",
   "cloud.choose": "credential.manage",
+  "cloud.boxes.list": "credential.manage",
+  "cloud.boxes.create": "credential.manage",
+  "cloud.boxes.wake": "credential.manage",
+  "cloud.boxes.sleep": "credential.manage",
+  "cloud.boxes.rename": "credential.manage",
+  "cloud.boxes.delete": "credential.manage",
   "devices.pool": "credential.manage",
   "devices.setPool": "credential.manage",
   "boat.runtimeSettings": "credential.manage",

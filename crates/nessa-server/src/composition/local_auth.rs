@@ -15,12 +15,13 @@ use crate::{
         },
     },
     workspaces::{
-        application::{RecoveryAudit, RecoveryEvent, Workspaces},
+        application::{CloudBoxBackend, CloudBoxes, RecoveryAudit, RecoveryEvent, Workspaces},
         domain::{Cloud, Failure as WorkspaceFailure},
         infrastructure::{
             agent37_template, worker_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
-            FileAssignments, FileCloudChoice, RuntimeSettingsAudit, SdkAgent37Enrollment,
-            VaultSettings,
+            FileAssignments, FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice,
+            ProviderActiveWorkChecker, RuntimeSettingsAudit, SdkAgent37Enrollment, VaultSettings,
+            WorkspaceCloudBoxProvider,
         },
     },
 };
@@ -319,40 +320,69 @@ pub(super) async fn product_state(
     // or writes it (issue #1260).
     let login_stores = crate::logins::infrastructure::login_stores(&vault.vault);
     #[cfg(unix)]
-    let workspace_service = Arc::new(
-        Workspaces::new(
-            Arc::new(VaultSettings(vault.vault.clone())),
-            Arc::new(BoatProvider {
-                api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
-                // SAFETY: geteuid has no preconditions.
-                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
-                    libc::geteuid()
-                }),
-                relay_program: std::env::current_exe().map_err(setup_error)?,
-            }),
-            Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
-            Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
-            runtime_settings,
-        )
-        .with_image(worker_image())
-        .with_cloud(
-            Cloud::Agent37,
-            Arc::new(Agent37VaultSettings(vault.vault.clone())),
-            Arc::new(Agent37Provider {
-                // SAFETY: geteuid has no preconditions.
-                relay_socket: super::mcp_servers::relay_socket(namespace, unsafe {
-                    libc::geteuid()
-                }),
-                relay_program: std::env::current_exe().map_err(setup_error)?,
-                endpoints: None,
-            }),
-            Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
-            Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
-        )
-        .with_agent37_enrollment(Arc::new(SdkAgent37Enrollment {
-            template: agent37_template(),
-        })),
-    );
+    let (workspace_service, cloud_boxes_service) = {
+        let boat_settings = Arc::new(VaultSettings(vault.vault.clone()));
+        let boat_provider = Arc::new(BoatProvider {
+            api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
+            // SAFETY: geteuid has no preconditions.
+            relay_socket: super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
+            relay_program: std::env::current_exe().map_err(setup_error)?,
+        });
+        let agent37_settings = Arc::new(Agent37VaultSettings(vault.vault.clone()));
+        let agent37_provider = Arc::new(Agent37Provider {
+            // SAFETY: geteuid has no preconditions.
+            relay_socket: super::mcp_servers::relay_socket(namespace, unsafe { libc::geteuid() }),
+            relay_program: std::env::current_exe().map_err(setup_error)?,
+            endpoints: None,
+        });
+        let workspaces = Arc::new(
+            Workspaces::new(
+                boat_settings.clone(),
+                boat_provider.clone(),
+                Arc::new(FileAssignments(namespace.join("boat-workspaces"))),
+                Arc::new(WorkspaceRecoveryAudit(workspace_audit.clone())),
+                runtime_settings,
+            )
+            .with_image(worker_image())
+            .with_cloud(
+                Cloud::Agent37,
+                agent37_settings.clone(),
+                agent37_provider.clone(),
+                Arc::new(FileAssignments(namespace.join("agent37-workspaces"))),
+                Arc::new(FileCloudChoice(namespace.join("workspace-cloud"))),
+            )
+            .with_agent37_enrollment(Arc::new(SdkAgent37Enrollment {
+                template: agent37_template(),
+            })),
+        );
+        let cloud_boxes = Arc::new(CloudBoxes::new(
+            vec![
+                CloudBoxBackend {
+                    cloud: Cloud::Boat,
+                    settings: boat_settings,
+                    provider: Arc::new(WorkspaceCloudBoxProvider::new(
+                        boat_provider.clone(),
+                        worker_image(),
+                    )),
+                },
+                CloudBoxBackend {
+                    cloud: Cloud::Agent37,
+                    settings: agent37_settings,
+                    provider: Arc::new(WorkspaceCloudBoxProvider::new(
+                        agent37_provider.clone(),
+                        agent37_template(),
+                    )),
+                },
+            ],
+            Arc::new(FileCloudBoxStore::new(namespace.join("cloud-boxes"))),
+            Arc::new(ProviderActiveWorkChecker::new(vec![
+                (Cloud::Boat, boat_provider, worker_image()),
+                (Cloud::Agent37, agent37_provider, agent37_template()),
+            ])),
+            Arc::new(FileCloudBoxAudit::new(namespace.join("cloud-boxes-audit"))),
+        ));
+        (workspaces, cloud_boxes)
+    };
     #[cfg(all(test, unix))]
     let workspace_service = super::vm_background_gateway::service(workspace_service);
     let inventory =
@@ -658,7 +688,9 @@ pub(super) async fn product_state(
     product.browser.http_allowed = config.browser_http_allowed();
     #[cfg(unix)]
     {
-        product = product.with_workspaces(workspace_service);
+        product = product
+            .with_workspaces(workspace_service)
+            .with_cloud_boxes(cloud_boxes_service);
     }
     #[cfg(unix)]
     if let Some(github) = github {

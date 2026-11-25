@@ -63,6 +63,16 @@ function browserStorage(): GatewayStorage | null {
   }
 }
 
+function parseCloudBox(raw: unknown): PersistedRemoteGateway["cloudBox"] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined
+  const obj = raw as Record<string, unknown>
+  const boxId = Object.hasOwn(obj, "boxId") ? obj.boxId : undefined
+  const cloud = Object.hasOwn(obj, "cloud") ? obj.cloud : undefined
+  if (typeof boxId !== "string" || boxId.trim() === "") return undefined
+  if (cloud !== "boat" && cloud !== "agent37") return undefined
+  return { boxId: boxId.trim(), cloud }
+}
+
 function parseEntry(raw: unknown): PersistedRemoteGateway | null {
   if (typeof raw !== "object" || raw === null) return null
   const record = raw as Record<string, unknown>
@@ -82,10 +92,14 @@ function parseEntry(raw: unknown): PersistedRemoteGateway | null {
     typeof record.addedAtMs === "number" && Number.isFinite(record.addedAtMs)
       ? record.addedAtMs
       : 0
+  const cloudBox = Object.hasOwn(record, "cloudBox")
+    ? parseCloudBox(record.cloudBox)
+    : undefined
   return {
     gatewayId: record.gatewayId,
     label: record.label.trim(),
     url,
+    ...(cloudBox ? { cloudBox } : {}),
     addedAtMs,
   }
 }
@@ -126,10 +140,11 @@ export function remoteGatewayStore(
           .filter(
             (entry) => entry.gatewayId !== "" && entry.gatewayId !== LOCAL_GATEWAY_ID,
           )
-          .map(({ gatewayId, label, url, addedAtMs }) => ({
+          .map(({ gatewayId, label, url, cloudBox, addedAtMs }) => ({
             gatewayId,
             label,
             url,
+            ...(cloudBox ? { cloudBox } : {}),
             addedAtMs,
           }))
         storage.setItem(storageKey, JSON.stringify(sanitized))
