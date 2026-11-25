@@ -619,7 +619,7 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
             join_after_active_for_test, select_joined_record_for_test, JoinedDialFuture, JoinedEpisode,
             JoinedStatusDial, JoinedStatusRoute,
         },
-        ReadStop, TokioJoinedDial,
+        ReadFailure, ReadStop, TokioJoinedDial,
     };
     use nessa_auth::{
         adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy},
@@ -638,7 +638,14 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         tunnel::TunnelSecret,
     };
     use nessa_sync::replication::domain::{Id, Scope};
-    use std::{io, net::SocketAddr};
+    use std::{io, net::SocketAddr, sync::atomic::AtomicU64};
+
+    struct DialClock(AtomicU64);
+    impl Clock for DialClock {
+        fn elapsed_ms(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
 
     struct CountDial(AtomicUsize);
     impl JoinedStatusDial for CountDial {
@@ -670,7 +677,7 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         )
     };
     for case in [
-        "match", "refused", "pending", "pin", "scope", "receiver", "epoch",
+        "match", "stop-after-accepted", "expire-after-accepted", "refused", "pending", "pin", "scope", "receiver", "epoch",
         "credential", "stop", "expiry",
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -720,7 +727,8 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         } else {
             trusted.clone()
         };
-        let peer = if case == "match" {
+        let active = matches!(case, "match" | "stop-after-accepted" | "expire-after-accepted");
+        let peer = if active {
             let key = relay_key(&pin).unwrap();
             let expected_scope = trusted.clone();
             Some(std::thread::spawn(move || {
@@ -767,11 +775,9 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         if case == "stop" {
             stop.stop();
         }
-        let episode = JoinedEpisode::new(
-            Arc::new(Time),
-            stop,
-            if case == "expiry" { 0 } else { 1_000 },
-        );
+        let clock = Arc::new(DialClock(AtomicU64::new(0)));
+        let expires_ms = if case == "expiry" { 0 } else { 1_000 };
+        let episode = JoinedEpisode::new(clock.clone(), stop.clone(), expires_ms);
         let reactor = tokio::runtime::Handle::current();
         let result = tokio::task::spawn_blocking(move || {
             join_after_active_for_test(
@@ -788,20 +794,30 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         .await
         .unwrap();
         match (case, result) {
-            ("match", Ok(selection)) => {
-                tokio::task::spawn_blocking(move || select_joined_record_for_test(selection))
-                    .await
-                    .unwrap()
-                    .unwrap();
+            (_, Ok(selection)) if active => {
+                let selected = tokio::task::spawn_blocking(move || {
+                    select_joined_record_for_test(selection, || match case {
+                        "stop-after-accepted" => stop.stop(),
+                        "expire-after-accepted" => clock.0.store(expires_ms, Ordering::SeqCst),
+                        _ => {}
+                    })
+                })
+                .await
+                .unwrap();
+                if case == "match" {
+                    assert_eq!(selected, Ok(()));
+                } else {
+                    assert_eq!(selected, Err(ReadFailure::Unreachable), "{case}");
+                }
                 peer.unwrap().join().unwrap();
             }
             ("stop", Err(NativeClientError::Io(io::ErrorKind::ConnectionAborted)))
             | ("expiry", Err(NativeClientError::Io(io::ErrorKind::TimedOut)))
             | ("credential", Err(NativeClientError::Storage(PrivateStateError::Conflict))) => {}
-            (_, Err(NativeClientError::Refused)) if !matches!(case, "match" | "stop" | "expiry" | "credential") => {}
+            (_, Err(NativeClientError::Refused)) if !active && !matches!(case, "stop" | "expiry" | "credential") => {}
             _ => panic!("unexpected admission result for {case}"),
         }
-        let calls = if case == "match" { 1 } else { 0 };
+        let calls = if active { 1 } else { 0 };
         assert_eq!(dial.0.load(Ordering::SeqCst), calls, "{case}");
     }
 }

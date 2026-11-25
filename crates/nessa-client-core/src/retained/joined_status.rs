@@ -2,7 +2,23 @@
 #[cfg(test)]
 use crate::pairing::NativeClientError;
 #[cfg(test)]
-use nessa_protocol::pairing::wire::NativePairingStatus;
+use super::ReadFailure;
+#[cfg(test)]
+use nessa_auth::{
+    adapters::pairing::{GatewayTrust, NativeTransport},
+    domain::CredentialId,
+};
+#[cfg(test)]
+use nessa_protocol::{
+    conversation::read_scope::validate_passive_read_selector,
+    pairing::{
+        wire::{
+            encode_request, NativePairingRequest, NativePairingStatus, RecordCarrierMode,
+            RecordCarrierOpen,
+        },
+        EnrollmentChannel, NativeFrameError,
+    },
+};
 use super::{ReadStop, StopSocket};
 use nessa_auth::adapters::pairing::relay_key;
 use nessa_protocol::{
@@ -164,6 +180,8 @@ pub(crate) struct JoinedRecordSelection {
     reader: super::RetainedDeviceReader,
     address: SocketAddr,
     scope: super::Scope,
+    episode: JoinedEpisode,
+    wake: Arc<WakeEndpoint>,
 }
 
 // Synthetic composition only until the retained cache-owning entry point
@@ -179,8 +197,6 @@ pub(crate) fn join_after_active_for_test(
     wake: Arc<WakeEndpoint>,
     reactor: &tokio::runtime::Handle,
 ) -> std::result::Result<JoinedRecordSelection, NativeClientError> {
-    use nessa_protocol::conversation::read_scope::validate_passive_read_selector;
-
     let status = status?;
     let reader = super::RetainedDeviceReader::from_current(&status, state)?
         .ok_or(NativeClientError::Refused)?;
@@ -192,28 +208,33 @@ pub(crate) fn join_after_active_for_test(
     validate_passive_read_selector(access.receiver, access.access_epoch, trusted_scope)
         .map_err(|_| NativeClientError::Refused)?;
     let joined = route
-        .join(&episode, wake, reactor)
+        .join(&episode, wake.clone(), reactor)
         .map_err(|error| NativeClientError::Io(error.kind()))?;
-    Ok(JoinedRecordSelection { joined, reader, address, scope: trusted_scope.clone() })
+    Ok(JoinedRecordSelection {
+        joined,
+        reader,
+        address,
+        scope: trusted_scope.clone(),
+        episode,
+        wake,
+    })
 }
 
 // Stop at the Accepted boundary until the cache owner can fence publication.
 #[cfg(test)]
 pub(crate) fn select_joined_record_for_test(
     selection: JoinedRecordSelection,
-) -> std::result::Result<(), super::ReadFailure> {
-    use nessa_auth::{
-        adapters::pairing::{GatewayTrust, NativeTransport},
-        domain::CredentialId,
-    };
-    use nessa_protocol::pairing::{
-        wire::{encode_request, NativePairingRequest, RecordCarrierMode, RecordCarrierOpen},
-        EnrollmentChannel,
-    };
-    use super::ReadFailure;
-
-    let JoinedRecordSelection { joined, reader, address, scope } = selection;
-    let (stream, deadline, _interrupt) = joined;
+    after_accepted: impl FnOnce(),
+) -> std::result::Result<(), ReadFailure> {
+    let JoinedRecordSelection {
+        joined,
+        reader,
+        address,
+        scope,
+        episode,
+        wake,
+    } = selection;
+    let (stream, _deadline, _interrupt) = joined;
     let access = reader.access(address, "joined-record-fixture");
     let transport =
         NativeTransport::connect(stream, access.identity, GatewayTrust::Pinned(access.pin))
@@ -228,11 +249,17 @@ pub(crate) fn select_joined_record_for_test(
     });
     let envelope = encode_request(&request).map_err(|_| ReadFailure::Protocol)?;
     channel.send_envelope(&envelope).map_err(|error| match error {
-        nessa_protocol::pairing::NativeFrameError::Wire(_) => ReadFailure::Protocol,
-        nessa_protocol::pairing::NativeFrameError::Io(_) => ReadFailure::Unreachable,
+        NativeFrameError::Wire(_) => ReadFailure::Protocol,
+        NativeFrameError::Io(_) => ReadFailure::Unreachable,
     })?;
     super::carrier::accept_selection(channel.receive_envelope())?;
-    check_deadline(&deadline).map_err(|_| ReadFailure::Unreachable)
+    after_accepted();
+    // TLS may have buffered the plaintext before stop/wake/expiry changed.
+    // Recheck the same episode and exact wake, not just the socket deadline.
+    episode
+        .remaining(&wake)
+        .map(|_| ())
+        .map_err(|_| ReadFailure::Unreachable)
 }
 
 // The enrollment worker owns this exact socket and registration from Connect
