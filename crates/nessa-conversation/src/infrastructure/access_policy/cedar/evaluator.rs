@@ -205,18 +205,21 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
         AccessSubject::Person {
             organization,
             principal,
+            app_namespace,
         } => entity(
             "NessaConversation::Person",
             principal.as_str(),
             [
                 ("organization", string(organization.as_str())),
                 ("id", string(principal.as_str())),
+                ("appNamespace", string(app_namespace.as_str())),
             ],
         ),
         AccessSubject::ReviewRecipient {
             organization,
             principal,
             membership,
+            app_namespace,
         } => entity(
             "NessaConversation::ReviewRecipient",
             principal.as_str(),
@@ -230,6 +233,7 @@ fn subject(subject: &AccessSubject<'_>) -> Result<Entity, Unavailable> {
                         MembershipRole::Member => "member",
                     }),
                 ),
+                ("appNamespace", string(app_namespace.as_str())),
             ],
         ),
         AccessSubject::PairedReader {
@@ -274,12 +278,14 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
         AccessResource::Conversation {
             organization,
             owner,
+            app_namespace,
             deleted,
             created_by,
         } => {
             let mut attributes = vec![
                 ("organization", string(organization.as_str())),
                 ("owner", string(owner.as_str())),
+                ("appNamespace", string(app_namespace.as_str())),
                 ("deleted", RestrictedExpression::new_bool(deleted)),
             ];
             if let Some(created_by) = created_by {
@@ -294,12 +300,14 @@ fn resource(resource: &AccessResource<'_>) -> Result<Entity, Unavailable> {
         AccessResource::Catalogue {
             organization,
             owner,
+            app_namespace,
         } => entity(
             "NessaConversation::Catalogue",
             "catalogue",
             [
                 ("organization", string(organization.as_str())),
                 ("owner", string(owner.as_str())),
+                ("appNamespace", string(app_namespace.as_str())),
             ],
         ),
         AccessResource::Workspace {

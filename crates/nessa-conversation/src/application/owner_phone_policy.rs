@@ -10,7 +10,7 @@ use nessa_auth::{
         ports::{AccessError, Clock},
         session::AuthenticatedSession,
     },
-    domain::{AuthContext, OrganizationId, PrincipalId, Resource},
+    domain::{AppNamespace, AuthContext, OrganizationId, PrincipalId, Resource},
 };
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -72,16 +72,20 @@ impl OwnerPhoneReader {
             AccessResource::Catalogue {
                 organization,
                 owner,
+                app_namespace: self.context.app_namespace(),
             },
         )
     }
 
     /// Catalogue metadata can include an actual tombstone; Locate is shared
     /// policy's question for whether this first-party surface may learn its ID.
+    /// `app_namespace` is the entry's own, read from its record, so Cedar's
+    /// namespace check compares the reader against the conversation.
     pub fn admit_entry(
         &self,
         owner: &PrincipalId,
         organization: &OrganizationId,
+        app_namespace: &AppNamespace,
         deleted: bool,
     ) -> Result<(), ReadRefusal> {
         self.admit_access(
@@ -89,6 +93,7 @@ impl OwnerPhoneReader {
             AccessResource::Conversation {
                 organization,
                 owner,
+                app_namespace,
                 deleted,
                 created_by: None,
             },
@@ -104,6 +109,7 @@ impl OwnerPhoneReader {
             subject: AccessSubject::Person {
                 organization: self.context.organization_id(),
                 principal: self.context.principal_id(),
+                app_namespace: self.context.app_namespace(),
             },
             action,
             resource,

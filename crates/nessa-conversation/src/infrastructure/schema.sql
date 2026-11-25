@@ -38,10 +38,11 @@ CREATE TABLE conversations (
     model TEXT NOT NULL,
     approval_mode TEXT NOT NULL CHECK (approval_mode IN ('ask', 'auto', 'full')),
     creation_revision INTEGER NOT NULL CHECK (creation_revision > 0),
-    change_revision INTEGER NOT NULL CHECK (change_revision >= creation_revision),
+    change_revision INTEGER NOT NULL CHECK (change_revision >= creation_revision), app_namespace TEXT NOT NULL DEFAULT 'nessa',
     FOREIGN KEY (organization, owner) REFERENCES catalogue_owners (organization, owner)
 ) STRICT;
 CREATE INDEX conversations_by_owner ON conversations (organization, owner);
+CREATE INDEX conversations_by_owner_namespace ON conversations (organization, owner, app_namespace);
 CREATE INDEX conversations_catalogue ON conversations
     (organization, owner, creation_revision, id);
 CREATE INDEX conversations_change_revision ON conversations
@@ -272,4 +273,4 @@ CREATE TABLE decision_settings (
     PRIMARY KEY (organization, owner)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 12;
+PRAGMA user_version = 13;

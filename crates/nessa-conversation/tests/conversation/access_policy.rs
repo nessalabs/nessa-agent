@@ -28,6 +28,7 @@ fn paired_list_catalogue_admission_matches_its_device_and_scope() {
     let resource = AccessResource::Catalogue {
         organization: &org,
         owner: &owner,
+        app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
     };
     for (org, binding_owner) in PEOPLE {
         for signed_in_as in [binding_owner, "gateway:peer"] {
@@ -265,6 +266,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             | AccessAction::TerminalUse => AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             AccessAction::ChannelUse | AccessAction::ChannelSettings => AccessResource::Channel {
                 organization: &org,
@@ -299,6 +301,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 organization: &org,
                 principal: &owner,
                 membership: MembershipRole::Member,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             AccessAction::NoteDeliver => AccessSubject::GrantHolder {
                 receiver: "receiver-1",
@@ -315,6 +318,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             _ => AccessSubject::Person {
                 organization: &org,
                 principal: &owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
         };
         let decision = policy.evaluate(&AccessAsk {
@@ -346,6 +350,7 @@ fn a_setting_changes_as_far_as_its_level_lets_who_asks() {
     let person = |organization, principal| AccessSubject::Person {
         organization,
         principal,
+        app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
     };
     let turn = |organization, principal, owner_initiated| AccessSubject::AgentTurn {
         organization,
@@ -612,12 +617,14 @@ fn owner_and_device_lists_ask_their_own_catalogue_policies() {
     let catalogue = AccessResource::Catalogue {
         organization: &org,
         owner: &owner,
+        app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
     };
     let list = |principal: &PrincipalId| {
         policy.evaluate(&AccessAsk {
             subject: AccessSubject::Person {
                 organization: &org,
                 principal,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action: AccessAction::List,
             resource: catalogue,
@@ -656,6 +663,7 @@ fn owner_workspace_read_is_the_owners_own_windows_and_nobody_elses() {
             subject: AccessSubject::Person {
                 organization,
                 principal,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action: AccessAction::WorkspaceRead,
             resource: AccessResource::Workspace {
@@ -700,6 +708,7 @@ fn owner_workspace_control_is_the_owners_own_windows_and_nobody_elses() {
             subject: AccessSubject::Person {
                 organization,
                 principal,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action: AccessAction::WorkspaceControl,
             resource: AccessResource::Workspace {
@@ -744,6 +753,7 @@ fn owner_channels_are_the_owners_own_and_nobody_elses() {
             AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             "owner.channel_create",
         ),
@@ -752,6 +762,7 @@ fn owner_channels_are_the_owners_own_and_nobody_elses() {
             AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             "owner.channel_list",
         ),
@@ -778,6 +789,7 @@ fn owner_channels_are_the_owners_own_and_nobody_elses() {
                 subject: AccessSubject::Person {
                     organization,
                     principal,
+                    app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
                 },
                 action,
                 resource,
@@ -1050,6 +1062,7 @@ fn a_paired_reader_writes_nothing_else() {
             AccessResource::Catalogue {
                 organization: &org,
                 owner: &owner,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             &Paired {
                 held: Some(Capabilities::drive()),
@@ -1272,6 +1285,7 @@ fn paired_access_answers_its_truth_table() {
                     let catalogue = AccessResource::Catalogue {
                         organization: &borg,
                         owner: &bowner,
+                        app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
                     };
                     assert!(!allowed(&paired(
                         &policy,
@@ -1727,6 +1741,7 @@ fn review_notices_use_current_membership_and_live_organization_ownership() {
                             organization: &org,
                             principal: &who,
                             membership,
+                            app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
                         },
                         action: AccessAction::ReviewNotice,
                         resource: on(&conversation),
@@ -1949,4 +1964,177 @@ fn a_turn_closes_only_a_thread_its_own_thread_created() {
     );
     let deleted = conversation("org", "owner", true);
     assert!(!ask(&deleted, Some("parent"), true), "a deleted thread");
+}
+
+#[test]
+fn app_namespace_isolation_denies_cross_namespace_owner_actions() {
+    use nessa_auth::domain::AppNamespace;
+
+    let policy = policy();
+    let (org, owner) = (organization("org"), principal("owner"));
+    let default_ns = AppNamespace::DEFAULT;
+    let ext_a = AppNamespace::extension("tracker-a").unwrap();
+    let ext_b = AppNamespace::extension("tracker-b").unwrap();
+
+    let live_default = conversation("org", "owner", false);
+    let live_ext_a = conversation("org", "owner", false).with_app_namespace(ext_a.clone());
+    let deleted_ext_a = conversation("org", "owner", true).with_app_namespace(ext_a.clone());
+
+    for action in [
+        AccessAction::Locate,
+        AccessAction::Act,
+        AccessAction::Read,
+        AccessAction::ArtifactRead,
+        AccessAction::TerminalUse,
+    ] {
+        // Matching namespaces are permitted (both built-in Nessa and extensions).
+        assert!(
+            allowed(&policy.evaluate(&AccessAsk::person_in(
+                action,
+                &live_default,
+                &org,
+                &owner,
+                &default_ns,
+            ))),
+            "same default namespace allows {action:?}"
+        );
+        assert!(
+            allowed(&policy.evaluate(&AccessAsk::person_in(
+                action,
+                &live_ext_a,
+                &org,
+                &owner,
+                &ext_a,
+            ))),
+            "same extension namespace allows {action:?}"
+        );
+        // Cross-namespace access is denied in all directions.
+        assert!(
+            !allowed(&policy.evaluate(&AccessAsk::person_in(
+                action,
+                &live_default,
+                &org,
+                &owner,
+                &ext_a,
+            ))),
+            "extension cannot access default nessa conversation for {action:?}"
+        );
+        assert!(
+            !allowed(&policy.evaluate(&AccessAsk::person_in(
+                action,
+                &live_ext_a,
+                &org,
+                &owner,
+                &default_ns,
+            ))),
+            "default nessa cannot access extension conversation for {action:?}"
+        );
+        assert!(
+            !allowed(&policy.evaluate(&AccessAsk::person_in(
+                action,
+                &live_ext_a,
+                &org,
+                &owner,
+                &ext_b,
+            ))),
+            "extension B cannot access extension A conversation for {action:?}"
+        );
+    }
+
+    // Deleted conversation erase also requires matching namespace.
+    assert!(allowed(&policy.evaluate(&AccessAsk::person_in(
+        AccessAction::Erase,
+        &deleted_ext_a,
+        &org,
+        &owner,
+        &ext_a,
+    ))));
+    assert!(!allowed(&policy.evaluate(&AccessAsk::person_in(
+        AccessAction::Erase,
+        &deleted_ext_a,
+        &org,
+        &owner,
+        &default_ns,
+    ))));
+
+    // Catalogue actions require matching namespace.
+    for action in [
+        AccessAction::List,
+        AccessAction::ChannelCreate,
+        AccessAction::ChannelList,
+        AccessAction::TerminalUse,
+    ] {
+        let ask = |caller_ns: &AppNamespace, cat_ns: &AppNamespace| {
+            allowed(&policy.evaluate(&AccessAsk {
+                subject: AccessSubject::Person {
+                    organization: &org,
+                    principal: &owner,
+                    app_namespace: caller_ns,
+                },
+                action,
+                resource: AccessResource::Catalogue {
+                    organization: &org,
+                    owner: &owner,
+                    app_namespace: cat_ns,
+                },
+                held: None,
+                request: RequestShape::default(),
+                target: None,
+            }))
+        };
+        assert!(ask(&default_ns, &default_ns));
+        assert!(ask(&ext_a, &ext_a));
+        assert!(!ask(&ext_a, &default_ns));
+        assert!(!ask(&default_ns, &ext_a));
+        assert!(!ask(&ext_b, &ext_a));
+    }
+
+    // Owner share management (Unshare, Shares) requires matching namespace.
+    for action in [AccessAction::Unshare, AccessAction::Shares] {
+        assert!(allowed(&policy.evaluate(&AccessAsk::person_in(
+            action,
+            &live_ext_a,
+            &org,
+            &owner,
+            &ext_a,
+        ))));
+        assert!(!allowed(&policy.evaluate(&AccessAsk::person_in(
+            action,
+            &live_ext_a,
+            &org,
+            &owner,
+            &default_ns,
+        ))));
+        assert!(!allowed(&policy.evaluate(&AccessAsk::person_in(
+            action,
+            &live_default,
+            &org,
+            &owner,
+            &ext_a,
+        ))));
+    }
+
+    // Review notices (both owner and admin) require matching namespace.
+    for membership in [MembershipRole::Member, MembershipRole::Admin] {
+        let review = |recipient_ns: &AppNamespace, target: &Conversation| {
+            allowed(&policy.evaluate(&AccessAsk {
+                subject: AccessSubject::ReviewRecipient {
+                    organization: &org,
+                    principal: &owner,
+                    membership,
+                    app_namespace: recipient_ns,
+                },
+                action: AccessAction::ReviewNotice,
+                resource: AccessResource::of(target),
+                held: None,
+                request: RequestShape::default(),
+                target: None,
+            }))
+        };
+        assert!(review(&default_ns, &live_default));
+        assert!(review(&ext_a, &live_ext_a));
+        assert!(!review(&default_ns, &live_ext_a));
+        assert!(!review(&ext_a, &live_default));
+        assert!(!review(&ext_b, &live_ext_a));
+    }
 }

@@ -65,6 +65,7 @@ impl ShareWebhookConversation<'_> {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
                 principal: &caller.principal_id,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action: AccessAction::Share,
             resource: AccessResource::of(&conversation),

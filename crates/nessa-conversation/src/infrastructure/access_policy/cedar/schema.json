@@ -110,6 +110,10 @@
             "id": {
               "type": "String",
               "required": true
+            },
+            "appNamespace": {
+              "type": "String",
+              "required": true
             }
           },
           "additionalAttributes": false
@@ -128,6 +132,10 @@
               "required": true
             },
             "membership": {
+              "type": "String",
+              "required": true
+            },
+            "appNamespace": {
               "type": "String",
               "required": true
             }
@@ -183,6 +191,10 @@
               "type": "String",
               "required": true
             },
+            "appNamespace": {
+              "type": "String",
+              "required": true
+            },
             "deleted": {
               "type": "Boolean",
               "required": true
@@ -204,6 +216,10 @@
               "required": true
             },
             "owner": {
+              "type": "String",
+              "required": true
+            },
+            "appNamespace": {
               "type": "String",
               "required": true
             }

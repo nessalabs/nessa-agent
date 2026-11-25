@@ -269,6 +269,7 @@ impl ConversationService {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
                 principal: &caller.principal_id,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
             action,
             resource,
@@ -303,6 +304,7 @@ impl ConversationService {
             AccessResource::Catalogue {
                 organization: &caller.organization_id,
                 owner: &caller.principal_id,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
         )?;
         let (Some(store), Some(folders)) = (
@@ -439,6 +441,7 @@ impl ConversationService {
             AccessResource::Catalogue {
                 organization: &caller.organization_id,
                 owner: &caller.principal_id,
+                app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
         )?;
         let channels = match self.channel_store() {

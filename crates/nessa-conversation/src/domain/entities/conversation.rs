@@ -1,5 +1,5 @@
 use crate::domain::{ConversationDeletion, DeletionContradiction};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{AppNamespace, OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, LATEST_TIME_MS,
@@ -30,11 +30,18 @@ pub struct Conversation {
     agent: Option<AgentId>,
     model: ConversationModelId,
     approval_mode: ConversationApprovalMode,
+    app_namespace: AppNamespace,
     deletion: Option<ConversationDeletion>,
 }
 impl Conversation {
     /// Maximum UTF-8 bytes in each persisted creator surface/action field.
     pub const MAX_CREATOR_CONTEXT_BYTES: usize = 256;
+
+    /// Bind this conversation to an explicit owning app namespace.
+    pub fn with_app_namespace(mut self, app_namespace: AppNamespace) -> Self {
+        self.app_namespace = app_namespace;
+        self
+    }
 
     pub fn with_approval_mode(mut self, mode: ConversationApprovalMode) -> Self {
         self.approval_mode = mode;
@@ -119,6 +126,7 @@ impl Conversation {
             agent,
             model,
             approval_mode,
+            app_namespace: AppNamespace::DEFAULT,
             deletion: None,
         })
     }
@@ -218,6 +226,10 @@ impl Conversation {
     /// The last durably committed approval choice.
     pub fn approval_mode(&self) -> ConversationApprovalMode {
         self.approval_mode
+    }
+    /// The owning app namespace for this conversation (`nessa` by default).
+    pub fn app_namespace(&self) -> &AppNamespace {
+        &self.app_namespace
     }
     /// The decision that deleted it, if somebody did.
     pub fn deletion(&self) -> Option<&ConversationDeletion> {

@@ -139,7 +139,7 @@ pub(super) fn read(connection: &Connection) -> Result<ExportFacts, ConversationE
     let conversations = json_rows(
         connection,
         "SELECT id, organization, owner, agent, model, approval_mode,
-                creation_revision, change_revision
+                creation_revision, change_revision, app_namespace
          FROM conversations ORDER BY id",
         &mut skipped,
         metadata_skip,
@@ -206,6 +206,7 @@ fn conversation_row(row: &Row<'_>) -> Result<Value, Error> {
         "approvalMode": row.get::<_, String>(5)?,
         "creationRevision": row.get::<_, i64>(6)?,
         "changeRevision": row.get::<_, i64>(7)?,
+        "appNamespace": row.get::<_, String>(8)?,
     }))
 }
 

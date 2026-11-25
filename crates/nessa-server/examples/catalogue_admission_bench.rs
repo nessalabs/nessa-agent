@@ -402,6 +402,7 @@ fn bench_evaluations(count: usize, cedar: &CedarConversationAccessPolicy) {
         resource: AccessResource::Conversation {
             organization: &organization,
             owner: &owner,
+            app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             deleted: false,
             created_by: None,
         },
@@ -413,6 +414,7 @@ fn bench_evaluations(count: usize, cedar: &CedarConversationAccessPolicy) {
         subject: AccessSubject::Person {
             organization: &organization,
             principal: &owner,
+            app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
         },
         action: AccessAction::Act,
         held: None,
