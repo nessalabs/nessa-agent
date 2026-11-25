@@ -1,16 +1,11 @@
 /**
  * Devices, the side rail's page for the hub's machines: the hub itself, then
- * one list of every other device — the computers that run agents for it,
- * the SSH hosts it runs them on, the cloud it falls back to, and the phones
- * and apps linked to it — each saying what it is underneath its name. A
- * computer or the cloud opens its own page; "Add device" asks which kind
- * and adds it here.
+ * one list of every other device — the clouds it is connected to, and the
+ * phones and apps linked to it — each saying what it is underneath its name.
+ * A cloud opens its own page; "Add device" asks which kind and adds it here.
  *
- * A star on the hub, a computer or an SSH host makes it the default device:
- * where a new chat runs, from this window or a phone, when it names none.
- * Under the list, the machines the hub's `~/.ssh/config` names are
- * suggested; Connect on one installs Nessa there over SSH and adds it, and
- * the hub starts again to serve it.
+ * Every gateway runs only its own agents (ADR 1417): the hub runs every chat
+ * it shows, and another computer runs a gateway of its own.
  *
  * Everything shown is what the gateway last answered, read again every
  * `pollMs` while the page is open; nothing is kept once it closes.
@@ -19,57 +14,33 @@ import { Button } from "@nessa-ui/react/button"
 import { DeviceFigure, type DeviceFigureKind } from "@nessa-ui/react/device-figure"
 import { LoadingText } from "@nessa-ui/react/loading-text"
 import { Meter } from "@nessa-ui/react/meter"
-import { Star } from "lucide-react"
 import {
   createContext,
   useContext,
   useEffect,
   useId,
-  useRef,
   useState,
   type ReactNode,
 } from "react"
-import { useNow } from "../../../clock"
 import { linkedOn, type LinkedDevice } from "../../model/linked-device"
 import { LinkedDevicesTab } from "../../settings/ui/linked-devices-tab"
 import { PageHeader } from "@nessa-ui/react/page-header"
-import { DeviceLoginsSwitch } from "../../settings/ui/saved-logins"
 import { BoatConnectionFields, useBoatConnection } from "../../settings/ui/boat-row"
 import { Agent37Row } from "../../settings/ui/agent37-row"
 import { clouds, cloudProvider, type Cloud } from "../../clouds/model/clouds"
 import { CloudFigure } from "../../clouds/ui/cloud-figure"
 import { useCloudStates } from "../../clouds/ui/cloud-states"
-import type {
-  CloudState,
-  DevicesGateway,
-  SshSuggestions,
-} from "../adapters/devices-gateway"
+import type { CloudState, DevicesGateway } from "../adapters/devices-gateway"
 import {
-  agentsWord,
-  ago,
-  connectWord,
   hubCard,
-  sshHostCard,
-  sortWorkers,
   statusWord,
-  workerCard,
   type DeviceStatus,
-  type DeviceSshConnect,
   type HubCard,
-  type SshHostCard,
   type Usage,
-  type WorkerCard,
 } from "../model/devices"
-import { AddComputer } from "./add-computer"
-import { PoolOrder } from "./pool-order"
 import "./devices.css"
 
 const Gateway = createContext<DevicesGateway | undefined>(undefined)
-
-/** The window's devices gateway, for a channel's thread order. */
-export function useDevicesGateway(): DevicesGateway | undefined {
-  return useContext(Gateway)
-}
 
 export function DevicesProvider({
   gateway,
@@ -83,20 +54,10 @@ export function DevicesProvider({
 
 /** What the page last read. `undefined`: not answered yet. */
 interface Read {
+  /** `undefined` until the first answer; `null` when the hub cannot be read. */
   readonly hub?: HubCard | null
-  readonly workers?: readonly WorkerCard[]
-  /** More workers than one read follows; those past it are not shown. */
-  readonly more?: boolean
-  /** Where the hub's native listener is bound; `null` while linking is off. */
-  readonly listening?: string | null
   readonly cloud?: CloudState | null
   readonly linked?: readonly LinkedDevice[] | null
-  /** The SSH hosts agents run on. */
-  readonly sshHosts?: readonly SshHostCard[]
-  /** Where a new chat runs when it names none; `null` is the hub. */
-  readonly defaultEnvironment?: string | null
-  /** Machines to suggest, and each setup under way; `null` unread. */
-  readonly suggestions?: SshSuggestions | null
   /** The last read of the list failed. */
   readonly unreachable: boolean
 }
@@ -109,26 +70,17 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
     if (!gateway) return
     let live = true
     const load = async () => {
-      const [list, cloud, linked, suggestions] = await Promise.all([
+      const [list, cloud, linked] = await Promise.all([
         gateway.list(),
         gateway.cloud(),
         gateway.linked(),
-        gateway.sshHosts(),
       ])
       if (!live) return
       setRead((last) => ({
         // A list that could not read the hub this time keeps the last one.
         hub: list.ok && list.value.hub ? hubCard(list.value.hub) : (last.hub ?? null),
-        workers: list.ok ? sortWorkers(list.value.workers.map(workerCard)) : last.workers,
-        more: list.ok ? list.value.more : last.more,
-        listening: list.ok ? (list.value.listening ?? null) : last.listening,
         cloud: cloud.ok ? cloud.value : null,
         linked: linked.ok ? linked.value : null,
-        sshHosts: list.ok ? list.value.sshHosts.map(sshHostCard) : last.sshHosts,
-        defaultEnvironment: list.ok
-          ? list.value.defaultEnvironment
-          : last.defaultEnvironment,
-        suggestions: suggestions.ok ? suggestions.value : (last.suggestions ?? null),
         unreachable: !list.ok,
       }))
     }
@@ -144,13 +96,10 @@ function useDevices(gateway: DevicesGateway | undefined): Read & { reload: () =>
 
 type Page =
   | { readonly kind: "list" }
-  | { readonly kind: "worker"; readonly id: string }
   | { readonly kind: "cloud"; readonly cloud: Cloud }
   | { readonly kind: "add" }
   | { readonly kind: "add-cloud" }
-  | { readonly kind: "add-computer" }
   | { readonly kind: "add-phone" }
-  | { readonly kind: "pool" }
 
 export function DevicesView() {
   const gateway = useContext(Gateway)
@@ -169,16 +118,7 @@ export function DevicesView() {
     return (
       <AddDevice
         onBack={list}
-        onPick={(kind) =>
-          setPage({
-            kind:
-              kind === "computer"
-                ? "add-computer"
-                : kind === "phone"
-                  ? "add-phone"
-                  : "add-cloud",
-          })
-        }
+        onPick={(kind) => setPage({ kind: kind === "phone" ? "add-phone" : "add-cloud" })}
       />
     )
   if (page.kind === "add-cloud")
@@ -209,50 +149,11 @@ export function DevicesView() {
     ) : (
       <Agent37Page onBack={list} />
     )
-  if (page.kind === "add-computer")
-    return (
-      <AddComputer
-        gateway={gateway}
-        hubName={devices.hub?.name}
-        listening={devices.listening}
-        onReached={devices.reload}
-        onDone={() => {
-          devices.reload()
-          setPage({ kind: "list" })
-        }}
-      />
-    )
-  if (page.kind === "pool")
-    return (
-      <div className="devices-page" data-devices-page="pool">
-        <BackButton onBack={list} />
-        <div className="devices-heading">
-          <PageHeader title="Thread order" />
-          <p className="devices-muted">
-            Which computer a new thread on Any computer runs on. A channel can keep its
-            own order in its settings.
-          </p>
-        </div>
-        <div className="devices-settings settings-surface">
-          <PoolOrder gateway={gateway} workers={devices.workers} />
-        </div>
-      </div>
-    )
-  if (page.kind === "worker") {
-    const worker = devices.workers?.find((each) => each.id === page.id)
-    return (
-      <WorkerPage worker={worker} hub={devices.hub?.name ?? "the hub"} onBack={list} />
-    )
-  }
   return (
     <DevicesList
       read={devices}
-      gateway={gateway}
-      onChanged={devices.reload}
-      onOpen={(id) => setPage({ kind: "worker", id })}
       onCloud={(cloud) => setPage({ kind: "cloud", cloud })}
       onAdd={() => setPage({ kind: "add" })}
-      onPool={() => setPage({ kind: "pool" })}
     />
   )
 }
@@ -274,54 +175,14 @@ const plus = (
 
 function DevicesList({
   read,
-  gateway,
-  onChanged,
-  onOpen,
   onCloud,
   onAdd,
-  onPool,
 }: {
   read: Read
-  gateway: DevicesGateway
-  /** Something was saved: read the list again. */
-  onChanged: () => void
-  onOpen: (id: string) => void
   onCloud: (cloud: Cloud) => void
   onAdd: () => void
-  onPool: () => void
 }) {
-  const now = useNow(30_000)
-  const loaded = read.workers !== undefined
-  const hubName = read.hub?.name ?? "This Mac"
-  // The star a person last pressed, shown at once and until its answer;
-  // an earlier press answering later does not take it back.
-  const [starring, setStarring] = useState<{
-    readonly to: string | null
-    readonly press: number
-  } | null>(null)
-  const presses = useRef(0)
-  const [starFailed, setStarFailed] = useState(false)
-  const current = starring !== null ? starring.to : (read.defaultEnvironment ?? null)
-  const makeDefault = (environment: string | null) => {
-    const press = (presses.current += 1)
-    setStarring({ to: environment, press })
-    setStarFailed(false)
-    void gateway.setDefault(environment).then((answer) => {
-      if (presses.current !== press) return
-      setStarring(null)
-      setStarFailed(!answer.ok)
-      onChanged()
-    })
-  }
-  const star = (environment: string | null, name: string) =>
-    loaded && read.defaultEnvironment !== undefined ? (
-      <DefaultStar
-        environment={environment}
-        current={current}
-        name={name}
-        onSet={makeDefault}
-      />
-    ) : null
+  const loaded = read.hub !== undefined
   return (
     <div className="devices-page" data-devices-page="list">
       <PageHeader
@@ -345,83 +206,17 @@ function DevicesList({
           The hub isn&apos;t answering. Showing what it last said.
         </p>
       ) : null}
-      {starFailed ? (
-        <p className="devices-muted" role="status" data-devices-default-failed>
-          Couldn&apos;t change where new chats run. Try again.
-        </p>
-      ) : null}
       {!loaded ? (
         <DelayedLoading />
       ) : (
         <>
-          <HubSection hub={read.hub ?? null} star={star(null, hubName)} />
+          <HubSection hub={read.hub ?? null} />
           <section className="devices-section" aria-label="Your devices">
             <div className="devices-grid" data-devices-list>
-              {(read.workers ?? []).map((worker) => (
-                <Tile
-                  key={worker.id}
-                  art={worker.art}
-                  name={worker.name}
-                  kind={worker.system}
-                  status={worker.status}
-                  onClick={() => onOpen(worker.id)}
-                  star={star(worker.environment, worker.name)}
-                  data-devices-worker={worker.id}
-                  footer={
-                    worker.status === "offline" ? (
-                      <span>
-                        {worker.lastSeenMs !== undefined
-                          ? `Last seen ${ago(worker.lastSeenMs, now)}`
-                          : "Never seen"}
-                      </span>
-                    ) : (
-                      <span>
-                        {agentsWord(worker.agents)}
-                        {worker.cpu ? ` · CPU ${worker.cpu.value}` : ""}
-                      </span>
-                    )
-                  }
-                />
-              ))}
-              {(read.sshHosts ?? []).map((host) => (
-                <Tile
-                  key={host.host}
-                  art="server"
-                  name={host.name}
-                  kind={host.kind}
-                  status="ready"
-                  star={star(host.host, host.name)}
-                  data-devices-ssh={host.host}
-                  footer={<span>{host.address}</span>}
-                />
-              ))}
               <CloudTiles boat={read.cloud} seen={read} onOpen={onCloud} />
               <LinkedTiles linked={read.linked} />
             </div>
-            {read.more ? (
-              <p className="devices-muted" data-devices-more>
-                More computers than these work for the hub; they are not shown.
-              </p>
-            ) : null}
-            {read.workers?.length ? (
-              <button
-                type="button"
-                className="devices-pool-link"
-                onClick={onPool}
-                data-devices-action="pool"
-              >
-                <span>Thread order</span>
-                <span className="devices-muted">
-                  Which computer new threads run on first
-                </span>
-              </button>
-            ) : null}
           </section>
-          <Suggestions
-            suggestions={read.suggestions}
-            gateway={gateway}
-            onChanged={onChanged}
-          />
         </>
       )}
     </div>
@@ -446,10 +241,9 @@ function Dot({ status }: { status: DeviceStatus }) {
   return <i className="devices-dot" data-status={status} aria-hidden="true" />
 }
 
-function HubSection({ hub, star }: { hub: HubCard | null; star: ReactNode }) {
+function HubSection({ hub }: { hub: HubCard | null }) {
   return (
     <section className="devices-hub" aria-labelledby="devices-hub-name" data-devices-hub>
-      {star ? <div className="devices-star-slot">{star}</div> : null}
       <DeviceFigure kind="desktop" className="devices-hub-figure" />
       <div className="devices-hub-title">
         <h2 id="devices-hub-name">
@@ -499,7 +293,6 @@ function Tile({
   said = statusWord(status),
   footer,
   onClick,
-  star,
   ...data
 }: {
   art?: DeviceFigureKind
@@ -514,8 +307,6 @@ function Tile({
   said?: string
   footer?: ReactNode
   onClick?: () => void
-  /** Makes it the default device; beside the tile, never inside its button. */
-  star?: ReactNode
   [data: `data-${string}`]: string
 }) {
   const body = (
@@ -543,7 +334,7 @@ function Tile({
       </div>
     </>
   )
-  const tile = onClick ? (
+  return onClick ? (
     <button
       type="button"
       className="devices-tile"
@@ -557,154 +348,6 @@ function Tile({
     <div className="devices-tile" {...data}>
       {body}
     </div>
-  )
-  return star ? (
-    <div className="devices-tile-holder">
-      {tile}
-      <div className="devices-star-slot">{star}</div>
-    </div>
-  ) : (
-    tile
-  )
-}
-
-/** The star that makes a device where new chats run: filled on that one. */
-function DefaultStar({
-  environment,
-  current,
-  name,
-  onSet,
-}: {
-  /** The device: `null` is the hub. */
-  environment: string | null
-  current: string | null
-  name: string
-  onSet: (environment: string | null) => void
-}) {
-  const chosen = environment === current
-  return (
-    <Button
-      variant="plain"
-      size="icon-sm"
-      shape="pill"
-      className="devices-star"
-      aria-pressed={chosen}
-      aria-label={chosen ? `${name} is where new chats run` : `Run new chats on ${name}`}
-      title={chosen ? "Default device: new chats run here" : "Make default"}
-      onClick={() => {
-        if (!chosen) onSet(environment)
-      }}
-      data-devices-default={environment ?? "hub"}
-      data-chosen={chosen ? "" : undefined}
-    >
-      <Star aria-hidden="true" fill={chosen ? "currentColor" : "none"} />
-    </Button>
-  )
-}
-
-/**
- * The machines the hub's SSH configuration names, as pills under the list:
- * each shows Connect on hover or focus, and then how its setup goes. One
- * that restarted the hub leaves this list for the one above.
- */
-function Suggestions({
-  suggestions,
-  gateway,
-  onChanged,
-}: {
-  suggestions: SshSuggestions | null | undefined
-  gateway: DevicesGateway
-  onChanged: () => void
-}) {
-  // A Connect pressed shows where it stands until the gateway's read that
-  // follows its answer says, and no longer: a read after a restart no
-  // longer names it, and an old answer would hold the pill on Installing.
-  const [pressed, setPressed] = useState<
-    Readonly<Record<string, { connect: DeviceSshConnect; answered: boolean }>>
-  >({})
-  useEffect(() => {
-    setPressed((last) => {
-      const kept = Object.entries(last).filter(([, each]) => !each.answered)
-      return kept.length === Object.keys(last).length ? last : Object.fromEntries(kept)
-    })
-  }, [suggestions])
-  if (!suggestions) return null
-  const under = new Map(suggestions.connecting.map((each) => [each.host, each]))
-  const stateOf = (host: string) => under.get(host) ?? pressed[host]?.connect
-  const shown = suggestions.suggested.filter(
-    (host) => stateOf(host.host)?.state !== "connected",
-  )
-  if (shown.length === 0) return null
-  const connect = (host: string) => {
-    setPressed((last) => ({
-      ...last,
-      [host]: { connect: { host, state: "installing" }, answered: false },
-    }))
-    void gateway.connectSsh(host).then((answer) => {
-      setPressed((last) => ({
-        ...last,
-        // Not answered at all: said as a setup that failed, never held on
-        // Installing.
-        [host]: {
-          connect: answer.ok
-            ? answer.value
-            : { host, state: "failed", refusal: "devices_unavailable" },
-          answered: answer.ok,
-        },
-      }))
-      onChanged()
-    })
-  }
-  return (
-    <section
-      className="devices-section devices-suggestions"
-      aria-labelledby="devices-suggestions-title"
-      data-devices-suggestions
-    >
-      <div className="devices-suggestions-head">
-        <h2 id="devices-suggestions-title">From your SSH config</h2>
-        <p className="devices-muted">
-          Connect one to install Nessa there and run agents on it.
-        </p>
-      </div>
-      <ul className="devices-pills">
-        {shown.map((host) => {
-          const card = sshHostCard(host)
-          const state = stateOf(host.host)
-          const busy = state?.state === "installing" || state?.state === "restarting"
-          return (
-            <li
-              key={host.host}
-              className="devices-pill"
-              data-devices-suggested={host.host}
-              data-state={state?.state ?? "idle"}
-            >
-              <span className="devices-pill-name">{host.host}</span>
-              {state ? (
-                <span className="devices-pill-note" role="status">
-                  {connectWord(state)}
-                </span>
-              ) : (
-                <span className="devices-pill-note devices-muted">{card.address}</span>
-              )}
-              {busy ? null : (
-                <Button
-                  className="devices-pill-connect"
-                  variant="inverse"
-                  size="24"
-                  shape="pill"
-                  onClick={() => connect(host.host)}
-                  aria-label={`Connect ${host.host}`}
-                  data-devices-action="connect"
-                >
-                  {state?.state === "failed" ? "Try again" : "Connect"}
-                </Button>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </section>
   )
 }
 
@@ -774,7 +417,7 @@ function LinkedTiles({ linked }: { linked: readonly LinkedDevice[] | null | unde
   ))
 }
 
-type AddKind = "computer" | "phone" | "cloud"
+type AddKind = "phone" | "cloud"
 
 const addKinds: readonly {
   kind: AddKind
@@ -782,18 +425,12 @@ const addKinds: readonly {
   name: string
   detail: string
 }[] = [
-  {
-    kind: "computer",
-    art: "laptop",
-    name: "Computer",
-    detail: "Runs agents the hub sends it",
-  },
   { kind: "phone", art: "phone", name: "Phone", detail: "Talk to the hub from anywhere" },
   {
     kind: "cloud",
     art: "boat",
     name: "Cloud",
-    detail: `${clouds.map((cloud) => cloud.name).join(" or ")} VMs for channels to run in`,
+    detail: `${clouds.map((cloud) => cloud.name).join(" or ")} accounts for cloud boxes`,
   },
 ]
 
@@ -848,7 +485,7 @@ function AddCloud({
       <BackButton onBack={onBack} />
       <div className="devices-heading">
         <PageHeader title="Add a cloud" />
-        <p className="devices-muted">Which cloud should make VMs for your threads?</p>
+        <p className="devices-muted">Which cloud should Nessa connect to?</p>
       </div>
       <div className="devices-grid">
         {clouds.map((cloud) => (
@@ -873,7 +510,7 @@ function AddCloud({
   )
 }
 
-/** Agent37's own page: its key, and which cloud new thread VMs go to. */
+/** Agent37's own page: its key. */
 function Agent37Page({ onBack }: { onBack: () => void }) {
   // The row below reads, connects, unlocks and disconnects; the header
   // follows what it last read.
@@ -1003,104 +640,3 @@ const back = (
     <path d="M10 3 5 8l5 5" />
   </svg>
 )
-
-/** A worker's own page: what it is and how busy, never what runs on it (the Agents panel says that). */
-function WorkerPage({
-  worker,
-  hub,
-  onBack,
-}: {
-  worker: WorkerCard | undefined
-  hub: string
-  onBack: () => void
-}) {
-  const now = useNow(30_000)
-  return (
-    <div className="devices-page" data-devices-page="worker">
-      <BackButton onBack={onBack} />
-      {!worker ? (
-        <p className="devices-muted">This computer is no longer listed.</p>
-      ) : (
-        <>
-          <header className="devices-detail-head">
-            <DeviceFigure
-              kind={worker.art}
-              dimmed={worker.status === "offline"}
-              className="devices-detail-figure"
-            />
-            <div className="devices-heading">
-              <PageHeader title={worker.name} />
-              <p className="devices-status devices-detail-status">
-                <Dot status={worker.status} />
-                {statusWord(worker.status)}
-                <span className="devices-muted">
-                  {" · "}
-                  {worker.status === "offline"
-                    ? worker.lastSeenMs !== undefined
-                      ? `last seen ${ago(worker.lastSeenMs, now)}`
-                      : "never seen"
-                    : `works for ${hub}`}
-                </span>
-              </p>
-            </div>
-          </header>
-          {worker.cpu && worker.memory && worker.disk ? (
-            <div className="devices-stats devices-detail-stats">
-              <div className="devices-stat" data-devices-stat="Agents">
-                <span className="devices-stat-label">Agents</span>
-                <span className="devices-stat-value">{worker.agents}</span>
-              </div>
-              <Stat label="CPU" usage={worker.cpu} />
-              <Stat label="Memory" usage={worker.memory} />
-              <Stat label="Disk" usage={worker.disk} />
-            </div>
-          ) : null}
-          {worker.disks ? (
-            <section className="devices-disks" aria-label="Disks" data-devices-disks>
-              <h2>Disks</h2>
-              <div className="devices-stats">
-                {worker.disks.map((disk, index) => (
-                  // Mounts are cut to 128 bytes, so two may read the same.
-                  <Stat
-                    key={`${index}:${disk.mount}`}
-                    label={disk.mount}
-                    usage={disk.usage}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
-          <dl className="devices-facts">
-            <div>
-              <dt>System</dt>
-              <dd>{worker.system}</dd>
-            </div>
-            {worker.cpus !== undefined ? (
-              <div>
-                <dt>Processors</dt>
-                <dd>{worker.cpus}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt>Takes new work</dt>
-              <dd>
-                {worker.status === "online"
-                  ? "Yes"
-                  : worker.status === "draining"
-                    ? "No, finishing what it has"
-                    : "No, it is offline"}
-              </dd>
-            </div>
-            <DeviceLoginsSwitch environment={worker.environment} />
-            <div>
-              <dt>Environment</dt>
-              <dd className="devices-mono" title={worker.environment}>
-                {`peer:${worker.id.slice(0, 12)}…`}
-              </dd>
-            </div>
-          </dl>
-        </>
-      )}
-    </div>
-  )
-}

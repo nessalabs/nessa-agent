@@ -1,5 +1,5 @@
-//! The saved-login methods (issue #1260): `logins.status`, `logins.save`,
-//! `logins.remove` and `logins.setDevice`, and Codex's ChatGPT accounts'
+//! The saved-login methods (issue #1260): `logins.status`, `logins.save`
+//! and `logins.remove`, and Codex's ChatGPT accounts'
 //! `logins.chatgptSignIn`, `logins.chatgptCancel`, `logins.chatgptUse` and
 //! `logins.chatgptRemove` (`docs/design/chatgpt-sign-in.md`), each admitted
 //! by Cedar's `credential.manage`, translated into [`SavedLoginsService`].
@@ -20,10 +20,9 @@ use nessa_protocol::product::generated::{
     ChatgptAccount as WireAccount, ChatgptLogins as WireChatgpt, ChatgptSignIn as WireSignIn,
     ChatgptSignInEnd as WireEnd, LoginAgent, LoginsChatgptRemoveParams, LoginsChatgptSignInParams,
     LoginsChatgptUseParams, LoginsErrorCode, LoginsRemoveParams, LoginsSaveParams,
-    LoginsSetDeviceParams, LoginsStatus as WireStatus, SavedLogin,
+    LoginsStatus as WireStatus, SavedLogin,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
-use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use serde_json::json;
 
 pub(super) async fn dispatch(
@@ -58,16 +57,6 @@ pub(super) async fn dispatch(
                 return failure(&frame.id, "invalid_request");
             };
             logins.remove(caller, agent(params.agent)).await
-        }
-        "logins.setDevice" => {
-            let Ok(params) = serde_json::from_value::<LoginsSetDeviceParams>(frame.params.clone())
-            else {
-                return failure(&frame.id, "invalid_request");
-            };
-            let Ok(peer) = PeerEnvironment::parse(&params.environment) else {
-                return failure(&frame.id, "invalid_request");
-            };
-            logins.set_device(caller, peer, params.on).await
         }
         "logins.chatgptSignIn" => {
             let Ok(params) =
@@ -179,11 +168,6 @@ fn wire(status: &LoginsStatus) -> WireStatus {
                 agent: wire_agent(*agent),
                 saved: status.saved.get(agent).copied().unwrap_or(false),
             })
-            .collect(),
-        devices_on: status
-            .devices_on
-            .iter()
-            .map(PeerEnvironment::name)
             .collect(),
         chatgpt: status.chatgpt.as_ref().map(wire_chatgpt),
     }

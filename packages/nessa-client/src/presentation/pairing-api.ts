@@ -37,8 +37,6 @@ export type PairingApi = {
    * Open one invitation. The code is in the answer and nowhere else.
    * `enrollee: "gateway"` invites a peer gateway instead of one of the
    * owner's devices; it pairs the same way and can only read.
-   * `enrollee: "environment"` invites a gateway that will run agents for this
-   * one; it pairs the same way and can only serve, never read.
    * `samePerson: true` on a gateway invitation records person attribution
    * after activation. It adds no capability; reads still need a share grant.
    * A failed link write leaves Active and is retried by the grant store.

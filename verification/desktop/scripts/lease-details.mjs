@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Where an agent runs, as a person sees it: the details sheet's "Where it
- * runs" for each lease state the gateway publishes, on this computer, an SSH
- * host or a paired machine, and the composer tray's "Run on" choice of place
- * for a new conversation, both production components.
+ * runs" for each lease state the gateway publishes, on this computer or, in
+ * the history of a conversation an older build ran elsewhere, an SSH host or
+ * a paired machine, in the production component.
  */
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
@@ -65,128 +65,11 @@ const expected = {
   ],
 }
 
-/** What each `run-on` case lists, and the place it then chooses. */
-const runOnCases = {
-  hosts: {
-    wanted: ["This computer", "devboxSSH", "me@build-01.internal.example.comSSH"],
-    choose: /^me@build-01/,
-    chosen: "me@build-01.internal.example.com",
-    row: "Run onme@build-01.internal.example.com",
-  },
-  // A connected paired machine, by the start of its key, after the SSH hosts.
-  paired: {
-    wanted: ["This computer", "devboxSSH", "Paired machine ababababPaired"],
-    choose: /^Paired machine/,
-    chosen: `peer:${"ab".repeat(32)}`,
-    row: "Run onPaired machine abababab",
-  },
-}
-
-/**
- * The composer tray's "Run on": offered only when the gateway names a host,
- * listing this computer and each host in full, and showing the one chosen.
- */
-async function runOn(browser, rep, url, engine, width) {
-  for (const name of ["none", ...Object.keys(runOnCases)]) {
-    const pageUrl = new URL("/verification/conversation/run-on-fixture.html", url)
-    pageUrl.searchParams.set("case", name)
-    const opened = await openPage(browser, {
-      url: pageUrl.href,
-      readySelector: css.runOnFixture,
-      width,
-      mac: false,
-    })
-    try {
-      await attempt(rep, { engine, width, name: `run-on-${name}` }, async () => {
-        const { page } = opened
-        const failures = []
-        const geometry = await page.locator(css.runOnFixture).evaluate((node) => ({
-          height: node.getBoundingClientRect().height,
-          bottom: node.getBoundingClientRect().bottom,
-          viewport: document.documentElement.clientHeight,
-        }))
-        if (
-          Math.abs(geometry.height - geometry.viewport) > 1 ||
-          Math.abs(geometry.bottom - geometry.viewport) > 1
-        )
-          return {
-            geometry,
-            failures: [
-              `Run on fixture does not fill the viewport: ${JSON.stringify(geometry)}`,
-            ],
-          }
-        const plus = page.getByRole("button", { name: /More options|Add attachment/ })
-        await plus.click()
-        const row = page.getByRole("button", { name: /^Run on/ })
-        if (name === "none") {
-          const rows = await row.count()
-          return {
-            rows,
-            geometry,
-            failures: [...(rows ? ["Run on is offered with no host"] : []), ...failures],
-          }
-        }
-        const before = (await row.textContent())?.trim()
-        if (before !== "Run onThis computer")
-          failures.push(`the row reads ${JSON.stringify(before)} before a choice`)
-        await row.click()
-        const group = page.getByRole("radiogroup", { name: "Run on", exact: true })
-        const radios = await group.getByRole("radio").evaluateAll((nodes) =>
-          nodes.map((node) => {
-            const name = node.firstElementChild?.firstElementChild
-            return {
-              text: node.textContent,
-              checked: node.getAttribute("aria-checked"),
-              focused: node === document.activeElement,
-              // A host cut short is not read in full.
-              cut: name ? name.scrollWidth > name.clientWidth + 1 : true,
-              right: node.getBoundingClientRect().right,
-            }
-          }),
-        )
-        const texts = radios.map((radio) => radio.text)
-        const {
-          wanted,
-          choose,
-          chosen: expectedChoice,
-          row: expectedRow,
-        } = runOnCases[name]
-        if (JSON.stringify(texts) !== JSON.stringify(wanted))
-          failures.push(
-            `choices ${JSON.stringify(texts)}, expected ${JSON.stringify(wanted)}`,
-          )
-        if (radios[0]?.checked !== "true" || !radios[0]?.focused)
-          failures.push("this computer is not the checked, focused choice")
-        const viewport = await page.evaluate(() => document.documentElement.clientWidth)
-        for (const radio of radios) {
-          if (radio.cut) failures.push(`${radio.text} is cut short`)
-          if (radio.right > viewport + 1)
-            failures.push(`${radio.text} ends at ${radio.right}, past ${viewport}`)
-        }
-        await group.getByRole("radio", { name: choose }).click()
-        const chosen = await page.locator(css.runOnFixture).getAttribute("data-chosen")
-        if (chosen !== expectedChoice) failures.push(`chose ${JSON.stringify(chosen)}`)
-        const after = (await row.textContent())?.trim()
-        if (after !== expectedRow)
-          failures.push(`the row reads ${JSON.stringify(after)} after a choice`)
-        const overflow = await page.evaluate(
-          () =>
-            document.documentElement.scrollWidth > document.documentElement.clientWidth,
-        )
-        if (overflow) failures.push("the page scrolls horizontally")
-        return { texts, chosen, after, geometry, failures }
-      })
-    } finally {
-      await opened.close()
-    }
-  }
-}
-
 await main(
   {
     name: "lease-details",
     summary:
-      "the details sheet's Where it runs section for every published lease state, here, on an SSH host or on a paired machine, and the composer's Run on choice",
+      "the details sheet's Where it runs section for every published lease state, here, or in history on an SSH host or a paired machine",
     defaults: { engine: "chromium,webkit" },
   },
   async ({ options, rep, url, mode }) => {
@@ -260,7 +143,6 @@ await main(
             await opened.close()
           }
         }
-        await runOn(browser, rep, url, engine, width)
       }
     })
   },

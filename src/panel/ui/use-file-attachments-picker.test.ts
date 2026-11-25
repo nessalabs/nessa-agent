@@ -777,48 +777,6 @@ it("does not route a closed read owner's refusal into a replacement provider", a
   ).toHaveLength(0)
 })
 
-it("refuses a file linked by path for a conversation that runs on an SSH host, and keeps taking images", async () => {
-  await act(async () => {
-    chat.setSelection(chat.active.id, {
-      agent: "claude",
-      model: "sonnet",
-      approvalMode: "ask",
-      environment: "devbox",
-    })
-  })
-  chooseAttachmentFiles.mockResolvedValue([
-    {
-      path: "/Users/ada/notes.md",
-      name: "notes.md",
-      size: 10,
-      mimeType: "text/markdown",
-      ticket: `k${ticketCount++}`,
-    },
-  ])
-  await act(async () => {
-    await hook.chooseFiles()
-  })
-  // The host has files of its own: this path would name nothing there, or
-  // something else. Nothing is attached, and the person is told why.
-  expect(draftFiles()).toHaveLength(0)
-  expect(hook.refusal).toEqual({ reason: "file-not-on-host", name: "notes.md" })
-
-  chooseAttachmentFiles.mockResolvedValue([
-    {
-      path: "/Users/ada/shot.png",
-      name: "shot.png",
-      size: 4,
-      mimeType: "image/png",
-      ticket: `k${ticketCount++}`,
-    },
-  ])
-  await act(async () => {
-    await hook.chooseFiles()
-  })
-  expect(draftFiles().map((file) => file.resource)).toMatchObject([{ name: "shot.png" }])
-  expect(hook.refusal).toBeNull()
-})
-
 it("keeps refusals with the actual store when the mounted provider changes", async () => {
   const refuseFromA = hook.refuse
   const destinationA = hook.captureDestination()

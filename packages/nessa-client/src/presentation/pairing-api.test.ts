@@ -74,10 +74,8 @@ describe("client.pairing", () => {
           if (method === "pairing.approve") return { status: saved }
           return saved
         })
-        const enrollee =
-          consentClass === "peer-gateway-environment-serve"
-            ? PairingEnrollee.Environment
-            : PairingEnrollee.Gateway
+        // An environment credential paired by an older build is still read.
+        const enrollee = PairingEnrollee.Gateway
         expect((await api.create({ enrollee })).status).toMatchObject({
           samePerson: choice,
         })
@@ -120,23 +118,6 @@ describe("client.pairing", () => {
         )
       }
     }
-  })
-
-  it("names an environment as the enrollee when asked", async () => {
-    const { api, calls } = session(() => ({
-      code: "ABCD-2345",
-      status: {
-        ...status,
-        class: "peer-gateway-environment-serve",
-        grant: { ...status.grant, action: "environment.serve" },
-      },
-    }))
-    const created = await api.create({ enrollee: PairingEnrollee.Environment })
-    expect(calls).toEqual([
-      { method: "pairing.create", params: { enrollee: "environment" } },
-    ])
-    expect(created.status.class).toBe("peer-gateway-environment-serve")
-    expect(created.status.grant.action).toBe("environment.serve")
   })
 
   it("lists pending enrollments and reads one by its invitation", async () => {

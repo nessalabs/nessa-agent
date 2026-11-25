@@ -1,7 +1,6 @@
 use super::{
-    ArtifactBytes, CatalogueHead, ConversationAgentSwitch, ConversationAgentSwitchState,
-    ConversationError, ConversationModelApplication, ConversationModelRequest,
-    ConversationModelRequestState, Reader,
+    CatalogueHead, ConversationAgentSwitch, ConversationAgentSwitchState, ConversationError,
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState, Reader,
 };
 use crate::domain::{Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -11,8 +10,6 @@ use nessa_protocol::conversation::domain::{
 #[cfg(doc)]
 use nessa_protocol::conversation::view::MAX_DECISIONS_KEPT;
 use nessa_protocol::conversation::view::{DecisionSettings, OwnerDecision};
-use nessa_protocol::lease::{CollectionRefusal, StagedArtifact};
-use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::PublishedFile;
 use nessa_sdk::domain::agent_execution::{prompts::ImageReference, sessions::ExecutionSessionId};
 use std::{future::Future, pin::Pin};
@@ -823,17 +820,8 @@ pub trait ConversationAttachments: Send + Sync {
     /// the release with its cause and initiator; an `Err` reports that some of
     /// it, or its evidence, could not be completed after every part was tried.
     fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()>;
-    /// Keep a file an environment published under a lease (issue #701):
-    /// held as the conversation's once its bytes are exactly what the host
-    /// published and the conversation recorded it, with the lease as its
-    /// cause; nothing is read when the conversation already holds that
-    /// file. A refusal leaves no hold.
-    fn keep_published(
-        &self,
-        published: PublishedArtifact,
-    ) -> Pin<Box<dyn Future<Output = Result<ArtifactKept, CollectionRefusal>> + Send + '_>>;
-    /// One range of a file the conversation holds, read for the person a
-    /// fetch is for (issue #701, slice D3b): at most `range.max_bytes` and at
+    /// One range of a file the conversation holds, read for the person an
+    /// upload is placed for: at most `range.max_bytes` and at
     /// most one of the store's own ranges, from `range.offset`, and only
     /// while the conversation is that person's and still holds exactly that
     /// file — asked again for every range, so a hold let go between two
@@ -869,37 +857,6 @@ pub enum HeldRangeError {
     /// The store could not say, or could not read the bytes, or the range
     /// is not one of the file's.
     Unavailable,
-}
-
-/// A file published under a lease, to be kept by its conversation.
-pub struct PublishedArtifact {
-    pub organization_id: OrganizationId,
-    pub conversation_id: ConversationId,
-    /// The lease it was published under.
-    pub lease: String,
-    /// Who asked for the work the lease runs.
-    pub requested_by: ActionContext,
-    /// What the host says the file is.
-    pub file: StagedArtifact,
-    /// Its bytes, read only if they are needed.
-    pub bytes: Box<dyn ArtifactBytes>,
-    /// Asked once the file is held, before anything says it is kept:
-    /// whether the conversation recorded it under the lease. `false`, and
-    /// the file is not kept.
-    pub record: ArtifactRecordGate,
-}
-
-/// Whether the conversation recorded a published file under its lease.
-pub type ArtifactRecordGate =
-    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>;
-
-/// What keeping a published file found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ArtifactKept {
-    /// Read, checked, and now held under the lease.
-    Held,
-    /// The conversation already held exactly this file; nothing was read.
-    AlreadyHeld,
 }
 
 /// Original stored input, before domain validation.

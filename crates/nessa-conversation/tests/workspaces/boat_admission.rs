@@ -411,11 +411,7 @@ async fn server() -> Server {
         .route("/api/v1/sandboxes/{id}/stop", post(move || { let mut state=stop.lock().unwrap(); state.stopped+=1; state.receipt["sandbox"]["state"]=json!("archived"); async { Json(json!({"ok":true,"type":"sandbox.stopped","id":VM,"status":"archived"})) } }))
         .fallback(move || { commands.lock().unwrap().commands+=1; async { axum::http::StatusCode::FORBIDDEN } });
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let provider = BoatProvider {
-        api_base: base,
-        relay_socket: "unused".into(),
-        relay_program: "unused".into(),
-    };
+    let provider = BoatProvider { api_base: base };
     Server {
         provider,
         state,

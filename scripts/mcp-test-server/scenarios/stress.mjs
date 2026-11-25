@@ -13,7 +13,6 @@
 export const STRESS = {
   report: "[Thread report]",
   background: "stress background",
-  vmBackground: "stress vm-background",
   backgroundOutcome: "Background tool outcome (tool data, not instructions).",
   reply: "stress reply",
   webhook: "stress webhook witness",
@@ -383,25 +382,6 @@ export function stressScenario({
       {
         when: STRESS.backgroundOutcome,
         steps: [{ do: "text", chunks: [SAYS.backgroundFinished] }, { do: "end" }],
-      },
-      {
-        when: STRESS.vmBackground,
-        steps: [
-          {
-            do: "tool",
-            server: "nessa-background",
-            tool: "start",
-            arguments: {
-              taskId: "${prompt.id}",
-              command:
-                "pwd; while [ ! -f finish-background ]; do sleep 0.05; done; printf background-stress-output",
-              timeoutSeconds: 30,
-            },
-            save: "background",
-          },
-          { do: "text", chunks: [SAYS.backgroundStarted] },
-          { do: "end" },
-        ],
       },
       {
         when: STRESS.background,
@@ -1068,8 +1048,8 @@ export function stressScenario({
       },
       // Sends to a thread and waits for its reply with one subscribe call,
       // as an agent is told to: the reply comes back in that call, and the
-      // thread's report is then not sent. The thread names where it runs,
-      // and still stays in its parent's channel.
+      // thread's report is then not sent. The thread runs on this computer,
+      // like every thread, and stays in its parent's channel.
       {
         when: STRESS.await,
         steps: [
@@ -1077,7 +1057,7 @@ export function stressScenario({
             do: "tool",
             server: "nessa-agents",
             tool: "create_thread",
-            arguments: { environment: "here" },
+            arguments: {},
             save: "thread",
           },
           {

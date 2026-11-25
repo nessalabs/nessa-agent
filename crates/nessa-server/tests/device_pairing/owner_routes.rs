@@ -249,50 +249,22 @@ async fn owner_route_creates_a_peer_gateway_invitation() {
     );
 }
 
-/// Row I1 (`docs/design/auth/peer-gateways.md`, "Environment peers"):
-/// `enrollee: "environment"` creates an invitation for a gateway that serves
-/// as an environment. Its class is the environment peer's and the grant it
-/// hands out is `environment.serve` on this gateway, never the read; the owner
-/// creates it without holding that grant.
+/// Every gateway runs only its own agents (ADR 1417): no gateway is paired
+/// to serve as another's environment, so that invitation is refused as
+/// malformed and nothing is created.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn owner_route_creates_an_environment_invitation() {
+async fn owner_route_refuses_an_environment_invitation() {
     let fixture = Fixture::new().await;
     let address = serve(&fixture, true).await;
     let token = fixture.owner_token.clone();
-    let created = blocking(|| {
-        let mut owner = ProductClient::connect(address, &token);
-        owner.ok("pairing.create", json!({"enrollee": "environment"}))
-    });
-    assert_eq!(created["status"]["class"], "peer-gateway-environment-serve");
-    assert_eq!(created["status"]["samePerson"], false);
-    assert_eq!(
-        created["status"]["grant"],
-        json!({"action": "environment.serve", "resource": {"organizationId": "org", "id": "gateway"}})
-    );
-    let id: [u8; 16] = serde_json::from_value(invitation(&created["status"])).unwrap();
-    assert_eq!(
-        fixture
-            .registry
-            .read_pairing(InvitationId::new(id))
-            .unwrap()
-            .intent()
-            .class(),
-        ConsentClass::PeerEnvironment
-    );
     blocking(|| {
         let mut owner = ProductClient::connect(address, &token);
-        owner.ok("pairing.cancel", json!({"invitationId": id}));
-        let chosen = owner.ok(
-            "pairing.create",
-            json!({"enrollee":"environment","samePerson":true}),
+        assert_eq!(
+            owner.refused("pairing.create", json!({"enrollee": "environment"})),
+            "invalid_request"
         );
-        assert_eq!(chosen["status"]["samePerson"], true);
-        let read = owner.ok(
-            "pairing.status",
-            json!({"invitationId":invitation(&chosen["status"])}),
-        );
-        assert_eq!(read["samePerson"], true);
     });
+    assert!(fixture.registry.pending_pairings().unwrap().is_empty());
 }
 
 /// Row O2: a lost create answer keeps its slot; pending finds it without its
@@ -569,9 +541,7 @@ async fn owner_route_hides_another_owners_invitation() {
 
 /// Row O3: an administrator whose credential does not allow what the consent
 /// grants (`conversation.read`) passes socket admission and is refused by
-/// Auth's exact consent check, as `forbidden`, with nothing created. Row I1:
-/// an environment invitation hands out `environment.serve`, which no person
-/// holds, so the same administrator creates one on `credential.manage` alone.
+/// Auth's exact consent check, as `forbidden`, with nothing created.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_route_without_the_consent_grant_is_forbidden() {
     let fixture = Fixture::with_read(false).await;
@@ -586,12 +556,6 @@ async fn owner_route_without_the_consent_grant_is_forbidden() {
         assert_eq!(owner.ok("pairing.pending", json!({}))["items"], json!([]));
     });
     assert!(fixture.registry.pending_pairings().unwrap().is_empty());
-    let created = blocking(|| {
-        ProductClient::connect(address, &token)
-            .ok("pairing.create", json!({"enrollee": "environment"}))
-    });
-    assert_eq!(created["status"]["class"], "peer-gateway-environment-serve");
-    assert_eq!(fixture.registry.pending_pairings().unwrap().len(), 1);
 }
 
 /// Row W1: malformed params are refused by the generated DTO before the

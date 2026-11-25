@@ -321,7 +321,7 @@ impl ConversationService {
                 approval_mode: requested.approval_mode,
                 environment: None,
                 channel: None,
-                fork: None,
+                fork: false,
             },
         )
         .await
@@ -444,12 +444,12 @@ fn binding(
         .as_ref()
         .filter(|channel| !channel.is_default())
         .map(|channel| channel.as_str());
-    // A fork asks for its source's place by the place itself; it enters as
-    // the name a fork used to ask by (none for here), so its fingerprint
-    // stays what it was.
-    let environment = match &requested.fork {
-        Some(source) => source.remote_name(),
-        None => requested.environment.clone(),
+    // A fork names no place; it enters as none, the name a fork of a
+    // conversation here always asked by, so its fingerprint stays what it was.
+    let environment = if requested.fork {
+        None
+    } else {
+        requested.environment.clone()
     };
     let canonical = match (environment.as_deref(), channel) {
         (None, None) => serde_json::to_vec(&(

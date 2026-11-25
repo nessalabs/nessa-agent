@@ -1625,9 +1625,9 @@ describe("provider recovery ownership", () => {
     ).toBe("The turn could not complete all required work.")
   })
 
-  it("offers Authenticate for Claude refused in a Boat VM, and this computer's sign-in elsewhere", async () => {
+  it("offers Claude this computer's sign-in wherever its refused run was", async () => {
     for (const [environment, label] of [
-      ["boat", "Authenticate"],
+      ["boat", "Sign in to Claude"],
       ["here", "Sign in to Claude"],
       ["ssh", "Sign in to Claude"],
     ] as const) {

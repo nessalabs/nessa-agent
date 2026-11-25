@@ -77,7 +77,7 @@ async fn an_unopened_view_carries_the_conversations_model() {
             "modelId":"selected-model","displayName":"Selected model",
             "maxContextWindowTokens":100000,"reasoning":false,"imageInput":false,
             "approvalModes":[{"id":"ask","name":"Ask","description":"Ask first"}]
-        }]}],"environments":[],"commandHosts":[],
+        }]}],
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();
@@ -125,7 +125,7 @@ async fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str)
             "modelId":"selected-model","displayName":"Selected model",
             "maxContextWindowTokens":100000,"reasoning":false,"imageInput":false,
             "approvalModes":[{"id":"ask","name":"Ask","description":"Ask first"}]
-        }]}],"environments":[],"commandHosts":[],
+        }]}],
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();
@@ -487,7 +487,7 @@ fn reading_state() -> ProductRouteState {
             "modelId":"selected-model","displayName":"Selected model",
             "maxContextWindowTokens":100000,"reasoning":false,"imageInput":false,
             "approvalModes":[{"id":"ask","name":"Ask","description":"Ask first"}]
-        }]}],"environments":[],"commandHosts":[],
+        }]}],
         "nativeHooks":{"claude":"off","codex":"off"}
     }))
     .unwrap();

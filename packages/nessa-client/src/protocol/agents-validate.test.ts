@@ -17,52 +17,12 @@ describe("agent installation request ID", () => {
   })
 })
 
-describe("the agent catalog's places", () => {
-  // At most 16 SSH destinations and 8 connected paired environments.
-  const places = (count: number) => [
-    ...Array.from({ length: Math.min(count, 16) }, (_, index) => `host${index}`),
-    ...Array.from(
-      { length: Math.max(count - 16, 0) },
-      (_, index) => `peer:${index.toString(16).padStart(2, "0").repeat(32)}`,
-    ),
-  ]
-
-  it("accepts the SSH hosts and connected paired environments together", () => {
-    expect(
-      agentsList({
-        agents: [],
-        environments: places(24),
-        commandHosts: places(24),
-        nativeHooks: { claude: "off", codex: "off" },
-      }).environments,
-    ).toHaveLength(24)
-  })
-
-  it("refuses more places than both kinds can name", () => {
-    expect(() =>
-      agentsList({
-        agents: [],
-        environments: places(25),
-        commandHosts: [],
-        nativeHooks: { claude: "off", codex: "off" },
-      }),
-    ).toThrow("Invalid agent catalog environments")
-  })
-
-  it("names a default device only among its places", () => {
-    const catalog = (defaultEnvironment: unknown) => ({
-      agents: [],
-      environments: ["devbox"],
-      commandHosts: [],
-      nativeHooks: { claude: "off", codex: "off" },
-      defaultEnvironment,
-    })
-    expect(agentsList(catalog("devbox")).defaultEnvironment).toBe("devbox")
-    expect(() => agentsList(catalog("other"))).toThrow(
-      "Invalid agent catalog default environment",
-    )
-    expect(() => agentsList(catalog(null))).toThrow(
-      "Invalid agent catalog default environment",
-    )
+describe("the agent catalog", () => {
+  it("names its agents and hooks switches, and no other place to run", () => {
+    const catalog = { agents: [], nativeHooks: { claude: "off", codex: "off" } }
+    expect(agentsList(catalog)).toEqual(catalog)
+    // Every gateway runs only its own agents (ADR 1417): an older gateway's
+    // places are not a catalog this client reads.
+    expect(() => agentsList({ ...catalog, environments: [], commandHosts: [] })).toThrow()
   })
 })

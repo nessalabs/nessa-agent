@@ -1,17 +1,11 @@
-//! The hub's devices (`devices.list`): the machine this gateway runs on and
-//! the paired environments that work for it, with what each is and how busy.
+//! The hub's machine (`devices.list`): what this gateway runs on and how
+//! busy it is.
 //!
 //! ```text
-//! env serve ── Machine{report} (lease link) ──▶ HostLink keeps the latest
-//! devices.list ──▶ Devices::list
-//!   ──▶ MachineProbe (this machine, read off the runtime)
-//!   ──▶ LiveWorkers (each paired environment's connection: load + report)
-//!   ──▶ WorkerSightings (each worker's last report, saved: offline ones too)
-//! a worker's connection ends ──▶ WorkerSightings::saw (its last report)
+//! devices.list ──▶ Devices::list ──▶ MachineProbe (this machine, read off the runtime)
 //! ```
 //!
-//! What a worker is doing now is read off its connection, never copied
-//! here; only when it was last seen, and as what, is kept, so a worker that
-//! is off still shows.
+//! Every gateway runs only its own agents (ADR 1417), so the hub is the one
+//! machine listed; other machines are gateways of their own.
 pub mod application;
 pub mod infrastructure;

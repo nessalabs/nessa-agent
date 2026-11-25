@@ -183,9 +183,7 @@ impl ConversationService {
                 .clone()
                 .ok_or(BackgroundTaskError::UnsupportedEnvironment)?;
             let workspace = match &target {
-                BackgroundTarget::Local(workspace) | BackgroundTarget::Vm { workspace, .. } => {
-                    workspace.clone()
-                }
+                BackgroundTarget::Local(workspace) => workspace.clone(),
             };
             let tool_call = service
                 .background_native_call(&source, &task, &command, &stop, &tasks)

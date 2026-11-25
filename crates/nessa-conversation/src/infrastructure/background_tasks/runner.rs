@@ -38,9 +38,7 @@ impl BackgroundRunner for ShepherdBackgroundTasks {
         mut stop: watch::Receiver<Option<TaskStop>>,
     ) -> BackgroundRun<'_, TaskOutcome> {
         Box::pin(async move {
-            let BackgroundTarget::Local(workspace) = target else {
-                return TaskOutcome::interrupted();
-            };
+            let BackgroundTarget::Local(workspace) = target;
             let mut result = TaskOutcome::not_started();
             if stop.borrow().is_some() {
                 result.cause = TaskCause::Cancelled;

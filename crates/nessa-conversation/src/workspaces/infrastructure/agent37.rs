@@ -21,7 +21,6 @@ use crate::workspaces::{
 use async_trait::async_trait;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use workspace_sdk::{
-    ports::SocketForward,
     providers::{
         agent37::{
             self as sdk, Agent37AttachOptions, Agent37Config, Agent37Failure, Agent37Identity,
@@ -40,9 +39,6 @@ const READY_BUDGET: Duration = Duration::from_secs(85);
 const CONNECT_BUDGET: Duration = Duration::from_secs(115);
 /// Where each thread's workspace is made inside its VM.
 const WORKSPACES: &str = "/home/node/.nessa/workspaces";
-/// Nessa's data directory in an Agent37 VM: under the image user's home,
-/// which is the instance's persistent disk.
-const DATA_DIR: &str = "/home/node/.nessa";
 /// The workspace supervisor the template carries.
 const VM_SUPERVISOR: &str = "/opt/nessa/bin/workspace-supervisor";
 /// The idle time Agent37 sleeps a VM after when its lifetime is unlimited:
@@ -50,8 +46,6 @@ const VM_SUPERVISOR: &str = "/opt/nessa/bin/workspace-supervisor";
 const LONGEST_IDLE: Duration = Duration::from_secs(86_400);
 
 pub struct Agent37Provider {
-    pub relay_socket: std::path::PathBuf,
-    pub relay_program: std::path::PathBuf,
     /// Another API and tunnel, for tests; Agent37's own when `None`.
     pub endpoints: Option<(String, String)>,
 }
@@ -98,24 +92,13 @@ impl Agent37Provider {
         let backend = workspace_sdk::IProvider::attach(&provider, request)
             .await
             .map_err(|_| Failure::Provider)?;
-        let root = backend.descriptor().root;
-        let forward =
-            SocketForward::new(self.relay_socket.clone()).map_err(|_| Failure::InvalidInput)?;
         let link = backend
             .connections()
             .ok_or(Failure::Provider)?
-            .connection(Some(forward))
+            .connection(None)
             .await
             .map_err(|_| Failure::Provider)?;
-        super::boat::write_config(link.as_ref(), &root, DATA_DIR).await?;
-        let access = super::ssh::VmLink::new(
-            link,
-            self.relay_socket.clone(),
-            self.relay_program.clone(),
-            root,
-            vm,
-            DATA_DIR,
-        )?;
+        let access = super::ssh::VmLink::new(link, vm);
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
 }

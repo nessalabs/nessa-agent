@@ -2225,11 +2225,7 @@ pub struct AgentsSetNativeHooksResult {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentsListResult {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_environment: Option<String>,
     pub agents: Vec<AgentOption>,
-    pub environments: Vec<String>,
-    pub command_hosts: Vec<String>,
     pub native_hooks: AgentsNativeHooks,
 }
 #[derive(Deserialize, Serialize)]
@@ -2507,8 +2503,6 @@ pub enum PairingEnrollee {
     OwnerPhone,
     #[serde(rename = "gateway")]
     Gateway,
-    #[serde(rename = "environment")]
-    Environment,
 }
 impl PairingEnrollee {
     pub fn as_str(self) -> &'static str {
@@ -2516,7 +2510,6 @@ impl PairingEnrollee {
             Self::Device => "device",
             Self::OwnerPhone => "ownerPhone",
             Self::Gateway => "gateway",
-            Self::Environment => "environment",
         }
     }
 }
@@ -2808,129 +2801,11 @@ pub struct DeviceDisk {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeviceWorker {
-    pub environment: String,
-    pub state: String,
-    pub agents: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub machine: Option<DeviceMachine>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_seen_ms: Option<u64>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DevicesListResult {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_environment: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ssh_hosts: Option<Vec<DeviceSshHost>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub: Option<DeviceMachine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<String>,
-    pub workers: Vec<DeviceWorker>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeviceSshHost {
-    pub host: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u64>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesSshHostsResult {
-    pub suggested: Vec<DeviceSshHost>,
-    pub connecting: Vec<DeviceSshConnect>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeviceSshConnect {
-    pub host: String,
-    pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refusal: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesConnectSshParams {
-    pub host: String,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesConnectSshResult {
-    pub connecting: DeviceSshConnect,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesSetDefaultParams {
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub environment: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesSetDefaultResult {
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub default_environment: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PoolPreference {
-    pub order: Vec<String>,
-    pub excluded: Vec<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesPoolParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub enum DevicesPoolSelection {
-    #[serde(rename = "default")]
-    Default,
-    #[serde(rename = "custom")]
-    Custom,
-}
-impl DevicesPoolSelection {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Custom => "custom",
-        }
-    }
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesSetPoolParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
-    pub mode: DevicesPoolSelection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preference: Option<PoolPreference>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DevicesPool {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
-    pub default_preference: PoolPreference,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_override: Option<PoolPreference>,
-    pub busy_cpu_percent: u64,
-    pub busy_memory_percent: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3889,8 +3764,6 @@ pub enum ChannelErrorCode {
     ChannelRequestConflict,
     #[serde(rename = "channel_storage_unavailable")]
     ChannelStorageUnavailable,
-    #[serde(rename = "channel_place_unavailable")]
-    ChannelPlaceUnavailable,
     #[serde(rename = "temporarily_unavailable")]
     TemporarilyUnavailable,
 }
@@ -3907,7 +3780,6 @@ impl ChannelErrorCode {
             Self::ChannelLimitReached => "channel_limit_reached",
             Self::ChannelRequestConflict => "channel_request_conflict",
             Self::ChannelStorageUnavailable => "channel_storage_unavailable",
-            Self::ChannelPlaceUnavailable => "channel_place_unavailable",
             Self::TemporarilyUnavailable => "temporarily_unavailable",
         }
     }
@@ -3925,8 +3797,6 @@ pub struct Channel {
     pub model: Option<String>,
     pub approval_mode: ApprovalMode,
     pub created_at_ms: u64,
-    pub coordinator_placement: String,
-    pub thread_placement: String,
     #[serde(deserialize_with = "Option::deserialize")]
     pub coordinator_conversation_id: Option<String>,
     pub coordinator_on: bool,
@@ -3947,24 +3817,12 @@ pub struct ChannelCreateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub coordinator_placement: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_placement: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinator: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelCreateResult {
     pub channel: Channel,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelSetPlacementParams {
-    pub request_id: String,
-    pub channel_id: String,
-    pub coordinator_placement: String,
-    pub thread_placement: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3976,11 +3834,6 @@ pub struct ChannelSetCoordinatorParams {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelSetCoordinatorResult {
-    pub channel: Channel,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChannelSetPlacementResult {
     pub channel: Channel,
 }
 #[derive(Deserialize, Serialize)]
@@ -4349,11 +4202,6 @@ impl VaultErrorCode {
 pub struct BoatSaveParams {
     pub token: String,
 }
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BoatClaudeSignInParams {
-    pub token: String,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum BoatErrorCode {
     #[serde(rename = "vault_locked")]
@@ -4636,13 +4484,6 @@ impl VmLifetimeMode {
     }
 }
 pub type VmLifetimeSeconds = u64;
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BoatVmLifetime {
-    pub mode: VmLifetimeMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seconds: Option<VmLifetimeSeconds>,
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum BoatRuntimeSelection {
     #[serde(rename = "default")]
@@ -4660,30 +4501,6 @@ impl BoatRuntimeSelection {
             Self::After => "after",
         }
     }
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BoatRuntimeReadParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BoatRuntimeSetParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
-    pub mode: BoatRuntimeSelection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seconds: Option<VmLifetimeSeconds>,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BoatRuntimeSettings {
-    pub default_lifetime: BoatVmLifetime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_override: Option<BoatVmLifetime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4748,7 +4565,6 @@ pub struct SavedLogin {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginsStatus {
     pub logins: Vec<SavedLogin>,
-    pub devices_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt: Option<ChatgptLogins>,
 }
@@ -4762,12 +4578,6 @@ pub struct LoginsSaveParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginsRemoveParams {
     pub agent: LoginAgent,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LoginsSetDeviceParams {
-    pub environment: String,
-    pub on: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -5272,8 +5082,6 @@ pub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = 5;
 pub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = true;
 /// Optional event subscription fields whose published schema forbids explicit null.
 pub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &["after", "replay", "kinds"];
-/// Runtime settings options whose published schema forbids explicit null.
-pub const NON_NULL_BOAT_RUNTIME_OPTIONS: &[&str] = &["channelId", "seconds"];
 pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";
@@ -5354,9 +5162,6 @@ pub mod product_method {
     pub const GITHUB_STATUS: &str = "github.status";
     pub const GITHUB_CONNECT: &str = "github.connect";
     pub const DEVICES_LIST: &str = "devices.list";
-    pub const DEVICES_SSH_HOSTS: &str = "devices.sshHosts";
-    pub const DEVICES_CONNECT_SSH: &str = "devices.connectSsh";
-    pub const DEVICES_SET_DEFAULT: &str = "devices.setDefault";
     pub const GITHUB_CANCEL: &str = "github.cancel";
     pub const GITHUB_DISCONNECT: &str = "github.disconnect";
     pub const PEER_ENROLL: &str = "peer.enroll";
@@ -5381,7 +5186,6 @@ pub mod product_method {
     pub const WORKSPACE_CLOSE_PANE: &str = "workspace.closePane";
     pub const CHANNEL_CREATE: &str = "channel.create";
     pub const CHANNEL_LIST: &str = "channel.list";
-    pub const CHANNEL_SET_PLACEMENT: &str = "channel.setPlacement";
     pub const CHANNEL_SET_COORDINATOR: &str = "channel.setCoordinator";
     pub const REPLY_STYLE_READ: &str = "replyStyle.read";
     pub const REPLY_STYLE_SET: &str = "replyStyle.set";
@@ -5398,7 +5202,6 @@ pub mod product_method {
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
-    pub const BOAT_SAVE_CLAUDE_SIGN_IN: &str = "boat.saveClaudeSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
     pub const AGENT37_STATUS: &str = "agent37.status";
     pub const AGENT37_SAVE: &str = "agent37.save";
@@ -5411,16 +5214,11 @@ pub mod product_method {
     pub const CLOUD_BOXES_SLEEP: &str = "cloud.boxes.sleep";
     pub const CLOUD_BOXES_RENAME: &str = "cloud.boxes.rename";
     pub const CLOUD_BOXES_DELETE: &str = "cloud.boxes.delete";
-    pub const DEVICES_POOL: &str = "devices.pool";
-    pub const DEVICES_SET_POOL: &str = "devices.setPool";
-    pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
-    pub const BOAT_SET_RUNTIME_SETTINGS: &str = "boat.setRuntimeSettings";
     pub const CONVERSATION_WEBHOOK_CURSOR: &str = "conversation.webhook.cursor";
     pub const CONVERSATION_WEBHOOK_RESET: &str = "conversation.webhook.reset";
     pub const LOGINS_STATUS: &str = "logins.status";
     pub const LOGINS_SAVE: &str = "logins.save";
     pub const LOGINS_REMOVE: &str = "logins.remove";
-    pub const LOGINS_SET_DEVICE: &str = "logins.setDevice";
     pub const LOGINS_CHATGPT_SIGN_IN: &str = "logins.chatgptSignIn";
     pub const LOGINS_CHATGPT_CANCEL: &str = "logins.chatgptCancel";
     pub const LOGINS_CHATGPT_USE: &str = "logins.chatgptUse";
@@ -5634,7 +5432,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 162
+                items.len() <= 152
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5736,9 +5534,6 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "github.status",
     "github.connect",
     "devices.list",
-    "devices.sshHosts",
-    "devices.connectSsh",
-    "devices.setDefault",
     "github.cancel",
     "github.disconnect",
     "peer.enroll",
@@ -5763,7 +5558,6 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "workspace.closePane",
     "channel.create",
     "channel.list",
-    "channel.setPlacement",
     "channel.setCoordinator",
     "replyStyle.read",
     "replyStyle.set",
@@ -5780,7 +5574,6 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.lock",
     "boat.status",
     "boat.save",
-    "boat.saveClaudeSignIn",
     "boat.disconnect",
     "agent37.status",
     "agent37.save",
@@ -5793,16 +5586,11 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "cloud.boxes.sleep",
     "cloud.boxes.rename",
     "cloud.boxes.delete",
-    "devices.pool",
-    "devices.setPool",
-    "boat.runtimeSettings",
-    "boat.setRuntimeSettings",
     "conversation.webhook.cursor",
     "conversation.webhook.reset",
     "logins.status",
     "logins.save",
     "logins.remove",
-    "logins.setDevice",
     "logins.chatgptSignIn",
     "logins.chatgptCancel",
     "logins.chatgptUse",
@@ -6041,12 +5829,6 @@ pub enum ProductMethod {
     GithubConnect,
     /// `devices.list`
     DevicesList,
-    /// `devices.sshHosts`
-    DevicesSshHosts,
-    /// `devices.connectSsh`
-    DevicesConnectSsh,
-    /// `devices.setDefault`
-    DevicesSetDefault,
     /// `github.cancel`
     GithubCancel,
     /// `github.disconnect`
@@ -6095,8 +5877,6 @@ pub enum ProductMethod {
     ChannelCreate,
     /// `channel.list`
     ChannelList,
-    /// `channel.setPlacement`
-    ChannelSetPlacement,
     /// `channel.setCoordinator`
     ChannelSetCoordinator,
     /// `replyStyle.read`
@@ -6129,8 +5909,6 @@ pub enum ProductMethod {
     BoatStatus,
     /// `boat.save`
     BoatSave,
-    /// `boat.saveClaudeSignIn`
-    BoatSaveClaudeSignIn,
     /// `boat.disconnect`
     BoatDisconnect,
     /// `agent37.status`
@@ -6155,14 +5933,6 @@ pub enum ProductMethod {
     CloudBoxesRename,
     /// `cloud.boxes.delete`
     CloudBoxesDelete,
-    /// `devices.pool`
-    DevicesPool,
-    /// `devices.setPool`
-    DevicesSetPool,
-    /// `boat.runtimeSettings`
-    BoatRuntimeSettings,
-    /// `boat.setRuntimeSettings`
-    BoatSetRuntimeSettings,
     /// `conversation.webhook.cursor`
     ConversationWebhookCursor,
     /// `conversation.webhook.reset`
@@ -6173,8 +5943,6 @@ pub enum ProductMethod {
     LoginsSave,
     /// `logins.remove`
     LoginsRemove,
-    /// `logins.setDevice`
-    LoginsSetDevice,
     /// `logins.chatgptSignIn`
     LoginsChatgptSignIn,
     /// `logins.chatgptCancel`
@@ -6294,9 +6062,6 @@ impl ProductMethod {
         ProductMethod::GithubStatus,
         ProductMethod::GithubConnect,
         ProductMethod::DevicesList,
-        ProductMethod::DevicesSshHosts,
-        ProductMethod::DevicesConnectSsh,
-        ProductMethod::DevicesSetDefault,
         ProductMethod::GithubCancel,
         ProductMethod::GithubDisconnect,
         ProductMethod::PeerEnroll,
@@ -6321,7 +6086,6 @@ impl ProductMethod {
         ProductMethod::WorkspaceClosePane,
         ProductMethod::ChannelCreate,
         ProductMethod::ChannelList,
-        ProductMethod::ChannelSetPlacement,
         ProductMethod::ChannelSetCoordinator,
         ProductMethod::ReplyStyleRead,
         ProductMethod::ReplyStyleSet,
@@ -6338,7 +6102,6 @@ impl ProductMethod {
         ProductMethod::VaultLock,
         ProductMethod::BoatStatus,
         ProductMethod::BoatSave,
-        ProductMethod::BoatSaveClaudeSignIn,
         ProductMethod::BoatDisconnect,
         ProductMethod::Agent37Status,
         ProductMethod::Agent37Save,
@@ -6351,16 +6114,11 @@ impl ProductMethod {
         ProductMethod::CloudBoxesSleep,
         ProductMethod::CloudBoxesRename,
         ProductMethod::CloudBoxesDelete,
-        ProductMethod::DevicesPool,
-        ProductMethod::DevicesSetPool,
-        ProductMethod::BoatRuntimeSettings,
-        ProductMethod::BoatSetRuntimeSettings,
         ProductMethod::ConversationWebhookCursor,
         ProductMethod::ConversationWebhookReset,
         ProductMethod::LoginsStatus,
         ProductMethod::LoginsSave,
         ProductMethod::LoginsRemove,
-        ProductMethod::LoginsSetDevice,
         ProductMethod::LoginsChatgptSignIn,
         ProductMethod::LoginsChatgptCancel,
         ProductMethod::LoginsChatgptUse,
@@ -6467,9 +6225,6 @@ impl ProductMethod {
             "github.status" => Some(ProductMethod::GithubStatus),
             "github.connect" => Some(ProductMethod::GithubConnect),
             "devices.list" => Some(ProductMethod::DevicesList),
-            "devices.sshHosts" => Some(ProductMethod::DevicesSshHosts),
-            "devices.connectSsh" => Some(ProductMethod::DevicesConnectSsh),
-            "devices.setDefault" => Some(ProductMethod::DevicesSetDefault),
             "github.cancel" => Some(ProductMethod::GithubCancel),
             "github.disconnect" => Some(ProductMethod::GithubDisconnect),
             "peer.enroll" => Some(ProductMethod::PeerEnroll),
@@ -6496,7 +6251,6 @@ impl ProductMethod {
             "workspace.closePane" => Some(ProductMethod::WorkspaceClosePane),
             "channel.create" => Some(ProductMethod::ChannelCreate),
             "channel.list" => Some(ProductMethod::ChannelList),
-            "channel.setPlacement" => Some(ProductMethod::ChannelSetPlacement),
             "channel.setCoordinator" => Some(ProductMethod::ChannelSetCoordinator),
             "replyStyle.read" => Some(ProductMethod::ReplyStyleRead),
             "replyStyle.set" => Some(ProductMethod::ReplyStyleSet),
@@ -6513,7 +6267,6 @@ impl ProductMethod {
             "vault.lock" => Some(ProductMethod::VaultLock),
             "boat.status" => Some(ProductMethod::BoatStatus),
             "boat.save" => Some(ProductMethod::BoatSave),
-            "boat.saveClaudeSignIn" => Some(ProductMethod::BoatSaveClaudeSignIn),
             "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
             "agent37.status" => Some(ProductMethod::Agent37Status),
             "agent37.save" => Some(ProductMethod::Agent37Save),
@@ -6526,16 +6279,11 @@ impl ProductMethod {
             "cloud.boxes.sleep" => Some(ProductMethod::CloudBoxesSleep),
             "cloud.boxes.rename" => Some(ProductMethod::CloudBoxesRename),
             "cloud.boxes.delete" => Some(ProductMethod::CloudBoxesDelete),
-            "devices.pool" => Some(ProductMethod::DevicesPool),
-            "devices.setPool" => Some(ProductMethod::DevicesSetPool),
-            "boat.runtimeSettings" => Some(ProductMethod::BoatRuntimeSettings),
-            "boat.setRuntimeSettings" => Some(ProductMethod::BoatSetRuntimeSettings),
             "conversation.webhook.cursor" => Some(ProductMethod::ConversationWebhookCursor),
             "conversation.webhook.reset" => Some(ProductMethod::ConversationWebhookReset),
             "logins.status" => Some(ProductMethod::LoginsStatus),
             "logins.save" => Some(ProductMethod::LoginsSave),
             "logins.remove" => Some(ProductMethod::LoginsRemove),
-            "logins.setDevice" => Some(ProductMethod::LoginsSetDevice),
             "logins.chatgptSignIn" => Some(ProductMethod::LoginsChatgptSignIn),
             "logins.chatgptCancel" => Some(ProductMethod::LoginsChatgptCancel),
             "logins.chatgptUse" => Some(ProductMethod::LoginsChatgptUse),
@@ -6641,9 +6389,6 @@ impl ProductMethod {
             ProductMethod::GithubStatus => "github.status",
             ProductMethod::GithubConnect => "github.connect",
             ProductMethod::DevicesList => "devices.list",
-            ProductMethod::DevicesSshHosts => "devices.sshHosts",
-            ProductMethod::DevicesConnectSsh => "devices.connectSsh",
-            ProductMethod::DevicesSetDefault => "devices.setDefault",
             ProductMethod::GithubCancel => "github.cancel",
             ProductMethod::GithubDisconnect => "github.disconnect",
             ProductMethod::PeerEnroll => "peer.enroll",
@@ -6668,7 +6413,6 @@ impl ProductMethod {
             ProductMethod::WorkspaceClosePane => "workspace.closePane",
             ProductMethod::ChannelCreate => "channel.create",
             ProductMethod::ChannelList => "channel.list",
-            ProductMethod::ChannelSetPlacement => "channel.setPlacement",
             ProductMethod::ChannelSetCoordinator => "channel.setCoordinator",
             ProductMethod::ReplyStyleRead => "replyStyle.read",
             ProductMethod::ReplyStyleSet => "replyStyle.set",
@@ -6685,7 +6429,6 @@ impl ProductMethod {
             ProductMethod::VaultLock => "vault.lock",
             ProductMethod::BoatStatus => "boat.status",
             ProductMethod::BoatSave => "boat.save",
-            ProductMethod::BoatSaveClaudeSignIn => "boat.saveClaudeSignIn",
             ProductMethod::BoatDisconnect => "boat.disconnect",
             ProductMethod::Agent37Status => "agent37.status",
             ProductMethod::Agent37Save => "agent37.save",
@@ -6698,16 +6441,11 @@ impl ProductMethod {
             ProductMethod::CloudBoxesSleep => "cloud.boxes.sleep",
             ProductMethod::CloudBoxesRename => "cloud.boxes.rename",
             ProductMethod::CloudBoxesDelete => "cloud.boxes.delete",
-            ProductMethod::DevicesPool => "devices.pool",
-            ProductMethod::DevicesSetPool => "devices.setPool",
-            ProductMethod::BoatRuntimeSettings => "boat.runtimeSettings",
-            ProductMethod::BoatSetRuntimeSettings => "boat.setRuntimeSettings",
             ProductMethod::ConversationWebhookCursor => "conversation.webhook.cursor",
             ProductMethod::ConversationWebhookReset => "conversation.webhook.reset",
             ProductMethod::LoginsStatus => "logins.status",
             ProductMethod::LoginsSave => "logins.save",
             ProductMethod::LoginsRemove => "logins.remove",
-            ProductMethod::LoginsSetDevice => "logins.setDevice",
             ProductMethod::LoginsChatgptSignIn => "logins.chatgptSignIn",
             ProductMethod::LoginsChatgptCancel => "logins.chatgptCancel",
             ProductMethod::LoginsChatgptUse => "logins.chatgptUse",
@@ -6811,9 +6549,6 @@ impl ProductMethod {
             ProductMethod::GithubStatus => Some("credential.manage"),
             ProductMethod::GithubConnect => Some("credential.manage"),
             ProductMethod::DevicesList => Some("server.read"),
-            ProductMethod::DevicesSshHosts => Some("credential.manage"),
-            ProductMethod::DevicesConnectSsh => Some("credential.manage"),
-            ProductMethod::DevicesSetDefault => Some("credential.manage"),
             ProductMethod::GithubCancel => Some("credential.manage"),
             ProductMethod::GithubDisconnect => Some("credential.manage"),
             ProductMethod::PeerEnroll => Some("credential.manage"),
@@ -6838,7 +6573,6 @@ impl ProductMethod {
             ProductMethod::WorkspaceClosePane => Some("conversation.write"),
             ProductMethod::ChannelCreate => Some("conversation.write"),
             ProductMethod::ChannelList => Some("conversation.write"),
-            ProductMethod::ChannelSetPlacement => Some("conversation.write"),
             ProductMethod::ChannelSetCoordinator => Some("conversation.write"),
             ProductMethod::ReplyStyleRead => Some("conversation.write"),
             ProductMethod::ReplyStyleSet => Some("conversation.write"),
@@ -6855,7 +6589,6 @@ impl ProductMethod {
             ProductMethod::VaultLock => Some("credential.manage"),
             ProductMethod::BoatStatus => Some("credential.manage"),
             ProductMethod::BoatSave => Some("credential.manage"),
-            ProductMethod::BoatSaveClaudeSignIn => Some("credential.manage"),
             ProductMethod::BoatDisconnect => Some("credential.manage"),
             ProductMethod::Agent37Status => Some("credential.manage"),
             ProductMethod::Agent37Save => Some("credential.manage"),
@@ -6868,16 +6601,11 @@ impl ProductMethod {
             ProductMethod::CloudBoxesSleep => Some("credential.manage"),
             ProductMethod::CloudBoxesRename => Some("credential.manage"),
             ProductMethod::CloudBoxesDelete => Some("credential.manage"),
-            ProductMethod::DevicesPool => Some("credential.manage"),
-            ProductMethod::DevicesSetPool => Some("credential.manage"),
-            ProductMethod::BoatRuntimeSettings => Some("credential.manage"),
-            ProductMethod::BoatSetRuntimeSettings => Some("credential.manage"),
             ProductMethod::ConversationWebhookCursor => Some("credential.manage"),
             ProductMethod::ConversationWebhookReset => Some("credential.manage"),
             ProductMethod::LoginsStatus => Some("credential.manage"),
             ProductMethod::LoginsSave => Some("credential.manage"),
             ProductMethod::LoginsRemove => Some("credential.manage"),
-            ProductMethod::LoginsSetDevice => Some("credential.manage"),
             ProductMethod::LoginsChatgptSignIn => Some("credential.manage"),
             ProductMethod::LoginsChatgptCancel => Some("credential.manage"),
             ProductMethod::LoginsChatgptUse => Some("credential.manage"),
@@ -6980,9 +6708,6 @@ impl ProductMethod {
             ProductMethod::GithubStatus => ProductLane::Requests,
             ProductMethod::GithubConnect => ProductLane::Requests,
             ProductMethod::DevicesList => ProductLane::Requests,
-            ProductMethod::DevicesSshHosts => ProductLane::Requests,
-            ProductMethod::DevicesConnectSsh => ProductLane::Requests,
-            ProductMethod::DevicesSetDefault => ProductLane::Requests,
             ProductMethod::GithubCancel => ProductLane::Requests,
             ProductMethod::GithubDisconnect => ProductLane::Requests,
             ProductMethod::PeerEnroll => ProductLane::Requests,
@@ -7007,7 +6732,6 @@ impl ProductMethod {
             ProductMethod::WorkspaceClosePane => ProductLane::Requests,
             ProductMethod::ChannelCreate => ProductLane::Requests,
             ProductMethod::ChannelList => ProductLane::Requests,
-            ProductMethod::ChannelSetPlacement => ProductLane::Requests,
             ProductMethod::ChannelSetCoordinator => ProductLane::Requests,
             ProductMethod::ReplyStyleRead => ProductLane::Requests,
             ProductMethod::ReplyStyleSet => ProductLane::Requests,
@@ -7024,7 +6748,6 @@ impl ProductMethod {
             ProductMethod::VaultLock => ProductLane::Requests,
             ProductMethod::BoatStatus => ProductLane::Requests,
             ProductMethod::BoatSave => ProductLane::Requests,
-            ProductMethod::BoatSaveClaudeSignIn => ProductLane::Requests,
             ProductMethod::BoatDisconnect => ProductLane::Requests,
             ProductMethod::Agent37Status => ProductLane::Requests,
             ProductMethod::Agent37Save => ProductLane::Requests,
@@ -7037,16 +6760,11 @@ impl ProductMethod {
             ProductMethod::CloudBoxesSleep => ProductLane::Requests,
             ProductMethod::CloudBoxesRename => ProductLane::Requests,
             ProductMethod::CloudBoxesDelete => ProductLane::Requests,
-            ProductMethod::DevicesPool => ProductLane::Requests,
-            ProductMethod::DevicesSetPool => ProductLane::Requests,
-            ProductMethod::BoatRuntimeSettings => ProductLane::Requests,
-            ProductMethod::BoatSetRuntimeSettings => ProductLane::Requests,
             ProductMethod::ConversationWebhookCursor => ProductLane::Requests,
             ProductMethod::ConversationWebhookReset => ProductLane::Requests,
             ProductMethod::LoginsStatus => ProductLane::Requests,
             ProductMethod::LoginsSave => ProductLane::Requests,
             ProductMethod::LoginsRemove => ProductLane::Requests,
-            ProductMethod::LoginsSetDevice => ProductLane::Requests,
             ProductMethod::LoginsChatgptSignIn => ProductLane::Requests,
             ProductMethod::LoginsChatgptCancel => ProductLane::Requests,
             ProductMethod::LoginsChatgptUse => ProductLane::Requests,
@@ -7330,19 +7048,10 @@ impl ProductMethod {
                 Value::Object(fields) if fields.is_empty() => ProductParams::GithubConnect,
                 _ => return Err(ParamsRefused),
             },
-            ProductMethod::DevicesList => ProductParams::DevicesList(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::DevicesSshHosts => match params {
-                Value::Object(fields) if fields.is_empty() => ProductParams::DevicesSshHosts,
+            ProductMethod::DevicesList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::DevicesList,
                 _ => return Err(ParamsRefused),
             },
-            ProductMethod::DevicesConnectSsh => ProductParams::DevicesConnectSsh(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::DevicesSetDefault => ProductParams::DevicesSetDefault(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
             ProductMethod::GithubCancel => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::GithubCancel,
                 _ => return Err(ParamsRefused),
@@ -7422,9 +7131,6 @@ impl ProductMethod {
             ProductMethod::ChannelList => ProductParams::ChannelList(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
-            ProductMethod::ChannelSetPlacement => ProductParams::ChannelSetPlacement(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
             ProductMethod::ChannelSetCoordinator => ProductParams::ChannelSetCoordinator(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -7478,9 +7184,6 @@ impl ProductMethod {
             ProductMethod::BoatSave => {
                 ProductParams::BoatSave(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
-            ProductMethod::BoatSaveClaudeSignIn => ProductParams::BoatSaveClaudeSignIn(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
             ProductMethod::BoatDisconnect => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
                 _ => return Err(ParamsRefused),
@@ -7522,18 +7225,6 @@ impl ProductMethod {
             ProductMethod::CloudBoxesDelete => ProductParams::CloudBoxesDelete(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
-            ProductMethod::DevicesPool => ProductParams::DevicesPool(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::DevicesSetPool => ProductParams::DevicesSetPool(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::BoatRuntimeSettings => ProductParams::BoatRuntimeSettings(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::BoatSetRuntimeSettings => ProductParams::BoatSetRuntimeSettings(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
             ProductMethod::ConversationWebhookCursor => ProductParams::ConversationWebhookCursor(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -7548,9 +7239,6 @@ impl ProductMethod {
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::LoginsRemove => ProductParams::LoginsRemove(
-                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
-            ),
-            ProductMethod::LoginsSetDevice => ProductParams::LoginsSetDevice(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::LoginsChatgptSignIn => ProductParams::LoginsChatgptSignIn(
@@ -7698,10 +7386,7 @@ pub enum ProductParams {
     GithubLiveEvents(GithubLiveEventsParams),
     GithubStatus,
     GithubConnect,
-    DevicesList(DevicesListParams),
-    DevicesSshHosts,
-    DevicesConnectSsh(DevicesConnectSshParams),
-    DevicesSetDefault(DevicesSetDefaultParams),
+    DevicesList,
     GithubCancel,
     GithubDisconnect,
     PeerEnroll(PeerEnrollParams),
@@ -7726,7 +7411,6 @@ pub enum ProductParams {
     WorkspaceClosePane(WorkspaceClosePaneParams),
     ChannelCreate(ChannelCreateParams),
     ChannelList(ChannelListParams),
-    ChannelSetPlacement(ChannelSetPlacementParams),
     ChannelSetCoordinator(ChannelSetCoordinatorParams),
     ReplyStyleRead(ReplyStyleReadParams),
     ReplyStyleSet(ReplyStyleSetParams),
@@ -7743,7 +7427,6 @@ pub enum ProductParams {
     VaultLock,
     BoatStatus,
     BoatSave(BoatSaveParams),
-    BoatSaveClaudeSignIn(BoatClaudeSignInParams),
     BoatDisconnect,
     Agent37Status,
     Agent37Save(Agent37SaveParams),
@@ -7756,16 +7439,11 @@ pub enum ProductParams {
     CloudBoxesSleep(CloudBoxIdParams),
     CloudBoxesRename(CloudBoxRenameParams),
     CloudBoxesDelete(CloudBoxIdParams),
-    DevicesPool(DevicesPoolParams),
-    DevicesSetPool(DevicesSetPoolParams),
-    BoatRuntimeSettings(BoatRuntimeReadParams),
-    BoatSetRuntimeSettings(BoatRuntimeSetParams),
     ConversationWebhookCursor(ConversationWebhookCursorParams),
     ConversationWebhookReset(ConversationWebhookResetParams),
     LoginsStatus,
     LoginsSave(LoginsSaveParams),
     LoginsRemove(LoginsRemoveParams),
-    LoginsSetDevice(LoginsSetDeviceParams),
     LoginsChatgptSignIn(LoginsChatgptSignInParams),
     LoginsChatgptCancel,
     LoginsChatgptUse(LoginsChatgptUseParams),
@@ -7885,10 +7563,7 @@ impl ProductParams {
             ProductParams::GithubLiveEvents(_) => ProductMethod::GithubLiveEvents,
             ProductParams::GithubStatus => ProductMethod::GithubStatus,
             ProductParams::GithubConnect => ProductMethod::GithubConnect,
-            ProductParams::DevicesList(_) => ProductMethod::DevicesList,
-            ProductParams::DevicesSshHosts => ProductMethod::DevicesSshHosts,
-            ProductParams::DevicesConnectSsh(_) => ProductMethod::DevicesConnectSsh,
-            ProductParams::DevicesSetDefault(_) => ProductMethod::DevicesSetDefault,
+            ProductParams::DevicesList => ProductMethod::DevicesList,
             ProductParams::GithubCancel => ProductMethod::GithubCancel,
             ProductParams::GithubDisconnect => ProductMethod::GithubDisconnect,
             ProductParams::PeerEnroll(_) => ProductMethod::PeerEnroll,
@@ -7917,7 +7592,6 @@ impl ProductParams {
             ProductParams::WorkspaceClosePane(_) => ProductMethod::WorkspaceClosePane,
             ProductParams::ChannelCreate(_) => ProductMethod::ChannelCreate,
             ProductParams::ChannelList(_) => ProductMethod::ChannelList,
-            ProductParams::ChannelSetPlacement(_) => ProductMethod::ChannelSetPlacement,
             ProductParams::ChannelSetCoordinator(_) => ProductMethod::ChannelSetCoordinator,
             ProductParams::ReplyStyleRead(_) => ProductMethod::ReplyStyleRead,
             ProductParams::ReplyStyleSet(_) => ProductMethod::ReplyStyleSet,
@@ -7936,7 +7610,6 @@ impl ProductParams {
             ProductParams::VaultLock => ProductMethod::VaultLock,
             ProductParams::BoatStatus => ProductMethod::BoatStatus,
             ProductParams::BoatSave(_) => ProductMethod::BoatSave,
-            ProductParams::BoatSaveClaudeSignIn(_) => ProductMethod::BoatSaveClaudeSignIn,
             ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
             ProductParams::Agent37Status => ProductMethod::Agent37Status,
             ProductParams::Agent37Save(_) => ProductMethod::Agent37Save,
@@ -7949,16 +7622,11 @@ impl ProductParams {
             ProductParams::CloudBoxesSleep(_) => ProductMethod::CloudBoxesSleep,
             ProductParams::CloudBoxesRename(_) => ProductMethod::CloudBoxesRename,
             ProductParams::CloudBoxesDelete(_) => ProductMethod::CloudBoxesDelete,
-            ProductParams::DevicesPool(_) => ProductMethod::DevicesPool,
-            ProductParams::DevicesSetPool(_) => ProductMethod::DevicesSetPool,
-            ProductParams::BoatRuntimeSettings(_) => ProductMethod::BoatRuntimeSettings,
-            ProductParams::BoatSetRuntimeSettings(_) => ProductMethod::BoatSetRuntimeSettings,
             ProductParams::ConversationWebhookCursor(_) => ProductMethod::ConversationWebhookCursor,
             ProductParams::ConversationWebhookReset(_) => ProductMethod::ConversationWebhookReset,
             ProductParams::LoginsStatus => ProductMethod::LoginsStatus,
             ProductParams::LoginsSave(_) => ProductMethod::LoginsSave,
             ProductParams::LoginsRemove(_) => ProductMethod::LoginsRemove,
-            ProductParams::LoginsSetDevice(_) => ProductMethod::LoginsSetDevice,
             ProductParams::LoginsChatgptSignIn(_) => ProductMethod::LoginsChatgptSignIn,
             ProductParams::LoginsChatgptCancel => ProductMethod::LoginsChatgptCancel,
             ProductParams::LoginsChatgptUse(_) => ProductMethod::LoginsChatgptUse,

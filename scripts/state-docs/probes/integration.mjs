@@ -79,16 +79,6 @@ export const probes = [
       s.replace('phase = "SetHeld" /\\ setHeld /\\ intent', 'phase = "Idle"'),
   },
   {
-    document: "gateway-environment-leases",
-    name: "Use wider grant timeout instead of narrowing to the request",
-    expectedRules: ["TermsNeverWiden"],
-    mutate: (s) =>
-      s.replace(
-        "effectiveTimeout' = (IF askedTimeout <= grantTimeout THEN askedTimeout ELSE grantTimeout)",
-        "effectiveTimeout' = grantTimeout",
-      ),
-  },
-  {
     document: "gateway-tunnel-connectivity",
     name: "Dispatch based on tunnel reachability without native admission",
     expectedRules: ["ForwardingIsNotAuthority"],

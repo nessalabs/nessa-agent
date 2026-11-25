@@ -2,7 +2,7 @@
 //! and what came of it; a step recorded again is acknowledged, not doubled.
 use super::*;
 use crate::application::ConversationCaller;
-use crate::domain::{ChannelExecution, ChannelId, Place};
+use crate::domain::ChannelId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 
@@ -27,23 +27,22 @@ fn read(directory: &std::path::Path, id: &str) -> Value {
 }
 
 #[tokio::test]
-async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
+async fn a_coordinator_switch_keeps_both_states_its_main_chat_and_who_asked() {
     let directory = tempfile::tempdir().unwrap();
     let audit =
         DurableSettingsAudit::new(directory.path().join("settings"), Arc::new(At(7))).unwrap();
     let old = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
-    let fresh = ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap();
-    let change = SettingsChange::ChannelPlacement {
+    let change = SettingsChange::ChannelCoordinator {
         channel: ChannelId::from_random([1; 10]),
-        before: Box::new(ChannelExecution::default()),
-        after: Box::new(ChannelExecution::new(Place::CloudVm, Place::Here)),
+        before: true,
+        after: false,
         coordinator: old.clone(),
     };
     for outcome in [
         SettingsOutcome::Requested,
         SettingsOutcome::Applied {
             changed: true,
-            coordinator: Some(fresh.clone()),
+            coordinator: Some(old.clone()),
         },
     ] {
         let record = SettingsAuditRecord {
@@ -60,9 +59,9 @@ async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
         &directory.path().join("settings"),
         "settings-op-1-requested",
     );
-    assert_eq!(asked["kind"], "channel_placement");
-    assert_eq!(asked["transition"]["before"]["coordinator"], "local");
-    assert_eq!(asked["transition"]["requested"]["coordinator"], "boat");
+    assert_eq!(asked["kind"], "channel_coordinator");
+    assert_eq!(asked["transition"]["before"]["on"], true);
+    assert_eq!(asked["transition"]["requested"]["on"], false);
     assert_eq!(
         asked["target"]["coordinatorConversationId"],
         old.to_string()
@@ -73,7 +72,7 @@ async fn a_channel_move_keeps_both_places_its_main_chats_and_who_asked() {
     assert_eq!(done["outcome"]["outcome"], "applied");
     assert_eq!(
         done["outcome"]["coordinatorConversationId"],
-        fresh.to_string()
+        old.to_string()
     );
     assert_eq!(done["observedAtMs"], 7);
 }

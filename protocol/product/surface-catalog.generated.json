@@ -602,30 +602,9 @@
     },
     {
       "name": "devices.list",
-      "params": "DevicesListParams",
+      "params": null,
       "grant": "server.read",
       "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.sshHosts",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.connectSsh",
-      "params": "DevicesConnectSshParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "devices.setDefault",
-      "params": "DevicesSetDefaultParams",
-      "grant": "credential.manage",
-      "readOnly": false,
       "destructive": false
     },
     {
@@ -755,13 +734,6 @@
       "destructive": false
     },
     {
-      "name": "channel.setPlacement",
-      "params": "ChannelSetPlacementParams",
-      "grant": "conversation.write",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "channel.setCoordinator",
       "params": "ChannelSetCoordinatorParams",
       "grant": "conversation.write",
@@ -867,13 +839,6 @@
       "destructive": false
     },
     {
-      "name": "boat.saveClaudeSignIn",
-      "params": "BoatClaudeSignInParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "boat.disconnect",
       "params": null,
       "grant": "credential.manage",
@@ -958,34 +923,6 @@
       "destructive": true
     },
     {
-      "name": "devices.pool",
-      "params": "DevicesPoolParams",
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.setPool",
-      "params": "DevicesSetPoolParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "boat.runtimeSettings",
-      "params": "BoatRuntimeReadParams",
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "boat.setRuntimeSettings",
-      "params": "BoatRuntimeSetParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "conversation.webhook.cursor",
       "params": "ConversationWebhookCursorParams",
       "grant": "credential.manage",
@@ -1019,13 +956,6 @@
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": true
-    },
-    {
-      "name": "logins.setDevice",
-      "params": "LoginsSetDeviceParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
     },
     {
       "name": "logins.chatgptSignIn",

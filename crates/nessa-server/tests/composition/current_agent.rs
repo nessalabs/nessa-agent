@@ -1098,7 +1098,6 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
             ),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         Some(root.join("workspace").to_string_lossy().into_owned()),

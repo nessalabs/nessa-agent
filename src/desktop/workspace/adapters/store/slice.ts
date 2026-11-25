@@ -524,9 +524,8 @@ const workspaceSlice = createSlice({
       { payload }: Payload<{ opening: string; channel: Channel; draftId: string }>,
     ) => channelCreation.channelMade(state, payload),
     // A channel's settings changed: the index keeps its section and the rest
-    // of what the window knows of it, and takes where its agents run now.
-    // A changed channel as its source answered it: where it runs, and its
-    // coordinator, on (with its main chat) or off (with none).
+    // of what the window knows of it, and takes its coordinator as its source
+    // answered it, on (with its main chat) or off (with none).
     channelPlaced: (state, { payload }: Payload<{ channel: Channel }>) => ({
       ...state,
       channels: state.channels.map((each) => {
@@ -535,8 +534,6 @@ const workspaceSlice = createSlice({
         const main = payload.channel.coordinatorConversationId ?? _held
         return {
           ...rest,
-          coordinatorPlacement: payload.channel.coordinatorPlacement,
-          threadPlacement: payload.channel.threadPlacement,
           ...(payload.channel.coordinatorOn === undefined
             ? {}
             : { coordinatorOn: payload.channel.coordinatorOn }),

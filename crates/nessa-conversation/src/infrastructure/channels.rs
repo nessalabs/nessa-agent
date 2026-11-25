@@ -5,9 +5,8 @@ use crate::application::{
     PinnedStart, ReplyStyleStore,
 };
 use crate::domain::{
-    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, ReplyStyle, RoleStyles, StyleRole,
-    StyleText,
+    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
+    ChannelPath, ChannelResources, ReplyStyle, RoleStyles, StyleRole, StyleText,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
@@ -139,8 +138,8 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         notes,
         resources,
         created_at,
-        coordinator_placement,
-        thread_placement,
+        _coordinator_placement,
+        _thread_placement,
         coordinator_on,
         coordinator,
     ) = row;
@@ -152,8 +151,6 @@ fn channel(row: Stored) -> Result<Channel, ConversationError> {
         OrganizationId::new(organization).map_err(|_| invalid())?,
         PrincipalId::new(owner).map_err(|_| invalid())?,
         ChannelParts {
-            execution: ChannelExecution::parse(&coordinator_placement, &thread_placement)
-                .map_err(|_| invalid())?,
             name: ChannelName::new(&name).map_err(|_| invalid())?,
             folder: ChannelFolder {
                 path: path(folder)?,
@@ -236,8 +233,10 @@ impl ChannelStore for LocalChannelStore {
                         resources,
                         i64::try_from(made.created_at_ms())
                             .map_err(|_| ConversationError::InvalidInput)?,
-                        made.execution().coordinator_word(),
-                        made.execution().threads_word(),
+                        // Every channel runs here (ADR 1417); the columns
+                        // stay for the rows earlier builds wrote.
+                        "local",
+                        "local",
                         made.coordinator_on(),
                     ],
                 )
@@ -403,55 +402,6 @@ impl ChannelStore for LocalChannelStore {
             transaction.execute("DELETE FROM conversation_reply_styles WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(())
-        })
-    }
-
-    fn set_execution(
-        &self,
-        id: &ChannelId,
-        execution: ChannelExecution,
-    ) -> ConversationFuture<'_, Option<Channel>> {
-        let id = id.as_str().to_owned();
-        self.run(move |connection| {
-            let transaction = connection.transaction().map_err(failed)?;
-            let Some(current) = transaction
-                .query_row(&format!("SELECT {COLUMNS} FROM channels WHERE channel = ?1"), [&id], stored)
-                .optional()
-                .map_err(failed)?
-            else {
-                return Ok(None);
-            };
-            let current = channel(current)?;
-            let mut changed = current.with_execution(execution.clone());
-            let main_made = transaction
-                .query_row(
-                    "SELECT 1 FROM channel_conversations WHERE conversation = ?1",
-                    [current.coordinator_id().to_string()],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map_err(failed)?
-                .is_some();
-            // Its word names the cloud too: Boat to Agent37 is a move.
-            if current.execution().coordinator_word() != execution.coordinator_word() && main_made {
-                // The main conversation already made (or begun: a creation
-                // places it in its channel before it exists) stays where it
-                // runs; a fresh one is named for the new place. One never
-                // begun is made where the channel says when it is, so it
-                // keeps its id and every surface holding it still opens it.
-                let next = uuid::Uuid::new_v4().to_string();
-                transaction.execute(
-                    "INSERT INTO channel_coordinator_replacements (retired, channel, coordinator, generation, cause) SELECT ?1, ?2, ?3, COALESCE(MAX(generation), 0) + 1, 'coordinator_moved' FROM channel_coordinator_replacements WHERE channel = ?2",
-                    params![current.coordinator_id().to_string(), id, next],
-                ).map_err(failed)?;
-                changed = changed.with_coordinator(ConversationId::new(&next).map_err(|_| ConversationError::Metadata)?);
-            }
-            transaction.execute(
-                "UPDATE channels SET coordinator_placement = ?2, thread_placement = ?3 WHERE channel = ?1",
-                params![id, execution.coordinator_word(), execution.threads_word()],
-            ).map_err(failed)?;
-            transaction.commit().map_err(failed)?;
-            Ok(Some(changed))
         })
     }
 

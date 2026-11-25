@@ -123,7 +123,6 @@ impl Durable {
                 ),
                 clock: Arc::new(TestClock),
                 environment: crate::infrastructure::in_process_environment().into(),
-                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             None,
