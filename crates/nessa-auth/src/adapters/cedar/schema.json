@@ -47,6 +47,10 @@
             "issuance": {
               "type": "String",
               "required": true
+            },
+            "membershipId": {
+              "type": "String",
+              "required": true
             }
           },
           "additionalAttributes": false
@@ -63,6 +67,10 @@
             "id": {
               "type": "String",
               "required": true
+            },
+            "ownerMembershipId": {
+              "type": "String",
+              "required": false
             }
           },
           "additionalAttributes": false
@@ -114,6 +122,21 @@
         }
       },
       "credential.manage": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "appCredential.issue": {
         "appliesTo": {
           "principalTypes": [
             "Actor"

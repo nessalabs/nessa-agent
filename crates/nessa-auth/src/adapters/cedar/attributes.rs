@@ -5,7 +5,9 @@
 
 use crate::{
     application::ports::{AccessError, AccessSnapshot, IssuePath},
-    domain::{Grant, MembershipRole, OrganizationId, PrincipalKind, Resource},
+    domain::{
+        Grant, IssuanceCause, MembershipId, MembershipRole, OrganizationId, PrincipalKind, Resource,
+    },
 };
 use cedar_policy::RestrictedExpression;
 use std::collections::HashMap;
@@ -18,7 +20,8 @@ pub(super) struct ActorAttributes<'a> {
     role: MembershipRole,
     active: bool,
     grants: &'a [Grant],
-    issuance: crate::domain::IssuanceCause,
+    membership: &'a MembershipId,
+    issuance: IssuanceCause,
 }
 
 impl<'a> From<&'a AccessSnapshot> for ActorAttributes<'a> {
@@ -28,6 +31,7 @@ impl<'a> From<&'a AccessSnapshot> for ActorAttributes<'a> {
             role: snapshot.membership.role(),
             active: snapshot.membership.is_active(),
             grants: snapshot.credential.grants(),
+            membership: snapshot.membership.id(),
             issuance: snapshot.origin.cause(),
         }
     }
@@ -57,15 +61,20 @@ impl ActorAttributes<'_> {
             ),
             ("grants".to_owned(), RestrictedExpression::new_set(grants)),
             (
+                "membershipId".to_owned(),
+                RestrictedExpression::new_string(self.membership.as_str().to_owned()),
+            ),
+            (
                 "issuance".to_owned(),
                 RestrictedExpression::new_string(
                     match self.issuance {
-                        crate::domain::IssuanceCause::Bootstrap => "bootstrap",
-                        crate::domain::IssuanceCause::AdminIssue => "admin_issue",
-                        crate::domain::IssuanceCause::WebhookIssue => "webhook_issue",
-                        crate::domain::IssuanceCause::DevicePairing => "device_pairing",
-                        crate::domain::IssuanceCause::SurfaceProvision => "surface_provision",
-                        crate::domain::IssuanceCause::OwnerRecovery => "owner_recovery",
+                        IssuanceCause::Bootstrap => "bootstrap",
+                        IssuanceCause::AdminIssue => "admin_issue",
+                        IssuanceCause::AppIssue => "app_issue",
+                        IssuanceCause::WebhookIssue => "webhook_issue",
+                        IssuanceCause::DevicePairing => "device_pairing",
+                        IssuanceCause::SurfaceProvision => "surface_provision",
+                        IssuanceCause::OwnerRecovery => "owner_recovery",
                     }
                     .to_owned(),
                 ),
@@ -105,7 +114,7 @@ impl<'a> From<&'a Resource> for ResourceAttributes<'a> {
 impl ResourceAttributes<'_> {
     /// Encode exactly the fields and value types declared for Resource in schema.json.
     pub(super) fn into_cedar(self) -> HashMap<String, RestrictedExpression> {
-        HashMap::from([
+        let mut attrs = HashMap::from([
             (
                 "id".to_owned(),
                 RestrictedExpression::new_string(self.resource.id().as_str().to_owned()),
@@ -116,7 +125,14 @@ impl ResourceAttributes<'_> {
                     self.resource.organization_id().as_str().to_owned(),
                 ),
             ),
-        ])
+        ]);
+        if let Some(owner) = self.resource.owner_membership() {
+            attrs.insert(
+                "ownerMembershipId".to_owned(),
+                RestrictedExpression::new_string(owner.as_str().to_owned()),
+            );
+        }
+        attrs
     }
 }
 
@@ -143,6 +159,7 @@ pub(super) fn path(path: IssuePath) -> &'static str {
     match path {
         IssuePath::Bootstrap => "bootstrap",
         IssuePath::ProductIssue => "product",
+        IssuePath::AppIssue => "app",
         IssuePath::WebhookIssue => "webhook",
         IssuePath::SurfaceProvision => "provision",
         IssuePath::OwnerRecovery => "recovery",

@@ -21,7 +21,7 @@ when {
 @id("credential.manage")
 permit (
     principal is Nessa::Actor,
-    action == Nessa::Action::"credential.manage",
+    action in [Nessa::Action::"credential.manage", Nessa::Action::"appCredential.issue"],
     resource is Nessa::Resource
 )
 when {
@@ -29,6 +29,14 @@ when {
     principal.role == "admin" &&
     principal.grants.contains({ action: "credential.manage", resourceId: resource.id, organizationId: resource.organizationId })
 };
+
+@id("app_credential.owner_only")
+forbid (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.issue",
+    resource is Nessa::Resource
+)
+unless { resource has ownerMembershipId && principal.membershipId == resource.ownerMembershipId };
 
 @id("conversation.read")
 permit (
@@ -70,7 +78,7 @@ when {
 // A person, agent or integration may hold anything but serving as an
 // environment; a peer gateway may only read what it is granted and serve as an
 // environment, never the conversation authority's actions. `context.path` is
-// the way the credential comes in: "bootstrap", "product", "provision",
+// the way the credential comes in: "bootstrap", "product", "app", "provision",
 // "recovery", "webhook", or "stored" for one already in the registry.
 @id("hold.person")
 permit (
@@ -81,6 +89,31 @@ permit (
 when {
     ["human", "agent", "integration"].contains(principal.kind) &&
     ["server.read", "credential.manage", "conversation.read", "conversation.write"].contains(context.action)
+};
+
+// An app marker records identity, not a callable request or a grant to a
+// Product handler. Generic issuance cannot mint it; app issuance holds only it.
+@id("hold.app_identity")
+permit (
+    principal is Nessa::Holder,
+    action == Nessa::Action::"credential.hold",
+    resource is Nessa::Resource
+)
+when {
+    context.path == "app" &&
+    principal.kind == "integration" &&
+    context.action == "app.identity"
+};
+
+@id("hold.app_only")
+forbid (
+    principal is Nessa::Holder,
+    action == Nessa::Action::"credential.hold",
+    resource is Nessa::Resource
+)
+when {
+    context.path == "app" &&
+    (principal.kind != "integration" || context.action != "app.identity")
 };
 
 @id("hold.peer")
