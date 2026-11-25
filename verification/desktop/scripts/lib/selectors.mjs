@@ -52,6 +52,8 @@ export const css = {
   loadMark: "[data-nessa-load-mark]",
   loadTitle: "[data-nessa-load-title]",
   startupScreen: "[data-nessa-startup-screen]",
+  connectingSplash: "[data-nessa-connecting]",
+  vaultDialog: "[data-vault-dialog]",
   startupMark: "[data-nessa-startup-mark]",
   startupLine: "[data-nessa-startup-line]",
   startupCode: "[data-nessa-startup-code]",

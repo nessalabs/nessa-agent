@@ -117,9 +117,13 @@ function MountedVault({
   )
   useEffect(() => {
     controller.activate()
-    if (autoUnlock) void requestUnlock()
     return () => controller.dispose()
-  }, [controller, autoUnlock, requestUnlock])
+  }, [controller])
+  // On its own: a window that turns `autoUnlock` on later (once its gateway
+  // answers) asks then, without disposing the controller it already has.
+  useEffect(() => {
+    if (autoUnlock) void requestUnlock()
+  }, [autoUnlock, requestUnlock])
   useEffect(() => {
     window.addEventListener("focus", controller.refreshPending)
     return () => window.removeEventListener("focus", controller.refreshPending)
