@@ -3,6 +3,7 @@ id: desktop-terminal-views
 title: Share a terminal between views
 kind: statechart
 status: proposed
+sourceRevision: "7d7fd3acba7cd7f1f02ff882da0fea74e10eb8d1"
 summary: One terminal session drawn by several views at once. The last focused
   view sets the size, every view paints the server's frames in order, and each
   view keeps its own scroll position.
@@ -17,8 +18,9 @@ model:
   spec: tla/services/desktop/workspace/share-a-terminal-between-views.tla
   config: tla/services/desktop/workspace/share-a-terminal-between-views.cfg
 modelCheck:
+  sourceRevision: "7d7fd3acba7cd7f1f02ff882da0fea74e10eb8d1"
   checker: tlc-1.7.4
-  date: 2026-11-21T00:43:04.643Z
+  date: 2026-11-25T07:01:59.789Z
   config: tla/services/desktop/workspace/share-a-terminal-between-views.cfg
   modelDigest: ae5604995093e2e1669a739977fb792f618fafd3670bcb5c496c86ebba5e68bb
   states: 1716

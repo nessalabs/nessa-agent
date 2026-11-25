@@ -4,7 +4,7 @@ title: "Reopen a message and understand its reference-only attachments"
 kind: "flow"
 status: "mixed"
 summary: "A reopened message can show a verified held image or a labeled attachment reference."
-sourceRevision: "ecd37cbac43367272d244dc75484a07e5eec053c"
+sourceRevision: "7d7fd3acba7cd7f1f02ff882da0fea74e10eb8d1"
 parent: "gateway-attachments"
 sources:
   - "src/conversation/model/content.ts"
@@ -50,4 +50,4 @@ stateDiagram-v2
 
 ## Model coverage
 
-The shared model covers ownership of local retained previews. Held-file reads, byte verification, downloads, and gateway routing are outside its bound. The existing source checkpoint predates the working-tree desktop routing change. [Preview or remove a draft attachment](preview-or-remove-a-draft-attachment.md)
+The shared model covers ownership of local retained previews. Held-file reads, byte verification, downloads, and gateway routing are outside its bound. [Preview or remove a draft attachment](preview-or-remove-a-draft-attachment.md)
