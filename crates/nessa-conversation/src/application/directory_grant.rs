@@ -146,28 +146,6 @@ enum RefusalKind {
 
 /// A missing root, or a root that is no longer a directory. Anything else,
 /// including a permission or a busy filesystem, is not this fact.
-/// `path` as a walk from `canonical`, or `None` when an absolute path is not
-/// under that directory. A relative path is walked as given, so `..` is the
-/// walk's refusal rather than a second parser.
-fn relative_to_grant(canonical: &str, path: &str) -> Option<String> {
-    let path = path.trim();
-    if path.is_empty() || path.contains('\0') {
-        return None;
-    }
-    if path.starts_with('/') {
-        let canonical = canonical.trim_end_matches('/');
-        if path == canonical {
-            return Some(".".to_owned());
-        }
-        let rest = path.strip_prefix(canonical)?.strip_prefix('/')?;
-        if rest.is_empty() || rest.split('/').any(|part| part.is_empty() || part == "..") {
-            return None;
-        }
-        return Some(rest.to_owned());
-    }
-    Some(path.to_owned())
-}
-
 fn root_refusal_cause(error: &DirectoryRefusal) -> Option<&'static str> {
     match error {
         DirectoryRefusal::Io(std::io::ErrorKind::NotFound) => Some("marker-missing"),
@@ -1317,51 +1295,9 @@ impl DirectoryAccess {
     }
 
     /// Whether `subject` holds a directory grant. A turn with one is
-    /// default-deny: a tool review that is not a known shape is refused.
+    /// default-deny.
     pub fn subject_has_directory(&self, subject: &str) -> Result<bool, DirectoryRefusal> {
         Ok(!self.store.grants_for_subject(subject)?.is_empty())
-    }
-
-    /// The path stays inside one of the subject's directories, and Cedar
-    /// allows `capability` there. No grant is not a refusal. The walk is the
-    /// same no-follow check as a read or a write, and it does not change the file.
-    pub fn admit_path(
-        &self,
-        subject: &str,
-        path: &str,
-        capability: &str,
-    ) -> Result<(), DirectoryRefusal> {
-        let owed = self.reconcile().err();
-        let grants = self.store.grants_for_subject(subject)?;
-        if grants.is_empty() {
-            return owed.map_or(Ok(()), Err);
-        }
-        let mut contained = Vec::new();
-        for grant in &grants {
-            let resource = self.resource_of(grant)?;
-            if let Some(relative) = relative_to_grant(&resource.canonical_path, path) {
-                contained.push((grant.clone(), resource, relative));
-            }
-        }
-        if contained.is_empty() {
-            let resource = self.resource_of(&grants[0])?;
-            let audit_recorded =
-                self.record_refusal(&resource, subject, path, capability, "path-leaves");
-            return Err(DirectoryRefusal::Outside {
-                leave: PathLeave::Outside,
-                audit_recorded,
-            });
-        }
-        let mut refusal = None;
-        for (grant, resource, relative) in contained {
-            match self.open_granted(subject, &grant, &resource, &relative, capability) {
-                Ok(_) => return owed.map_or(Ok(()), Err),
-                Err(error) => {
-                    refusal.get_or_insert(error);
-                }
-            }
-        }
-        Err(refusal.expect("a path inside a grant was checked"))
     }
 
     fn open_granted(

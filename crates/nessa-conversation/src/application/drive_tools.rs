@@ -39,9 +39,10 @@
 //! Claude reads files and Codex runs commands inside its read-only, offline
 //! sandbox without asking: no policy takes those away, and a deny pattern
 //! naming a read tool does not stop them. A directory grant is the exception.
-//! Its turn is default-deny: a command is checked as a command, and a native
-//! file or search tool is checked against the directory boundary. A tool
-//! shape that is neither is refused. A call the harness makes without asking
+//! Its turn is default-deny: a command is checked as a command. A native file
+//! or search tool is refused, because the harness opens the path after this
+//! review and this hook does not have the harness workspace. A tool shape
+//! that is neither is refused. A call the harness makes without asking
 //! is still recorded afterwards, not admitted here.
 //!
 //! The owner's turns are never checked here, and a missing or unreadable
@@ -323,8 +324,10 @@ fn directory_command(
 
 /// Why a directory-granted tool review was refused, or `None` when it may run.
 /// A subject with no directory grant is unchanged. A subject with one is
-/// default-deny: a command is admitted as a command, a file or search tool is
-/// admitted only for paths inside the directory, and every other shape is refused.
+/// default-deny. A command is admitted as a command. A native file or search
+/// tool is refused: the harness opens the original path after this review,
+/// and the review does not know the workspace that path is resolved against.
+/// Every other shape is refused.
 pub(crate) fn review_directory_tool(
     directory: &super::DirectoryAccess,
     subject: &str,
@@ -351,18 +354,32 @@ pub(crate) fn review_directory_tool(
                 Err(error) => Some(error.to_string()),
             }
         }
-        ToolShape::Files { capability, paths } => {
-            if paths.is_empty() {
-                return deny_unbounded(directory, subject);
-            }
-            for path in paths {
-                if let Err(error) = directory.admit_path(subject, &path, capability) {
-                    return Some(error.to_string());
-                }
-            }
-            None
-        }
-        ToolShape::Unbounded => deny_unbounded(directory, subject),
+        ToolShape::OpensPath => deny_harness_path(directory, subject),
+    }
+}
+
+/// Claude and Codex tools whose execution opens a path in the harness, after
+/// the permission review has returned.
+fn harness_opens_path(name: &str) -> bool {
+    matches!(
+        name,
+        "Read"
+            | "Write"
+            | "Edit"
+            | "MultiEdit"
+            | "NotebookEdit"
+            | "Glob"
+            | "Grep"
+            | "LS"
+            | "apply_patch"
+    )
+}
+
+fn deny_harness_path(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
+    match directory.subject_has_directory(subject) {
+        Ok(false) => None,
+        Ok(true) => Some("the tool opens its path outside the directory handle".to_owned()),
+        Err(error) => Some(error.to_string()),
     }
 }
 
@@ -374,63 +391,93 @@ fn deny_unknown(directory: &super::DirectoryAccess, subject: &str) -> Option<Str
     }
 }
 
-fn deny_unbounded(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
-    match directory.subject_has_directory(subject) {
-        Ok(false) => None,
-        Ok(true) => Some("the tool does not name a path inside the directory".to_owned()),
-        Err(error) => Some(error.to_string()),
-    }
-}
-
 /// A review a directory grant can check, or a shape it cannot.
 enum ToolShape {
     Command(ParsedCommand),
-    /// Each path is checked for `capability` (`read` or `write`).
-    Files {
-        capability: &'static str,
-        paths: Vec<String>,
-    },
-    /// A file or search tool that names no path, so the boundary cannot be checked.
-    Unbounded,
-    /// Not a command and not a file tool.
+    /// The harness opens a path after this review. The directory handle is
+    /// not that open, and a relative path is resolved in the harness workspace,
+    /// which this review does not have.
+    OpensPath,
+    /// Not a command and not a path the harness opens.
     Unknown,
 }
 
 fn tool_shape(name: &str, json: &str) -> ToolShape {
+    // The name is what the harness executes, including when the payload also
+    // carries `command` or `argv`.
+    if harness_opens_path(name) {
+        return ToolShape::OpensPath;
+    }
+    let Ok(raw) = serde_json::from_str::<serde_json::Value>(json) else {
+        return ToolShape::Unknown;
+    };
+    if !raw.is_object() {
+        return ToolShape::Unknown;
+    }
+    // A path field is an open, including one nested under `arguments` beside
+    // a command. The harness may use the path and ignore the command.
+    if names_a_path(&raw) {
+        return ToolShape::OpensPath;
+    }
     let Some(value) = argument_object(json) else {
         return ToolShape::Unknown;
     };
-    if name != "apply_patch" && (value.get("argv").is_some() || value.get("command").is_some()) {
+    if value.get("argv").is_some() || value.get("command").is_some() {
         return ToolShape::Command(command_from_value(&value, json));
     }
-    match name {
-        "Read" => files("read", file_path(&value)),
-        "Write" | "Edit" => files("write", file_path(&value)),
-        "NotebookEdit" => files("write", notebook_path(&value)),
-        "MultiEdit" => files("write", edit_paths(&value)),
-        "Glob" | "Grep" | "LS" => files("read", search_path(&value)),
-        "apply_patch" => files("write", patch_paths(&value)),
-        _ => {
-            if let Some(path) = text_at(&value, "file_path") {
-                ToolShape::Files {
-                    capability: "write",
-                    paths: vec![path],
-                }
-            } else if let Some(paths) = string_list(value.get("paths")) {
-                files("write", paths)
-            } else {
-                ToolShape::Unknown
-            }
-        }
-    }
+    ToolShape::Unknown
 }
 
-fn files(capability: &'static str, paths: Vec<String>) -> ToolShape {
-    if paths.is_empty() {
-        ToolShape::Unbounded
-    } else {
-        ToolShape::Files { capability, paths }
-    }
+/// A payload that names a file, a search root, a notebook, an edit, or a patch.
+/// The command string is not one of these: a shell is admitted as a command.
+fn names_a_path(value: &serde_json::Value) -> bool {
+    path_fields(value)
+        || value
+            .get("arguments")
+            .is_some_and(|inner| inner.is_object() && path_fields(inner))
+}
+
+fn path_fields(value: &serde_json::Value) -> bool {
+    text_at(value, "file_path").is_some()
+        || text_at(value, "notebook_path").is_some()
+        || text_at(value, "path").is_some()
+        || string_list(value.get("paths")).is_some_and(|paths| !paths.is_empty())
+        || value
+            .get("edits")
+            .and_then(|item| item.as_array())
+            .is_some_and(|edits| {
+                edits
+                    .iter()
+                    .any(|edit| text_at(edit, "file_path").is_some())
+            })
+        || value
+            .get("files")
+            .and_then(|item| item.as_array())
+            .is_some_and(|files| {
+                files.iter().any(|file| {
+                    file.as_str().is_some_and(|text| !text.is_empty())
+                        || text_at(file, "path").is_some()
+                        || text_at(file, "file_path").is_some()
+                })
+            })
+        || ["input", "patch"]
+            .iter()
+            .any(|key| text_at(value, key).is_some_and(|text| text.lines().any(patch_header)))
+}
+
+fn patch_header(line: &str) -> bool {
+    let line = line.trim();
+    [
+        "*** Update File: ",
+        "*** Add File: ",
+        "*** Delete File: ",
+        "*** Move to: ",
+    ]
+    .iter()
+    .any(|prefix| {
+        line.strip_prefix(prefix)
+            .is_some_and(|path| !path.trim().is_empty())
+    })
 }
 
 fn argument_object(json: &str) -> Option<serde_json::Value> {
@@ -472,82 +519,6 @@ fn command_from_value(value: &serde_json::Value, json: &str) -> ParsedCommand {
         return ParsedCommand::Skip;
     };
     command_arguments(&serde_json::json!({ "command": command }).to_string())
-}
-
-fn file_path(value: &serde_json::Value) -> Vec<String> {
-    text_at(value, "file_path").into_iter().collect()
-}
-
-fn notebook_path(value: &serde_json::Value) -> Vec<String> {
-    text_at(value, "notebook_path")
-        .or_else(|| text_at(value, "file_path"))
-        .into_iter()
-        .collect()
-}
-
-fn search_path(value: &serde_json::Value) -> Vec<String> {
-    text_at(value, "path")
-        .or_else(|| text_at(value, "file_path"))
-        .into_iter()
-        .collect()
-}
-
-fn edit_paths(value: &serde_json::Value) -> Vec<String> {
-    let mut paths = file_path(value);
-    if let Some(edits) = value.get("edits").and_then(|item| item.as_array()) {
-        for edit in edits {
-            if let Some(path) = text_at(edit, "file_path") {
-                paths.push(path);
-            }
-        }
-    }
-    paths
-}
-
-fn patch_paths(value: &serde_json::Value) -> Vec<String> {
-    let mut paths = Vec::new();
-    for key in ["path", "file_path"] {
-        if let Some(path) = text_at(value, key) {
-            paths.push(path);
-        }
-    }
-    if let Some(files) = value.get("files").and_then(|item| item.as_array()) {
-        for file in files {
-            if let Some(path) = file.as_str() {
-                paths.push(path.to_owned());
-            } else if let Some(path) = text_at(file, "path").or_else(|| text_at(file, "file_path"))
-            {
-                paths.push(path);
-            }
-        }
-    }
-    for key in ["input", "patch", "command"] {
-        if let Some(text) = text_at(value, key) {
-            paths.extend(paths_in_patch(&text));
-        }
-    }
-    paths
-}
-
-fn paths_in_patch(text: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        for prefix in [
-            "*** Update File: ",
-            "*** Add File: ",
-            "*** Delete File: ",
-            "*** Move to: ",
-        ] {
-            if let Some(path) = line.strip_prefix(prefix) {
-                let path = path.trim();
-                if !path.is_empty() {
-                    paths.push(path.to_owned());
-                }
-            }
-        }
-    }
-    paths
 }
 
 fn text_at(value: &serde_json::Value, key: &str) -> Option<String> {

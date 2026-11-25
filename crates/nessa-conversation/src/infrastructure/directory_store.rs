@@ -16,6 +16,9 @@ use crate::timer::clock::wall_now;
 
 /// SQLite directory grants. A version other than this build's is refused and not rewritten.
 pub struct SqliteDirectoryStore {
+    /// The grant file. The cross-instance share lock is a sibling of this path,
+    /// and only Unix takes that lock.
+    #[cfg(unix)]
     path: std::path::PathBuf,
     connection: Mutex<nessa_local_database::rusqlite::Connection>,
     /// The grant subscription's wake, when this store shares the conversation
@@ -29,6 +32,7 @@ impl SqliteDirectoryStore {
         let connection =
             nessa_local_database::open(path, &Schema::new(include_str!("store/grants.sql"))?)?;
         Ok(Self {
+            #[cfg(unix)]
             path: path.to_path_buf(),
             connection: Mutex::new(connection),
             grant_wake: Mutex::new(None),

@@ -2859,165 +2859,110 @@ fn json_path(key: &str, path: &str) -> String {
     serde_json::json!({ key: path }).to_string()
 }
 
-#[test]
-fn a_directory_grant_admits_a_read_of_a_file_inside() {
-    let granted = read_and_write();
-    let path = format!("{}/note.txt", granted.canonical);
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Read",
-        &json_path("file_path", &path)
-    )
-    .is_none());
-}
+const HARNESS_PATH: &str = "the tool opens its path outside the directory handle";
 
 #[test]
-fn a_directory_grant_refuses_a_read_of_the_marker_and_of_a_path_outside() {
-    let granted = read_and_write();
-    let marker = format!("{}/.nessa-binding", granted.canonical);
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Read",
-        &json_path("file_path", &marker)
-    )
-    .is_some());
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Read",
-        &json_path("file_path", "/etc/passwd")
-    )
-    .is_some());
-}
-
-#[test]
-fn a_directory_grant_admits_a_write_inside_and_refuses_it_for_a_read_only_grant() {
-    let granted = read_and_write();
-    let path = format!("{}/note.txt", granted.canonical);
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Write",
-        &json_path("file_path", &path)
-    )
-    .is_none());
-    assert!(review(
-        &granted.access,
-        "reader",
-        "Write",
-        &json_path("file_path", &path)
-    )
-    .is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_an_edit_path() {
-    let granted = read_and_write();
-    let path = format!("{}/note.txt", granted.canonical);
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Edit",
-        &json_path("file_path", &path)
-    )
-    .is_none());
-    assert!(review(
-        &granted.access,
-        "reader",
-        "Edit",
-        &json_path("file_path", &path)
-    )
-    .is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_every_multiedit_path() {
+fn a_directory_grant_refuses_native_file_tools_the_harness_opens_itself() {
     let granted = read_and_write();
     let inside = format!("{}/note.txt", granted.canonical);
-    let both = serde_json::json!({"edits":[{"file_path": inside}, {"file_path": "/etc/passwd"}]})
-        .to_string();
-    assert!(review(&granted.access, "writer", "MultiEdit", &both).is_some());
-    let only = serde_json::json!({"edits":[{"file_path": inside}]}).to_string();
-    assert!(review(&granted.access, "writer", "MultiEdit", &only).is_none());
+    let cases = [
+        ("Read", json_path("file_path", &inside)),
+        ("Read", json_path("file_path", "note.txt")),
+        ("Read", json_path("file_path", ".")),
+        ("Read", json_path("file_path", "../outside.txt")),
+        ("Write", json_path("file_path", &inside)),
+        ("Edit", json_path("file_path", &inside)),
+        (
+            "NotebookEdit",
+            json_path(
+                "notebook_path",
+                &format!("{}/note.ipynb", granted.canonical),
+            ),
+        ),
+        ("Glob", json_path("path", &granted.canonical)),
+        ("Glob", r#"{"pattern":"*.rs"}"#.to_owned()),
+        (
+            "Grep",
+            serde_json::json!({"pattern": "hello", "path": "."}).to_string(),
+        ),
+        ("LS", json_path("path", &granted.canonical)),
+        ("LS", "{}".to_owned()),
+        (
+            "MultiEdit",
+            serde_json::json!({"edits":[{"file_path": inside}]}).to_string(),
+        ),
+        (
+            "apply_patch",
+            format!(r#"{{"input":"*** Update File: {inside}"}}"#),
+        ),
+    ];
+    for (name, json) in cases {
+        assert_eq!(
+            review(&granted.access, "writer", name, &json).as_deref(),
+            Some(HARNESS_PATH),
+            "{name}"
+        );
+        assert_eq!(
+            review(&granted.access, "reader", name, &json).as_deref(),
+            Some(HARNESS_PATH),
+            "{name} reader"
+        );
+    }
 }
 
 #[test]
-fn a_directory_grant_checks_a_notebook_path() {
-    let granted = read_and_write();
-    let path = format!("{}/note.ipynb", granted.canonical);
-    assert!(review(
-        &granted.access,
-        "writer",
-        "NotebookEdit",
-        &json_path("notebook_path", &path)
-    )
-    .is_none());
-    assert!(review(
-        &granted.access,
-        "writer",
-        "NotebookEdit",
-        &json_path("notebook_path", "/etc/passwd")
-    )
-    .is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_a_glob_path_and_refuses_one_that_names_none() {
-    let granted = read_and_write();
-    assert!(review(
-        &granted.access,
-        "writer",
-        "Glob",
-        &json_path("path", &granted.canonical)
-    )
-    .is_none());
-    assert!(review(&granted.access, "writer", "Glob", r#"{"pattern":"*.rs"}"#).is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_a_grep_path() {
-    let granted = read_and_write();
-    let body = serde_json::json!({"pattern": "hello", "path": granted.canonical}).to_string();
-    assert!(review(&granted.access, "writer", "Grep", &body).is_none());
-    assert!(review(&granted.access, "writer", "Grep", r#"{"pattern":"hello"}"#).is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_an_ls_path() {
-    let granted = read_and_write();
-    assert!(review(
-        &granted.access,
-        "writer",
-        "LS",
-        &json_path("path", &granted.canonical)
-    )
-    .is_none());
-    assert!(review(&granted.access, "writer", "LS", "{}").is_some());
-}
-
-#[test]
-fn a_directory_grant_checks_paths_in_an_apply_patch() {
+fn a_directory_grant_refuses_a_file_tool_that_also_carries_a_command() {
     let granted = read_and_write();
     let inside = format!("{}/note.txt", granted.canonical);
-    let input = format!("*** Begin Patch\n*** Update File: {inside}\n*** End Patch");
-    let body = serde_json::json!({"input": input}).to_string();
-    assert!(review(&granted.access, "writer", "apply_patch", &body).is_none());
+    let smuggled = serde_json::json!({"command": "true", "file_path": inside}).to_string();
+    assert_eq!(
+        review(&granted.access, "writer", "Read", &smuggled).as_deref(),
+        Some(HARNESS_PATH)
+    );
+    let wrapped = serde_json::json!({"arguments": {"file_path": "note.txt"}}).to_string();
+    assert_eq!(
+        review(&granted.access, "writer", "Read", &wrapped).as_deref(),
+        Some(HARNESS_PATH)
+    );
+}
+
+#[test]
+fn a_directory_grant_refuses_an_unlisted_tool_that_names_a_path() {
+    let granted = read_and_write();
+    let inside = format!("{}/note.txt", granted.canonical);
+    let forms = [
+        json_path("file_path", &inside),
+        json_path("path", "."),
+        json_path("notebook_path", "note.ipynb"),
+        serde_json::json!({"paths": ["note.txt", "../secret"]}).to_string(),
+        serde_json::json!({"edits": [{"file_path": "note.txt"}]}).to_string(),
+        serde_json::json!({"files": ["/etc/passwd"]}).to_string(),
+        r#"{"input":"*** Add File: note.txt"}"#.to_owned(),
+        serde_json::json!({"command": "true", "arguments": {"file_path": inside}}).to_string(),
+        serde_json::json!({"command": "ls", "path": "."}).to_string(),
+    ];
+    for json in forms {
+        assert_eq!(
+            review(&granted.access, "writer", "CustomEdit", &json).as_deref(),
+            Some(HARNESS_PATH),
+            "{json}"
+        );
+    }
     assert!(review(
         &granted.access,
-        "writer",
-        "apply_patch",
-        r#"{"input":"*** Update File: /etc/passwd"}"#
+        "stranger",
+        "Read",
+        &json_path("file_path", "note.txt")
     )
-    .is_some());
-    assert!(review(&granted.access, "reader", "apply_patch", &body).is_some());
+    .is_none());
 }
 
 #[test]
 fn a_directory_grant_still_checks_a_command() {
     let granted = read_and_write();
-    assert!(review(&granted.access, "writer", "Bash", r#"{"command":"ls -l"}"#).is_some());
+    let refused = review(&granted.access, "writer", "Bash", r#"{"command":"ls -l"}"#);
+    assert_ne!(refused.as_deref(), Some(HARNESS_PATH));
+    assert!(refused.is_some());
 }
 
 #[test]
