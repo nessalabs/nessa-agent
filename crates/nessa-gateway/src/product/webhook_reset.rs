@@ -205,6 +205,7 @@ async fn run(
             subject: AccessSubject::Person {
                 organization: session.context().organization_id(),
                 principal: session.context().principal_id(),
+                app_namespace: session.context().app_namespace(),
             },
             action: AccessAction::Share,
             resource: AccessResource::of(&record),

@@ -483,6 +483,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
             agent: "restored".into(),
             model: "restored".into(),
             approval_mode: "ask".into(),
+            app_namespace: nessa_auth::domain::DEFAULT_APP_NAMESPACE.into(),
             creation_revision: 1,
             change_revision: 1,
             title: None,
@@ -508,6 +509,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 agent: "restored".into(),
                 model: "restored".into(),
                 approval_mode: "ask".into(),
+                app_namespace: nessa_auth::domain::DEFAULT_APP_NAMESPACE.into(),
                 creation_revision: 1,
                 change_revision: 1,
                 title: None,
@@ -550,8 +552,8 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 "INSERT OR IGNORE INTO conversations (
                     id, organization, owner, creator_surface, creation_action,
                     creation_requested_at_ms, agent, model, approval_mode,
-                    creation_revision, change_revision
-                 ) VALUES (?1, ?2, ?3, 'restore', 'backup.restore.accept', 0, ?4, ?5, ?6, ?7, ?8)",
+                    creation_revision, change_revision, app_namespace
+                 ) VALUES (?1, ?2, ?3, 'restore', 'backup.restore.accept', 0, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     row.id,
                     row.organization,
@@ -560,7 +562,8 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                     row.model,
                     row.approval_mode,
                     row.creation_revision,
-                    row.change_revision
+                    row.change_revision,
+                    row.app_namespace
                 ],
             )
             .map_err(|error| error.to_string())?;
@@ -616,6 +619,7 @@ struct MetadataRow {
     agent: String,
     model: String,
     approval_mode: String,
+    app_namespace: String,
     creation_revision: i64,
     change_revision: i64,
     title: Option<String>,
@@ -641,6 +645,7 @@ struct ConversationFields {
     agent: String,
     model: String,
     approval_mode: String,
+    app_namespace: String,
     creation_revision: i64,
     change_revision: i64,
 }
@@ -719,6 +724,7 @@ fn metadata_rows(live: &Path) -> Result<RestoredMetadata, String> {
                 agent: conversation.agent,
                 model: conversation.model,
                 approval_mode: conversation.approval_mode,
+                app_namespace: conversation.app_namespace,
                 creation_revision: conversation.creation_revision,
                 change_revision: conversation.change_revision,
                 title: summary.as_ref().and_then(|summary| summary.title.clone()),
@@ -800,6 +806,11 @@ fn conversation_fields(value: &serde_json::Value) -> Option<ConversationFields> 
     let change_revision = positive(value, "changeRevision")
         .unwrap_or(creation_revision)
         .max(creation_revision);
+    let app_namespace = match value.get("appNamespace") {
+        // Legacy pre-v13 backups predate namespaces and belong to default nessa.
+        None => nessa_auth::domain::AppNamespace::DEFAULT,
+        Some(raw) => nessa_auth::domain::AppNamespace::parse(raw.as_str()?).ok()?,
+    };
     Some(ConversationFields {
         organization: text(value, "organization")?,
         owner: text(value, "owner")?,
@@ -809,6 +820,7 @@ fn conversation_fields(value: &serde_json::Value) -> Option<ConversationFields> 
             Some(mode @ ("ask" | "auto" | "full")) => mode.to_owned(),
             _ => "ask".into(),
         },
+        app_namespace: app_namespace.as_str().to_owned(),
         creation_revision,
         change_revision,
     })
@@ -944,5 +956,54 @@ fn merge_stream(
         (Ok(()), Ok(_)) => Ok(()),
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conversation_fields;
+    use serde_json::json;
+
+    fn exported(app_namespace: Option<&str>) -> serde_json::Value {
+        let mut value = json!({
+            "organization": "org",
+            "owner": "alice",
+            "agent": "claude",
+            "model": "test-model",
+            "approvalMode": "ask",
+            "creationRevision": 1,
+            "changeRevision": 2,
+        });
+        if let Some(app_namespace) = app_namespace {
+            value["appNamespace"] = json!(app_namespace);
+        }
+        value
+    }
+
+    #[test]
+    fn conversation_fields_keep_an_extension_app_namespace() {
+        let fields = conversation_fields(&exported(Some("acme"))).expect("restorable");
+        assert_eq!(fields.app_namespace, "acme");
+    }
+
+    #[test]
+    fn conversation_fields_default_a_legacy_row_to_nessa() {
+        let fields = conversation_fields(&exported(None)).expect("restorable");
+        assert_eq!(
+            fields.app_namespace,
+            nessa_auth::domain::DEFAULT_APP_NAMESPACE
+        );
+    }
+
+    #[test]
+    fn conversation_fields_skip_an_invalid_app_namespace() {
+        assert!(conversation_fields(&exported(Some("Invalid Uppercase"))).is_none());
+        assert!(conversation_fields(&json!({
+            "organization": "org",
+            "owner": "alice",
+            "agent": "claude",
+            "appNamespace": 7,
+        }))
+        .is_none());
     }
 }

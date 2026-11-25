@@ -18,6 +18,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted &&
     context has target &&
     context.target.organization == principal.organization &&
@@ -39,7 +40,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // The owner lists a conversation's shares, deleted or not.
@@ -51,5 +53,6 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };

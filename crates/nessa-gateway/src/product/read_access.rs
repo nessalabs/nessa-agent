@@ -421,6 +421,7 @@ pub(super) async fn admit_index_rows(
             .admit_entry(
                 target.owner(),
                 target.organization(),
+                target.app_namespace(),
                 target.deletion().is_some(),
             )
             .map_err(|_| ConversationError::Metadata)?;

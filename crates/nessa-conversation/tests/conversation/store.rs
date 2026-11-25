@@ -1181,7 +1181,7 @@ fn many(path: &Path, owner: &str, count: usize) {
         ).unwrap();
         transaction
             .execute(
-                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask', ?3, ?3)",
+                "INSERT INTO conversations VALUES (?1, 'org', ?2, 'panel', 'create', 1, 'claude', 'test-model', 'ask', ?3, ?3, 'nessa')",
                 params![id, owner, revision],
             )
             .unwrap();
@@ -1236,6 +1236,80 @@ async fn the_list_query_reads_only_its_owners_rows_however_many_others_there_are
     // An owner with more than the bound gets the bound and one more.
     let (rows, _, scanned) = list_cost(&path, "someone", 501);
     assert_eq!((rows, scanned), (501, 0));
+}
+
+#[tokio::test]
+async fn extension_namespace_conversations_round_trip_and_stay_out_of_default_list() {
+    use nessa_auth::domain::AppNamespace;
+
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let default_id = new_id();
+    let ext_id = new_id();
+    let ext_ns = AppNamespace::extension("space-tracker").unwrap();
+
+    store.create(owned(&default_id)).await.unwrap();
+    store
+        .record(
+            &default_id,
+            ConversationSummary::after_message(None, "Nessa thread", None, 1000),
+        )
+        .await
+        .unwrap();
+
+    let ext_conversation = owned(&ext_id).with_app_namespace(ext_ns.clone());
+    store.create(ext_conversation).await.unwrap();
+    store
+        .record(
+            &ext_id,
+            ConversationSummary::after_message(None, "Extension thread", None, 2000),
+        )
+        .await
+        .unwrap();
+
+    // Direct lookup preserves the persisted app namespace.
+    let loaded_default = ConversationRepository::load(&store, &default_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded_default.app_namespace(), &AppNamespace::Nessa);
+    let loaded_ext = ConversationRepository::load(&store, &ext_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded_ext.app_namespace(), &ext_ns);
+
+    // Default Nessa list only shows Nessa-owned conversations, never extension ones.
+    let (ids, unreadable) = listed(&store, &alice(), false, 10).await;
+    assert_eq!(ids, vec![default_id.clone()]);
+    assert_eq!(unreadable, 0);
+
+    // Corrupted or overlong app_namespace values fail closed as `Metadata` rather than coercing to default.
+    let connection = raw(&path);
+    connection
+        .execute(
+            "UPDATE conversations SET app_namespace = 'Invalid Uppercase' WHERE id = ?1",
+            params![ext_id.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        ConversationRepository::load(&store, &ext_id).await,
+        Err(ConversationError::Metadata)
+    ));
+    let overlong = "a".repeat(nessa_auth::domain::MAX_EXTENSION_APP_ID_BYTES + 1);
+    connection
+        .execute(
+            "UPDATE conversations SET app_namespace = ?2 WHERE id = ?1",
+            params![ext_id.to_string(), overlong],
+        )
+        .unwrap();
+    assert!(matches!(
+        ConversationRepository::load(&store, &ext_id).await,
+        Err(ConversationError::Metadata)
+    ));
 }
 
 #[tokio::test]
@@ -1325,7 +1399,10 @@ async fn unfinished_deletions_are_read_by_their_index_and_an_unnamed_one_is_coun
     let unnamed = "not-a-conversation";
     let raw = raw(&path);
     raw.execute(
-        "INSERT INTO conversations VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude', 'test-model', 'ask', 1, 1)",
+        "INSERT INTO conversations (id, organization, owner, creator_surface, creation_action,
+            creation_requested_at_ms, agent, model, approval_mode, creation_revision,
+            change_revision, app_namespace)
+         VALUES (?1, 'org', 'alice', 'panel', 'create', 1, 'claude', 'test-model', 'ask', 1, 1, 'nessa')",
         [unnamed],
     )
     .unwrap();

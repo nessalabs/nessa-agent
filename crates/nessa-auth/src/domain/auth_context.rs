@@ -1,5 +1,5 @@
 //! Stable identity selectors established by application session verification.
-use super::{AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId};
+use super::{AppNamespace, AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Verified identity selectors, not a snapshot of roles or permission decisions.
@@ -11,6 +11,7 @@ pub struct AuthContext {
     membership_id: MembershipId,
     credential_id: CredentialId,
     audience_id: AudienceId,
+    app_namespace: AppNamespace,
 }
 
 impl AuthContext {
@@ -29,6 +30,7 @@ impl AuthContext {
             membership_id,
             credential_id,
             audience_id,
+            app_namespace: AppNamespace::DEFAULT,
         }
     }
 
@@ -51,6 +53,10 @@ impl AuthContext {
     pub fn audience_id(&self) -> &AudienceId {
         &self.audience_id
     }
+    /// Owning app namespace for this authenticated session.
+    pub fn app_namespace(&self) -> &AppNamespace {
+        &self.app_namespace
+    }
 }
 
 #[cfg(test)]
@@ -68,5 +74,6 @@ mod tests {
         );
         assert_eq!(context.membership_id().as_str(), "membership-1");
         assert_eq!(context.audience_id().as_str(), "server");
+        assert_eq!(context.app_namespace(), &AppNamespace::Nessa);
     }
 }
