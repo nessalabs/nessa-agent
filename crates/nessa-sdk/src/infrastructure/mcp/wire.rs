@@ -18,15 +18,22 @@ use std::collections::{HashMap, HashSet};
 /// The protocol revision this client asks for.
 pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The revisions it accepts a server answering with. Each has `tools/list`
-/// and `resources/read` as used here; none it does not know.
-pub(crate) const SUPPORTED_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+/// and `resources/read` as used here; `2026-07-28` adds SEP-2640 skill caching
+/// metadata.
+pub(crate) const SUPPORTED_VERSIONS: [&str; 4] =
+    ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// What this client sends as `initialize`: the revision it speaks, the MCP
-/// Apps extension with the one MIME type it draws, and no other capability.
+/// Apps extension with the one MIME type it draws, and the Skills extension.
 pub(crate) fn initialize_params() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "extensions": { (EXTENSION): { "mimeTypes": [APP_MIME_TYPE] } } },
+        "capabilities": {
+            "extensions": {
+                (EXTENSION): { "mimeTypes": [APP_MIME_TYPE] },
+                (crate::domain::mcp_skills::EXTENSION): {}
+            }
+        },
         "clientInfo": { "name": "nessa", "version": env!("CARGO_PKG_VERSION") },
     })
 }
