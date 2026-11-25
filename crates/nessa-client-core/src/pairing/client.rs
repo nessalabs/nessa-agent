@@ -322,7 +322,11 @@ impl NativeEnrollmentClient {
         complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
     ) -> Result<T, NativeClientError> {
         let wake = WakeEndpoint::new(route.address());
-        let clock = self.clock.clone();
+        let episode = crate::retained::joined_status::JoinedEpisode::new(
+            self.clock.clone(),
+            stop,
+            expires_ms,
+        );
         let reactor = tokio::runtime::Handle::current();
         self.dispatch_owned(vec![wake.clone()], move |pending| {
             begin();
@@ -345,7 +349,7 @@ impl NativeEnrollmentClient {
                     return Err(NativeClientError::Phase);
                 }
                 let (stream, deadline) = route
-                    .join(clock, stop, wake, expires_ms, &reactor)
+                    .join(&episode, wake, &reactor)
                     .map_err(|error| NativeClientError::Io(error.kind()))?;
                 status_exchange(stream, &deadline, pending, saved, received.as_ref())
             })();

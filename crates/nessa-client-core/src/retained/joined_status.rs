@@ -15,43 +15,53 @@ use std::{
     time::Duration,
 };
 
-// This polling tick lives on the single dial future, not on repeated connects.
-// The caller's original monotonic clock is the authority for expiry.
-async fn await_dial<T>(
-    dial: impl Future<Output = Result<T>>,
-    clock: &dyn Clock,
+/// One caller-owned time budget and stop source, even if the retained
+/// operation later opens more than one explicitly selected socket.
+pub(crate) struct JoinedEpisode {
+    clock: Arc<dyn Clock>,
+    stop: Arc<ReadStop>,
     expires_ms: u64,
-    stop: &ReadStop,
-    wake: &WakeEndpoint,
-) -> Result<T> {
-    tokio::pin!(dial);
-    loop {
-        let wait = remaining(clock, expires_ms, stop, wake)?;
-        tokio::select! {
-            result = &mut dial => {
-                remaining(clock, expires_ms, stop, wake)?;
-                return result;
-            }
-            _ = tokio::time::sleep(wait.min(super::STOP_SLICE)) => {}
-        }
-    }
 }
 
-fn remaining(
-    clock: &dyn Clock,
-    expires_ms: u64,
-    stop: &ReadStop,
-    wake: &WakeEndpoint,
-) -> Result<Duration> {
-    check_stop(stop)?;
-    if wake.woken() {
-        return Err(ErrorKind::ConnectionAborted.into());
+impl JoinedEpisode {
+    pub(crate) fn new(clock: Arc<dyn Clock>, stop: Arc<ReadStop>, expires_ms: u64) -> Self {
+        Self {
+            clock,
+            stop,
+            expires_ms,
+        }
     }
-    expires_ms
-        .checked_sub(clock.elapsed_ms())
-        .filter(|left| *left > 0)
-        .map(Duration::from_millis)
-        .ok_or_else(|| ErrorKind::TimedOut.into())
+
+    // This tick polls the one admitted dial future, not repeated connects.
+    async fn await_dial<T>(
+        &self,
+        dial: impl Future<Output = Result<T>>,
+        wake: &WakeEndpoint,
+    ) -> Result<T> {
+        tokio::pin!(dial);
+        loop {
+            let wait = self.remaining(wake)?;
+            tokio::select! {
+                result = &mut dial => {
+                    self.remaining(wake)?;
+                    return result;
+                }
+                _ = tokio::time::sleep(wait.min(super::STOP_SLICE)) => {}
+            }
+        }
+    }
+
+    fn remaining(&self, wake: &WakeEndpoint) -> Result<Duration> {
+        check_stop(&self.stop)?;
+        if wake.woken() {
+            return Err(ErrorKind::ConnectionAborted.into());
+        }
+        self.expires_ms
+            .checked_sub(self.clock.elapsed_ms())
+            .filter(|left| *left > 0)
+            .map(Duration::from_millis)
+            .ok_or_else(|| ErrorKind::TimedOut.into())
+    }
 }
 
 // A dial transfers one exact connected socket. Orchestration chooses when and
@@ -96,10 +106,8 @@ impl JoinedStatusRoute {
 
     pub(crate) fn join(
         self,
-        clock: Arc<dyn Clock>,
-        stop: Arc<ReadStop>,
+        episode: &JoinedEpisode,
         wake: Arc<WakeEndpoint>,
-        expires_ms: u64,
         reactor: &tokio::runtime::Handle,
     ) -> Result<(DeadlineStream<JoinedStatusSocket>, Arc<NativeDeadline>)> {
         // Only the already-admitted blocking worker calls this, while the
@@ -107,23 +115,23 @@ impl JoinedStatusRoute {
         // spawn a second reader, or move a pending dial out of this owner.
         let raw = reactor.block_on(async {
             // Refuse even the port invocation before budget/stop admission.
-            remaining(clock.as_ref(), expires_ms, &stop, &wake)?;
-            await_dial(
-                self.dial.dial(self.address),
-                clock.as_ref(),
-                expires_ms,
-                &stop,
-                &wake,
-            )
-            .await
+            episode.remaining(&wake)?;
+            episode
+                .await_dial(self.dial.dial(self.address), &wake)
+                .await
         })?;
         raw.set_nonblocking(false)?;
-        let handle = stop.register(&Arc::new(()), &raw)?;
-        let socket = JoinedStatusSocket { raw, stop, handle };
+        let handle = episode.stop.register(&Arc::new(()), &raw)?;
+        let socket = JoinedStatusSocket {
+            raw,
+            stop: episode.stop.clone(),
+            handle,
+        };
         check_stop(&socket.stop)?;
         socket.raw.set_nodelay(true)?;
         let (mut io, deadline) =
-            DeadlineStream::new_absolute(socket, clock, wake, expires_ms).map_err(deadline_io)?;
+            DeadlineStream::new_absolute(socket, episode.clock.clone(), wake, episode.expires_ms)
+                .map_err(deadline_io)?;
         write_frame(&mut io, &RelayFrame::Connect { key: self.key })?;
         match read_frame(&mut io)? {
             RelayFrame::Joined => {
@@ -241,13 +249,8 @@ mod tests {
         let reactor = tokio::runtime::Handle::current();
         let worker_stop = stop.clone();
         let (mut joined, _) = tokio::task::spawn_blocking(move || {
-            route.join(
-                Arc::new(Time),
-                worker_stop,
-                WakeEndpoint::new(addr),
-                2500,
-                &reactor,
-            )
+            let episode = JoinedEpisode::new(Arc::new(Time), worker_stop, 2500);
+            route.join(&episode, WakeEndpoint::new(addr), &reactor)
         })
         .await
         .unwrap()
@@ -261,6 +264,39 @@ mod tests {
         drop(joined);
         assert!(stop.lock().is_empty());
         peer.join().unwrap();
+    }
+
+    #[test]
+    fn fresh_socket_wake_does_not_extend_the_episode() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct TestClock(AtomicU64);
+        impl Clock for TestClock {
+            fn elapsed_ms(&self) -> u64 {
+                self.0.load(Ordering::Relaxed)
+            }
+        }
+
+        let address = SocketAddr::from(([127, 0, 0, 1], 1234));
+        let clock = Arc::new(TestClock(AtomicU64::new(500)));
+        let stop = ReadStop::new();
+        let episode = JoinedEpisode::new(clock.clone(), stop.clone(), 1000);
+        assert_eq!(
+            episode.remaining(&WakeEndpoint::new(address)).unwrap(),
+            Duration::from_millis(500)
+        );
+
+        clock.0.store(1000, Ordering::Relaxed);
+        let next_wake = WakeEndpoint::new(address);
+        assert_eq!(
+            episode.remaining(&next_wake).unwrap_err().kind(),
+            ErrorKind::TimedOut
+        );
+        stop.stop();
+        assert_eq!(
+            episode.remaining(&next_wake).unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
     }
 
     #[tokio::test]
@@ -284,13 +320,8 @@ mod tests {
             }
             let reactor = tokio::runtime::Handle::current();
             let result = tokio::task::spawn_blocking(move || {
-                route.join(
-                    Arc::new(Time),
-                    stop,
-                    WakeEndpoint::new(addr),
-                    expires,
-                    &reactor,
-                )
+                let episode = JoinedEpisode::new(Arc::new(Time), stop, expires);
+                route.join(&episode, WakeEndpoint::new(addr), &reactor)
             })
             .await
             .unwrap();
