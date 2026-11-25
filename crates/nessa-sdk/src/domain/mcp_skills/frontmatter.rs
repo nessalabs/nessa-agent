@@ -9,11 +9,9 @@ use std::collections::BTreeMap;
 pub fn parse_frontmatter(markdown: &str) -> Result<SkillFrontmatter, McpSkillError> {
     let text = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
     let mut lines = text.split('\n');
-    let Some(first) = lines.next() else {
-        return Err(McpSkillError::InvalidFrontmatter(
-            "empty SKILL.md".to_owned(),
-        ));
-    };
+    // `split` always yields a first piece; an empty file's is `""`, which is
+    // refused below like any other first line that is not `---`.
+    let first = lines.next().unwrap_or_default();
     if first.trim_end_matches('\r') != "---" {
         return Err(McpSkillError::InvalidFrontmatter(
             "SKILL.md must start with '---'".to_owned(),
@@ -185,44 +183,77 @@ fn parse_block_scalar(
     Ok(FrontmatterValue::String(out))
 }
 
+/// Parse an inline value, refusing a quoted string or flow sequence whose
+/// quotes do not close.
+///
+/// Only this top-level call can fail: every quote inside a value that passed
+/// the check closes too, so [`inline_value`] reads its parts without a check
+/// of its own.
 fn parse_inline_value(raw: &str) -> Result<FrontmatterValue, McpSkillError> {
     let trimmed = strip_inline_comment(raw).trim();
+    let quoted = trimmed.starts_with('"') && trimmed.ends_with('"');
+    let flow = trimmed.starts_with('[') && trimmed.ends_with(']');
+    if (quoted || flow) && !quotes_close(trimmed) {
+        return Err(unterminated_quote());
+    }
+    Ok(inline_value(trimmed))
+}
+
+fn inline_value(trimmed: &str) -> FrontmatterValue {
     if trimmed.is_empty() || trimmed == "null" || trimmed == "~" {
-        return Ok(FrontmatterValue::Null);
+        return FrontmatterValue::Null;
     }
     if trimmed == "true" {
-        return Ok(FrontmatterValue::Bool(true));
+        return FrontmatterValue::Bool(true);
     }
     if trimmed == "false" {
-        return Ok(FrontmatterValue::Bool(false));
+        return FrontmatterValue::Bool(false);
     }
     if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        return Ok(FrontmatterValue::String(unescape_double_quoted(inner)?));
+        return FrontmatterValue::String(unescape_double_quoted(inner));
     }
     if let Some(inner) = trimmed
         .strip_prefix('\'')
         .and_then(|s| s.strip_suffix('\''))
     {
-        return Ok(FrontmatterValue::String(inner.replace("''", "'")));
+        return FrontmatterValue::String(inner.replace("''", "'"));
     }
     if let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let inner = inner.trim();
         if inner.is_empty() {
-            return Ok(FrontmatterValue::Sequence(Vec::new()));
+            return FrontmatterValue::Sequence(Vec::new());
         }
-        let mut items = Vec::new();
-        for part in split_flow_items(inner)? {
-            items.push(parse_inline_value(part)?);
-        }
-        return Ok(FrontmatterValue::Sequence(items));
+        return FrontmatterValue::Sequence(
+            split_flow_items(inner)
+                .into_iter()
+                .map(|part| inline_value(strip_inline_comment(part).trim()))
+                .collect(),
+        );
     }
     if let Ok(number) = trimmed.parse::<i64>() {
-        return Ok(FrontmatterValue::Integer(number));
+        return FrontmatterValue::Integer(number);
     }
-    Ok(FrontmatterValue::String(trimmed.to_owned()))
+    FrontmatterValue::String(trimmed.to_owned())
 }
 
-fn split_flow_items(input: &str) -> Result<Vec<&str>, McpSkillError> {
+fn unterminated_quote() -> McpSkillError {
+    McpSkillError::InvalidFrontmatter("unterminated quote in frontmatter value".to_owned())
+}
+
+/// Whether every quote in `input` closes, reading `\` inside double quotes as
+/// an escape the way [`unescape_double_quoted`] does.
+fn quotes_close(input: &str) -> bool {
+    scan_quotes(input).1
+}
+
+/// Split a flow sequence's inside at its top-level commas.
+fn split_flow_items(input: &str) -> Vec<&str> {
+    scan_quotes(input).0
+}
+
+/// One pass over `input`: the pieces between top-level commas, and whether
+/// every quote closed.
+fn scan_quotes(input: &str) -> (Vec<&str>, bool) {
     let mut items = Vec::new();
     let mut start = 0;
     let mut in_single = false;
@@ -244,29 +275,26 @@ fn split_flow_items(input: &str) -> Result<Vec<&str>, McpSkillError> {
             _ => {}
         }
     }
-    if in_single || in_double {
-        return Err(McpSkillError::InvalidFrontmatter(
-            "unterminated quote in inline sequence".to_owned(),
-        ));
-    }
     items.push(input[start..].trim());
-    Ok(items)
+    (items, !in_single && !in_double)
 }
 
-fn unescape_double_quoted(input: &str) -> Result<String, McpSkillError> {
+/// Unescape the inside of a double-quoted string whose quotes closed, so it
+/// never ends in a lone backslash.
+fn unescape_double_quoted(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
+    let mut escaped = false;
+    for ch in input.chars() {
+        if !escaped {
+            if ch == '\\' {
+                escaped = true;
+            } else {
+                out.push(ch);
+            }
             continue;
         }
-        let Some(escaped) = chars.next() else {
-            return Err(McpSkillError::InvalidFrontmatter(
-                "dangling backslash in double-quoted string".to_owned(),
-            ));
-        };
-        match escaped {
+        escaped = false;
+        match ch {
             '"' => out.push('"'),
             '\\' => out.push('\\'),
             'n' => out.push('\n'),
@@ -279,7 +307,7 @@ fn unescape_double_quoted(input: &str) -> Result<String, McpSkillError> {
             }
         }
     }
-    Ok(out)
+    out
 }
 
 fn strip_inline_comment(raw: &str) -> &str {
@@ -336,7 +364,10 @@ fn parse_key(raw: &str) -> Result<String, McpSkillError> {
         ));
     }
     if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        return unescape_double_quoted(inner);
+        if !quotes_close(trimmed) {
+            return Err(unterminated_quote());
+        }
+        return Ok(unescape_double_quoted(inner));
     }
     if let Some(inner) = trimmed
         .strip_prefix('\'')
