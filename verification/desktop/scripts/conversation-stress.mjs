@@ -468,12 +468,7 @@ import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { freePort } from "./lib/server.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
-import {
-  asEarlierPlaces,
-  asOlderBuild,
-  metadataFile,
-  schemaVersion,
-} from "./lib/stress-upgrade.mjs"
+import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   pairedCatalogue,
   preparePairedCatalogue,
@@ -6771,31 +6766,30 @@ const steps = {
     await run.exclusive(async () => {
       const before = await listed()
       const path = metadataFile(run.stack.gateway.directory)
+      const conversations = dirname(path)
       let older
       await run.restartConsole.during(run.opened, async () => {
         const count = failures.length
         const old = run.client
         run.restarts += 1
-        let earlier
         await run.stack.gateway.restart("SIGTERM", async () => {
           older = asOlderBuild(path)
-          // And every place record as the two files an older build kept.
-          earlier = asEarlierPlaces(conversationsOf(run))
-          // And one of them as an older build placed it: on a paired
-          // worker, which no build runs now (ADR 1417).
-          strandOnWorker(conversationsOf(run), stranded)
+          // Older builds kept no placement file for a local conversation.
+          // This build writes none, including for the separate worker case
+          // that we explicitly seed below (ADR 1417).
+          if (hasPlaceFile(conversations, run.main.id))
+            failures.push("the local main conversation unexpectedly has a place file")
+          strandOnWorker(conversations, stranded)
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
         log(
-          `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
+          `upgrade: restarted on a version ${older} file and one seeded legacy placement`,
         )
         if (older === CURRENT_METADATA_VERSION)
           failures.push(
             "the conversation metadata could not be downgraded without losing its app namespace",
           )
-        if (!earlier.includes(run.main.id))
-          failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
         if (version !== CURRENT_METADATA_VERSION)
           failures.push(
@@ -13654,18 +13648,22 @@ async function switchTunnel(run, enabled, failures) {
   return held
 }
 
-/**
- * Writes conversation `id`'s place as an older build kept one placed on a
- * paired worker: a `placements/<id>.json` naming that worker, and no record
- * of this build's own.
- */
+/** Whether any historic placement format is present for this conversation. */
+function hasPlaceFile(conversations, id) {
+  return ["places", "placements", "bindings"].some((directory) =>
+    existsSync(join(conversations, directory, `${id}.json`)),
+  )
+}
+
+/** Seeds the version-one placement an older build kept for a remote worker. */
 function strandOnWorker(conversations, id) {
-  rmSync(join(conversations, "places", `${id}.json`), { force: true })
+  if (hasPlaceFile(conversations, id))
+    throw new Error("the conversation to strand already has a place file")
   mkdirSync(join(conversations, "placements"), { recursive: true, mode: 0o700 })
   writeFileSync(
     join(conversations, "placements", `${id}.json`),
     `${JSON.stringify({ schemaVersion: 1, host: `peer:${"ab".repeat(32)}` })}\n`,
-    { mode: 0o600 },
+    { mode: 0o600, flag: "wx" },
   )
 }
 
@@ -13680,8 +13678,12 @@ async function strandedStaysReadable(run, step, id, text) {
   const { conversations } = await run.client.conversation.list({})
   if (!conversations.some((each) => each.conversationId === id))
     failures.push("the conversation placed on a worker is no longer listed")
+  const transcript = (messages) =>
+    messages.map(({ executionId, userText }) => [executionId, userText])
+  let before
   try {
     const view = await run.client.conversation.read(id)
+    before = transcript(view.messages)
     if (!view.messages.some((each) => each.userText === text))
       failures.push("the conversation placed on a worker lost its history")
   } catch (error) {
@@ -13698,12 +13700,17 @@ async function strandedStaysReadable(run, step, id, text) {
     failures.push(
       `a message to the conversation placed on a worker was ${refused ? `refused ${explain(refused)}` : "taken"}, not refused environment_not_configured`,
     )
+  try {
+    const after = transcript((await run.client.conversation.read(id)).messages)
+    if (before && JSON.stringify(after) !== JSON.stringify(before))
+      failures.push("the refused send changed the conversation placed on a worker")
+  } catch (error) {
+    failures.push(
+      `the conversation placed on a worker cannot be re-read: ${explain(error)}`,
+    )
+  }
   return failures
 }
-
-/** The gateway's conversations directory, where it keeps place records. */
-const conversationsOf = (run) =>
-  join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "conversations")
 
 /**
  * The first view frame of `conversationId` from a view subscription, which

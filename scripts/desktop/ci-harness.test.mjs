@@ -862,7 +862,7 @@ test("the stress check and its companion checks run on two runners with the same
     "drag.mjs",
     "--webhooks 3",
     "--menuPanels 1",
-    "--devices 1",
+    "--only peer --peers 1",
     "--menus 1",
     "--composers 1 --voices 1",
     "--githubs 1",
@@ -870,6 +870,11 @@ test("the stress check and its companion checks run on two runners with the same
     "pnpm test:e2e:chaos",
   ])
     assert.equal(workflow.split(check).length - 1, 1, check)
+  assert.doesNotMatch(checks, /--devices\b/)
+  assert.match(
+    checks,
+    /--engine webkit --channel bundled "\$\{zero\[@\]\}" --only peer --peers 1 --evidence "\$STRESS_EVIDENCE\/peer-webkit" --out "\$STRESS_EVIDENCE\/peer-webkit\.json"/,
+  )
   assert.ok(checks.includes("pnpm test:e2e:chaos"))
   // One cache writer: the companion job reads the stress job's cache.
   assert.match(checks, /shared-key: conversation-stress\r?\n\s+save-if: false/)
