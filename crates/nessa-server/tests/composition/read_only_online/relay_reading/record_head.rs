@@ -1,6 +1,6 @@
 //! One enrolled binary Head behind the existing direct and joined relay.
 use super::{completion, Device, Gateway, REFUSED};
-use crate::composition::read_only_online_tests::fixtures::Setup;
+use crate::composition::read_only_online_tests::fixtures::{Setup, WireClient};
 use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeTransport},
     domain::{pairing::TerminalCause, CredentialId},
@@ -18,6 +18,7 @@ use nessa_protocol::{
         },
         EnrollmentChannel,
     },
+    product::generated::{product_method, ConversationRecordsHeadParams},
     relay::RelayAddress,
 };
 use nessa_sync::replication::{
@@ -458,18 +459,62 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
         );
         drop(retained);
         assert!(scoped_raw_rows(&device, name, scope).is_empty());
-        for cursor in [1, 2] {
-            let mut reopened = device.cache(name);
-            assert_eq!(
-                reopened.enrolled_record_page_for_test(access(), scope, ReadStop::new(), WAIT),
-                Ok((cursor, 1))
-            );
-            drop(reopened);
-            assert_eq!(
-                scoped_raw_rows(&device, name, scope),
-                expected[..cursor as usize]
-            );
-        }
+        let mut retained = device.cache(name);
+        assert_eq!(
+            retained.enrolled_record_page_for_test(access(), scope, ReadStop::new(), WAIT),
+            Ok((1, 1))
+        );
+        drop(retained);
+        assert_eq!(scoped_raw_rows(&device, name, scope), expected[..1]);
+
+        // Keep one separately authenticated Product connection open across
+        // this attempt, rather than dialing again after interruption.
+        let mut product = WireClient::connect(&device.root);
+        let params = ConversationRecordsHeadParams {
+            conversation_id: setup.conversation.clone(),
+            receiver_id: device.receiver.clone(),
+            access_epoch: device.access_epoch.to_string(),
+        };
+        let product_head = product.call(product_method::CONVERSATION_RECORDS_HEAD, &params);
+        assert_eq!(product_head["ok"], true, "{product_head}");
+
+        let stop = ReadStop::new();
+        let mut retained = device.cache(name);
+        let (interrupted_after, read) =
+            retained.interrupt_enrolled_record_page_for_test(access(), scope, stop.clone(), WAIT);
+        assert_eq!(interrupted_after, Some(1));
+        assert!(read.is_err(), "{read:?}");
+        assert!(
+            !stop.is_stopped(),
+            "only the selected record socket stopped"
+        );
+        drop(retained);
+
+        let surviving = product.call(product_method::CONVERSATION_RECORDS_HEAD, &params);
+        assert_eq!(surviving["ok"], true, "{surviving}");
+        assert_eq!(surviving["payload"], product_head["payload"]);
+
+        assert_eq!(scoped_raw_rows(&device, name, scope), expected[..1]);
+        let mut reopened = device.cache(name);
+        let RetainedTranscript::Retained(saved) = reopened
+            .transcript_view(
+                &device.receiver,
+                scope.origin().as_str(),
+                &conversation,
+                Uuid::nil(),
+            )
+            .unwrap()
+        else {
+            panic!("interruption must preserve the exact first durable checkpoint");
+        };
+        assert_eq!(saved.progress().scope(), scope);
+        assert_eq!(saved.progress().downloaded(), 1);
+        assert_eq!(
+            reopened.enrolled_record_page_for_test(access(), scope, ReadStop::new(), WAIT),
+            Ok((2, 1))
+        );
+        drop(reopened);
+        assert_eq!(scoped_raw_rows(&device, name, scope), expected[..2]);
         drop(gateway);
     }
 }

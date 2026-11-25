@@ -14,13 +14,16 @@ use nessa_protocol::{
         RecordCarrierOpen,
     },
 };
-use nessa_sync::replication::domain::CapabilitySupport;
 use nessa_sync::replication::infrastructure::session::{
     CapabilityRecordSession, InterruptibleSessionIo, SessionInterrupt, SessionLimits,
 };
+use nessa_sync::replication::{
+    application::{RecordSource, SourceError},
+    domain::{CapabilitySupport, Page, PageRequest},
+};
 use std::{
-    cell::RefCell,
-    io::{Read, Result as IoResult, Write},
+    cell::{Cell, RefCell},
+    io::{Error, ErrorKind, Read, Result as IoResult, Write},
     net::SocketAddr,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
@@ -39,16 +42,68 @@ impl GatewayConnector for ConnectRecord {
     }
 }
 
-struct RecordIo {
+#[derive(Clone, Copy)]
+enum CutState {
+    Waiting,
+    Page(u64),
+    Prefix(u64),
+    Interrupted(u64),
+}
+
+// The one existing driver still owns the request and checkpoint. Arm only for
+// its Page, not the selector, Bind, Head, or any prior scope authorization.
+struct PageCutSource<'a, S> {
+    source: S,
+    cut: &'a Cell<CutState>,
+}
+impl<S: RecordSource> RecordSource for PageCutSource<'_, S> {
+    fn head(&mut self, scope: &Scope) -> Result<u64, SourceError> {
+        self.source.head(scope)
+    }
+
+    fn page(&mut self, request: &PageRequest) -> Result<Page, SourceError> {
+        self.cut.set(CutState::Page(request.after));
+        self.source.page(request)
+    }
+}
+
+struct RecordIo<'a> {
     transport: NativeTransport<DeadlineStream>,
     interrupt: Arc<dyn SessionInterrupt>,
+    cut: Option<&'a Cell<CutState>>,
 }
-impl Read for RecordIo {
+impl Read for RecordIo<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
+        if !bytes.is_empty() {
+            if let Some(cut) = self.cut {
+                match cut.get() {
+                    CutState::Page(after) => {
+                        // Feed one real decoder byte from the accepted reply.
+                        let count = self.transport.read(&mut bytes[..1])?;
+                        if count == 1 {
+                            cut.set(CutState::Prefix(after));
+                        }
+                        return Ok(count);
+                    }
+                    CutState::Prefix(after) => {
+                        // The preceding read has returned to the frame owner.
+                        // Stop only this socket and do not expose TLS bytes
+                        // that it may already hold beyond that first byte.
+                        self.interrupt.interrupt()?;
+                        cut.set(CutState::Interrupted(after));
+                        return Err(Error::from(ErrorKind::ConnectionAborted));
+                    }
+                    CutState::Interrupted(_) => {
+                        return Err(Error::from(ErrorKind::ConnectionAborted))
+                    }
+                    CutState::Waiting => {}
+                }
+            }
+        }
         self.transport.read(bytes)
     }
 }
-impl Write for RecordIo {
+impl Write for RecordIo<'_> {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         self.transport.write(bytes)
     }
@@ -56,7 +111,7 @@ impl Write for RecordIo {
         self.transport.flush()
     }
 }
-impl InterruptibleSessionIo for RecordIo {
+impl InterruptibleSessionIo for RecordIo<'_> {
     fn interrupt_handle(&self) -> Arc<dyn SessionInterrupt> {
         self.interrupt.clone()
     }
@@ -72,6 +127,37 @@ impl RetainedCache {
         scope: &Scope,
         stop: Arc<ReadStop>,
         budget: Duration,
+    ) -> Result<(u64, usize), ReadFailure> {
+        self.enrolled_record_page(access, scope, stop, budget, None)
+    }
+
+    /// Interrupt a real Page reply after one byte entered the frame decoder.
+    /// The receipt is the driver's requested offset, only if interrupt returned
+    /// success; it is not evidence about what the remote side sent or retained.
+    #[doc(hidden)]
+    pub fn interrupt_enrolled_record_page_for_test(
+        &mut self,
+        access: ReaderAccess<'_>,
+        scope: &Scope,
+        stop: Arc<ReadStop>,
+        budget: Duration,
+    ) -> (Option<u64>, Result<(u64, usize), ReadFailure>) {
+        let cut = Cell::new(CutState::Waiting);
+        let result = self.enrolled_record_page(access, scope, stop, budget, Some(&cut));
+        let after = match cut.get() {
+            CutState::Interrupted(after) => Some(after),
+            _ => None,
+        };
+        (after, result)
+    }
+
+    fn enrolled_record_page(
+        &mut self,
+        access: ReaderAccess<'_>,
+        scope: &Scope,
+        stop: Arc<ReadStop>,
+        budget: Duration,
+        cut: Option<&Cell<CutState>>,
     ) -> Result<(u64, usize), ReadFailure> {
         validate_passive_read_selector(access.receiver, access.access_epoch, scope)
             .map_err(|_| ReadFailure::Refused)?;
@@ -143,6 +229,7 @@ impl RetainedCache {
                 .interrupt
                 .into_inner()
                 .ok_or(ReadFailure::Protocol)?,
+            cut,
         };
         let session = CapabilityRecordSession::connect(
             io,
@@ -161,7 +248,14 @@ impl RetainedCache {
             }
         })?;
         let (mut authorizer, mut source) = session.parts();
-        let result = self.one_record_page_for_test(scope, &mut authorizer, &mut source);
+        let result = match cut {
+            Some(cut) => self.one_record_page_for_test(
+                scope,
+                &mut authorizer,
+                &mut PageCutSource { source, cut },
+            ),
+            None => self.one_record_page_for_test(scope, &mut authorizer, &mut source),
+        };
         // The driver is the sole cache owner. A teardown error must not
         // change the meaning of a previously successful durable commit.
         let _ = session.close();
