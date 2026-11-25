@@ -3737,6 +3737,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "nessa-local-storage",
+ "nessa-types",
  "opaque-ke",
  "ring",
  "rustls",
