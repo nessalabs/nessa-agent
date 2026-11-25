@@ -11,8 +11,9 @@ use nessa_local_database::{
     rusqlite::{Connection, TransactionBehavior},
     OpenError, Schema,
 };
-use nessa_projection::retained_view;
+use nessa_projection::{earlier_turns, retained_activity, retained_view, NoMcpToolUis};
 use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::view::{ConversationEarlier, ConversationPoint};
 use nessa_sdk::application::agent_execution::sessions::{CommittedStatus, StorageError};
 use nessa_sdk::infrastructure::session_storage::{
     TranscriptError, TranscriptFold, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -22,8 +23,19 @@ use nessa_sync::replication::{
     domain::{Checkpoint, CommitPlan, Id, Scope},
     infrastructure::{MAX_PAGE_PAYLOAD, MAX_PAGE_RECORDS},
 };
+use std::collections::HashSet;
 use std::{path::Path, sync::Arc};
 use uuid::Uuid;
+
+/// A page of history from a retained fold, or why there is none.
+pub(crate) enum EarlierFold {
+    /// This cache has no retained transcript for the conversation.
+    Absent,
+    /// The transcript is retained, and the point is not in it.
+    Invalid,
+    /// The turns before the point.
+    Page(ConversationEarlier),
+}
 
 struct LoadedTranscript {
     progress: Option<CachedProgress>,
@@ -56,19 +68,55 @@ impl ReadOnlyCache {
                 return Ok(SavedTranscript::NotLoaded);
             };
             let progress = loaded.progress.clone().ok_or(CacheError::Stale)?;
-            let view = retained_view(
-                conversation,
-                loaded.fold.snapshot(),
-                loaded.fold.status(),
-                revision,
-            );
+            let snapshot = loaded.fold.snapshot();
+            let (created_at_ms, updated_at_ms) = retained_activity(snapshot);
+            let view = retained_view(conversation, snapshot, loaded.fold.status(), revision);
             Ok(SavedTranscript::Retained {
                 progress,
                 view: Box::new(view),
+                created_at_ms,
+                updated_at_ms,
             })
         })();
         match result {
             Err(CacheError::Fenced) => Ok(SavedTranscript::Deleted),
+            other => other,
+        }
+    }
+
+    /// The turns before `before` in the retained fold, through the same
+    /// projection a gateway uses for `conversation.readEarlier`. Nothing is
+    /// live here: the fold is the peer's committed history.
+    pub(crate) fn retained_earlier(
+        &mut self,
+        receiver: &Id,
+        origin: &Id,
+        conversation: &ConversationId,
+        before: &ConversationPoint,
+        after: Option<&ConversationPoint>,
+    ) -> Result<EarlierFold, CacheError> {
+        let stream = Id::new(conversation.to_string()).map_err(|_| CacheError::Corrupt)?;
+        let result = (|| {
+            let Some(loaded) = self.retained_loaded(receiver, origin, &stream)? else {
+                return Ok(EarlierFold::Absent);
+            };
+            let Some(snapshot) = loaded.fold.snapshot() else {
+                return Ok(EarlierFold::Invalid);
+            };
+            match earlier_turns(
+                &conversation.to_string(),
+                snapshot,
+                Arc::new(NoMcpToolUis),
+                before,
+                after,
+                &HashSet::new(),
+            ) {
+                Some(page) => Ok(EarlierFold::Page(page)),
+                None => Ok(EarlierFold::Invalid),
+            }
+        })();
+        match result {
+            Err(CacheError::Fenced) => Ok(EarlierFold::Absent),
             other => other,
         }
     }
@@ -131,6 +179,11 @@ impl ReadOnlyCache {
         }
         let schema = Schema::new(include_str!("schema.sql")).map_err(open_error)?;
         let connection = nessa_local_database::open(path, &schema).map_err(open_error)?;
+        // A poller write and a local open share this file. Wait out a short
+        // lock instead of treating the granted chat as missing.
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(rows::database_error)?;
         Self::from_connection(connection, policy, clock)
     }
 

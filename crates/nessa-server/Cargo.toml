@@ -97,7 +97,7 @@ nessa-gateway = { path = "../nessa-gateway", features = ["test-support"] }
 nessa-conversation = { path = "../nessa-conversation", features = ["test-support"] }
 time = "0.3"
 # Online process tests drive the example's command entry point.
-nessa-client-core = { path = "../nessa-client-core", features = ["cli"] }
+nessa-client-core = { path = "../nessa-client-core", features = ["cli", "test-support"] }
 nessa-agent-install = { path = "../nessa-agent-install", features = ["test-support"] }
 nessa-attachments = { path = "../nessa-attachments", features = ["test-support"] }
 # Actual native-session tests share the existing paired gateway process fixture.

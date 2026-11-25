@@ -462,6 +462,14 @@ async fn gateway_child() {
         )),
         None => prepared,
     };
+    let prepared = if matches!(
+        mode.as_str(),
+        "record-head-probe" | "record-head-probe-revoked"
+    ) {
+        prepared.with_record_carrier()
+    } else {
+        prepared
+    };
     let bound = bind(prepared, RuntimeDependencies::default().clock, state)
         .await
         .unwrap();
@@ -532,7 +540,7 @@ async fn gateway_child() {
             SessionId::new(setup.conversation.clone()).unwrap(),
         ))
         .unwrap();
-    if mode == "revoke" {
+    if matches!(mode.as_str(), "revoke" | "record-head-probe-revoked") {
         // The owner revokes the device's credential: its enrollment ends
         // Terminal(CredentialRevoked) and its next pinned status says so.
         auth.revoke_sync(RevokeCredentialRequest {

@@ -163,6 +163,12 @@ fn error_code(error: CatalogueReadError) -> CatalogueReadErrorCode {
             ReadRefusal::StaleEpoch => CatalogueReadErrorCode::StaleEpoch,
             ReadRefusal::Unverifiable => CatalogueReadErrorCode::Unverifiable,
         },
+        // Product v1 does not carry newer capabilities or deletion coverage.
+        // Report an unverifiable read, not a reset, absence, or retry hint.
+        CatalogueReadError::Incompatible(_)
+        | CatalogueReadError::HorizonRequired
+        | CatalogueReadError::HorizonVersion(_)
+        | CatalogueReadError::HorizonExpired { .. } => CatalogueReadErrorCode::Unverifiable,
         CatalogueReadError::InvalidRequest => CatalogueReadErrorCode::InvalidRequest,
         CatalogueReadError::IdentityChanged => CatalogueReadErrorCode::IdentityChanged,
         CatalogueReadError::SourceUnavailable

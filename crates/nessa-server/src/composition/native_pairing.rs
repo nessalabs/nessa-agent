@@ -126,6 +126,7 @@ pub(super) struct PreparedNative {
     /// and `bind` binds `address`. A test that reserved the port hands the
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
+    record_carrier: bool,
     /// The web tunnel, when one is on.
     #[cfg(unix)]
     tunnel: Option<super::tunnel::PreparedTunnel>,
@@ -156,6 +157,13 @@ impl PreparedNative {
     /// Serve `openEnvironment` with `environments`.
     pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
         self.environments = Some(environments);
+        self
+    }
+
+    /// Enable the normally unmounted record carrier in the private fixture.
+    #[cfg(test)]
+    pub(super) fn with_record_carrier(mut self) -> Self {
+        self.record_carrier = true;
         self
     }
 
@@ -271,6 +279,7 @@ pub(super) async fn prepare(
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
+            record_carrier: false,
             #[cfg(unix)]
             tunnel: None,
         },
@@ -372,6 +381,7 @@ pub(super) async fn bind(
         relay,
         advertised_address,
         bound_socket,
+        record_carrier,
         #[cfg(unix)]
         tunnel,
     } = prepared;
@@ -405,13 +415,21 @@ pub(super) async fn bind(
                 .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
         }
     }
-    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry.clone())));
+    let sessions = Arc::new(NativeSessions::new(
+        product,
+        Arc::new(RegistryDevices(registry.clone())),
+    ));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
-        .with_protected_sessions(Arc::new(sessions))
+        .with_protected_sessions(sessions.clone())
         .with_discovery(Arc::new(RegistryDiscovery {
             store: registry.clone(),
             clock: wall.clone(),
         }));
+    let connections = if record_carrier {
+        connections.with_record_carrier(sessions)
+    } else {
+        connections
+    };
     let connections = Arc::new(match environments {
         Some(environments) => connections.with_environment_peers(environments),
         None => connections,

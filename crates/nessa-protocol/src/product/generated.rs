@@ -1028,6 +1028,8 @@ pub struct ConversationSummary {
 pub struct ConversationListResult {
     pub conversations: Vec<ConversationSummary>,
     pub complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_conversation_ids: Option<Vec<String>>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

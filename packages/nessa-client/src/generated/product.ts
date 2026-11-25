@@ -1009,6 +1009,8 @@ export interface ConversationListResult {
   conversations: ConversationSummary[]
   /** True when `conversations` names every conversation the caller has under this list's filter. False when the 500 bound left some out, or when a stored record or summary of the caller's own cannot be read back, which lasts until an operator repairs it. Nobody else's conversations are read to answer a list, so nobody else's damage makes it false. A conversation missing from a complete list is not there under that filter: deleted, listed under the other filter, or one the gateway has no summary for (nothing was said in it, or its summary was never written). */
   complete: boolean
+  /** The shared chats this filter includes, when the peer cache was read. It names every one of them, including when `conversations` is an incomplete page of the local catalogue. Absent when the cache was not read or could not be read: a shared chat missing from `conversations` is not then a withdrawal. */
+  sharedConversationIds?: string[]
 }
 /** Where an observation pass resumes: the same incarnation and boundary, then the next descriptor after this creation revision and identity. */
 export interface ConversationObserveCursor {

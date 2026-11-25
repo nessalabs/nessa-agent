@@ -51,22 +51,26 @@ use crate::read_only_sync::application::{
     CacheError, CachePolicy, CachedProgress, Cancellation, GatewayConnector, GatewayError,
     GatewayPolicy, GatewayStream,
 };
+use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
-    CatalogueReader, DeviceEvidence, GatewayConnection, Session,
+    read_named, CatalogueReader, DeviceEvidence, GatewayConnection, Session,
 };
 use nessa_auth::adapters::pairing::{relay_key, NativeIdentity};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_protocol::clock::Clock as MonotonicClock;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
-    MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
-    PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+    ArtifactReadParams, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    MAX_RECORD_PAGE_RECORDS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
+#[cfg(feature = "test-support")]
+use nessa_sync::replication::application::{RecordSource, ScopeAuthorizer};
+use nessa_sync::replication::infrastructure::session::SessionInterrupt;
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
     catalogue::{
@@ -77,7 +81,7 @@ use nessa_sync::replication::{
 pub(crate) use relay::race;
 use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
-use std::io::{Read, Result as IoResult, Write};
+use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -111,8 +115,8 @@ pub use artifact::{
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
-    RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress, RetainedTranscript,
-    RetainedTranscriptSnapshot,
+    EarlierMiss, RetainedCatalogueEntry, RetainedCataloguePage, RetainedProgress,
+    RetainedTranscript, RetainedTranscriptSnapshot,
 };
 pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 
@@ -168,6 +172,22 @@ const STAGED_GRANT_BYTES: usize = 512 * 1024;
 pub const HANDSHAKE: Duration = Duration::from_millis(HANDSHAKE_MS);
 /// Unrelated events one operation tolerates.
 const UNEXPECTED_EVENTS: usize = 16;
+
+/// One range of a file a peer's conversation holds, named as the view names it.
+pub struct PeerArtifact<'a> {
+    /// The granted conversation.
+    pub conversation: &'a ConversationId,
+    /// The file's digest, as the view spells it.
+    pub digest: &'a str,
+    /// The file's media type, as the view spells it.
+    pub media_type: &'a str,
+    /// The file's size, together with the digest and media type.
+    pub size: u64,
+    /// Where the range starts.
+    pub offset: u64,
+    /// How many bytes this range asks for, at most one product range.
+    pub max_bytes: usize,
+}
 
 /// What a reader presents and reads as: its key, the gateway key it pinned,
 /// and the credential, receiver and access epoch its latest Active status
@@ -276,7 +296,7 @@ pub enum ReadFailure {
 #[derive(Default)]
 pub struct ReadStop {
     stopped: AtomicBool,
-    sockets: Mutex<Vec<StopSocket>>,
+    sockets: Mutex<Vec<Arc<StopSocket>>>,
     /// Held by `stop` while the flag is set, and by [`Self::admit`] while a
     /// hard link publishes a held file. The call that takes it first wins.
     publication: Mutex<()>,
@@ -284,10 +304,18 @@ pub struct ReadStop {
 /// A socket belongs to one read, even when several reads share cancellation.
 struct StopSocket {
     owner: Arc<()>,
-    /// This socket alone, so it leaves the list when it closes, while other
-    /// sockets of the same read stay.
-    id: Arc<()>,
     socket: TcpStream,
+    interrupted: AtomicBool,
+}
+impl SessionInterrupt for StopSocket {
+    fn interrupt(&self) -> IoResult<()> {
+        self.interrupted.store(true, Ordering::Release);
+        // The local fence is not evidence that the OS accepted shutdown.
+        match self.socket.shutdown(Shutdown::Both) {
+            Err(error) if error.kind() == ErrorKind::NotConnected => Ok(()),
+            result => result,
+        }
+    }
 }
 impl ReadStop {
     /// A stop not yet asked for.
@@ -306,7 +334,7 @@ impl ReadStop {
             self.stopped.store(true, Ordering::SeqCst);
         }
         for socket in self.lock().drain(..) {
-            let _ = socket.socket.shutdown(Shutdown::Both);
+            let _ = socket.interrupt();
         }
     }
     /// Run `link` while this holds the publication gate. `Err` when `stop`
@@ -329,27 +357,26 @@ impl ReadStop {
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<StopSocket>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<StopSocket>>> {
         self.sockets.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<()>> {
-        let handle = socket.try_clone()?;
-        let id = Arc::new(());
-        self.lock().push(StopSocket {
+    fn register(&self, owner: &Arc<()>, socket: &TcpStream) -> IoResult<Arc<StopSocket>> {
+        let handle = Arc::new(StopSocket {
             owner: owner.clone(),
-            id: id.clone(),
-            socket: handle,
+            socket: socket.try_clone()?,
+            interrupted: AtomicBool::new(false),
         });
+        self.lock().push(handle.clone());
         // A stop between the check in `connect` and here still reaches it.
         if self.is_stopped() {
             self.stop();
         }
-        Ok(id)
+        Ok(handle)
     }
     /// One socket closed: drop its handle, so a read that reopens sessions
     /// for as long as it lives does not keep every closed one open.
-    fn forget(&self, id: &Arc<()>) {
-        self.lock().retain(|socket| !Arc::ptr_eq(&socket.id, id));
+    fn forget(&self, handle: &Arc<StopSocket>) {
+        self.lock().retain(|socket| !Arc::ptr_eq(socket, handle));
     }
     fn release(&self, owner: &Arc<()>) {
         self.lock()
@@ -395,7 +422,7 @@ impl Stopping {
         self.until
             .store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
     }
-    fn register(&self, socket: &TcpStream) -> IoResult<Arc<()>> {
+    fn register(&self, socket: &TcpStream) -> IoResult<Arc<StopSocket>> {
         self.stop.register(&self.owner, socket)
     }
     fn release(&self) {
@@ -581,6 +608,12 @@ struct StoppableConnector {
 }
 impl GatewayConnector for StoppableConnector {
     fn connect(&self, address: SocketAddr, timeout: Duration) -> IoResult<Box<dyn GatewayStream>> {
+        self.connect_socket(address, timeout)
+            .map(|socket| Box::new(socket) as Box<dyn GatewayStream>)
+    }
+}
+impl StoppableConnector {
+    fn connect_socket(&self, address: SocketAddr, timeout: Duration) -> IoResult<Socket> {
         // A dial itself cannot be stopped; it is bounded by `timeout`, at
         // most [`HANDSHAKE`]. With a relay the race between the two dials
         // asks the stop and the injected clock's budget as it waits.
@@ -616,8 +649,8 @@ impl GatewayConnector for StoppableConnector {
             Ordering::SeqCst,
         );
         let socket = connected?;
-        let id = self.ending.register(&socket)?;
-        Ok(Box::new(Socket::new(socket, self.ending.stop.clone(), id)))
+        let handle = self.ending.register(&socket)?;
+        Ok(Socket::new(socket, self.ending.stop.clone(), handle))
     }
 }
 /// A read's socket. Each wait the caller sets is taken in slices of at most
@@ -627,26 +660,34 @@ impl GatewayConnector for StoppableConnector {
 struct Socket {
     stream: TcpStream,
     stop: Arc<ReadStop>,
-    /// Its entry in `stop`, removed when this socket is dropped.
-    id: Arc<()>,
+    /// Its one exact shutdown descriptor, shared with the run-wide stop.
+    handle: Arc<StopSocket>,
     read_for: Cell<Duration>,
     write_for: Cell<Duration>,
 }
 impl Drop for Socket {
     fn drop(&mut self) {
-        self.stop.forget(&self.id);
+        let _ = self.handle.interrupt();
+        self.stop.forget(&self.handle);
     }
 }
 impl Socket {
-    fn new(stream: TcpStream, stop: Arc<ReadStop>, id: Arc<()>) -> Self {
+    fn new(stream: TcpStream, stop: Arc<ReadStop>, handle: Arc<StopSocket>) -> Self {
         Self {
             stream,
             stop,
-            id,
+            handle,
             read_for: Cell::new(STOP_SLICE),
             write_for: Cell::new(STOP_SLICE),
         }
     }
+    fn check_open(&self) -> IoResult<()> {
+        if self.stop.is_stopped() || self.handle.interrupted.load(Ordering::Acquire) {
+            return Err(io::Error::from(ErrorKind::ConnectionAborted));
+        }
+        Ok(())
+    }
+
     /// `operation` on the stream, its wait `total` taken a slice at a time.
     fn sliced<T>(
         &mut self,
@@ -656,9 +697,7 @@ impl Socket {
     ) -> IoResult<T> {
         let mut left = total;
         loop {
-            if self.stop.is_stopped() {
-                return Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted));
-            }
+            self.check_open()?;
             let slice = left.min(STOP_SLICE);
             set(&self.stream, Some(slice))?;
             match operation(&mut self.stream) {
@@ -694,6 +733,7 @@ impl Write for Socket {
         )
     }
     fn flush(&mut self) -> IoResult<()> {
+        self.check_open()?;
         self.stream.flush()
     }
 }
@@ -707,9 +747,15 @@ impl GatewayStream for Socket {
         Ok(())
     }
     fn shutdown(&self) -> IoResult<()> {
-        self.stream.shutdown(Shutdown::Both)
+        self.handle.interrupt()
     }
 }
+
+// Opt-in only in the process fixture; the normal catalogue and retained
+// refresh still choose Product and have one cache owner.
+#[cfg(feature = "test-support")]
+#[path = "retained/carrier.rs"]
+mod carrier;
 
 /// A complete frame continues the staged prefix only when it names the same
 /// snapshot. A replacement that fits in one frame would otherwise put the
@@ -822,6 +868,44 @@ pub struct RetainedCache {
     progressed: bool,
 }
 impl RetainedCache {
+    /// Drive one local-fixture record page through the existing retained pass
+    /// and private SQLite owner.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn one_record_page_for_test<A, S>(
+        &mut self,
+        scope: &Scope,
+        authorizer: &mut A,
+        source: &mut S,
+    ) -> Result<(u64, usize), ReadFailure>
+    where
+        A: ScopeAuthorizer,
+        S: RecordSource,
+    {
+        let policy = self.policy.suffix_page();
+        let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
+            .map_err(|_| ReadFailure::Protocol)?;
+        run_records(
+            scope,
+            authorizer,
+            source,
+            &mut self.cache,
+            limits,
+            1,
+            self.wall.as_ref(),
+        )
+        .map(|run| (run.downloaded, run.pages))
+        .map_err(|error| match error.cause {
+            RecordDriverCause::Cache(error) => cache_failure(&error),
+            RecordDriverCause::Core(SyncError::Store(_)) => self
+                .cache
+                .take_refusal()
+                .as_ref()
+                .map_or(ReadFailure::Cache, cache_failure),
+            RecordDriverCause::Core(_) => ReadFailure::Protocol,
+        })
+    }
+
     /// Open, or create, the cache at `path`, in a private directory that is
     /// already there. `wall` stamps what the cache records; `clock` measures
     /// the gateway deadlines.
@@ -853,6 +937,11 @@ impl RetainedCache {
         })
     }
 
+    /// The wall time the cache stamps records with, in Unix milliseconds.
+    pub fn unix_milliseconds(&self) -> u64 {
+        self.wall.unix_milliseconds()
+    }
+
     /// The conversations the cache holds for `receiver`, by id, read from
     /// the cache alone.
     pub fn conversation_ids(&mut self, receiver: &str) -> Result<Vec<String>, ReadFailure> {
@@ -874,6 +963,26 @@ impl RetainedCache {
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    /// Grants saved for `receiver`, once a complete grant frame has been
+    /// stored. `None` before that frame: the catalogue snapshot is still the
+    /// membership the last catalogue read narrowed to the grants it saw.
+    /// After the frame, this is the membership, including when it is empty
+    /// because the last grant was revoked. The catalogue snapshot is not
+    /// read again while the follow stays up.
+    pub fn saved_grants(&mut self, receiver: &str) -> Result<Option<Vec<String>>, ReadFailure> {
+        let cursor = self
+            .cache
+            .grant_cursor(receiver)
+            .map_err(|error| cache_failure(&error))?;
+        if cursor.is_none() {
+            return Ok(None);
+        }
+        self.cache
+            .grant_ids(receiver)
+            .map(Some)
+            .map_err(|error| cache_failure(&error))
     }
 
     /// Read what the gateway grants `access` into this cache, within
@@ -903,6 +1012,7 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
     ) -> Result<ReadReport, ReadFailure> {
         self.read_in(access, stop, budget, max_withdrawn, withdrawn, None)
+            .0
     }
 
     /// Read like [`Self::read`], and keep a transcript only for a conversation
@@ -911,6 +1021,11 @@ impl RetainedCache {
     /// choice, so it is not reported in `withdrawn` (that list is chats the
     /// gateway no longer grants). A rule cannot add a chat the gateway did
     /// not grant: the catalogue is still what the gateway serves.
+    ///
+    /// The boolean is true when a page was kept and the read then failed
+    /// because the cache is full, could not be written, or the connection
+    /// was lost. The error still stands. The caller tells subscribers the
+    /// cache moved; a withdrawal is already in `withdrawn`.
     pub fn read_followed(
         &mut self,
         access: ReaderAccess<'_>,
@@ -919,8 +1034,11 @@ impl RetainedCache {
         budget: Duration,
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
-    ) -> Result<ReadReport, ReadFailure> {
-        self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow))
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
+        let (result, progressed) =
+            self.read_in(access, stop, budget, max_withdrawn, withdrawn, Some(follow));
+        let retained = retained_page(&result, progressed);
+        (result, retained)
     }
 
     /// Follow this receiver's grants on `grants.subscribe`, and each chat
@@ -929,6 +1047,11 @@ impl RetainedCache {
     /// wait for this call to return. `on_synced` runs after each complete
     /// frame, with how many conversations the replica holds. The call stays
     /// until `stop` or the subscription ends.
+    ///
+    /// The boolean is true when a page was kept and the follow then failed
+    /// because the cache is full, could not be written, or the connection
+    /// was lost. The error still stands. `on_synced` has already run for a
+    /// snapshot that was stored.
     #[allow(clippy::too_many_arguments)]
     pub fn follow_grants(
         &mut self,
@@ -940,7 +1063,7 @@ impl RetainedCache {
         withdrawn: &mut Vec<String>,
         on_withdrawn: impl FnMut(&[String]),
         on_synced: impl FnMut(u64),
-    ) -> Result<ReadReport, ReadFailure> {
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
         let receiver = access.receiver.to_owned();
         let before = withdrawn.len();
         self.progressed = false;
@@ -966,19 +1089,21 @@ impl RetainedCache {
         // spent budget that saved nothing is unreachable.
         let progressed = self.progressed || withdrawn.len() > before;
         let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
-        match end {
+        let result = match end {
             ReadEnd::Read(report) => Ok(report),
-            ReadEnd::Incomplete => Ok(ReadReport {
-                moved: true,
-                complete: false,
-                conversations: self
-                    .cache
-                    .grant_ids(&receiver)
-                    .map_err(|error| cache_failure(&error))?
-                    .len(),
-            }),
+            ReadEnd::Incomplete => self
+                .cache
+                .grant_ids(&receiver)
+                .map_err(|error| cache_failure(&error))
+                .map(|ids| ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: ids.len(),
+                }),
             ReadEnd::Failed(failure) => Err(failure),
-        }
+        };
+        let retained = retained_page(&result, progressed);
+        (result, retained)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1527,7 +1652,7 @@ impl RetainedCache {
         max_withdrawn: usize,
         withdrawn: &mut Vec<String>,
         follow: Option<&FollowRule>,
-    ) -> Result<ReadReport, ReadFailure> {
+    ) -> (Result<ReadReport, ReadFailure>, bool) {
         let receiver = access.receiver.to_owned();
         let ending = Arc::new(Stopping::new(
             stop.clone(),
@@ -1542,15 +1667,19 @@ impl RetainedCache {
         let result = self.read_inner(access, &ending, &offline, max_withdrawn, withdrawn, follow);
         let progressed = self.progressed || withdrawn.len() > before;
         let end = read_end(result, stop.is_stopped(), ending.spent(), progressed);
-        match away(end, offline.load(Ordering::SeqCst)) {
+        let result = match away(end, offline.load(Ordering::SeqCst)) {
             ReadEnd::Read(report) => Ok(report),
-            ReadEnd::Incomplete => Ok(ReadReport {
-                moved: true,
-                complete: false,
-                conversations: self.conversation_ids(&receiver)?.len(),
-            }),
+            ReadEnd::Incomplete => match self.conversation_ids(&receiver) {
+                Ok(ids) => Ok(ReadReport {
+                    moved: true,
+                    complete: false,
+                    conversations: ids.len(),
+                }),
+                Err(failure) => Err(failure),
+            },
             ReadEnd::Failed(failure) => Err(failure),
-        }
+        };
+        (result, progressed)
     }
 
     fn read_inner(
@@ -1755,36 +1884,7 @@ impl RetainedCache {
         ending: &Arc<Stopping>,
         offline: &Arc<AtomicBool>,
     ) -> Result<Session, ReadFailure> {
-        let policy = GatewayPolicy::new(
-            HANDSHAKE_MS,
-            PASSIVE_MIN_REQUEST_TIMEOUT_MS,
-            UNEXPECTED_EVENTS,
-        )
-        .map_err(|_| ReadFailure::Protocol)?;
-        Session::connect(
-            access.address,
-            DeviceEvidence {
-                identity: access.identity,
-                pin: access.pin,
-                credential: access.credential,
-            },
-            access.client_id,
-            &StoppableConnector {
-                ending: ending.clone(),
-                // A pin that is no Ed25519 key fails TLS whatever the route.
-                relay: access.relay.and_then(|address| {
-                    Some(RelayRoute {
-                        address: address.clone(),
-                        key: relay_key(&access.pin)?,
-                    })
-                }),
-                offline: offline.clone(),
-            },
-            self.clock.clone(),
-            ending.clone(),
-            policy,
-        )
-        .map_err(failure)
+        connect_reader(access, &self.clock, ending, offline)
     }
 
     /// One conversation's records, from what the cache holds to the head;
@@ -2056,6 +2156,19 @@ fn read_each(
     held.map_or(Ok(complete), Err)
 }
 
+/// A failed read kept a page the caller has not announced. The poller wakes
+/// subscribers from this answer and does not decide the failures again.
+fn retained_page(result: &Result<ReadReport, ReadFailure>, progressed: bool) -> bool {
+    progressed
+        && matches!(
+            result,
+            Err(ReadFailure::Quota
+                | ReadFailure::Cache
+                | ReadFailure::Unreachable
+                | ReadFailure::Away)
+        )
+}
+
 /// A cache failure the rest of a read's withdrawals still go ahead past.
 fn holds_back(failure: ReadFailure) -> bool {
     matches!(failure, ReadFailure::Quota | ReadFailure::Cache)
@@ -2155,6 +2268,90 @@ fn cache_failure(error: &CacheError) -> ReadFailure {
         CacheError::Scope { .. } => ReadFailure::ResetRequired,
         _ => ReadFailure::Cache,
     }
+}
+
+/// One `artifact.read` range from the peer `access` names. The range is the
+/// caller's. Nothing is written to a cache. A file the peer does not hold, or
+/// a conversation it does not grant, is [`ReadFailure::Product`].
+pub fn read_peer_artifact(
+    access: ReaderAccess<'_>,
+    file: PeerArtifact<'_>,
+    clock: &Arc<dyn MonotonicClock>,
+    budget: Duration,
+) -> Result<Vec<u8>, ReadFailure> {
+    if file.max_bytes == 0
+        || file.max_bytes as u64 > HELD_FILE_RANGE_BYTES
+        || file.size == 0
+        || file.offset >= file.size
+    {
+        return Err(ReadFailure::Protocol);
+    }
+    let stop = ReadStop::new();
+    let until = clock
+        .elapsed_ms()
+        .saturating_add(u64::try_from(budget.as_millis()).unwrap_or(u64::MAX));
+    let ending = Arc::new(Stopping::new(stop, Arc::clone(clock), until));
+    let offline = Arc::new(AtomicBool::new(false));
+    let session = connect_reader(&access, clock, &ending, &offline)?;
+    let connection = GatewayConnection::new(session);
+    let params = ArtifactReadParams {
+        conversation_id: file.conversation.to_string(),
+        digest: file.digest.to_owned(),
+        mime_type: file.media_type.to_owned(),
+        size: file.size,
+        offset: file.offset,
+        max_bytes: file.max_bytes as u64,
+    };
+    match read_named(&connection, params) {
+        Ok(bytes) => {
+            let room = file.size - file.offset;
+            let limit = room.min(file.max_bytes as u64);
+            if bytes.is_empty() || bytes.len() as u64 > limit {
+                Err(ReadFailure::Protocol)
+            } else {
+                Ok(bytes)
+            }
+        }
+        Err(error) => Err(artifact::held_file_failure(error)),
+    }
+}
+
+fn connect_reader(
+    access: &ReaderAccess<'_>,
+    clock: &Arc<dyn MonotonicClock>,
+    ending: &Arc<Stopping>,
+    offline: &Arc<AtomicBool>,
+) -> Result<Session, ReadFailure> {
+    let policy = GatewayPolicy::new(
+        HANDSHAKE_MS,
+        PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+        UNEXPECTED_EVENTS,
+    )
+    .map_err(|_| ReadFailure::Protocol)?;
+    Session::connect(
+        access.address,
+        DeviceEvidence {
+            identity: access.identity,
+            pin: access.pin,
+            credential: access.credential,
+        },
+        access.client_id,
+        &StoppableConnector {
+            ending: ending.clone(),
+            // A pin that is no Ed25519 key fails TLS whatever the route.
+            relay: access.relay.and_then(|address| {
+                Some(RelayRoute {
+                    address: address.clone(),
+                    key: relay_key(&access.pin)?,
+                })
+            }),
+            offline: offline.clone(),
+        },
+        Arc::clone(clock),
+        ending.clone(),
+        policy,
+    )
+    .map_err(failure)
 }
 
 /// A gateway failure as the caller acts on it.
@@ -2304,9 +2501,58 @@ mod grant_frames {
 
 #[cfg(test)]
 mod stop_sockets {
-    use super::ReadStop;
+    use super::{ReadStop, SessionInterrupt, Socket};
+    use std::io::{ErrorKind, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn interrupting_one_retained_connection_leaves_the_other_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = ReadStop::new();
+        let run = Arc::new(());
+        let connect = || {
+            let stream = TcpStream::connect(address).unwrap();
+            let (peer, _) = listener.accept().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let handle = stop.register(&run, &stream).unwrap();
+            (
+                Socket::new(stream, stop.clone(), handle.clone()),
+                peer,
+                handle,
+            )
+        };
+        let (mut records, mut records_peer, interrupt) = connect();
+        let (mut product, mut product_peer, _) = connect();
+        interrupt.interrupt().unwrap();
+        interrupt.interrupt().unwrap();
+        assert!(!stop.is_stopped());
+        assert_eq!(
+            records.write(b"x").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(
+            records.flush().unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+        assert_eq!(records_peer.read(&mut [0]).unwrap(), 0);
+
+        drop(records);
+        assert_eq!(stop.lock().len(), 1);
+        product.write_all(b"p").unwrap();
+        let mut byte = [0];
+        product_peer.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"p");
+
+        stop.stop();
+        assert_eq!(product_peer.read(&mut byte).unwrap(), 0);
+        assert_eq!(
+            product.write(b"x").unwrap_err().kind(),
+            ErrorKind::ConnectionAborted
+        );
+    }
 
     #[test]
     fn a_closed_socket_leaves_the_stop_and_the_others_stay() {

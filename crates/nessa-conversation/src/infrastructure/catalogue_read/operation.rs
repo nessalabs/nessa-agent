@@ -9,6 +9,7 @@ use crate::{
 };
 #[cfg(test)]
 use nessa_protocol::conversation::domain::conversation_catalogue_schema;
+use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::conversation::read_scope::{
     check_catalogue_scope_identity, passive_read_selector, validate_catalogue_selector,
     CatalogueReadScope,
@@ -130,6 +131,15 @@ fn worker_error(error: CatalogueWorkerError) -> CatalogueReadError {
 
 fn source_error(error: CatalogueSourceError) -> CatalogueReadError {
     match error {
+        CatalogueSourceError::Denied => CatalogueReadError::Admission(ReadRefusal::Forbidden),
+        CatalogueSourceError::Incompatible(reason) => CatalogueReadError::Incompatible(reason),
+        CatalogueSourceError::HorizonRequired => CatalogueReadError::HorizonRequired,
+        CatalogueSourceError::HorizonVersion(version) => {
+            CatalogueReadError::HorizonVersion(version)
+        }
+        CatalogueSourceError::HorizonExpired { completed, head } => {
+            CatalogueReadError::HorizonExpired { completed, head }
+        }
         CatalogueSourceError::Unavailable => CatalogueReadError::SourceUnavailable,
         CatalogueSourceError::IdentityChanged => CatalogueReadError::IdentityChanged,
         CatalogueSourceError::InvalidRequest => CatalogueReadError::InvalidRequest,
@@ -152,6 +162,46 @@ mod tests {
         domain::Scope,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn single_pin_preserves_typed_catalogue_coverage_refusals() {
+        use nessa_sync::replication::{
+            catalogue::CatalogueHorizonHead,
+            domain::{CapabilityError, SourceHead},
+        };
+        let head = Box::new(CatalogueHorizonHead::new(
+            SourceHead::new(admitted_scope_for_error(), 10, 0, 0),
+            4,
+        ));
+        assert_eq!(
+            source_error(CatalogueSourceError::HorizonExpired {
+                completed: 3,
+                head: head.clone(),
+            }),
+            CatalogueReadError::HorizonExpired { completed: 3, head }
+        );
+        assert_eq!(
+            source_error(CatalogueSourceError::Denied),
+            CatalogueReadError::Admission(ReadRefusal::Forbidden)
+        );
+        let reason = CapabilityError::MissingReader(4);
+        assert_eq!(
+            source_error(CatalogueSourceError::Incompatible(reason)),
+            CatalogueReadError::Incompatible(reason)
+        );
+    }
+
+    fn admitted_scope_for_error() -> Scope {
+        let id = nessa_sync::replication::domain::Id::new("coverage-error-scope").unwrap();
+        Scope::new(
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id,
+        )
+    }
 
     struct CountingCatalogue(AtomicUsize);
     impl ConversationCatalogue for CountingCatalogue {

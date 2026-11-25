@@ -227,7 +227,7 @@ pub(super) async fn run(run: Run) {
         }
         if idle {
             match sources.changed().await {
-                Wake::Changed | Wake::Catalogue => {}
+                Wake::Changed | Wake::Catalogue | Wake::Shared => {}
                 Wake::Closed => {
                     end(&deliveries, &id, "source_closed", None, last.as_deref());
                     return;

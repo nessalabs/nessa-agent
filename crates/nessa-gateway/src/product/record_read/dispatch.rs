@@ -67,41 +67,7 @@ pub async fn dispatch(
     };
     let conversation =
         ConversationId::new(&conversation_id).map_err(|_| RecordReadErrorCode::InvalidRequest)?;
-    let (receivers, repository, share_grants) = state
-        .reads
-        .passive_read
-        .as_ref()
-        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
-    let access_policy = state
-        .reads
-        .conversation_access
-        .as_ref()
-        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
-    let source = state
-        .reads
-        .record_source
-        .as_ref()
-        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
-    let use_case = ReadRecords {
-        admission: AdmitPassiveRead {
-            owner_phone_purposes: state.owner_phone.purpose.as_ref(),
-            owner_phone_receivers: state.owner_phone.receivers.as_deref(),
-            owner_phone_policy: state.owner_phone.policy.clone(),
-            authorization: AuthorizeAction {
-                access: state.access.as_ref(),
-                clock: state.clock.as_ref(),
-                policy: state.policy.as_ref(),
-            },
-            gateway: &state.gateway,
-            receivers: receivers.as_ref(),
-            conversations: repository.as_ref(),
-            grants: &PUBLISHED_PASSIVE_READ_GRANTS,
-            share_grants: share_grants.as_ref(),
-            access_policy: access_policy.clone(),
-        },
-        source: source.as_ref(),
-    };
-    let response = use_case
+    let response = use_case(state)?
         .execute(
             session,
             &conversation,
@@ -128,9 +94,52 @@ pub async fn dispatch(
     Ok((text, response.lease))
 }
 
+// The transport does only wire conversion. Other explicit read transports
+// must ask this same application owner for the current admission and source.
+pub(super) fn use_case(state: &ProductRouteState) -> Result<ReadRecords<'_>, RecordReadErrorCode> {
+    let (receivers, repository, share_grants) = state
+        .reads
+        .passive_read
+        .as_ref()
+        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
+    let access_policy = state
+        .reads
+        .conversation_access
+        .as_ref()
+        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
+    let source = state
+        .reads
+        .record_source
+        .as_ref()
+        .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
+    Ok(ReadRecords {
+        admission: AdmitPassiveRead {
+            owner_phone_purposes: state.owner_phone.purpose.as_ref(),
+            owner_phone_receivers: state.owner_phone.receivers.as_deref(),
+            owner_phone_policy: state.owner_phone.policy.clone(),
+            authorization: AuthorizeAction {
+                access: state.access.as_ref(),
+                clock: state.clock.as_ref(),
+                policy: state.policy.as_ref(),
+            },
+            gateway: &state.gateway,
+            receivers: receivers.as_ref(),
+            conversations: repository.as_ref(),
+            grants: &PUBLISHED_PASSIVE_READ_GRANTS,
+            share_grants: share_grants.as_ref(),
+            access_policy: access_policy.clone(),
+        },
+        source: source.as_ref(),
+    })
+}
+
 fn error_code(error: RecordReadError) -> RecordReadErrorCode {
     match error {
         RecordReadError::Admission(refusal) => refusal_code(refusal),
+        // Product v1 has no capability negotiation. Preserve the typed
+        // reason in the source boundary, but do not pretend this read is
+        // retryable or that the stream identity changed.
+        RecordReadError::Incompatible(_) => RecordReadErrorCode::Unverifiable,
         RecordReadError::InvalidRequest => RecordReadErrorCode::InvalidRequest,
         RecordReadError::IdentityChanged => RecordReadErrorCode::IdentityChanged,
         RecordReadError::HistoryPruned => RecordReadErrorCode::HistoryPruned,
@@ -171,3 +180,7 @@ pub(in crate::product) fn refusal_code(refusal: ReadRefusal) -> RecordReadErrorC
         ReadRefusal::Unverifiable => RecordReadErrorCode::Unverifiable,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/product/record_read/dispatch.rs"]
+mod tests;

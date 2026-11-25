@@ -38,3 +38,31 @@ fn a_value_that_answers_another_operation_is_unverifiable() {
         Err(CatalogueReadErrorCode::Unverifiable)
     );
 }
+
+#[test]
+fn single_pin_catalogue_coverage_is_an_unverifiable_v1_read_not_a_reset() {
+    use nessa_sync::replication::{
+        catalogue::CatalogueHorizonHead,
+        domain::{CapabilityError, SourceHead},
+    };
+    let head = Box::new(CatalogueHorizonHead::new(
+        SourceHead::new(scope(), 10, 0, 0),
+        4,
+    ));
+    for error in [
+        CatalogueReadError::Incompatible(CapabilityError::UnsupportedVersion(8)),
+        CatalogueReadError::HorizonRequired,
+        CatalogueReadError::HorizonVersion(8),
+        CatalogueReadError::HorizonExpired { completed: 3, head },
+    ] {
+        assert_eq!(error_code(error), CatalogueReadErrorCode::Unverifiable);
+    }
+    assert_eq!(
+        error_code(CatalogueReadError::Admission(ReadRefusal::Forbidden)),
+        CatalogueReadErrorCode::Forbidden
+    );
+    assert_eq!(
+        error_code(CatalogueReadError::Admission(ReadRefusal::StaleEpoch)),
+        CatalogueReadErrorCode::StaleEpoch
+    );
+}

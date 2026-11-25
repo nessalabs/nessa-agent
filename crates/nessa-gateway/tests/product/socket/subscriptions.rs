@@ -2422,6 +2422,48 @@ async fn a_paired_reader_reads_back_a_held_file_only_where_it_was_granted() {
     assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
 }
 
+/// A peer gateway signs in as itself and holds a read grant on the owner's
+/// conversation. `grant.artifact_read` returns the file the owner holds.
+#[tokio::test]
+async fn a_peer_gateway_reads_a_file_its_grant_allows() {
+    use nessa_attachments::application::AttachmentLimits;
+    use nessa_attachments::test_support::{digest_of, Fixture};
+    let held = Fixture::new(AttachmentLimits::default());
+    let fixture = SubscriptionFixture::new().await;
+    held.held.hold(
+        "organization",
+        &fixture.id.to_string(),
+        b"a held file",
+        "text/plain",
+    );
+    let read = json!({
+        "conversationId": fixture.id.to_string(),
+        "digest": digest_of(b"a held file").to_string(),
+        "mimeType": "text/plain",
+        "size": 11,
+        "offset": 0,
+        "maxBytes": 5,
+    });
+    let mut fixture = fixture.with_devices(this_device(true));
+    fixture.state = fixture
+        .state
+        .clone()
+        .with_attachments(held.service.clone(), held.reads());
+    fixture
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
+        .await;
+    let fixture = fixture
+        .signed_in_as_peer(&["conversation.read", "server.read"])
+        .await;
+    let reply = fixture.call("artifact.read", read).await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["payload"]["data"], "YSBoZWw=");
+}
+
 /// Row G13: a revoke ends a device's subscription before its next batch.
 #[tokio::test]
 async fn a_revoke_ends_a_device_subscription_before_its_next_batch() {

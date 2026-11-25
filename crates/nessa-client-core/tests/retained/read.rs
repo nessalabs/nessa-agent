@@ -479,6 +479,19 @@ fn report(complete: bool) -> ReadReport {
 }
 
 #[test]
+fn a_kept_page_is_announced_only_for_the_failures_that_leave_it() {
+    let kept = |failure| retained_page(&Err(failure), true);
+    assert!(kept(ReadFailure::Quota));
+    assert!(kept(ReadFailure::Cache));
+    assert!(kept(ReadFailure::Unreachable));
+    assert!(kept(ReadFailure::Away));
+    assert!(!kept(ReadFailure::Stopped));
+    assert!(!kept(ReadFailure::CacheDamaged));
+    assert!(!retained_page(&Err(ReadFailure::Quota), false));
+    assert!(!retained_page(&Ok(report(true)), true));
+}
+
+#[test]
 fn a_read_its_budget_cut_short_counts_only_if_it_saved_something() {
     for cut in [ReadFailure::Stopped, ReadFailure::Unreachable] {
         // Saved something: incomplete, and the next read carries on.
@@ -533,7 +546,8 @@ fn a_stop_ends_a_blocked_read_without_shutting_its_socket() {
     let reading = std::thread::spawn({
         let stop = stop.clone();
         move || {
-            let mut socket = Socket::new(stream, stop, Arc::new(()));
+            let handle = stop.register(&Arc::new(()), &stream).unwrap();
+            let mut socket = Socket::new(stream, stop, handle);
             socket.read_timeout(Duration::from_secs(30)).unwrap();
             let started = std::time::Instant::now();
             let read = socket.read(&mut [0; 16]);
@@ -555,7 +569,9 @@ fn a_sliced_wait_lasts_as_long_as_the_caller_set() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_held, _) = listener.accept().unwrap();
-    let mut socket = Socket::new(stream, ReadStop::new(), Arc::new(()));
+    let stop = ReadStop::new();
+    let handle = stop.register(&Arc::new(()), &stream).unwrap();
+    let mut socket = Socket::new(stream, stop, handle);
     socket.read_timeout(STOP_SLICE * 5).unwrap();
     let started = std::time::Instant::now();
     let kind = socket.read(&mut [0; 16]).unwrap_err().kind();
@@ -979,7 +995,7 @@ fn a_grant_follow_its_budget_cut_short_is_unreachable_and_a_stop_stays_stopped()
         |_| {},
         |_| {},
     );
-    assert_eq!(stopped, Err(ReadFailure::Stopped));
+    assert_eq!(stopped.0, Err(ReadFailure::Stopped));
 
     let clock = Arc::new(Moved(std::sync::atomic::AtomicU64::new(0)));
     let (ready, heard) = mpsc::channel();
@@ -1019,7 +1035,7 @@ fn a_grant_follow_its_budget_cut_short_is_unreachable_and_a_stop_stays_stopped()
         |_| {},
         |_| {},
     );
-    assert_eq!(unread, Err(ReadFailure::Unreachable));
+    assert_eq!(unread.0, Err(ReadFailure::Unreachable));
     assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
     drop(cache);
     advancing.join().unwrap();
@@ -1084,7 +1100,7 @@ fn a_grant_follow_its_budget_cut_short_is_unreachable_and_a_stop_stays_stopped()
         |_| {},
         |_| {},
     );
-    assert_eq!(copied, Err(ReadFailure::Unreachable));
+    assert_eq!(copied.0, Err(ReadFailure::Unreachable));
     assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
     drop(cache);
     advancing.join().unwrap();
@@ -1158,7 +1174,7 @@ fn an_incomplete_grant_snapshot_past_its_budget_leaves_the_cursor() {
         |_| {},
         |_| {},
     );
-    assert_eq!(failed, Err(ReadFailure::Protocol));
+    assert_eq!(failed.0, Err(ReadFailure::Protocol));
     assert_eq!(cache.cache.grant_cursor("receiver").unwrap(), None);
     drop(cache);
     gateway.join().unwrap();

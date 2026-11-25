@@ -100,6 +100,62 @@ pub(crate) struct DeviceEvidence<'a> {
     pub(crate) credential: &'a str,
 }
 
+/// Dial, prove possession on the pinned TLS channel, and send exactly one
+/// first native selector. The named protocol owns the next reply on that same
+/// connection; only its caller may promote this channel to that protocol.
+pub(crate) fn select_native(
+    address: SocketAddr,
+    device: &DeviceEvidence<'_>,
+    connector: &dyn GatewayConnector,
+    clock: Arc<dyn Clock>,
+    cancellation: Arc<dyn Cancellation>,
+    handshake_ms: u64,
+    request: &NativePairingRequest,
+) -> Result<EnrollmentChannel<DeadlineStream>, GatewayError> {
+    let deadline = clock
+        .elapsed_ms()
+        .checked_add(handshake_ms)
+        .ok_or(GatewayError::TimedOut)?;
+    if cancellation.cancelled() {
+        return Err(GatewayError::Cancelled);
+    }
+    let remaining = deadline
+        .checked_sub(clock.elapsed_ms())
+        .filter(|ms| *ms > 0)
+        .ok_or(GatewayError::TimedOut)?;
+    // The run's own cancellation time bounds the connect too.
+    let cut = cancellation
+        .until_ms()
+        .map(|until| until.saturating_sub(clock.elapsed_ms()))
+        .filter(|left| *left < remaining);
+    if cut == Some(0) {
+        return Err(GatewayError::Cancelled);
+    }
+    let stream = connector
+        .connect(address, Duration::from_millis(cut.unwrap_or(remaining)))
+        .map_err(|error| match io_cause(&error) {
+            GatewayError::TimedOut if cut.is_some() => GatewayError::Cancelled,
+            cause => cause,
+        })?;
+    let observer = cancellation.clone();
+    let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
+    stream.remaining()?;
+    let failure = stream.failure_owner();
+    let transport = NativeTransport::connect_observed(
+        stream,
+        device.identity,
+        GatewayTrust::Pinned(device.pin),
+        |_| observer.record_failure(failure.get().unwrap_or(GatewayError::NativeHandshake)),
+    )
+    .map_err(|_| failure.take().unwrap_or(GatewayError::NativeHandshake))?;
+    let mut selector = EnrollmentChannel::new(transport);
+    let envelope = encode_envelope(request).map_err(|_| GatewayError::Protocol)?;
+    selector
+        .send_envelope(&envelope)
+        .map_err(|_| failure.take().unwrap_or(GatewayError::Transport))?;
+    Ok(selector)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum RpcKind {
     Authentication,
@@ -468,48 +524,15 @@ impl Session {
                 return Err(GatewayError::InvalidCredential);
             }
         }
-        let deadline = clock
-            .elapsed_ms()
-            .checked_add(policy.handshake_ms())
-            .ok_or(GatewayError::TimedOut)?;
-        if cancellation.cancelled() {
-            return Err(GatewayError::Cancelled);
-        }
-        let remaining = deadline
-            .checked_sub(clock.elapsed_ms())
-            .filter(|ms| *ms > 0)
-            .ok_or(GatewayError::TimedOut)?;
-        // The run's own cancellation time bounds the connect too.
-        let cut = cancellation
-            .until_ms()
-            .map(|until| until.saturating_sub(clock.elapsed_ms()))
-            .filter(|left| *left < remaining);
-        if cut == Some(0) {
-            return Err(GatewayError::Cancelled);
-        }
-        let stream = connector
-            .connect(address, Duration::from_millis(cut.unwrap_or(remaining)))
-            .map_err(|error| match io_cause(&error) {
-                GatewayError::TimedOut if cut.is_some() => GatewayError::Cancelled,
-                cause => cause,
-            })?;
-        let observer = cancellation.clone();
-        let stream = DeadlineStream::new(stream, clock.clone(), cancellation, deadline);
-        stream.remaining()?;
-        let failure = stream.failure_owner();
-        let transport = NativeTransport::connect_observed(
-            stream,
-            device.identity,
-            GatewayTrust::Pinned(device.pin),
-            |_| observer.record_failure(failure.get().unwrap_or(GatewayError::NativeHandshake)),
-        )
-        .map_err(|_| failure.take().unwrap_or(GatewayError::NativeHandshake))?;
-        let mut selector = EnrollmentChannel::new(transport);
-        let envelope = encode_envelope(&NativePairingRequest::OpenProduct)
-            .map_err(|_| GatewayError::Protocol)?;
-        selector
-            .send_envelope(&envelope)
-            .map_err(|_| failure.take().unwrap_or(GatewayError::Transport))?;
+        let selector = select_native(
+            address,
+            &device,
+            connector,
+            clock.clone(),
+            cancellation,
+            policy.handshake_ms(),
+            &NativePairingRequest::OpenProduct,
+        )?;
         let mut socket = Channel {
             transport: selector.into_transport(),
             frames: FrameReader::new(MAX_PROTECTED_RESPONSE_BYTES),

@@ -269,6 +269,10 @@ export const KNOBS = {
     default: 1,
     what: "window turns captured by a disposable webhook with production loopback refusal and no attempt; positive TLS delivery is qualified separately",
   },
+  sharedChats: {
+    default: 1,
+    what: "a granted chat opened from the follower's window: the transcript is read, a composed message is refused, and unshare takes the chat off the list",
+  },
   peers: {
     default: 1,
     what: "paired peer gateways granted comment and drive that leave a note and send a turn the window shows",
@@ -454,6 +458,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.raises, () => ({ kind: "raise" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
+  for (let slot = 0; slot < knobs.sharedChats; slot += 1)
+    steps.push({ kind: "sharedChat", slot })
   // Preset checks keep their original model. Positive model changes (a
   // `model` step, and a `picker` step's bar) follow that work, using Ask
   // before their review; chaos keeps concurrent coverage.

@@ -11,6 +11,9 @@ pub(crate) enum SavedTranscript {
     Retained {
         progress: CachedProgress,
         view: Box<ConversationView>,
+        /// Earliest and latest time the fold saved, or `0` when it saved none.
+        created_at_ms: u64,
+        updated_at_ms: u64,
     },
 }
 

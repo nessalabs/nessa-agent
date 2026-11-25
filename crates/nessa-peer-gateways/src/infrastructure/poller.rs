@@ -663,7 +663,7 @@ impl Shared {
                 receiver,
                 access_epoch,
             }) => {
-                let mut result = self
+                let mut read = self
                     .read(
                         &record,
                         &receiver,
@@ -673,9 +673,9 @@ impl Shared {
                         Arc::clone(&place),
                     )
                     .await;
-                if let Some(cause) = match &result {
-                    Some(Err(ReadFailure::ResetRequired)) => Some(PollerCause::ResetRequired),
-                    Some(Err(ReadFailure::CacheDamaged)) => Some(PollerCause::CacheDamaged),
+                if let Some(cause) = match &read {
+                    Some((Err(ReadFailure::ResetRequired), _)) => Some(PollerCause::ResetRequired),
+                    Some((Err(ReadFailure::CacheDamaged), _)) => Some(PollerCause::CacheDamaged),
                     _ => None,
                 } {
                     // Derived from the peer: emptied and read again from nothing.
@@ -695,14 +695,14 @@ impl Shared {
                     }
                     self.reset(key, cause, changes).await;
                     *place.permit.lock().unwrap_or_else(PoisonError::into_inner) = permit;
-                    result = self
+                    read = self
                         .read(&record, &receiver, access_epoch, cycle, changes, place)
                         .await;
                 }
-                match result {
+                match read {
                     None => return self.stopped_short(),
-                    Some(Ok(report)) => self.read_done(key, report),
-                    Some(Err(ReadFailure::Refused)) => {
+                    Some((Ok(report), _)) => self.read_done(key, report),
+                    Some((Err(ReadFailure::Refused), _)) => {
                         match self.status(&record, cycle, changes).await {
                             None => return self.stopped_short(),
                             Some(Ok(Status::Ended)) => {
@@ -712,8 +712,15 @@ impl Shared {
                             Some(_) => self.unread(key, &Unread::Read(ReadFailure::Refused)),
                         }
                     }
-                    Some(Err(ReadFailure::Stopped)) => return self.stopped_short(),
-                    Some(Err(failure)) => self.unread(key, &Unread::Read(failure)),
+                    Some((Err(ReadFailure::Stopped), _)) => return self.stopped_short(),
+                    Some((Err(failure), retained)) => {
+                        // `retained` is the cache's decision that a page was
+                        // kept. The failure still backs off.
+                        if retained {
+                            self.commands.note_shared_chats();
+                        }
+                        self.unread(key, &Unread::Read(failure))
+                    }
                 }
             }
         };
@@ -865,7 +872,7 @@ impl Shared {
         cycle: &Arc<CycleStop>,
         changes: &mut Vec<PollerRecord<'a>>,
         place: Arc<ReadPlace>,
-    ) -> Option<Result<ReadReport, ReadFailure>> {
+    ) -> Option<(Result<ReadReport, ReadFailure>, bool)> {
         let key = *record.key();
         let records = self.commands.records().clone();
         let (address, relay, receiver) = (
@@ -883,24 +890,68 @@ impl Shared {
         let (live_tx, mut live_rx) = tokio::sync::mpsc::channel(1);
         let (audit_tx, mut audit_rx) = tokio::sync::mpsc::unbounded_channel();
         let (work, withdrawn) = spawn_read(move |withdrawn| {
-            let credential = records
-                .slot(key)
-                .load_credential()
-                .map_err(|_| ReadFailure::Cache)?
-                .ok_or(ReadFailure::Cache)?;
+            let fail = |failure| (Err(failure), false);
+            let credential = match records.slot(key).load_credential() {
+                Ok(Some(credential)) => credential,
+                Ok(None) | Err(_) => return fail(ReadFailure::Cache),
+            };
             let id = credential.credential().as_str().to_owned();
             let (secret, pin, _) = credential.into_enrollment().into_parts();
-            let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
-            let loaded = records.load_follow(&key).map_err(|_| ReadFailure::Cache)?;
+            let identity = match NativeIdentity::restore(secret) {
+                Ok(identity) => identity,
+                Err(_) => return fail(ReadFailure::Cache),
+            };
+            let loaded = match records.load_follow(&key) {
+                Ok(loaded) => loaded,
+                Err(_) => return fail(ReadFailure::Cache),
+            };
             let rule = loaded
                 .map(|follow| follow.rule)
                 .unwrap_or_else(FollowRule::none);
-            let mut cache = RetainedCache::open_keeping(
+            let mut cache = match RetainedCache::open_keeping(
                 &records.cache_path(&key),
                 rule.keep_bytes(),
                 wall.clone(),
                 clock,
-            )?;
+            ) {
+                Ok(cache) => cache,
+                Err(failure) => return fail(failure),
+            };
+            // The list and an open read the catalogue: its title and agent.
+            // The follow then stays up, and does not write that catalogue.
+            // Withdrawals found while filling the catalogue are not audited
+            // here. The follow reports the same revoke once.
+            let mut catalogue_withdrawn = Vec::new();
+            let (catalogued, retained) = cache.read_followed(
+                ReaderAccess {
+                    role: ReaderRole::GrantedPeer,
+                    address,
+                    relay: relay.as_ref(),
+                    identity: &identity,
+                    pin,
+                    credential: &id,
+                    receiver: &receiver,
+                    access_epoch,
+                    client_id: CLIENT_ID,
+                },
+                &rule,
+                &stop,
+                budget,
+                WITHDRAWN_PER_READ,
+                &mut catalogue_withdrawn,
+            );
+            if retained || catalogued.as_ref().is_ok_and(|report| report.moved) {
+                commands.note_shared_chats();
+            }
+            // A catalogue that cannot continue is emptied and read again by
+            // the outer cycle. Following grants on it would keep the stale
+            // transcripts and never return this failure.
+            if matches!(
+                catalogued,
+                Err(ReadFailure::ResetRequired | ReadFailure::CacheDamaged)
+            ) {
+                return (catalogued, retained);
+            }
             let live_tx = live_tx.clone();
             let audit_tx = audit_tx.clone();
             cache.follow_grants(
@@ -932,6 +983,10 @@ impl Shared {
                             conversations: Some(count),
                         }),
                     );
+                    // The snapshot is in the cache now. `follow_grants` stays
+                    // up after this, so the window cannot wait for the read
+                    // to return before it lists the chat.
+                    commands.note_shared_chats();
                     let _ = live_tx.try_send(());
                 },
             )
@@ -1007,7 +1062,7 @@ impl Shared {
                 )
                 .await;
         }
-        let (result, withdrawn) = read_ended(ended, &withdrawn);
+        let (result, withdrawn, retained) = read_ended(ended, &withdrawn);
         let pending = withdrawn.get(recorded..).unwrap_or(&[]);
         if !pending.is_empty() {
             let _ = self
@@ -1029,7 +1084,7 @@ impl Shared {
         if self.stopping() {
             return None;
         }
-        Some(result)
+        Some((result, retained))
     }
 
     /// Record `batch` and free the place once that wave has left the queue.
@@ -1083,6 +1138,9 @@ impl Shared {
     }
 
     fn read_done(&self, key: DeviceKey, report: ReadReport) -> Pace {
+        if report.moved {
+            self.commands.note_shared_chats();
+        }
         self.commands.set_sync(
             key,
             Some(PeerSync {
@@ -1324,18 +1382,59 @@ fn status_outcome(landed: Option<SlotOutcome>) -> Result<(), &'static str> {
 /// The conversations a read has withdrawn so far, outside its worker.
 type Withdrawn = Arc<Mutex<Vec<String>>>;
 
+/// What the blocking read returns: its report, and whether a page was kept
+/// before a quota or storage failure.
+type FinishedRead = (Result<ReadReport, ReadFailure>, bool);
+
 /// Start `read` on a blocking thread, with the conversations it withdraws
 /// kept outside that thread: a read that panics part way has still removed
 /// them from the cache, and its caller still learns of them.
 fn spawn_read(
-    read: impl FnOnce(&mut Vec<String>) -> Result<ReadReport, ReadFailure> + Send + 'static,
-) -> (JoinHandle<Result<ReadReport, ReadFailure>>, Withdrawn) {
+    read: impl FnOnce(&mut Vec<String>) -> FinishedRead + Send + 'static,
+) -> (JoinHandle<FinishedRead>, Withdrawn) {
     let withdrawn = Arc::new(Mutex::new(Vec::new()));
     let work = tokio::task::spawn_blocking({
         let withdrawn = withdrawn.clone();
         move || read(&mut withdrawn.lock().unwrap_or_else(PoisonError::into_inner))
     });
     (work, withdrawn)
+}
+
+/// One range of a file the peer holds. The bytes come from that peer's
+/// `artifact.read`. Nothing is written to the retained cache. The peer is
+/// dialed for this one range.
+pub fn read_granted_artifact(
+    records: &Arc<PeerRecords>,
+    record: &PeerRecord,
+    receiver: &str,
+    file: nessa_client_core::retained::PeerArtifact<'_>,
+    clock: Arc<dyn MonotonicClock>,
+) -> Result<Vec<u8>, ReadFailure> {
+    let key = *record.key();
+    let credential = records
+        .slot(key)
+        .load_credential()
+        .map_err(|_| ReadFailure::Cache)?
+        .ok_or(ReadFailure::Cache)?;
+    let id = credential.credential().as_str().to_owned();
+    let (secret, pin, _) = credential.into_enrollment().into_parts();
+    let identity = NativeIdentity::restore(secret).map_err(|_| ReadFailure::Cache)?;
+    nessa_client_core::retained::read_peer_artifact(
+        ReaderAccess {
+            role: ReaderRole::GrantedPeer,
+            address: record.address(),
+            relay: record.relay(),
+            identity: &identity,
+            pin,
+            credential: &id,
+            receiver,
+            access_epoch: 0,
+            client_id: CLIENT_ID,
+        },
+        file,
+        &clock,
+        Duration::from_secs(15),
+    )
 }
 
 /// Read `conversation` from `record`'s peer without adding it to the follow
@@ -1393,11 +1492,12 @@ pub fn open_granted(
 /// it ended: a worker that panicked is a cache failure, and what it withdrew
 /// before is kept.
 fn read_ended(
-    joined: Result<Result<ReadReport, ReadFailure>, JoinError>,
+    joined: Result<FinishedRead, JoinError>,
     withdrawn: &Mutex<Vec<String>>,
-) -> (Result<ReadReport, ReadFailure>, Vec<String>) {
+) -> (Result<ReadReport, ReadFailure>, Vec<String>, bool) {
     let withdrawn = std::mem::take(&mut *withdrawn.lock().unwrap_or_else(PoisonError::into_inner));
-    (joined.unwrap_or(Err(ReadFailure::Cache)), withdrawn)
+    let (result, retained) = joined.unwrap_or((Err(ReadFailure::Cache), false));
+    (result, withdrawn, retained)
 }
 
 /// How a cycle that did not read is listed.

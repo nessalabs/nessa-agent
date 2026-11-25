@@ -19,6 +19,8 @@
 //! Remote: HttpExchange (injected) ─ HttpSession (owned JSON/SSE bodies and recovery) ─ the same Connection
 //! RecoveryReady / captured peer reply ──bounded FIFO with control reserve──▶ HTTP writer
 //! HttpSession owns binding claims and the shared authorized modern POST policy.
+//! ExperimentalEventsPoll ──direct, caller-driven 2026-07-28 requests──▶ HttpExchange
+//!   └── one selected event and in-memory cursor, without a harness connection
 //! A panicked HTTP writer settles that outcome, records ServerGone, then logs
 //! the marker on a thread the session runtime does not run. A reply reader,
 //! legacy stream, server stream, or recovery panic records that same end, then
@@ -57,6 +59,7 @@
 mod authorization;
 mod connection;
 mod error;
+mod events;
 mod framing;
 mod http;
 mod http_exchange;
@@ -69,6 +72,9 @@ mod wire;
 
 pub use authorization::{Bearer, NoAuthorization, RemoteAuthorization};
 pub use error::McpError;
+pub use events::{
+    ExperimentalEvent, ExperimentalEventsBatch, ExperimentalEventsError, ExperimentalEventsPoll,
+};
 pub use http::SessionClaims;
 pub use http_exchange::{
     HttpBody, HttpChunks, HttpExchange, HttpFailure, HttpMethod, HttpRequest, HttpResponse,

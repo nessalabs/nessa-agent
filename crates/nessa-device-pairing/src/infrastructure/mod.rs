@@ -58,8 +58,8 @@ pub fn platform_announcer() -> std::sync::Arc<dyn crate::application::LinkingAnn
     }
 }
 pub use connection::{
-    NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections, RelayPermit,
-    TunnelPermit,
+    NativeConnectionError, NativeConnectionFailure, NativeEnrollmentConnections,
+    PendingRecordCarrier, RecordCarrier, RelayPermit, SelectedRecordCarrier, TunnelPermit,
 };
 pub use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
 pub use environment_peers::EnvironmentPeers;
