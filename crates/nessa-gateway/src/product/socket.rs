@@ -2263,6 +2263,14 @@ async fn dispatch_authorized(
         ProductMethod::CloudRead | ProductMethod::CloudChoose => {
             super::cloud::dispatch(state, session, frame).await
         }
+        ProductMethod::CloudBoxesList
+        | ProductMethod::CloudBoxesCreate
+        | ProductMethod::CloudBoxesWake
+        | ProductMethod::CloudBoxesSleep
+        | ProductMethod::CloudBoxesRename
+        | ProductMethod::CloudBoxesDelete => {
+            super::cloud_boxes::dispatch(state, session, frame).await
+        }
         ProductMethod::BoatStatus
         | ProductMethod::BoatSave
         | ProductMethod::BoatSaveClaudeSignIn

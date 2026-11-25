@@ -65,6 +65,7 @@ mod agent37;
 mod boat;
 mod channel;
 mod cloud;
+mod cloud_boxes;
 mod conversation;
 mod device_setup;
 mod github;

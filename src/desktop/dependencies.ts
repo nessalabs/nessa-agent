@@ -321,6 +321,32 @@ export function createDesktopDependencies(
             digest: sha256Digest,
           },
           connectRemote: options.connectRemote,
+          cloudBoxes: {
+            create: async (input) => {
+              const client = await source.connected()
+              const created = await client.cloud.boxes.create(input)
+              return {
+                boxId: created.cloudBox.boxId,
+                name: created.cloudBox.name,
+                cloud: created.cloudBox.cloud,
+                url: created.cloudBox.url,
+                credential: created.credential,
+              }
+            },
+            wake: async (boxId) => {
+              const client = await source.connected()
+              const woken = await client.cloud.boxes.wake(boxId)
+              return { url: woken.url }
+            },
+            sleep: async (boxId) => {
+              const client = await source.connected()
+              await client.cloud.boxes.sleep(boxId)
+            },
+            delete: async (boxId) => {
+              const client = await source.connected()
+              await client.cloud.boxes.delete(boxId)
+            },
+          },
         })
       : undefined
   const workspace =

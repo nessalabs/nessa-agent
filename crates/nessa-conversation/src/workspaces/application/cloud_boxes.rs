@@ -1,0 +1,1747 @@
+//! Persistent cloud gateway VM orchestration service (ADR 1417, #1420).
+//!
+//! Coordinates durable receipt storage (ADR 1160), provider VM lifecycle
+//! (`create`, `wake`, `sleep`, `delete`), active-work guards before sleeping
+//! (G5), single-flight per-box locking (G3), and durable audit evidence on
+//! every transition including refusal and cleanup paths.
+
+use super::workspaces::Settings;
+use crate::timer::clock;
+use crate::workspaces::domain::{
+    Admitted, Cloud, CloudBoxEndpoint, CloudBoxEnrollment, CloudBoxError, CloudBoxId, CloudBoxName,
+    CloudBoxRecord, CloudBoxState, CloudBoxSummary, CloudConnection, Failure,
+};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Weak},
+    time::UNIX_EPOCH,
+};
+use tokio::sync::Mutex;
+use zeroize::Zeroizing;
+
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Provisioned VM details returned by a provider after creating and
+/// bootstrapping a headless gateway inside the VM.
+#[derive(Debug)]
+pub struct ProvisionedCloudBox {
+    pub vm: String,
+    pub image: String,
+    pub admission: Admitted,
+    pub endpoint: CloudBoxEndpoint,
+    pub credential: Zeroizing<String>,
+}
+
+/// Process-boundary port for cloud VM provider lifecycle operations.
+pub trait CloudBoxProvider: Send + Sync {
+    fn create_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        box_id: &'a CloudBoxId,
+    ) -> BoxFuture<'a, Result<ProvisionedCloudBox, CloudBoxError>>;
+
+    fn wake_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
+    ) -> BoxFuture<'a, Result<CloudBoxEndpoint, CloudBoxError>>;
+
+    /// Wake an admitted box and have its gateway issue a fresh enrollment
+    /// credential: how a create whose answer was lost after the box was
+    /// admitted is finished.
+    fn enroll_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
+    ) -> BoxFuture<'a, Result<(CloudBoxEndpoint, Zeroizing<String>), CloudBoxError>>;
+
+    fn stop_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+    ) -> BoxFuture<'a, Result<(), CloudBoxError>>;
+
+    fn delete_box<'a>(
+        &'a self,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
+    ) -> BoxFuture<'a, Result<(), CloudBoxError>>;
+}
+
+/// Process-boundary port for durable append-only cloud box receipt storage.
+pub trait CloudBoxStore: Send + Sync {
+    fn list(&self) -> Result<Vec<Vec<CloudBoxRecord>>, CloudBoxError>;
+    fn read(&self, box_id: &CloudBoxId) -> Result<Vec<CloudBoxRecord>, CloudBoxError>;
+    fn append(&self, box_id: &CloudBoxId, record: CloudBoxRecord) -> Result<(), CloudBoxError>;
+}
+
+/// Process-boundary guard checking whether a running cloud box currently has
+/// active conversations or terminals before allowing it to sleep (G5).
+pub trait ActiveWorkChecker: Send + Sync {
+    fn has_active_work<'a>(
+        &'a self,
+        cloud: Cloud,
+        connection: &'a CloudConnection,
+        vm: &'a str,
+        admission: &'a Admitted,
+    ) -> BoxFuture<'a, Result<bool, CloudBoxError>>;
+}
+
+/// Consequential lifecycle audit event for persistent cloud boxes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloudBoxAuditEvent {
+    pub box_id: CloudBoxId,
+    pub cloud: Option<Cloud>,
+    pub before: Option<CloudBoxState>,
+    pub after: Option<CloudBoxState>,
+    pub action: &'static str,
+    pub cause: String,
+    pub initiator: String,
+}
+
+/// Durable audit sink for every cloud box transition, including refusal and
+/// cleanup paths. Audit delivery failures are observable (`Err`).
+pub trait CloudBoxAudit: Send + Sync {
+    fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError>;
+}
+
+/// One cloud provider's settings + box provider wired into [`CloudBoxes`].
+pub struct CloudBoxBackend {
+    pub cloud: Cloud,
+    pub settings: Arc<dyn Settings>,
+    pub provider: Arc<dyn CloudBoxProvider>,
+}
+
+/// Orchestration service for persistent cloud gateway VMs.
+pub struct CloudBoxes {
+    backends: HashMap<Cloud, CloudBoxBackend>,
+    store: Arc<dyn CloudBoxStore>,
+    active_work: Arc<dyn ActiveWorkChecker>,
+    audit: Arc<dyn CloudBoxAudit>,
+    locks: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+}
+
+impl CloudBoxes {
+    pub fn new(
+        backends: Vec<CloudBoxBackend>,
+        store: Arc<dyn CloudBoxStore>,
+        active_work: Arc<dyn ActiveWorkChecker>,
+        audit: Arc<dyn CloudBoxAudit>,
+    ) -> Self {
+        let map = backends
+            .into_iter()
+            .map(|backend| (backend.cloud, backend))
+            .collect();
+        Self {
+            backends: map,
+            store,
+            active_work,
+            audit,
+            locks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn now_ms() -> u64 {
+        clock::wall_now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+            .unwrap_or(0)
+    }
+
+    async fn box_lock(&self, box_id: &CloudBoxId) -> Arc<Mutex<()>> {
+        let mut map = self.locks.lock().await;
+        map.retain(|_, weak| weak.strong_count() > 0);
+        if let Some(existing) = map.get(box_id.as_str()).and_then(Weak::upgrade) {
+            return existing;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        map.insert(box_id.as_str().to_owned(), Arc::downgrade(&lock));
+        lock
+    }
+
+    fn backend(&self, cloud: Cloud) -> Result<&CloudBoxBackend, CloudBoxError> {
+        self.backends
+            .get(&cloud)
+            .ok_or(CloudBoxError::AccountDisconnected)
+    }
+
+    async fn load_connection(
+        &self,
+        cloud: Cloud,
+    ) -> Result<(&CloudBoxBackend, CloudConnection), CloudBoxError> {
+        let backend = self.backend(cloud)?;
+        let connection = backend
+            .settings
+            .read()
+            .await
+            .map_err(|failure| match failure {
+                Failure::Locked => CloudBoxError::VaultLocked,
+                Failure::NotConfigured => CloudBoxError::AccountDisconnected,
+                other => CloudBoxError::ProviderFailed(format!("{other:?}")),
+            })?;
+        Ok((backend, connection))
+    }
+
+    fn latest_active(history: &[CloudBoxRecord]) -> Result<CloudBoxRecord, CloudBoxError> {
+        match history.last().cloned() {
+            Some(record @ CloudBoxRecord::Active { .. }) => Ok(record),
+            Some(CloudBoxRecord::Refused { .. }) => Err(CloudBoxError::BoxRefused),
+            _ => Err(CloudBoxError::NotActive),
+        }
+    }
+
+    /// List all currently active (running or sleeping) cloud boxes.
+    pub fn list(&self) -> Result<Vec<CloudBoxSummary>, CloudBoxError> {
+        let histories = self.store.list()?;
+        let mut summaries = Vec::new();
+        for history in histories {
+            CloudBoxRecord::validate_history(&history)?;
+            if let Some(summary) = history.last().and_then(CloudBoxRecord::as_summary) {
+                summaries.push(summary);
+            }
+        }
+        summaries.sort_by_key(|s| s.created_at_ms);
+        Ok(summaries)
+    }
+
+    /// Create and bootstrap a persistent cloud gateway VM (ADR 1160).
+    ///
+    /// The caller names the box: the same `box_id` asked again is the same
+    /// creation, never a second VM. A box with no history saves its
+    /// `Provisioning` intent before the provider is asked; one whose intent is
+    /// saved but whose answer was lost asks the provider again under the same
+    /// key; one already admitted has its gateway issue a fresh enrollment
+    /// credential. So any failure after the intent is durable, including an
+    /// audit that could not be delivered, is reported and left resumable,
+    /// and the caller finishes it by asking again.
+    pub async fn create(
+        &self,
+        box_id: CloudBoxId,
+        name: CloudBoxName,
+        cloud: Cloud,
+        initiator: impl Into<String>,
+    ) -> Result<CloudBoxEnrollment, CloudBoxError> {
+        let initiator = initiator.into();
+        let lock = self.box_lock(&box_id).await;
+        let _guard = lock.lock().await;
+
+        let history = self.store.read(&box_id)?;
+        let Some(latest) = history.last().cloned() else {
+            let (backend, connection) = self.load_connection(cloud).await?;
+            let created_at_ms = Self::now_ms();
+
+            // ADR 1160: persist durable intent BEFORE provider creation.
+            self.store.append(
+                &box_id,
+                CloudBoxRecord::Provisioning {
+                    box_id: box_id.clone(),
+                    name: name.clone(),
+                    cloud,
+                    created_at_ms,
+                },
+            )?;
+            self.audit.record(CloudBoxAuditEvent {
+                box_id: box_id.clone(),
+                cloud: Some(cloud),
+                before: None,
+                after: Some(CloudBoxState::Provisioning),
+                action: "create_requested",
+                cause: "user_request".into(),
+                initiator: initiator.clone(),
+            })?;
+            return self
+                .provision(
+                    backend,
+                    &connection,
+                    box_id,
+                    name,
+                    cloud,
+                    created_at_ms,
+                    initiator,
+                )
+                .await;
+        };
+        CloudBoxRecord::validate_history(&history)?;
+
+        match latest {
+            CloudBoxRecord::Provisioning {
+                name,
+                cloud: recorded,
+                created_at_ms,
+                ..
+            } => {
+                if recorded != cloud {
+                    return Err(CloudBoxError::AlreadyExists);
+                }
+                let (backend, connection) = self.load_connection(cloud).await?;
+                self.audit.record(CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(CloudBoxState::Provisioning),
+                    after: Some(CloudBoxState::Provisioning),
+                    action: "create_resumed",
+                    cause: "intent_saved_answer_lost".into(),
+                    initiator: initiator.clone(),
+                })?;
+                self.provision(
+                    backend,
+                    &connection,
+                    box_id,
+                    name,
+                    cloud,
+                    created_at_ms,
+                    initiator,
+                )
+                .await
+            }
+            active @ CloudBoxRecord::Active { .. } => self.reenroll(active, cloud, initiator).await,
+            CloudBoxRecord::Refused { .. } => Err(CloudBoxError::BoxRefused),
+            CloudBoxRecord::Deleted { .. } => Err(CloudBoxError::NotActive),
+        }
+    }
+
+    /// Finish an admitted box's creation again: its gateway issues a fresh
+    /// enrollment credential, and the endpoint it reports is saved.
+    async fn reenroll(
+        &self,
+        active: CloudBoxRecord,
+        cloud: Cloud,
+        initiator: String,
+    ) -> Result<CloudBoxEnrollment, CloudBoxError> {
+        let CloudBoxRecord::Active {
+            box_id,
+            name,
+            cloud: recorded,
+            vm,
+            image,
+            admission,
+            url,
+            state,
+            created_at_ms,
+            ..
+        } = active.clone()
+        else {
+            unreachable!("reenroll is only called with an Active record")
+        };
+        if recorded != cloud {
+            return Err(CloudBoxError::AlreadyExists);
+        }
+        let (backend, connection) = self.load_connection(cloud).await?;
+        let (endpoint, credential) = match backend
+            .provider
+            .enroll_box(&connection, &vm, &admission)
+            .await
+        {
+            Ok(enrolled) => enrolled,
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(state),
+                        action: "reenroll_refused",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+
+        let current = if endpoint.url != url || state != CloudBoxState::Running {
+            let updated = CloudBoxRecord::Active {
+                box_id: box_id.clone(),
+                name,
+                cloud,
+                vm,
+                image,
+                admission,
+                url: endpoint.url,
+                state: CloudBoxState::Running,
+                created_at_ms,
+                updated_at_ms: Self::now_ms(),
+            };
+            if let Err(save_error) = self.store.append(&box_id, updated.clone()) {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(CloudBoxState::Running),
+                        action: "reenroll_receipt_failed",
+                        cause: save_error.to_string(),
+                        initiator,
+                    },
+                    save_error,
+                ));
+            }
+            updated
+        } else {
+            active
+        };
+        let summary = current
+            .as_summary()
+            .expect("Active record always projects to summary");
+        self.audit.record(CloudBoxAuditEvent {
+            box_id,
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(CloudBoxState::Running),
+            action: "create_reenrolled",
+            cause: "enrollment_reissued".into(),
+            initiator,
+        })?;
+        Ok(CloudBoxEnrollment {
+            summary,
+            credential,
+        })
+    }
+
+    /// Ask the provider for the box's VM under its key, bootstrap its gateway
+    /// and save the `Active` receipt. The intent is already durable, so this
+    /// runs the same way for a first creation and a resumed one.
+    #[allow(clippy::too_many_arguments)]
+    async fn provision(
+        &self,
+        backend: &CloudBoxBackend,
+        connection: &CloudConnection,
+        box_id: CloudBoxId,
+        name: CloudBoxName,
+        cloud: Cloud,
+        created_at_ms: u64,
+        initiator: String,
+    ) -> Result<CloudBoxEnrollment, CloudBoxError> {
+        let provisioned = match backend.provider.create_box(connection, &box_id).await {
+            Ok(provisioned) => provisioned,
+            // Only an admission refusal is a settled answer: the provider
+            // answered, and any new VM was rolled back (a failed rollback is
+            // `CleanupUncertain`). Anything else may have left a VM under this
+            // box's key, so the intent stays `Provisioning`: asking again
+            // resumes it, and `delete` can still find and remove the VM.
+            Err(error @ CloudBoxError::AdmissionRefused(_)) => {
+                let receipt_result = self.store.append(
+                    &box_id,
+                    CloudBoxRecord::Refused {
+                        box_id: box_id.clone(),
+                        name: name.clone(),
+                        cloud,
+                        reason: error.to_string(),
+                        updated_at_ms: Self::now_ms(),
+                    },
+                );
+                let cause = match &receipt_result {
+                    Ok(()) => error.to_string(),
+                    Err(receipt_err) => format!("{error}; refusal_receipt_error={receipt_err}"),
+                };
+                let after = if receipt_result.is_ok() {
+                    CloudBoxState::Refused
+                } else {
+                    CloudBoxState::Provisioning
+                };
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(after),
+                        action: "create_refused",
+                        cause,
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id,
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(CloudBoxState::Provisioning),
+                        action: "create_unsettled",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+
+        let updated_at_ms = Self::now_ms();
+        let active_record = CloudBoxRecord::Active {
+            box_id: box_id.clone(),
+            name: name.clone(),
+            cloud,
+            vm: provisioned.vm.clone(),
+            image: provisioned.image,
+            admission: provisioned.admission.clone(),
+            url: provisioned.endpoint.url.clone(),
+            state: CloudBoxState::Running,
+            created_at_ms,
+            updated_at_ms,
+        };
+
+        if let Err(save_error) = self.store.append(&box_id, active_record.clone()) {
+            // Fail closed: roll back the newly created VM if we cannot durably
+            // record its receipt; surface CleanupUncertain if rollback also fails.
+            let cleanup = backend
+                .provider
+                .delete_box(connection, &provisioned.vm, &provisioned.admission)
+                .await;
+            let event = CloudBoxAuditEvent {
+                box_id,
+                cloud: Some(cloud),
+                before: Some(CloudBoxState::Provisioning),
+                after: None,
+                action: "create_receipt_failed_rollback",
+                cause: format!(
+                    "vm={}; save={save_error}; cleanup={cleanup:?}",
+                    provisioned.vm
+                ),
+                initiator,
+            };
+            let operation_error = match cleanup {
+                Ok(()) => save_error,
+                Err(cleanup_error) => CloudBoxError::CleanupUncertain(format!(
+                    "vm={}; save={save_error}; cleanup={cleanup_error}",
+                    provisioned.vm
+                )),
+            };
+            return Err(self.audit_failure(event, operation_error));
+        }
+
+        let summary = active_record
+            .as_summary()
+            .expect("Active record always projects to summary");
+        // The receipt is durable, so a failed audit here leaves the box
+        // admitted and resumable: the caller asks again with the same id and
+        // `reenroll` finishes it. The audit failure is still the answer.
+        self.audit.record(CloudBoxAuditEvent {
+            box_id,
+            cloud: Some(cloud),
+            before: Some(CloudBoxState::Provisioning),
+            after: Some(CloudBoxState::Running),
+            action: "create_admitted",
+            cause: "provisioned".into(),
+            initiator,
+        })?;
+
+        Ok(CloudBoxEnrollment {
+            summary,
+            credential: provisioned.credential,
+        })
+    }
+
+    /// Wake a sleeping (or verify a running) cloud box under its per-box lock
+    /// (G3), persisting the `wss://` URL its gateway now reports (G8). Which
+    /// gateway answers there is the client's to check, from that gateway's
+    /// own handshake.
+    pub async fn wake(
+        &self,
+        box_id: &CloudBoxId,
+        initiator: impl Into<String>,
+    ) -> Result<CloudBoxEndpoint, CloudBoxError> {
+        let initiator = initiator.into();
+        let lock = self.box_lock(box_id).await;
+        let _guard = lock.lock().await;
+
+        let history = self.store.read(box_id)?;
+        if history.is_empty() {
+            return Err(CloudBoxError::NotFound);
+        }
+        CloudBoxRecord::validate_history(&history)?;
+
+        let CloudBoxRecord::Active {
+            name,
+            cloud,
+            vm,
+            image,
+            admission,
+            state,
+            created_at_ms,
+            ..
+        } = Self::latest_active(&history)?
+        else {
+            unreachable!()
+        };
+
+        let (backend, connection) = self.load_connection(cloud).await?;
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(CloudBoxState::Running),
+            action: "wake_requested",
+            cause: "client_wake".into(),
+            initiator: initiator.clone(),
+        })?;
+
+        let endpoint = match backend
+            .provider
+            .wake_box(&connection, &vm, &admission)
+            .await
+        {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(state),
+                        action: "wake_refused",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+
+        let updated = CloudBoxRecord::Active {
+            box_id: box_id.clone(),
+            name,
+            cloud,
+            vm,
+            image,
+            admission,
+            url: endpoint.url.clone(),
+            state: CloudBoxState::Running,
+            created_at_ms,
+            updated_at_ms: Self::now_ms(),
+        };
+        if let Err(save_error) = self.store.append(box_id, updated) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Running),
+                    action: "wake_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(CloudBoxState::Running),
+            action: "wake_completed",
+            cause: "running".into(),
+            initiator,
+        })?;
+
+        Ok(endpoint)
+    }
+
+    /// Stop an idle cloud box VM while keeping its persistent disk (G5).
+    /// Refuses if active work is in flight on the box; idempotent if already
+    /// sleeping.
+    pub async fn sleep(
+        &self,
+        box_id: &CloudBoxId,
+        initiator: impl Into<String>,
+    ) -> Result<CloudBoxSummary, CloudBoxError> {
+        let initiator = initiator.into();
+        let lock = self.box_lock(box_id).await;
+        let _guard = lock.lock().await;
+
+        let history = self.store.read(box_id)?;
+        if history.is_empty() {
+            return Err(CloudBoxError::NotFound);
+        }
+        CloudBoxRecord::validate_history(&history)?;
+
+        let active = Self::latest_active(&history)?;
+        let CloudBoxRecord::Active {
+            name,
+            cloud,
+            vm,
+            image,
+            admission,
+            url,
+            state,
+            created_at_ms,
+            ..
+        } = active.clone()
+        else {
+            unreachable!()
+        };
+
+        if state == CloudBoxState::Sleeping {
+            return Ok(active
+                .as_summary()
+                .expect("Active record always projects to summary"));
+        }
+
+        let (backend, connection) = self.load_connection(cloud).await?;
+
+        // G5: never sleep while conversations or terminals are active.
+        let busy = match self
+            .active_work
+            .has_active_work(cloud, &connection, &vm, &admission)
+            .await
+        {
+            Ok(busy) => busy,
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(state),
+                        after: Some(state),
+                        action: "sleep_active_work_check_failed",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+        if busy {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "sleep_refused",
+                    cause: "active_work_in_flight".into(),
+                    initiator,
+                },
+                CloudBoxError::ActiveWorkInFlight,
+            ));
+        }
+
+        if let Err(error) = backend.provider.stop_box(&connection, &vm).await {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "sleep_failed",
+                    cause: error.to_string(),
+                    initiator,
+                },
+                error,
+            ));
+        }
+
+        let updated = CloudBoxRecord::Active {
+            box_id: box_id.clone(),
+            name,
+            cloud,
+            vm,
+            image,
+            admission,
+            url,
+            state: CloudBoxState::Sleeping,
+            created_at_ms,
+            updated_at_ms: Self::now_ms(),
+        };
+        let summary = updated
+            .as_summary()
+            .expect("Active record always projects to summary");
+        if let Err(save_error) = self.store.append(box_id, updated) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Sleeping),
+                    action: "sleep_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(CloudBoxState::Sleeping),
+            action: "sleep_completed",
+            cause: "idle_or_user_request".into(),
+            initiator,
+        })?;
+
+        Ok(summary)
+    }
+
+    /// Update the display name of an active cloud box.
+    pub async fn rename(
+        &self,
+        box_id: &CloudBoxId,
+        new_name: CloudBoxName,
+        initiator: impl Into<String>,
+    ) -> Result<CloudBoxSummary, CloudBoxError> {
+        let initiator = initiator.into();
+        let lock = self.box_lock(box_id).await;
+        let _guard = lock.lock().await;
+
+        let history = self.store.read(box_id)?;
+        if history.is_empty() {
+            return Err(CloudBoxError::NotFound);
+        }
+        CloudBoxRecord::validate_history(&history)?;
+
+        let CloudBoxRecord::Active {
+            name: old_name,
+            cloud,
+            vm,
+            image,
+            admission,
+            url,
+            state,
+            created_at_ms,
+            ..
+        } = Self::latest_active(&history)?
+        else {
+            unreachable!()
+        };
+        // Receipt history is compacted, so the audit line is what keeps
+        // every rename's before and after.
+        let renamed_cause = format!(
+            "user_request; from={:?}; to={:?}",
+            old_name.as_str(),
+            new_name.as_str()
+        );
+
+        let updated = CloudBoxRecord::Active {
+            box_id: box_id.clone(),
+            name: new_name,
+            cloud,
+            vm,
+            image,
+            admission,
+            url,
+            state,
+            created_at_ms,
+            updated_at_ms: Self::now_ms(),
+        };
+        let summary = updated
+            .as_summary()
+            .expect("Active record always projects to summary");
+        if let Err(save_error) = self.store.append(box_id, updated) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "rename_receipt_failed",
+                    cause: format!("{renamed_cause}; save={save_error}"),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(state),
+            action: "renamed",
+            cause: renamed_cause,
+            initiator,
+        })?;
+        Ok(summary)
+    }
+
+    /// Permanently destroy a cloud box VM and mark its receipt history
+    /// terminally `Deleted` (G11).
+    pub async fn delete(
+        &self,
+        box_id: &CloudBoxId,
+        initiator: impl Into<String>,
+    ) -> Result<(), CloudBoxError> {
+        let initiator = initiator.into();
+        let lock = self.box_lock(box_id).await;
+        let _guard = lock.lock().await;
+
+        let history = self.store.read(box_id)?;
+        if history.is_empty() {
+            return Err(CloudBoxError::NotFound);
+        }
+        CloudBoxRecord::validate_history(&history)?;
+
+        let latest = history.last().cloned().expect("history is not empty");
+        let (cloud, vm, admission, state) = match latest {
+            CloudBoxRecord::Active {
+                cloud,
+                vm,
+                admission,
+                state,
+                ..
+            } => (cloud, vm, admission, state),
+            // A delete whose receipt was saved but whose answer or audit was
+            // lost: the VM is gone, so finishing it is recording the audit.
+            CloudBoxRecord::Deleted { .. } => {
+                return self.audit.record(CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: None,
+                    before: Some(CloudBoxState::Deleted),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "deleted",
+                    cause: "already_deleted".into(),
+                    initiator,
+                });
+            }
+            CloudBoxRecord::Provisioning { cloud, .. } => {
+                return self.delete_unsettled(box_id, cloud, initiator).await;
+            }
+            CloudBoxRecord::Refused { .. } => return Err(CloudBoxError::BoxRefused),
+        };
+
+        let (backend, connection) = self.load_connection(cloud).await?;
+        if let Err(error) = backend
+            .provider
+            .delete_box(&connection, &vm, &admission)
+            .await
+        {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(state),
+                    action: "delete_failed",
+                    cause: error.to_string(),
+                    initiator,
+                },
+                error,
+            ));
+        }
+
+        if let Err(save_error) = self.store.append(
+            box_id,
+            CloudBoxRecord::Deleted {
+                box_id: box_id.clone(),
+                vm: Some(vm),
+                updated_at_ms: Self::now_ms(),
+            },
+        ) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(state),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "delete_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(state),
+            after: Some(CloudBoxState::Deleted),
+            action: "deleted",
+            cause: "user_request".into(),
+            initiator,
+        })?;
+        Ok(())
+    }
+
+    /// Delete a box whose creation never settled. The provider may hold a VM
+    /// under the box's key, so it is asked for it under that key (it answers
+    /// with the VM it made, or makes and bootstraps one) and that VM is
+    /// removed. A creation that fails in the asking already removed its new
+    /// VM, unless it says the cleanup was uncertain.
+    async fn delete_unsettled(
+        &self,
+        box_id: &CloudBoxId,
+        cloud: Cloud,
+        initiator: String,
+    ) -> Result<(), CloudBoxError> {
+        let (backend, connection) = self.load_connection(cloud).await?;
+        let vm = match backend.provider.create_box(&connection, box_id).await {
+            Ok(provisioned) => {
+                if let Err(error) = backend
+                    .provider
+                    .delete_box(&connection, &provisioned.vm, &provisioned.admission)
+                    .await
+                {
+                    return Err(self.audit_failure(
+                        CloudBoxAuditEvent {
+                            box_id: box_id.clone(),
+                            cloud: Some(cloud),
+                            before: Some(CloudBoxState::Provisioning),
+                            after: Some(CloudBoxState::Provisioning),
+                            action: "delete_failed",
+                            cause: format!("vm={}; {error}", provisioned.vm),
+                            initiator,
+                        },
+                        error,
+                    ));
+                }
+                Some(provisioned.vm)
+            }
+            // The provider refused, or bootstrap failed and its new VM was
+            // removed: nothing is left under the key.
+            Err(CloudBoxError::AdmissionRefused(_) | CloudBoxError::BootstrapFailed(_)) => None,
+            // Anything else (a lost answer, an uncertain cleanup) may still
+            // hold a VM, so the box stays to be deleted again.
+            Err(error) => {
+                return Err(self.audit_failure(
+                    CloudBoxAuditEvent {
+                        box_id: box_id.clone(),
+                        cloud: Some(cloud),
+                        before: Some(CloudBoxState::Provisioning),
+                        after: Some(CloudBoxState::Provisioning),
+                        action: "delete_failed",
+                        cause: error.to_string(),
+                        initiator,
+                    },
+                    error,
+                ));
+            }
+        };
+        if let Err(save_error) = self.store.append(
+            box_id,
+            CloudBoxRecord::Deleted {
+                box_id: box_id.clone(),
+                vm,
+                updated_at_ms: Self::now_ms(),
+            },
+        ) {
+            return Err(self.audit_failure(
+                CloudBoxAuditEvent {
+                    box_id: box_id.clone(),
+                    cloud: Some(cloud),
+                    before: Some(CloudBoxState::Provisioning),
+                    after: Some(CloudBoxState::Deleted),
+                    action: "delete_receipt_failed",
+                    cause: save_error.to_string(),
+                    initiator,
+                },
+                save_error,
+            ));
+        }
+        self.audit.record(CloudBoxAuditEvent {
+            box_id: box_id.clone(),
+            cloud: Some(cloud),
+            before: Some(CloudBoxState::Provisioning),
+            after: Some(CloudBoxState::Deleted),
+            action: "deleted",
+            cause: "user_request; creation_unsettled".into(),
+            initiator,
+        })
+    }
+
+    /// Record required audit evidence on a failure/refusal/cleanup path,
+    /// preserving both the original operation failure and any audit delivery
+    /// failure so audit outages are never silently discarded.
+    fn audit_failure(&self, event: CloudBoxAuditEvent, original: CloudBoxError) -> CloudBoxError {
+        match self.audit.record(event) {
+            Ok(()) => original,
+            Err(audit_error) => CloudBoxError::AuditDeliveryFailed {
+                operation: Box::new(original),
+                audit: audit_error.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspaces::domain::CloudBoxUrl;
+    use crate::workspaces::domain::{BoatConnection, TemplateRelease};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex as StdMutex;
+
+    struct FakeSettings(Option<CloudConnection>);
+    #[async_trait]
+    impl Settings for FakeSettings {
+        async fn read(&self) -> Result<CloudConnection, Failure> {
+            self.0.clone().ok_or(Failure::NotConfigured)
+        }
+        fn generation(&self) -> Result<u64, Failure> {
+            Ok(1)
+        }
+        async fn save(
+            &self,
+            _generation: u64,
+            _connection: CloudConnection,
+        ) -> Result<(), Failure> {
+            Ok(())
+        }
+        async fn clear(&self) -> Result<(), Failure> {
+            Ok(())
+        }
+    }
+
+    struct MemoryStore {
+        rows: StdMutex<HashMap<String, Vec<CloudBoxRecord>>>,
+        fail_active_save: AtomicBool,
+    }
+    impl MemoryStore {
+        fn new() -> Self {
+            Self {
+                rows: StdMutex::new(HashMap::new()),
+                fail_active_save: AtomicBool::new(false),
+            }
+        }
+    }
+    impl CloudBoxStore for MemoryStore {
+        fn list(&self) -> Result<Vec<Vec<CloudBoxRecord>>, CloudBoxError> {
+            Ok(self.rows.lock().unwrap().values().cloned().collect())
+        }
+        fn read(&self, box_id: &CloudBoxId) -> Result<Vec<CloudBoxRecord>, CloudBoxError> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .get(box_id.as_str())
+                .cloned()
+                .unwrap_or_default())
+        }
+        fn append(&self, box_id: &CloudBoxId, record: CloudBoxRecord) -> Result<(), CloudBoxError> {
+            if matches!(record, CloudBoxRecord::Active { .. })
+                && self.fail_active_save.load(Ordering::SeqCst)
+            {
+                return Err(CloudBoxError::ReceiptUnavailable("disk full".into()));
+            }
+            self.rows
+                .lock()
+                .unwrap()
+                .entry(box_id.as_str().to_owned())
+                .or_default()
+                .push(record);
+            Ok(())
+        }
+    }
+
+    struct FakeActiveWork(AtomicBool);
+    impl ActiveWorkChecker for FakeActiveWork {
+        fn has_active_work<'a>(
+            &'a self,
+            _cloud: Cloud,
+            _connection: &'a CloudConnection,
+            _vm: &'a str,
+            _admission: &'a Admitted,
+        ) -> BoxFuture<'a, Result<bool, CloudBoxError>> {
+            let busy = self.0.load(Ordering::SeqCst);
+            Box::pin(async move { Ok(busy) })
+        }
+    }
+
+    struct FakeAudit(StdMutex<Vec<CloudBoxAuditEvent>>);
+    impl CloudBoxAudit for FakeAudit {
+        fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+            self.0.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    struct FakeProvider {
+        wake_url: StdMutex<String>,
+        created: StdMutex<Vec<String>>,
+        enrolled: StdMutex<Vec<String>>,
+        deleted: StdMutex<Vec<String>>,
+        fail_create: AtomicBool,
+        refuse_admission: AtomicBool,
+        fail_wake: AtomicBool,
+        fail_delete: AtomicBool,
+    }
+    impl FakeProvider {
+        fn new() -> Self {
+            Self {
+                wake_url: StdMutex::new("wss://box-rotated.example.com".into()),
+                created: StdMutex::new(Vec::new()),
+                enrolled: StdMutex::new(Vec::new()),
+                deleted: StdMutex::new(Vec::new()),
+                fail_create: AtomicBool::new(false),
+                refuse_admission: AtomicBool::new(false),
+                fail_wake: AtomicBool::new(false),
+                fail_delete: AtomicBool::new(false),
+            }
+        }
+    }
+    impl CloudBoxProvider for FakeProvider {
+        fn create_box<'a>(
+            &'a self,
+            _connection: &'a CloudConnection,
+            box_id: &'a CloudBoxId,
+        ) -> BoxFuture<'a, Result<ProvisionedCloudBox, CloudBoxError>> {
+            self.created
+                .lock()
+                .unwrap()
+                .push(box_id.as_str().to_owned());
+            Box::pin(async move {
+                if self.refuse_admission.load(Ordering::SeqCst) {
+                    return Err(CloudBoxError::AdmissionRefused("template retired".into()));
+                }
+                if self.fail_create.load(Ordering::SeqCst) {
+                    return Err(CloudBoxError::ProviderFailed("quota exceeded".into()));
+                }
+                Ok(ProvisionedCloudBox {
+                    vm: "vm-box-1".into(),
+                    image: "nessa-headless:v1".into(),
+                    admission: Admitted::Agent37(
+                        TemplateRelease::new("v1".into(), Some(1), None).unwrap(),
+                    ),
+                    endpoint: CloudBoxEndpoint {
+                        url: CloudBoxUrl::new("wss://box-1.example.com").unwrap(),
+                    },
+                    credential: Zeroizing::new("secret-enroll-token".into()),
+                })
+            })
+        }
+
+        fn wake_box<'a>(
+            &'a self,
+            _connection: &'a CloudConnection,
+            _vm: &'a str,
+            _admission: &'a Admitted,
+        ) -> BoxFuture<'a, Result<CloudBoxEndpoint, CloudBoxError>> {
+            let url = self.wake_url.lock().unwrap().clone();
+            let fail = self.fail_wake.load(Ordering::SeqCst);
+            Box::pin(async move {
+                if fail {
+                    return Err(CloudBoxError::BootstrapFailed(
+                        "server did not start".into(),
+                    ));
+                }
+                Ok(CloudBoxEndpoint {
+                    url: CloudBoxUrl::new(url).unwrap(),
+                })
+            })
+        }
+
+        fn enroll_box<'a>(
+            &'a self,
+            _connection: &'a CloudConnection,
+            vm: &'a str,
+            _admission: &'a Admitted,
+        ) -> BoxFuture<'a, Result<(CloudBoxEndpoint, Zeroizing<String>), CloudBoxError>> {
+            let mut enrolled = self.enrolled.lock().unwrap();
+            enrolled.push(vm.to_owned());
+            let credential = format!("reissued-token-{}", enrolled.len());
+            let url = self.wake_url.lock().unwrap().clone();
+            Box::pin(async move {
+                Ok((
+                    CloudBoxEndpoint {
+                        url: CloudBoxUrl::new(url).unwrap(),
+                    },
+                    Zeroizing::new(credential),
+                ))
+            })
+        }
+
+        fn stop_box<'a>(
+            &'a self,
+            _connection: &'a CloudConnection,
+            _vm: &'a str,
+        ) -> BoxFuture<'a, Result<(), CloudBoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn delete_box<'a>(
+            &'a self,
+            _connection: &'a CloudConnection,
+            vm: &'a str,
+            _admission: &'a Admitted,
+        ) -> BoxFuture<'a, Result<(), CloudBoxError>> {
+            self.deleted.lock().unwrap().push(vm.to_owned());
+            let fail = self.fail_delete.load(Ordering::SeqCst);
+            Box::pin(async move {
+                if fail {
+                    Err(CloudBoxError::ProviderFailed("delete timeout".into()))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
+    fn connected_account() -> CloudConnection {
+        CloudConnection::Boat(
+            BoatConnection::new("key-123".into(), "env".into(), "img".into()).unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn full_lifecycle_create_sleep_guard_wake_rotate_rename_and_delete() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let active_work = Arc::new(FakeActiveWork(AtomicBool::new(true)));
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = CloudBoxes::new(
+            vec![CloudBoxBackend {
+                cloud: Cloud::Agent37,
+                settings: Arc::new(FakeSettings(Some(connected_account()))),
+                provider: provider.clone(),
+            }],
+            store.clone(),
+            active_work.clone(),
+            audit.clone(),
+        );
+
+        let id = CloudBoxId::parse("11111111-2222-3333-4444-555555555555").unwrap();
+        let enrolled = service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Cloud Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        assert_eq!(enrolled.summary.state, CloudBoxState::Running);
+        assert_eq!(enrolled.credential.as_str(), "secret-enroll-token");
+
+        // G5: active work prevents sleep.
+        assert_eq!(
+            service.sleep(&id, "owner").await.unwrap_err(),
+            CloudBoxError::ActiveWorkInFlight
+        );
+
+        // Once idle, sleep succeeds and is idempotent.
+        active_work.0.store(false, Ordering::SeqCst);
+        let sleeping = service.sleep(&id, "owner").await.unwrap();
+        assert_eq!(sleeping.state, CloudBoxState::Sleeping);
+        let still_sleeping = service.sleep(&id, "owner").await.unwrap();
+        assert_eq!(still_sleeping.state, CloudBoxState::Sleeping);
+
+        // G8: wake refreshes rotated wss:// URL.
+        let endpoint = service.wake(&id, "owner").await.unwrap();
+        assert_eq!(endpoint.url.as_str(), "wss://box-rotated.example.com/");
+        assert_eq!(service.list().unwrap()[0].state, CloudBoxState::Running);
+
+        // Rename and delete (G11).
+        let renamed = service
+            .rename(&id, CloudBoxName::new("Prod Box").unwrap(), "owner")
+            .await
+            .unwrap();
+        assert_eq!(renamed.name.as_str(), "Prod Box");
+
+        service.delete(&id, "owner").await.unwrap();
+        assert!(service.list().unwrap().is_empty());
+        assert_eq!(provider.deleted.lock().unwrap().as_slice(), ["vm-box-1"]);
+    }
+
+    #[tokio::test]
+    async fn receipt_save_failure_rolls_back_and_surfaces_cleanup_uncertain_on_rollback_error() {
+        let store = Arc::new(MemoryStore::new());
+        store.fail_active_save.store(true, Ordering::SeqCst);
+        let provider = Arc::new(FakeProvider::new());
+        let service = CloudBoxes::new(
+            vec![CloudBoxBackend {
+                cloud: Cloud::Agent37,
+                settings: Arc::new(FakeSettings(Some(connected_account()))),
+                provider: provider.clone(),
+            }],
+            store.clone(),
+            Arc::new(FakeActiveWork(AtomicBool::new(false))),
+            Arc::new(FakeAudit(StdMutex::new(Vec::new()))),
+        );
+
+        let id1 = CloudBoxId::parse("22222222-3333-4444-5555-666666666666").unwrap();
+        let err = service
+            .create(
+                id1,
+                CloudBoxName::new("Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CloudBoxError::ReceiptUnavailable(_)));
+        assert_eq!(provider.deleted.lock().unwrap().as_slice(), ["vm-box-1"]);
+
+        // When rollback delete ALSO fails, CleanupUncertain is surfaced (M1).
+        provider.fail_delete.store(true, Ordering::SeqCst);
+        let id2 = CloudBoxId::parse("33333333-4444-5555-6666-777777777777").unwrap();
+        let err2 = service
+            .create(
+                id2,
+                CloudBoxName::new("Box 2").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err2, CloudBoxError::CleanupUncertain(_)));
+    }
+
+    #[tokio::test]
+    async fn refusal_and_failure_paths_surface_both_operation_and_audit_delivery_errors() {
+        struct FailingOnActionAudit {
+            fail_action: StdMutex<Option<&'static str>>,
+        }
+        impl CloudBoxAudit for FailingOnActionAudit {
+            fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+                if *self.fail_action.lock().unwrap() == Some(event.action) {
+                    return Err(CloudBoxError::ReceiptUnavailable("audit disk full".into()));
+                }
+                Ok(())
+            }
+        }
+
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let active_work = Arc::new(FakeActiveWork(AtomicBool::new(true)));
+        let audit = Arc::new(FailingOnActionAudit {
+            fail_action: StdMutex::new(Some("create_refused")),
+        });
+        let service = CloudBoxes::new(
+            vec![CloudBoxBackend {
+                cloud: Cloud::Agent37,
+                settings: Arc::new(FakeSettings(Some(connected_account()))),
+                provider: provider.clone(),
+            }],
+            store.clone(),
+            active_work.clone(),
+            audit.clone(),
+        );
+
+        // 1. Create refusal + audit failure preserves both.
+        provider.refuse_admission.store(true, Ordering::SeqCst);
+        let refused_id = CloudBoxId::parse("44444444-3333-4444-5555-666666666666").unwrap();
+        let create_err = service
+            .create(
+                refused_id,
+                CloudBoxName::new("Fail Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            create_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::AdmissionRefused(_))
+                    && audit.contains("audit disk full")
+        ));
+
+        // Provision a healthy box for sleep, wake, and delete failure checks.
+        provider.refuse_admission.store(false, Ordering::SeqCst);
+        *audit.fail_action.lock().unwrap() = None;
+        let box_id = CloudBoxId::parse("55555555-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                box_id.clone(),
+                CloudBoxName::new("Live Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+
+        // 2. Sleep refusal (active work) + audit failure preserves both.
+        *audit.fail_action.lock().unwrap() = Some("sleep_refused");
+        let sleep_err = service.sleep(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            sleep_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::ActiveWorkInFlight)
+                    && audit.contains("audit disk full")
+        ));
+
+        // 3. Wake failure + audit failure preserves both.
+        provider.fail_wake.store(true, Ordering::SeqCst);
+        *audit.fail_action.lock().unwrap() = Some("wake_refused");
+        let wake_err = service.wake(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            wake_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::BootstrapFailed(_))
+                    && audit.contains("audit disk full")
+        ));
+
+        // 4. Delete failure + audit failure preserves both.
+        provider.fail_delete.store(true, Ordering::SeqCst);
+        *audit.fail_action.lock().unwrap() = Some("delete_failed");
+        let delete_err = service.delete(&box_id, "owner").await.unwrap_err();
+        assert!(matches!(
+            delete_err,
+            CloudBoxError::AuditDeliveryFailed { ref operation, ref audit }
+                if matches!(**operation, CloudBoxError::ProviderFailed(_))
+                    && audit.contains("audit disk full")
+        ));
+    }
+
+    fn agent37_service(
+        store: Arc<MemoryStore>,
+        provider: Arc<FakeProvider>,
+        audit: Arc<dyn CloudBoxAudit>,
+    ) -> CloudBoxes {
+        CloudBoxes::new(
+            vec![CloudBoxBackend {
+                cloud: Cloud::Agent37,
+                settings: Arc::new(FakeSettings(Some(connected_account()))),
+                provider,
+            }],
+            store,
+            Arc::new(FakeActiveWork(AtomicBool::new(false))),
+            audit,
+        )
+    }
+
+    struct FailOnce {
+        action: &'static str,
+        failed: AtomicBool,
+    }
+    impl CloudBoxAudit for FailOnce {
+        fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+            if event.action == self.action && !self.failed.swap(true, Ordering::SeqCst) {
+                return Err(CloudBoxError::ReceiptUnavailable("audit disk full".into()));
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_admission_audit_leaves_the_box_admitted_and_asking_again_reenrolls_it() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FailOnce {
+            action: "create_admitted",
+            failed: AtomicBool::new(false),
+        });
+        let service = agent37_service(store.clone(), provider.clone(), audit);
+        let id = CloudBoxId::parse("66666666-3333-4444-5555-666666666666").unwrap();
+        let name = || CloudBoxName::new("Audited Box").unwrap();
+
+        // The provider made the VM and its receipt is saved, but the audit of
+        // that could not be delivered: the caller is told so.
+        let err = service
+            .create(id.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CloudBoxError::ReceiptUnavailable(ref d) if d.contains("audit")));
+        assert!(provider.deleted.lock().unwrap().is_empty());
+        assert_eq!(service.list().unwrap().len(), 1);
+
+        // Asking again for the same box finishes it: no second VM, a fresh
+        // credential from the box's own gateway.
+        let enrolled = service
+            .create(id.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .unwrap();
+        assert_eq!(enrolled.credential.as_str(), "reissued-token-1");
+        assert_eq!(enrolled.summary.vm, "vm-box-1");
+        assert_eq!(provider.created.lock().unwrap().len(), 1);
+        assert_eq!(provider.enrolled.lock().unwrap().as_slice(), ["vm-box-1"]);
+        assert!(provider.deleted.lock().unwrap().is_empty());
+        assert_eq!(service.list().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_intent_whose_answer_was_lost_asks_the_provider_again_under_the_same_box() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let service = agent37_service(
+            store.clone(),
+            provider.clone(),
+            Arc::new(FakeAudit(StdMutex::new(Vec::new()))),
+        );
+        let id = CloudBoxId::parse("77777777-3333-4444-5555-666666666666").unwrap();
+        // An earlier creation saved its intent and was lost before the
+        // provider answered.
+        store
+            .append(
+                &id,
+                CloudBoxRecord::Provisioning {
+                    box_id: id.clone(),
+                    name: CloudBoxName::new("Lost Box").unwrap(),
+                    cloud: Cloud::Agent37,
+                    created_at_ms: 5,
+                },
+            )
+            .unwrap();
+
+        let enrolled = service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Lost Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        assert_eq!(enrolled.summary.created_at_ms, 5);
+        assert_eq!(enrolled.credential.as_str(), "secret-enroll-token");
+        assert_eq!(provider.created.lock().unwrap().as_slice(), [id.as_str()]);
+        assert_eq!(store.read(&id).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_deleted_or_other_cloud_box_is_not_created_again() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let service = agent37_service(
+            store.clone(),
+            provider.clone(),
+            Arc::new(FakeAudit(StdMutex::new(Vec::new()))),
+        );
+        let name = || CloudBoxName::new("Box").unwrap();
+
+        provider.refuse_admission.store(true, Ordering::SeqCst);
+        let refused = CloudBoxId::parse("88888888-3333-4444-5555-666666666666").unwrap();
+        assert!(service
+            .create(refused.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .is_err());
+        provider.refuse_admission.store(false, Ordering::SeqCst);
+        assert_eq!(
+            service
+                .create(refused, name(), Cloud::Agent37, "owner")
+                .await
+                .unwrap_err(),
+            CloudBoxError::BoxRefused
+        );
+
+        let live = CloudBoxId::parse("99999999-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(live.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .create(live.clone(), name(), Cloud::Boat, "owner")
+                .await
+                .unwrap_err(),
+            CloudBoxError::AlreadyExists
+        );
+        service.delete(&live, "owner").await.unwrap();
+        assert_eq!(
+            service
+                .create(live, name(), Cloud::Agent37, "owner")
+                .await
+                .unwrap_err(),
+            CloudBoxError::NotActive
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failure_that_is_not_a_refusal_leaves_the_box_resumable_and_deletable() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let name = || CloudBoxName::new("Box").unwrap();
+
+        // A provider failure is not an answer that no VM exists: it stays
+        // Provisioning and asking again resumes it under the same key.
+        provider.fail_create.store(true, Ordering::SeqCst);
+        let id = CloudBoxId::parse("12121212-3333-4444-5555-666666666666").unwrap();
+        assert!(matches!(
+            service
+                .create(id.clone(), name(), Cloud::Agent37, "owner")
+                .await
+                .unwrap_err(),
+            CloudBoxError::ProviderFailed(_)
+        ));
+        assert!(matches!(
+            store.read(&id).unwrap().last(),
+            Some(CloudBoxRecord::Provisioning { .. })
+        ));
+        provider.fail_create.store(false, Ordering::SeqCst);
+        service
+            .create(id.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .unwrap();
+        assert_eq!(
+            provider.created.lock().unwrap().as_slice(),
+            [id.as_str(), id.as_str()]
+        );
+
+        // An unsettled creation can be deleted: the provider is asked again
+        // under the same key and whatever VM it answers with is removed.
+        let unsettled = CloudBoxId::parse("13131313-3333-4444-5555-666666666666").unwrap();
+        provider.fail_create.store(true, Ordering::SeqCst);
+        assert!(service
+            .create(unsettled.clone(), name(), Cloud::Agent37, "owner")
+            .await
+            .is_err());
+        provider.fail_create.store(false, Ordering::SeqCst);
+        service.delete(&unsettled, "owner").await.unwrap();
+        assert_eq!(
+            provider.deleted.lock().unwrap().as_slice(),
+            ["vm-box-1".to_owned()]
+        );
+        assert!(matches!(
+            store.read(&unsettled).unwrap().last(),
+            Some(CloudBoxRecord::Deleted { .. })
+        ));
+        let actions: Vec<_> = audit.0.lock().unwrap().iter().map(|e| e.action).collect();
+        assert!(actions.contains(&"create_unsettled"));
+        assert!(!actions.contains(&"create_refused"));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_deleted_box_again_succeeds_without_asking_the_provider() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let id = CloudBoxId::parse("14141414-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Box").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        service.delete(&id, "owner").await.unwrap();
+        service.delete(&id, "owner").await.unwrap();
+        assert_eq!(provider.deleted.lock().unwrap().len(), 1);
+        let deleted: Vec<_> = audit
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.action == "deleted")
+            .map(|e| e.cause.clone())
+            .collect();
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted[1].contains("already_deleted"));
+    }
+
+    #[tokio::test]
+    async fn a_rename_audit_names_the_old_and_the_new_name() {
+        let store = Arc::new(MemoryStore::new());
+        let provider = Arc::new(FakeProvider::new());
+        let audit = Arc::new(FakeAudit(StdMutex::new(Vec::new())));
+        let service = agent37_service(store.clone(), provider.clone(), audit.clone());
+        let id = CloudBoxId::parse("15151515-3333-4444-5555-666666666666").unwrap();
+        service
+            .create(
+                id.clone(),
+                CloudBoxName::new("Old").unwrap(),
+                Cloud::Agent37,
+                "owner",
+            )
+            .await
+            .unwrap();
+        service
+            .rename(&id, CloudBoxName::new("New").unwrap(), "owner")
+            .await
+            .unwrap();
+        let events = audit.0.lock().unwrap();
+        let renamed = events.iter().find(|e| e.action == "renamed").unwrap();
+        assert!(renamed.cause.contains("\"Old\""), "{}", renamed.cause);
+        assert!(renamed.cause.contains("\"New\""), "{}", renamed.cause);
+    }
+}

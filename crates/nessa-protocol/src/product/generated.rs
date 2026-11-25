@@ -4497,6 +4497,130 @@ pub struct CloudChoice {
     pub cloud: Cloud,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CloudBoxState {
+    #[serde(rename = "provisioning")]
+    Provisioning,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "sleeping")]
+    Sleeping,
+    #[serde(rename = "refused")]
+    Refused,
+    #[serde(rename = "deleted")]
+    Deleted,
+}
+impl CloudBoxState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Provisioning => "provisioning",
+            Self::Running => "running",
+            Self::Sleeping => "sleeping",
+            Self::Refused => "refused",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxSummary {
+    pub box_id: String,
+    pub name: String,
+    pub cloud: Cloud,
+    pub vm: String,
+    pub url: String,
+    pub state: CloudBoxState,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxCreateParams {
+    pub box_id: String,
+    pub name: String,
+    pub cloud: Cloud,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxIdParams {
+    pub box_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxRenameParams {
+    pub box_id: String,
+    pub name: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxesListResult {
+    pub boxes: Vec<CloudBoxSummary>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxCreateResult {
+    pub cloud_box: CloudBoxSummary,
+    pub credential: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxWakeResult {
+    pub box_id: String,
+    pub url: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxResult {
+    pub cloud_box: CloudBoxSummary,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudBoxDeleteResult {
+    pub box_id: String,
+    pub deleted: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CloudBoxErrorCode {
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "vault_locked")]
+    VaultLocked,
+    #[serde(rename = "cloud_not_configured")]
+    CloudNotConfigured,
+    #[serde(rename = "cloud_box_not_found")]
+    CloudBoxNotFound,
+    #[serde(rename = "cloud_box_already_exists")]
+    CloudBoxAlreadyExists,
+    #[serde(rename = "cloud_box_not_active")]
+    CloudBoxNotActive,
+    #[serde(rename = "cloud_box_active_work")]
+    CloudBoxActiveWork,
+    #[serde(rename = "cloud_box_admission_refused")]
+    CloudBoxAdmissionRefused,
+    #[serde(rename = "cloud_box_bootstrap_failed")]
+    CloudBoxBootstrapFailed,
+    #[serde(rename = "cloud_box_provider_failed")]
+    CloudBoxProviderFailed,
+    #[serde(rename = "cloud_box_storage_unavailable")]
+    CloudBoxStorageUnavailable,
+}
+impl CloudBoxErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::VaultLocked => "vault_locked",
+            Self::CloudNotConfigured => "cloud_not_configured",
+            Self::CloudBoxNotFound => "cloud_box_not_found",
+            Self::CloudBoxAlreadyExists => "cloud_box_already_exists",
+            Self::CloudBoxNotActive => "cloud_box_not_active",
+            Self::CloudBoxActiveWork => "cloud_box_active_work",
+            Self::CloudBoxAdmissionRefused => "cloud_box_admission_refused",
+            Self::CloudBoxBootstrapFailed => "cloud_box_bootstrap_failed",
+            Self::CloudBoxProviderFailed => "cloud_box_provider_failed",
+            Self::CloudBoxStorageUnavailable => "cloud_box_storage_unavailable",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum VmLifetimeMode {
     #[serde(rename = "never")]
     Never,
@@ -5281,6 +5405,12 @@ pub mod product_method {
     pub const AGENT37_DISCONNECT: &str = "agent37.disconnect";
     pub const CLOUD_READ: &str = "cloud.read";
     pub const CLOUD_CHOOSE: &str = "cloud.choose";
+    pub const CLOUD_BOXES_LIST: &str = "cloud.boxes.list";
+    pub const CLOUD_BOXES_CREATE: &str = "cloud.boxes.create";
+    pub const CLOUD_BOXES_WAKE: &str = "cloud.boxes.wake";
+    pub const CLOUD_BOXES_SLEEP: &str = "cloud.boxes.sleep";
+    pub const CLOUD_BOXES_RENAME: &str = "cloud.boxes.rename";
+    pub const CLOUD_BOXES_DELETE: &str = "cloud.boxes.delete";
     pub const DEVICES_POOL: &str = "devices.pool";
     pub const DEVICES_SET_POOL: &str = "devices.setPool";
     pub const BOAT_RUNTIME_SETTINGS: &str = "boat.runtimeSettings";
@@ -5504,7 +5634,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 156
+                items.len() <= 162
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5657,6 +5787,12 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "agent37.disconnect",
     "cloud.read",
     "cloud.choose",
+    "cloud.boxes.list",
+    "cloud.boxes.create",
+    "cloud.boxes.wake",
+    "cloud.boxes.sleep",
+    "cloud.boxes.rename",
+    "cloud.boxes.delete",
     "devices.pool",
     "devices.setPool",
     "boat.runtimeSettings",
@@ -6007,6 +6143,18 @@ pub enum ProductMethod {
     CloudRead,
     /// `cloud.choose`
     CloudChoose,
+    /// `cloud.boxes.list`
+    CloudBoxesList,
+    /// `cloud.boxes.create`
+    CloudBoxesCreate,
+    /// `cloud.boxes.wake`
+    CloudBoxesWake,
+    /// `cloud.boxes.sleep`
+    CloudBoxesSleep,
+    /// `cloud.boxes.rename`
+    CloudBoxesRename,
+    /// `cloud.boxes.delete`
+    CloudBoxesDelete,
     /// `devices.pool`
     DevicesPool,
     /// `devices.setPool`
@@ -6197,6 +6345,12 @@ impl ProductMethod {
         ProductMethod::Agent37Disconnect,
         ProductMethod::CloudRead,
         ProductMethod::CloudChoose,
+        ProductMethod::CloudBoxesList,
+        ProductMethod::CloudBoxesCreate,
+        ProductMethod::CloudBoxesWake,
+        ProductMethod::CloudBoxesSleep,
+        ProductMethod::CloudBoxesRename,
+        ProductMethod::CloudBoxesDelete,
         ProductMethod::DevicesPool,
         ProductMethod::DevicesSetPool,
         ProductMethod::BoatRuntimeSettings,
@@ -6366,6 +6520,12 @@ impl ProductMethod {
             "agent37.disconnect" => Some(ProductMethod::Agent37Disconnect),
             "cloud.read" => Some(ProductMethod::CloudRead),
             "cloud.choose" => Some(ProductMethod::CloudChoose),
+            "cloud.boxes.list" => Some(ProductMethod::CloudBoxesList),
+            "cloud.boxes.create" => Some(ProductMethod::CloudBoxesCreate),
+            "cloud.boxes.wake" => Some(ProductMethod::CloudBoxesWake),
+            "cloud.boxes.sleep" => Some(ProductMethod::CloudBoxesSleep),
+            "cloud.boxes.rename" => Some(ProductMethod::CloudBoxesRename),
+            "cloud.boxes.delete" => Some(ProductMethod::CloudBoxesDelete),
             "devices.pool" => Some(ProductMethod::DevicesPool),
             "devices.setPool" => Some(ProductMethod::DevicesSetPool),
             "boat.runtimeSettings" => Some(ProductMethod::BoatRuntimeSettings),
@@ -6532,6 +6692,12 @@ impl ProductMethod {
             ProductMethod::Agent37Disconnect => "agent37.disconnect",
             ProductMethod::CloudRead => "cloud.read",
             ProductMethod::CloudChoose => "cloud.choose",
+            ProductMethod::CloudBoxesList => "cloud.boxes.list",
+            ProductMethod::CloudBoxesCreate => "cloud.boxes.create",
+            ProductMethod::CloudBoxesWake => "cloud.boxes.wake",
+            ProductMethod::CloudBoxesSleep => "cloud.boxes.sleep",
+            ProductMethod::CloudBoxesRename => "cloud.boxes.rename",
+            ProductMethod::CloudBoxesDelete => "cloud.boxes.delete",
             ProductMethod::DevicesPool => "devices.pool",
             ProductMethod::DevicesSetPool => "devices.setPool",
             ProductMethod::BoatRuntimeSettings => "boat.runtimeSettings",
@@ -6696,6 +6862,12 @@ impl ProductMethod {
             ProductMethod::Agent37Disconnect => Some("credential.manage"),
             ProductMethod::CloudRead => Some("credential.manage"),
             ProductMethod::CloudChoose => Some("credential.manage"),
+            ProductMethod::CloudBoxesList => Some("credential.manage"),
+            ProductMethod::CloudBoxesCreate => Some("credential.manage"),
+            ProductMethod::CloudBoxesWake => Some("credential.manage"),
+            ProductMethod::CloudBoxesSleep => Some("credential.manage"),
+            ProductMethod::CloudBoxesRename => Some("credential.manage"),
+            ProductMethod::CloudBoxesDelete => Some("credential.manage"),
             ProductMethod::DevicesPool => Some("credential.manage"),
             ProductMethod::DevicesSetPool => Some("credential.manage"),
             ProductMethod::BoatRuntimeSettings => Some("credential.manage"),
@@ -6859,6 +7031,12 @@ impl ProductMethod {
             ProductMethod::Agent37Disconnect => ProductLane::Requests,
             ProductMethod::CloudRead => ProductLane::Requests,
             ProductMethod::CloudChoose => ProductLane::Requests,
+            ProductMethod::CloudBoxesList => ProductLane::Requests,
+            ProductMethod::CloudBoxesCreate => ProductLane::Requests,
+            ProductMethod::CloudBoxesWake => ProductLane::Requests,
+            ProductMethod::CloudBoxesSleep => ProductLane::Requests,
+            ProductMethod::CloudBoxesRename => ProductLane::Requests,
+            ProductMethod::CloudBoxesDelete => ProductLane::Requests,
             ProductMethod::DevicesPool => ProductLane::Requests,
             ProductMethod::DevicesSetPool => ProductLane::Requests,
             ProductMethod::BoatRuntimeSettings => ProductLane::Requests,
@@ -7325,6 +7503,25 @@ impl ProductMethod {
             ProductMethod::CloudChoose => ProductParams::CloudChoose(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::CloudBoxesList => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::CloudBoxesList,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::CloudBoxesCreate => ProductParams::CloudBoxesCreate(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::CloudBoxesWake => ProductParams::CloudBoxesWake(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::CloudBoxesSleep => ProductParams::CloudBoxesSleep(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::CloudBoxesRename => ProductParams::CloudBoxesRename(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::CloudBoxesDelete => ProductParams::CloudBoxesDelete(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::DevicesPool => ProductParams::DevicesPool(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -7553,6 +7750,12 @@ pub enum ProductParams {
     Agent37Disconnect,
     CloudRead,
     CloudChoose(CloudChooseParams),
+    CloudBoxesList,
+    CloudBoxesCreate(CloudBoxCreateParams),
+    CloudBoxesWake(CloudBoxIdParams),
+    CloudBoxesSleep(CloudBoxIdParams),
+    CloudBoxesRename(CloudBoxRenameParams),
+    CloudBoxesDelete(CloudBoxIdParams),
     DevicesPool(DevicesPoolParams),
     DevicesSetPool(DevicesSetPoolParams),
     BoatRuntimeSettings(BoatRuntimeReadParams),
@@ -7740,6 +7943,12 @@ impl ProductParams {
             ProductParams::Agent37Disconnect => ProductMethod::Agent37Disconnect,
             ProductParams::CloudRead => ProductMethod::CloudRead,
             ProductParams::CloudChoose(_) => ProductMethod::CloudChoose,
+            ProductParams::CloudBoxesList => ProductMethod::CloudBoxesList,
+            ProductParams::CloudBoxesCreate(_) => ProductMethod::CloudBoxesCreate,
+            ProductParams::CloudBoxesWake(_) => ProductMethod::CloudBoxesWake,
+            ProductParams::CloudBoxesSleep(_) => ProductMethod::CloudBoxesSleep,
+            ProductParams::CloudBoxesRename(_) => ProductMethod::CloudBoxesRename,
+            ProductParams::CloudBoxesDelete(_) => ProductMethod::CloudBoxesDelete,
             ProductParams::DevicesPool(_) => ProductMethod::DevicesPool,
             ProductParams::DevicesSetPool(_) => ProductMethod::DevicesSetPool,
             ProductParams::BoatRuntimeSettings(_) => ProductMethod::BoatRuntimeSettings,
