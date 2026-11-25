@@ -1048,8 +1048,8 @@ export function stressScenario({
       },
       // Sends to a thread and waits for its reply with one subscribe call,
       // as an agent is told to: the reply comes back in that call, and the
-      // thread's report is then not sent. The thread names where it runs,
-      // and still stays in its parent's channel.
+      // thread's report is then not sent. The thread runs on this computer,
+      // like every thread, and stays in its parent's channel.
       {
         when: STRESS.await,
         steps: [
@@ -1057,7 +1057,7 @@ export function stressScenario({
             do: "tool",
             server: "nessa-agents",
             tool: "create_thread",
-            arguments: { environment: "here" },
+            arguments: {},
             save: "thread",
           },
           {

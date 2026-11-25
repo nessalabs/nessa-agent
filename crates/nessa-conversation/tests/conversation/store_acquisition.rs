@@ -101,10 +101,10 @@ fn required_types_and_nullable_summary_use_one_projection() {
 #[test]
 fn conversation_projection_consumes_supported_name_owner_and_compacts_unknown() {
     let connection = Connection::open_in_memory().unwrap();
-    connection.execute("CREATE TABLE saved (id, organization, owner, creator_surface, creation_action, creation_requested_at_ms, agent, model, approval_mode)", []).unwrap();
+    connection.execute("CREATE TABLE saved (id, organization, owner, creator_surface, creation_action, creation_requested_at_ms, agent, model, approval_mode, app_namespace)", []).unwrap();
     connection
         .execute(
-            "INSERT INTO saved VALUES (?1, ?2, ?2, ?3, ?3, 1, 'claude', ?4, 'full')",
+            "INSERT INTO saved VALUES (?1, ?2, ?2, ?3, ?3, 1, 'claude', ?4, 'full', 'nessa')",
             params![
                 "é".repeat(MAX_ID_BYTES / 2),
                 "é".repeat(MAX_IDENTIFIER_BYTES / 2),
