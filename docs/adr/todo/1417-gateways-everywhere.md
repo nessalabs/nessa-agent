@@ -209,12 +209,14 @@ SFTP artifact channels, remote terminals and Boat's Claude sign-in are gone;
 (`sshHosts`, `defaultEnvironment`, `envServe`, `environmentTools`, `pool`)
 are read and ignored so an upgraded gateway starts; a conversation an older
 build placed elsewhere is refused `environment_not_configured` with its
-history readable; the `environment_*` refusal codes and a lease's `ssh` /
-`peer` environment are read only in history; the backup format's lease
-records store is restored as before. Left for follow-ups: saved logins and
-ChatGPT accounts have no consumer until Cloud Boxes take them, a share
-grant's `commandHosts` can only be empty, and the gateway's per-device login
-switches are unreachable code.
+history readable; a lease's refusals and its `ssh` / `peer` environment are
+read only in history; the backup manifest still names the lease records store,
+cut empty, so every build reads every cut. The follow-up cleanup removed
+saved logins and ChatGPT accounts and the gateway's per-device login
+switches, a share grant's `commandHosts` (an older stored policy reads
+without them), the `environment_version_mismatch`,
+`environment_platform_unsupported` and `environment_install_failed` command
+codes, and the restore of a cut's lease records with its `--receipt`.
 
 ## Tradeoffs and Follow-ups
 
