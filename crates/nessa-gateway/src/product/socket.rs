@@ -3357,6 +3357,7 @@ mod tests {
 
     fn repository_of(rows: Vec<Conversation>) -> Arc<MemoryRepository> {
         let repository = MemoryRepository::default();
+        *repository.catalogue_incarnation.lock().unwrap() = "socket-test-catalogue".into();
         {
             let mut records = repository.records.lock().unwrap();
             for conversation in rows {
