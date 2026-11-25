@@ -64,3 +64,17 @@ fn background_identity_schema_and_domain_consume_the_product_contract() {
         assert!(BackgroundTaskId::new(invalid).is_err());
     }
 }
+
+#[test]
+fn background_tools_ships_verified_sep2640_skill() {
+    use nessa_sdk::domain::mcp_skills::SkillFileUri;
+    let tools = BackgroundTools::new();
+    let catalog = tools.skills().expect("background server ships skills");
+    let entry = catalog
+        .get("skill://nessa-background/SKILL.md")
+        .expect("nessa-background skill");
+    let (_, _, bytes) = catalog.read_resource(entry.uri().as_str()).unwrap();
+    entry
+        .verify_file(&SkillFileUri::from(entry.uri()), bytes)
+        .expect("embedded SKILL.md matches its manifest digest and frontmatter");
+}

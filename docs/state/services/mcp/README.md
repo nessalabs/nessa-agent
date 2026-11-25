@@ -16,6 +16,7 @@ diagramLinks:
   Sessions: "mcp-sessions"
   Policy: "sdk-runtime-an-app-calls-a-tool-through-gateway-policy-and-review"
   Resources: "mcp-resource-tickets"
+  Skills: "mcp-skills"
   Shell: "sdk-runtime-stop-cancels-owned-work-and-confirms-process-cleanup"
 ---
 
@@ -34,9 +35,11 @@ flowchart TB
     Sessions[Conversation grants and upstream sessions]
     Policy[App tool policy and review]
     Resources[One-use app resource tickets]
+    Skills[Skills over MCP discovery and verification]
     Shell[Local shell execution]
     Sessions -->|own session listed tools| Policy
     Sessions -->|read UI HTML| Resources
+    Sessions -->|verified skill manifests| Skills
     Sessions -->|configured stdio server| Shell
 ```
 
@@ -44,6 +47,7 @@ flowchart TB
 
 - [One-use app resource tickets](resource-tickets.md)
 - [Conversation grants and upstream sessions](sessions.md)
+- [Skills over MCP (SEP-2640)](skills.md)
 
 OAuth non-secret records, sealed tokens and authorization audit use
 [bounded physical adapter work](../storage/README.md#physical-adapter-work).

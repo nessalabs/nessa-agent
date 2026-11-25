@@ -66,6 +66,7 @@ mod http_exchange;
 mod process;
 mod remote;
 mod servers;
+mod skills;
 mod sse;
 mod stand_in;
 mod wire;
@@ -85,6 +86,7 @@ pub use servers::{
     INITIALIZE_TIMEOUT, MAX_MCP_ENVIRONMENT_NAME_BYTES, MAX_TOOLS, MAX_TOOL_PAGES,
     MCP_SESSION_VARIABLE, REQUEST_TIMEOUT,
 };
+pub use skills::{handle_skill_method, insert_server_skills_capabilities, VerifiedSkillFile};
 pub(crate) use wire::structured_result;
 #[cfg(test)]
 pub(crate) use wire::STRUCTURED_RESULT_OMITTED;
