@@ -1,6 +1,6 @@
 //! The client session against a real native TLS peer: the gateway key pinned,
 //! the device key presented, `openProduct`, then product frames.
-use super::super::session::{DeviceEvidence, LocalConnector, RpcKind, Session};
+use super::super::session::{select_native, DeviceEvidence, LocalConnector, RpcKind, Session};
 use super::super::sources::{CatalogueReader, GatewayConnection};
 use crate::outbox::{
     LookupAnswer, PhoneCommandId, PhoneFailure, PhoneGateway, PhoneIntent, SendAnswer,
@@ -13,7 +13,7 @@ use nessa_auth::adapters::pairing::{
     NativeIdentity, NativeTransport, OsEntropy, PairingCryptoError,
 };
 use nessa_auth::application::ports::Clock as WallClock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId};
 use nessa_protocol::clock::Clock;
 use nessa_protocol::conversation::domain::{
     conversation_catalogue_schema, conversation_catalogue_stream, ConversationId,
@@ -21,7 +21,10 @@ use nessa_protocol::conversation::domain::{
 use nessa_protocol::conversation::read_scope::check_catalogue_scope_identity;
 use nessa_protocol::pairing::{
     encode_frame,
-    wire::{decode_request, encode_refused, NativePairingRequest},
+    wire::{
+        decode_reply, decode_request, encode_refused, NativePairingReply, NativePairingRequest,
+        RecordCarrierMode, RecordCarrierOpen,
+    },
     EnrollmentChannel, FrameReader, MAX_PROTECTED_REQUEST_BYTES,
 };
 use nessa_protocol::product::catalogue_read::wire_descriptor;
@@ -278,6 +281,18 @@ fn native_peer_answering(
     reply: Option<Vec<u8>>,
     script: impl FnOnce(&mut PeerSocket) + Send + 'static,
 ) -> (Endpoint, Peer) {
+    native_peer_selecting(
+        |request| assert!(matches!(request, NativePairingRequest::OpenProduct)),
+        reply,
+        script,
+    )
+}
+
+fn native_peer_selecting(
+    expect: impl FnOnce(NativePairingRequest) + Send + 'static,
+    reply: Option<Vec<u8>>,
+    script: impl FnOnce(&mut PeerSocket) + Send + 'static,
+) -> (Endpoint, Peer) {
     prepare_then_start(
         || -> Result<_, PairingCryptoError> {
             let gateway = NativeIdentity::generate(&mut OsEntropy)?;
@@ -293,10 +308,7 @@ fn native_peer_answering(
                 let transport = NativeTransport::accept(stream, &gateway).unwrap();
                 let mut selector = EnrollmentChannel::new(transport);
                 let first = selector.receive_envelope().unwrap();
-                assert!(matches!(
-                    decode_request(&first).unwrap(),
-                    NativePairingRequest::OpenProduct
-                ));
+                expect(decode_request(&first).unwrap());
                 if let Some(reply) = reply {
                     selector.send_envelope(&reply).unwrap();
                 }
@@ -854,6 +866,53 @@ fn challenge_scalar_refusal_happens_before_any_authentication_request() {
         ));
         peer.join().unwrap();
     }
+}
+
+#[test]
+fn the_shared_native_open_sends_only_the_selected_record_envelope() {
+    let scope = Scope::new(
+        Id::new("receiver").unwrap(),
+        Id::new("gateway").unwrap(),
+        Id::new("conversation").unwrap(),
+        Id::new("incarnation").unwrap(),
+        Id::new("schema").unwrap(),
+        Id::new("epoch-7").unwrap(),
+    );
+    let expected = scope.clone();
+    let (endpoint, peer) = native_peer_selecting(
+        move |request| {
+            let NativePairingRequest::OpenRecordCarrierV1(open) = request else {
+                panic!("expected the explicit records selector");
+            };
+            assert_eq!(open.credential.as_str(), "credential");
+            assert_eq!(open.access_epoch, 7);
+            assert_eq!(open.scope, expected);
+            assert_eq!(open.mode, RecordCarrierMode::Page);
+        },
+        Some(encode_refused().unwrap()),
+        |socket| assert!(socket.ended()),
+    );
+    let mut selector = select_native(
+        endpoint.address,
+        &endpoint.evidence("credential"),
+        &LocalConnector,
+        Arc::new(Time(Instant::now())),
+        Arc::new(Never),
+        policy().handshake_ms(),
+        &NativePairingRequest::OpenRecordCarrierV1(RecordCarrierOpen {
+            credential: CredentialId::new("credential".to_owned()).unwrap(),
+            access_epoch: 7,
+            scope,
+            mode: RecordCarrierMode::Page,
+        }),
+    )
+    .unwrap();
+    assert!(matches!(
+        decode_reply(&selector.receive_envelope().unwrap()).unwrap(),
+        NativePairingReply::Refused
+    ));
+    drop(selector);
+    peer.join().unwrap();
 }
 
 /// Rows PR5, PR15 (client): the enrollment `Refused` reply answering

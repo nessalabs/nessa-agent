@@ -546,7 +546,8 @@ fn a_stop_ends_a_blocked_read_without_shutting_its_socket() {
     let reading = std::thread::spawn({
         let stop = stop.clone();
         move || {
-            let mut socket = Socket::new(stream, stop, Arc::new(()));
+            let handle = stop.register(&Arc::new(()), &stream).unwrap();
+            let mut socket = Socket::new(stream, stop, handle);
             socket.read_timeout(Duration::from_secs(30)).unwrap();
             let started = std::time::Instant::now();
             let read = socket.read(&mut [0; 16]);
@@ -568,7 +569,9 @@ fn a_sliced_wait_lasts_as_long_as_the_caller_set() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_held, _) = listener.accept().unwrap();
-    let mut socket = Socket::new(stream, ReadStop::new(), Arc::new(()));
+    let stop = ReadStop::new();
+    let handle = stop.register(&Arc::new(()), &stream).unwrap();
+    let mut socket = Socket::new(stream, stop, handle);
     socket.read_timeout(STOP_SLICE * 5).unwrap();
     let started = std::time::Instant::now();
     let kind = socket.read(&mut [0; 16]).unwrap_err().kind();

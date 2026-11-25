@@ -5,7 +5,9 @@ use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeTransport},
     domain::{pairing::TerminalCause, CredentialId},
 };
-use nessa_client_core::retained::{dial_gateway, RetainedTranscript};
+use nessa_client_core::retained::{
+    dial_gateway, ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedTranscript,
+};
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
     conversation::domain::ConversationId,
@@ -429,6 +431,43 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
             assert_eq!(
                 scoped_raw_rows(&device, name, scope),
                 expected[..position as usize]
+            );
+        }
+        // Repeat the prefix through the real retained client opener, not
+        // the fixture's binary session. The same Product-discovered scope
+        // and existing SQLite driver remain the authorities on both routes.
+        let name = "native-adapter-staged.sqlite3";
+        let relay = device.relay();
+        let access = || ReaderAccess {
+            role: ReaderRole::DeviceOwner,
+            address: if use_relay { REFUSED } else { device.address },
+            relay: use_relay.then_some(&relay),
+            identity: &device.identity,
+            pin: device.pin,
+            credential: &device.credential,
+            receiver: &device.receiver,
+            access_epoch: device.access_epoch,
+            client_id: "retained-binary-process-fixture",
+        };
+        let stopped = ReadStop::new();
+        stopped.stop();
+        let mut retained = device.cache(name);
+        assert_eq!(
+            retained.enrolled_record_page_for_test(access(), scope, stopped, WAIT),
+            Err(ReadFailure::Stopped)
+        );
+        drop(retained);
+        assert!(scoped_raw_rows(&device, name, scope).is_empty());
+        for cursor in [1, 2] {
+            let mut reopened = device.cache(name);
+            assert_eq!(
+                reopened.enrolled_record_page_for_test(access(), scope, ReadStop::new(), WAIT),
+                Ok((cursor, 1))
+            );
+            drop(reopened);
+            assert_eq!(
+                scoped_raw_rows(&device, name, scope),
+                expected[..cursor as usize]
             );
         }
         drop(gateway);
