@@ -67,13 +67,19 @@ stateDiagram-v2
 
 ## Reconnect a remote terminal view
 
-A mounted pane for a listed remote terminal keeps its latest measured fit while the gateway is offline. When that gateway connects, the view attaches to the same terminal using its raw ID. The last focused view restores its size ownership. Keys typed while the owner was offline are discarded. Closing the pane stops it from attaching when the gateway returns.
+A mounted pane for a listed remote terminal keeps its latest measured fit while the gateway is offline. The list retains the gateway's last confirmed terminals through a connection replacement. The next successful list confirms which terminals still exist, and removing a gateway clears its entries immediately. When the gateway connects, the view attaches to the same terminal using its raw ID. The last focused view restores its size ownership. Keys typed while the owner was offline are discarded. Closing the pane stops it from attaching when the gateway returns.
 
 The working-tree adapter regressions cover opening a pane offline, receipt of the first output, replacement of the owner's terminal source, retention of the last focus owner, and closure before recovery. [Composite adapter tests](../../../../../src/desktop/workspace/adapters/gateway/multi-terminal-gateway.test.ts) · [Terminal gateway tests](../../../../../src/desktop/workspace/adapters/gateway/terminal-gateway.test.ts)
 
 ## Bounded rule model
 
-Two views, two fits and up to two frames after the first, starting with both views at the same fit (`StartFit`); a refit reaches the other fit. Transport is a FIFO queue per view, and delivery happens in any order across views. The model checks that the owner is always an open view, that the size is the owner's fit whenever there is an owner, that only the owner ever resizes, that a view never paints an older frame after a newer one, that what a view paints has the server's size for that frame, and that a closed view holds nothing. A failure probe that lets any view resize breaks `OnlyOwnerResizes` and `SizeFollowsOwner`. Not modelled: scrolling (each view's scroll position is its own field, which no other view's action writes), input bytes, history trimming (a scrolled view re-anchors from `total`/`scrollback` in each history reply), parking, and the phone. The model checks design safety, not the implementation, and makes no progress claim.
+Two views, two fits and up to two frames after the first, starting with both views at the same fit (`StartFit`); a refit reaches the other fit. Transport is a FIFO queue per view, and delivery happens in any order across views. The model checks that the owner is always an open view, that the size is the owner's fit whenever there is an owner, that only the owner ever resizes, that a view never paints an older frame after a newer one, that what a view paints has the server's size for that frame, and that a closed view holds nothing. Not modelled: scrolling (each view's scroll position is its own field, which no other view's action writes), input bytes, history trimming (a scrolled view re-anchors from `total`/`scrollback` in each history reply), parking, and the phone. The model checks design safety, not the implementation, and makes no progress claim.
+
+TLC 1.7.4 checked all seven configured rules across 1,716 distinct states.
+The repository probes let another view resize the terminal, keep the owner after
+it detaches, and queue an old checkpoint after the latest frame is painted. They
+break `OnlyOwnerResizes` and `SizeFollowsOwner`, `OwnerAttached`, and `QueueAhead`,
+respectively. [Probe command](../../../../../scripts/state-docs/README.md)
 
 ## Model coverage
 

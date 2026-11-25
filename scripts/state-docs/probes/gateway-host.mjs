@@ -2,6 +2,23 @@
 // The harness resolves each document through the catalog and never edits its model.
 export const probes = [
   {
+    document: "gateway-peer-discovery",
+    name: "Announce before the peer's discovery key is installed",
+    expectedRules: ["AnnounceOnlyInstalled"],
+    mutate: (spec) => spec.replace('present /\\ field = "installed"', "present"),
+  },
+  {
+    document: "gateway-peer-discovery",
+    name: "Publish after observing the credential is noncurrent",
+    expectedRules: ["PublishOnlyObservedCurrent"],
+    // Allow a bad publish while still letting the next refresh withdraw it.
+    mutate: (spec) =>
+      spec.replace(
+        'phase = "Active" /\\ credential = "current")',
+        'phase = "Active" /\\ (credential = "current" \\/ ~announced))',
+      ),
+  },
+  {
     document: "gateway-surface-call",
     name: "Dispatch a call the catalog rejects",
     expectedRules: ["CatalogBeforeSend"],
