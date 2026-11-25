@@ -39,3 +39,19 @@
 :root[data-motion="reduced"] .connecting-splash {
   transition: none;
 }
+
+/* The sweep's crest in Nessa's colours, the setup field's palette
+   (BloomField's magenta, violet, amber and blue), over the muted word. */
+.connecting-splash-text[data-slot="loading-text"] [data-shimmer="true"] {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 30%,
+    #e2457a 40%,
+    #8d5ad8 46%,
+    #f09a4a 53%,
+    #4b6cf0 60%,
+    var(--muted-foreground) 70%,
+    var(--muted-foreground) 100%
+  );
+}
