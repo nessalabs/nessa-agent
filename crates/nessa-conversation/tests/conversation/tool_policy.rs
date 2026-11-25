@@ -60,7 +60,6 @@ fn read_only_tools_allows_only_named_readers() {
         (ToolSource::Claude, "Grep"),
         (ToolSource::Claude, "ToolSearch"),
         (ToolSource::Codex, "read"),
-        (ToolSource::Gateway, "environments_list"),
     ] {
         assert_eq!(
             under(&policy, source, name),
@@ -202,7 +201,7 @@ fn a_star_matches_any_run_of_characters_anywhere() {
         allowed(&["tool.rules.allow.0", "tool.rules.allow.2"])
     );
     assert_eq!(
-        under(&policy, ToolSource::Gateway, "environments_list"),
+        under(&policy, ToolSource::Gateway, "threads_list"),
         allowed(&["tool.rules.allow.1", "tool.rules.allow.2"])
     );
     let exact = rules(&["Read"], &[]);

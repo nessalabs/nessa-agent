@@ -299,6 +299,8 @@ export interface GatewaySource<
    * connect it made or joined is refused that way.
    */
   connected(): Promise<C>
+  /** Reports each adopted client, including the one already held. */
+  followClient(listener: (client: C) => void): () => void
   /**
    * Makes one of an app's calls in conversation `conversationId`, following
    * that conversation (a conversation taken out is not followed, P9). The
@@ -469,6 +471,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const { clock } = options
   const timing = options.timing ?? defaultGatewayTiming
   const listeners = new Set<(update: WorkspaceUpdate) => void>()
+  const clientListeners = new Set<(client: C) => void>()
   let disposed = false
 
   // Each session's summary counter, kept after a removal so a later listing outranks it.
@@ -696,6 +699,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         offReviews()
       },
     }
+    for (const listener of clientListeners) listener(connected)
     waitUntil = 0
     // A connection after another is a reconnect: what it missed is read again.
     if (connectedBefore) {
@@ -2322,6 +2326,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     },
     // An app calls on its own schedule, not a person's: in the background.
     connected: () => within(() => client("app")),
+    followClient(listener) {
+      if (disposed) return noop
+      clientListeners.add(listener)
+      if (current) listener(current.client)
+      return () => clientListeners.delete(listener)
+    },
     appCall(conversationId, call) {
       // Followed, so the review the call may open is shown (#436); not one taken out (P9).
       if (!takenOut(conversationId)) follow(conversationId, "app")
@@ -2337,6 +2347,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       for (const sessionId of [...views.keys()])
         unfollow(sessionId, new WorkspaceSourceError("unavailable"))
       listeners.clear()
+      clientListeners.clear()
       current?.off()
       current?.client.close()
       current = undefined
@@ -2712,7 +2723,6 @@ function reasonFor(
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
     case ConversationErrorCode.EnvironmentPlatformUnsupported:
-    case ConversationErrorCode.LinkedFileUnreachable:
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:

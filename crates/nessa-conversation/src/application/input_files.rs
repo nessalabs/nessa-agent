@@ -1,11 +1,11 @@
 //! Original uploaded input becomes confirmed links under one execution lease.
 //!
 //! admission -> exact holds + submitted evidence -> durable SDK input
-//! dispatch -> asked evidence -> local placement / LeaseHold::fetch -> outcome evidence
+//! dispatch -> asked evidence -> local placement -> outcome evidence
 //! Physical work and its outcome outlive a dropped provider preparation waiter.
 use super::{
-    ConversationAttachments, ConversationFileLinkAudit, EnvironmentFuture, FetchAsk, FetchFailure,
-    FetchPlaced, HeldRange, HeldRangeError, HeldSource, HeldSourceFailure, LeaseHold,
+    ConversationAttachments, ConversationFileLinkAudit, EnvironmentFuture, HeldRange,
+    HeldRangeError, HeldSource, HeldSourceFailure,
 };
 use futures_util::FutureExt;
 use nessa_auth::{
@@ -110,7 +110,6 @@ pub struct ConversationInputFiles {
     principal: PrincipalId,
     conversation: ConversationId,
     lease: LeaseId,
-    hold: Arc<dyn LeaseHold>,
     workspace: String,
     local: Option<Arc<dyn LocalInputFilePlacement>>,
     lease_stopped: watch::Receiver<bool>,
@@ -127,7 +126,6 @@ impl ConversationInputFiles {
         principal: PrincipalId,
         conversation: ConversationId,
         lease: LeaseId,
-        hold: Arc<dyn LeaseHold>,
         workspace: String,
         local: Option<Arc<dyn LocalInputFilePlacement>>,
         lease_stopped: watch::Receiver<bool>,
@@ -142,7 +140,6 @@ impl ConversationInputFiles {
             principal,
             conversation,
             lease,
-            hold,
             workspace,
             local,
             lease_stopped,
@@ -219,24 +216,7 @@ impl ConversationInputFiles {
                         delivered: delivered.clone(),
                     })
                 } else {
-                    match self.hold.fetch(FetchAsk {
-                        request: attempt,
-                        destination: file.destination_name(),
-                        file: published,
-                        source,
-                        delivered: delivered.clone(),
-                    }) {
-                        Some(fetch) => Box::pin(async move {
-                            fetch
-                                .await
-                                .map(|placed| match placed {
-                                    FetchPlaced::Placed { path }
-                                    | FetchPlaced::AlreadyPlaced { path } => path,
-                                })
-                                .map_err(fetch_error)
-                        }),
-                        None => Box::pin(async { Err(UserFileError::NotOffered) }),
-                    }
+                    Box::pin(async { Err(UserFileError::NotOffered) })
                 }
             },
         ))
@@ -393,29 +373,6 @@ impl HeldSource for InputSource {
         })
     }
 }
-fn fetch_error(error: FetchFailure) -> UserFileError {
-    match error {
-        FetchFailure::NotHeld => UserFileError::NotHeld,
-        FetchFailure::SourceUnavailable | FetchFailure::ChannelUnavailable => {
-            UserFileError::Unavailable
-        }
-        FetchFailure::Unanswered => UserFileError::Uncertain,
-        FetchFailure::Refused(reason) => match reason {
-            nessa_protocol::lease::FetchRefusal::Unavailable => UserFileError::NotOffered,
-            nessa_protocol::lease::FetchRefusal::Occupied => UserFileError::Occupied,
-            nessa_protocol::lease::FetchRefusal::Mismatch
-            | nessa_protocol::lease::FetchRefusal::Invalid
-            | nessa_protocol::lease::FetchRefusal::Size
-            | nessa_protocol::lease::FetchRefusal::OutsideWorkspace => UserFileError::Mismatch,
-            nessa_protocol::lease::FetchRefusal::AuditUnavailable => UserFileError::Audit,
-            nessa_protocol::lease::FetchRefusal::LeaseEnded => UserFileError::Cancelled,
-            nessa_protocol::lease::FetchRefusal::NoDirectory
-            | nessa_protocol::lease::FetchRefusal::Busy
-            | nessa_protocol::lease::FetchRefusal::PlacingFailed => UserFileError::Unavailable,
-        },
-    }
-}
-
 #[cfg(test)]
 #[path = "../../tests/conversation/input_files.rs"]
 pub(in crate::application) mod tests;

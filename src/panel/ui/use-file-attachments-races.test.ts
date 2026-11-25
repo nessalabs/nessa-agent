@@ -125,8 +125,6 @@ function appElement(targetStore: AppStore, targetResources: typeof resources) {
             show({
               catalog: {
                 agents: [],
-                environments: [],
-                commandHosts: [],
                 nativeHooks: { claude: "off", codex: "off" },
               },
               chosenAgent: undefined,

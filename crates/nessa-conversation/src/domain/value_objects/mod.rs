@@ -9,8 +9,6 @@ mod channel;
 mod cloud;
 pub use cloud::Cloud;
 mod conversation_deletion;
-mod place;
-mod pool_preference;
 mod reply_style;
 mod setting_level;
 mod settings_scope;
@@ -20,11 +18,10 @@ mod vm_lifetime;
 mod window_action;
 mod workspace_window;
 pub use channel::{
-    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
-    UnknownChannelPlace, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES,
-    MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES,
-    MAX_CHANNEL_RESOURCE_BYTES,
+    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
+    ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources, MAX_CHANNELS_PER_OWNER,
+    MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES,
+    MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES,
 };
 pub use conversation_deletion::{
     ConversationDeletion, DeletionContradiction, ProviderSessionErasure, ProviderSessionLink,
@@ -40,8 +37,6 @@ pub use workspace_window::{
     WindowRefusal, WindowShowing, WorkspaceWindow, MAX_PANEL_TABS,
 };
 
-pub use place::{Place, UnknownPlace};
-pub use pool_preference::{PoolPreference, PoolRefusal, PoolSettings, MAX_POOL_ENTRIES};
 pub use reply_style::{
     ReplyStyle, ReplyStyleSettings, RoleStyles, StyleRole, StyleText, MAX_REPLY_STYLE_BYTES,
 };

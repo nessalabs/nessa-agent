@@ -102,11 +102,6 @@ pub enum NativePairingRequest {
     OpenProduct,
     /// Select the bounded record carrier on this proved native connection.
     OpenRecordCarrierV1(RecordCarrierOpen),
-    /// Select the environment phase on this connection: the dialing gateway
-    /// serves leases to this one over it. Only a first envelope selects it;
-    /// it carries no credential, and whether the proved key may serve is the
-    /// gateway's decision.
-    OpenEnvironment,
     /// Select discovery-key agreement on this connection. Only a first
     /// envelope selects it. Identifiers correlate an existing enrollment, never enroll.
     OpenDiscovery {
@@ -223,9 +218,6 @@ pub enum NativePairingReply {
     Refused,
     /// The v1 carrier was selected; exact physical binding still follows.
     RecordCarrierV1Accepted,
-    /// The environment phase was admitted: lease frames follow, the serving
-    /// side's hello first.
-    Serving,
 }
 /// Refuse oversized complete envelopes before decoding their syntax and domain values.
 /// Decoded requests remain untrusted; no key proof or admission is established.
@@ -269,7 +261,6 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
                 },
             ))
         }
-        WireRequest::OpenEnvironment {} => Ok(NativePairingRequest::OpenEnvironment),
         WireRequest::OpenDiscovery { public, credential } => {
             Ok(NativePairingRequest::OpenDiscovery {
                 public: public.into_domain()?,
@@ -314,7 +305,6 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
                 mode: opening.mode,
             }
         }
-        NativePairingRequest::OpenEnvironment => WireRequest::OpenEnvironment {},
         NativePairingRequest::OpenDiscovery { public, credential } => WireRequest::OpenDiscovery {
             public: WirePublic::from_domain(*public),
             credential: Cow::Borrowed(credential.as_str()),
@@ -408,10 +398,6 @@ pub fn encode_refused() -> Result<Vec<u8>, NativeWireError> {
 pub fn encode_record_carrier_accepted() -> Result<Vec<u8>, NativeWireError> {
     encode(&WireReply::RecordCarrierV1Accepted {})
 }
-/// Encode the admission of an environment phase.
-pub fn encode_serving() -> Result<Vec<u8>, NativeWireError> {
-    encode(&WireReply::Serving {})
-}
 /// Decode a complete bounded peer reply through the domain projection/identity owners.
 /// Successful decode alone does not authenticate the peer or authorize replacing prior scope.
 pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError> {
@@ -435,7 +421,6 @@ pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError>
         }),
         WireReply::Refused {} => Ok(NativePairingReply::Refused),
         WireReply::RecordCarrierV1Accepted {} => Ok(NativePairingReply::RecordCarrierV1Accepted),
-        WireReply::Serving {} => Ok(NativePairingReply::Serving),
     }
 }
 /// `access_epoch` is the current epoch an Active status carries, and only an

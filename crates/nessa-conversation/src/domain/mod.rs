@@ -32,19 +32,17 @@ pub use scheduled_message::{
     ObservedUsageLimit, OpenContinuation,
 };
 pub use value_objects::{
-    Capabilities, Capability, Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId,
-    ChannelName, ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest,
-    ChannelResources, Cloud, CommandHosts, ConversationDeletion, DeletionContradiction, OpenPlace,
-    PaneContent, PanePlace, Place, PoolPreference, PoolRefusal, PoolSettings,
-    ProviderSessionErasure, ProviderSessionLink, ReplyStyle, ReplyStyleSettings, RestCause,
-    RoleStyles, Setting, SettingLevel, SettingsScope, ShareAccess, ShareAccessError, StyleRole,
-    StyleText, ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
-    ToolSource, UnknownChannelPlace, UnknownPlace, VmLifetime, VmLifetimeSettings, WidgetRef,
-    WindowAction, WindowActionSeverity, WindowArrangement, WindowColumn, WindowPane, WindowPanel,
-    WindowRefusal, WindowShowing, WindowSide, WindowView, WorkspaceWindow, MAX_CHANNELS_PER_OWNER,
-    MAX_CHANNEL_NAME_CHARS, MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES,
-    MAX_CHANNEL_REQUEST_ID_BYTES, MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES,
-    MAX_PANEL_TABS, MAX_POOL_ENTRIES, MAX_REPLY_STYLE_BYTES,
+    Capabilities, Capability, Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName,
+    ChannelNotes, ChannelParts, ChannelPath, ChannelRefusal, ChannelRequest, ChannelResources,
+    Cloud, CommandHosts, ConversationDeletion, DeletionContradiction, OpenPlace, PaneContent,
+    PanePlace, ProviderSessionErasure, ProviderSessionLink, ReplyStyle, ReplyStyleSettings,
+    RestCause, RoleStyles, Setting, SettingLevel, SettingsScope, ShareAccess, ShareAccessError,
+    StyleRole, StyleText, ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
+    ToolSource, VmLifetime, VmLifetimeSettings, WidgetRef, WindowAction, WindowActionSeverity,
+    WindowArrangement, WindowColumn, WindowPane, WindowPanel, WindowRefusal, WindowShowing,
+    WindowSide, WindowView, WorkspaceWindow, MAX_CHANNELS_PER_OWNER, MAX_CHANNEL_NAME_CHARS,
+    MAX_CHANNEL_NOTES_BYTES, MAX_CHANNEL_PATH_BYTES, MAX_CHANNEL_REQUEST_ID_BYTES,
+    MAX_CHANNEL_RESOURCES, MAX_CHANNEL_RESOURCE_BYTES, MAX_PANEL_TABS, MAX_REPLY_STYLE_BYTES,
 };
 
 #[cfg(test)]

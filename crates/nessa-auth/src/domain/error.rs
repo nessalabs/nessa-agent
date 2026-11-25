@@ -22,6 +22,8 @@ pub enum DomainError {
     InvalidTransition {
         reason: &'static str,
     },
+    /// An extension attempted to claim the built-in default `"nessa"` namespace.
+    ReservedAppNamespace,
 }
 
 impl fmt::Display for DomainError {
@@ -49,6 +51,9 @@ impl fmt::Display for DomainError {
             ),
             Self::InvalidTransition { reason } => {
                 write!(formatter, "invalid credential transition: {reason}")
+            }
+            Self::ReservedAppNamespace => {
+                formatter.write_str("app namespace \"nessa\" is reserved for the default app")
             }
         }
     }

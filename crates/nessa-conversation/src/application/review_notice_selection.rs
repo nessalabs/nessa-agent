@@ -100,6 +100,7 @@ impl<'a> SelectReviewNotice<'a> {
                 organization: recipient.organization_id(),
                 principal: recipient.principal_id(),
                 membership: current.membership.role(),
+                app_namespace: recipient.app_namespace(),
             },
             action: AccessAction::ReviewNotice,
             resource: AccessResource::of(conversation),

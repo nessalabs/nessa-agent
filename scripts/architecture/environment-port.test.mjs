@@ -2,10 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { environmentPortViolations } from "./environment-port.mjs"
 
-const adapters = [
-  "crates/nessa-conversation/src/infrastructure/environment.rs",
-  "crates/nessa-conversation/src/infrastructure/ssh_environment/environment.rs",
-]
+const adapters = ["crates/nessa-conversation/src/infrastructure/environment.rs"]
 
 test("each adapter implements the port and the service and composition name it", () => {
   for (const adapter of adapters)
@@ -32,11 +29,10 @@ test("each adapter implements the port and the service and composition name it",
   )
 })
 
-test("a third adapter in product source is refused, wherever it is", () => {
+test("a second adapter in product source is refused, wherever it is", () => {
   for (const path of [
     "crates/nessa-server/src/conversation/infrastructure/ssh.rs",
-    "crates/nessa-conversation/src/infrastructure/ssh_environment/link.rs",
-    "crates/nessa-env-serve/src/application/serve.rs",
+    "crates/nessa-conversation/src/infrastructure/ssh_environment/environment.rs",
     "crates/nessa-server/src/product/environments.rs",
   ])
     for (const source of [

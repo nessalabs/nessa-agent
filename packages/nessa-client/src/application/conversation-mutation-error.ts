@@ -46,22 +46,17 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retry normally succeeds once the runtime is warm.",
   sandbox_unavailable:
     "The gateway could not give this conversation's agent the sandbox it runs in, so the agent did not start and nothing was sent.",
+  // Every gateway runs only its own agents (ADR 1417). Only a conversation an
+  // older build placed on another computer is refused this way; its history
+  // stays readable.
   environment_not_configured:
-    'This conversation runs on an SSH host the gateway\'s config.json does not name under "sshHosts", so nothing was sent.',
+    "This conversation was started on another computer by an older version of Nessa. Every computer now runs its own agents, so nothing was sent. Its history is still here; start a new conversation to carry on.",
   environment_unavailable:
-    "The remote workspace could not be opened or cannot run its agent, so nothing was sent. Check its connection, unlock Nessa if needed, and retry once it is available.",
-  environment_version_mismatch:
-    "The copy of Nessa on the SSH host this conversation runs on is not the one this gateway installs there, so nothing was sent to it.",
-  environment_platform_unsupported:
-    "The SSH host this conversation runs on has an operating system or processor this version of Nessa has no build for, so it could not install itself there and nothing was sent.",
-  environment_install_failed:
-    "Nessa could not install itself on the SSH host this conversation runs on: the copy could not be downloaded, did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
+    "The workspace this conversation runs in could not be opened, so nothing was sent. Retry once it is available.",
   deferred_source_unavailable:
     "This conversation’s recorded version is no longer at its source. Other conversations are unchanged.",
   deferred_source_changed:
     "This conversation’s recorded version changed at its source, so it was not restored. Other conversations are unchanged.",
-  linked_file_unreachable:
-    "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
   // Named apart from the two codes below, which say the turn was saved.
   revoked:
     "Access changed before the message was admitted, so nothing was saved. Sending it again needs a new message.",
@@ -140,19 +135,15 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
       return true
     // No lease was granted for the agent's run, so the gateway never opened a
     // provider: the refusal comes from the same startup that ends before
-    // anything reaches one. The same for an SSH host: placed nowhere
-    // configured, unreachable, busy, unable to run the agent, or another
-    // build — no lease, nothing opened.
+    // anything reaches one. The same for a conversation an older build placed
+    // on another computer, or one of those builds' remote refusals — no
+    // lease, nothing opened.
     case ConversationErrorCode.SandboxUnavailable:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentUnavailable:
     case ConversationErrorCode.EnvironmentVersionMismatch:
     case ConversationErrorCode.EnvironmentPlatformUnsupported:
     case ConversationErrorCode.EnvironmentInstallFailed:
-      return true
-    // Refused before anything of the message was recorded or sent: the
-    // conversation's environment cannot read a path on this machine.
-    case ConversationErrorCode.LinkedFileUnreachable:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so

@@ -71,7 +71,16 @@ The model separates remote expiry from locally observed authority. `AnnounceOnly
 
 The live refresh interval is 75 seconds after the last refresh, assuming the scheduler and publication adapter make progress. Remote detection is not bounded when the peer is unreachable, and this model does not assert immediate or eventual detection of every remote expiry. Its fairness assumptions cover the live refresh loop or stopped withdrawal only; they do not prove OS DNS-SD withdrawal, native worker completion, disk durability, or behavior under a permanently stalled scheduler. Those require implementation tests and platform verification. The model excludes cryptography, concurrent enrollment/CAS writes, and audit restoration; focused regressions cover those boundaries.
 
-TLC 1.7.4 checked the corrected model with one worker: 205 generated states, 61 distinct states, and no safety or temporal violation. Removing the local-current publication guard violates `PublishOnlyObservedCurrent`; disabling stopped withdrawal violates the temporal property. The original combined remote/local expiry model failed after publication followed by expiry. These are model checks, not implementation or network proofs.
+TLC 1.7.4 checked 61 distinct states and all five configured rules. The
+repository probes allow publication without an installed discovery key and
+allow a new publication after a noncurrent observation. They break
+`AnnounceOnlyInstalled` and `PublishOnlyObservedCurrent`, respectively.
+
+A separate TLC control kept `announced` unchanged in the stopped `Withdraw`
+action and reproduced a trace where a published registration remains after
+stop. TLC 1.7.4 reports this violation without a rule name. The automated
+probes use the named safety violations, which the checker can match.
+[Probe command](../../../../scripts/state-docs/README.md)
 
 ## Verification limits
 

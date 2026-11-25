@@ -125,6 +125,13 @@ impl NativeHooksPreferences {
         self.changes.subscribe()
     }
 
+    /// How many readers of [`Self::changes`] are open, so a test can see a
+    /// subscription's wake source go with its socket.
+    #[cfg(test)]
+    pub fn readers(&self) -> usize {
+        self.changes.receiver_count()
+    }
+
     /// The choice in effect now.
     pub fn selection(&self) -> NativeHooksSelection {
         NativeHooksSelection::new(

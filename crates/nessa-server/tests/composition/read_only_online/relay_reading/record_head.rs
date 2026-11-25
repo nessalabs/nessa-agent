@@ -18,7 +18,10 @@ use nessa_protocol::{
         },
         EnrollmentChannel,
     },
-    product::generated::{product_method, ConversationRecordsHeadParams},
+    product::generated::{
+        product_method, ConversationRecordsHeadParams, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        MAX_RECORD_PAGE_PAYLOAD_BYTES, MAX_RECORD_PAGE_RECORDS,
+    },
     relay::RelayAddress,
 };
 use nessa_sync::replication::{
@@ -329,6 +332,132 @@ fn scoped_raw_rows(device: &Device, name: &str, scope: &Scope) -> Vec<(u64, Stri
 }
 
 #[test]
+fn enrolled_pair_commits_two_pages_on_one_connection_and_refuses_a_third() {
+    for use_relay in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (_gateway, device) = Device::start(directory.path(), "record-page-pair");
+        device.wait_registered();
+        let setup: Setup =
+            serde_json::from_slice(&std::fs::read(device.root.join("setup.json")).unwrap())
+                .unwrap();
+        let conversation = ConversationId::new(&setup.conversation).unwrap();
+        let mut ordinary = device.cache("pair-baseline.sqlite3");
+        assert!(
+            completion::finish(|budget| device.read_for(
+                &mut ordinary,
+                device.address,
+                None,
+                budget,
+                8,
+            ))
+            .unwrap()
+            .complete
+        );
+        let catalogue = ordinary
+            .saved_catalogue_scope(&device.receiver)
+            .unwrap()
+            .unwrap();
+        let RetainedTranscript::Retained(baseline) = ordinary
+            .transcript_view(
+                &device.receiver,
+                catalogue.origin().as_str(),
+                &conversation,
+                Uuid::nil(),
+            )
+            .unwrap()
+        else {
+            panic!("ordinary baseline must discover and retain the authorized scope");
+        };
+        let scope = baseline.progress().scope();
+        drop(ordinary);
+        let expected = scoped_raw_rows(&device, "pair-baseline.sqlite3", scope);
+        assert_eq!(expected.len(), 3);
+        let relay = device.relay();
+        let io = open_probe(&device, use_relay.then_some(&relay), scope, true).unwrap();
+        let session = CapabilityRecordSession::connect(
+            io,
+            scope.clone(),
+            SessionLimits {
+                control_bytes: 2048,
+                bindings: 1,
+            },
+            CapabilitySupport::current(),
+        )
+        .unwrap();
+        let (mut auth, source) = session.parts();
+        let mut source = RecordRequests {
+            source,
+            after: Vec::new(),
+        };
+        let name = "native-record-page-pair.sqlite3";
+        let mut retained = device.cache(name);
+        for durable in [1, 2] {
+            assert_eq!(
+                retained
+                    .one_record_page_for_test(scope, &mut auth, &mut source)
+                    .unwrap(),
+                (durable, 1)
+            );
+            assert_eq!(
+                scoped_raw_rows(&device, name, scope),
+                expected[..durable as usize]
+            );
+        }
+        assert_eq!(source.after, [0, 1]);
+        let source_entries = || {
+            std::fs::read_dir(&device.root)
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("pair-source-entries.")
+                })
+                .count()
+        };
+        let entries = source_entries();
+        assert!(entries > 0, "fixture must see physical source calls");
+        assert!(matches!(
+            source.page(&PageRequest {
+                scope: scope.clone(),
+                after: 2,
+                target: baseline.progress().downloaded(),
+                max_records: 1,
+                max_payload_bytes: MAX_RECORD_PAGE_PAYLOAD_BYTES,
+                max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            }),
+            Err(SourceError::Denied)
+        ));
+        assert_eq!(source.after, [0, 1, 2]);
+        assert_eq!(
+            source_entries(),
+            entries,
+            "third Page must not enter physical Head or Page"
+        );
+        session.close().unwrap();
+        drop(retained);
+        let mut reopened = device.cache(name);
+        let RetainedTranscript::Retained(saved) = reopened
+            .transcript_view(
+                &device.receiver,
+                scope.origin().as_str(),
+                &conversation,
+                Uuid::nil(),
+            )
+            .unwrap()
+        else {
+            panic!("the reopened owner must retain the two committed Pages");
+        };
+        assert_eq!(saved.progress().scope(), scope);
+        assert_eq!(saved.progress().downloaded(), 2);
+        drop(reopened);
+        assert_eq!(scoped_raw_rows(&device, name, scope), expected[..2]);
+    }
+}
+
+#[test]
 fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
     for use_relay in [false, true] {
         let directory = tempfile::tempdir().unwrap();
@@ -434,6 +563,37 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                 expected[..position as usize]
             );
         }
+        // The original mount spends its one allowance even if the gateway's
+        // host limit rejects an upstream-valid request.
+        let relay = device.relay();
+        let io = open_probe(&device, use_relay.then_some(&relay), scope, true).unwrap();
+        let session = CapabilityRecordSession::connect(
+            io,
+            scope.clone(),
+            SessionLimits {
+                control_bytes: 2048,
+                bindings: 1,
+            },
+            CapabilitySupport::current(),
+        )
+        .unwrap();
+        let (_, mut source) = session.parts();
+        let mut request = PageRequest {
+            scope: scope.clone(),
+            after: 0,
+            target: baseline.progress().downloaded(),
+            max_records: MAX_RECORD_PAGE_RECORDS + 1,
+            max_payload_bytes: MAX_RECORD_PAGE_PAYLOAD_BYTES,
+            max_record_bytes: MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        };
+        assert!(matches!(
+            source.page(&request),
+            Err(SourceError::InvalidRequest)
+        ));
+        request.max_records = 1;
+        assert!(matches!(source.page(&request), Err(SourceError::Denied)));
+        session.close().unwrap();
+
         // Repeat the prefix through the real retained client opener, not
         // the fixture's binary session. The same Product-discovered scope
         // and existing SQLite driver remain the authorities on both routes.

@@ -2,9 +2,9 @@
 /**
  * The owner's share dialog (nessa_ui#128, #129) against a scripted product
  * session: Share… on a session's menu, its grants and what each holds, a
- * Drive grant with a preset and hosts sent as the wire takes it, the host
- * list held to the hosts' own bound however full the tool patterns are, a
- * refusal said in words,
+ * Drive grant with a preset sent as the wire takes it, naming no host since
+ * every gateway runs only its own agents (ADR 1417), full tool patterns
+ * still sendable, a refusal said in words,
  * a revoke, a change refused because another window changed the grant and
  * started again from what it holds, a list held while it predates this
  * window's own change, focus kept in the dialog and given back,
@@ -26,9 +26,6 @@ import { main } from "./lib/run.mjs"
 import { css, names, selectorFor } from "./lib/selectors.mjs"
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
-const fixtures = JSON.parse(
-  readFileSync(join(repo, "protocol/product/fixtures.json"), "utf8"),
-)
 
 const wireCodes = [
   "share_target_not_paired",
@@ -115,7 +112,6 @@ const devices = [
 
 const protocol = JSON.parse(readFileSync(join(repo, "protocol/product/v1.json"), "utf8"))
 const sharePageSize = protocol.$defs.ConversationSharesParams.properties.pageSize.maximum
-const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
 
 /**
  * A product socket that lists one conversation and answers sharing.
@@ -264,18 +260,12 @@ function scriptedGateway(scenario = {}) {
             status: "off",
           },
         }
+      case "terminal.list":
+        // The window reads its terminals at start; this one has none.
+        return { ok: true, payload: { terminals: [] } }
       case "pairing.pending":
         // Linked devices, once the empty dialog's link has opened it.
         return { ok: true, payload: { items: [] } }
-      case "agents.list":
-        return {
-          ok: true,
-          payload: {
-            ...fixtures.AgentsListResult,
-            environments: ["here", ...hosts],
-            commandHosts: hosts,
-          },
-        }
       case "conversation.shares": {
         if (failingReads)
           return {
@@ -466,7 +456,7 @@ async function shot(page, options, engine, name) {
 const meta = {
   name: "share-dialog",
   summary:
-    "Share dialog: grants, Drive policy and hosts, the host budget, refusal, revoke, focus, fit",
+    "Share dialog: grants, Drive policy, full patterns, refusal, revoke, focus, fit",
   defaults: { engine: "chromium,webkit" },
   help: `
 Usage: node verification/desktop/scripts/share-dialog.mjs [options] [--shots <dir>]
@@ -474,14 +464,14 @@ Usage: node verification/desktop/scripts/share-dialog.mjs [options] [--shots <di
 Per engine, against a scripted product session:
   open      Share… on a session's menu opens one dialog, focus inside it,
             its grant listed with role, tools and hosts in words
-  drive     a Drive grant with a preset and two hosts is sent as the wire
-            takes it, naming revision 0 as a first grant, said as done, and
-            listed as the gateway read it back
+  drive     a Drive grant with a preset is sent as the wire takes it, with
+            no host to pick (each gateway runs only its own agents), naming
+            revision 0 as a first grant, said as done, and listed as the
+            gateway read it back
   empty     with no linked device and nothing shared, one line and Link a
             Device, which closes the dialog and opens Settings on Linked
             devices; no Done, no Share
-  budget    both pattern lists full still leave every host: "4 of 16", and
-            Share can send
+  budget    both pattern lists full, Share can still send
   refusal   a refused share is said in words; no wire code on the page
   held      while a share is on its way, and the read after it, the form,
             Share and Revoke are held; once that read answers they take input
@@ -590,10 +580,9 @@ await main(meta, async ({ options, rep, url }) => {
       await need(page, css.shareNotes, "the Drive notes")
       const notes = await page.locator(css.shareNotes).innerText()
       await choose(page, css.sharePresets, "No shell")
-      const boxes = page.locator(`${css.shareHosts} input[type="checkbox"]`)
-      await boxes.nth(0).check()
-      await boxes.nth(2).check()
-      const count = await page.locator(css.shareHostCount).innerText()
+      const offered = await page
+        .locator(`${css.shareHosts} input[type="checkbox"]`)
+        .count()
       const evidence = await shot(page, options, engine, "drive")
       await page.locator(selectorFor.shareAction("submit")).click()
       await page.waitForFunction(
@@ -609,7 +598,7 @@ await main(meta, async ({ options, rep, url }) => {
       const policy = JSON.stringify(share?.params?.policy)
       return {
         policy,
-        count,
+        offered,
         evidence,
         failures: [
           gate.sent.length === 1 ? null : `${gate.sent.length} changes were sent`,
@@ -620,21 +609,18 @@ await main(meta, async ({ options, rep, url }) => {
           JSON.stringify(["comment", "drive", "read"])
             ? null
             : `capabilities ${JSON.stringify(share?.params?.capabilities)}`,
-          policy ===
-          JSON.stringify({ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] })
-            ? null
-            : `policy ${policy}`,
+          policy === JSON.stringify({ preset: "no_shell" }) ? null : `policy ${policy}`,
           typeof share?.params?.requestId === "string" ? null : "no request id",
           // A first grant names 0: no grant held, so another window's first
           // grant landing before it is refused rather than overwritten.
           share?.params?.expectedPolicyRevision === 0
             ? null
             : `a first grant expected ${share?.params?.expectedPolicyRevision}`,
-          count.includes("2 of 16") ? null : `the count read ${JSON.stringify(count)}`,
+          offered === 0 ? null : `${offered} hosts were offered`,
           notes.includes("sandbox")
             ? null
             : "the note on what a policy cannot stop was missing",
-          row.includes("Drive · No shell, commands on devbox and ci-runner")
+          row.includes("Drive · No shell, commands nowhere")
             ? null
             : `the new grant read ${JSON.stringify(row)}`,
         ].filter(Boolean),
@@ -649,19 +635,12 @@ await main(meta, async ({ options, rep, url }) => {
         Array.from({ length: count }, (_, index) => `${prefix}${index}`).join(", ")
       await page.locator(selectorFor.sharePattern("allow")).fill(many("Allowed", 16))
       await page.locator(selectorFor.sharePattern("deny")).fill(many("Denied", 16))
-      const boxes = page.locator(`${css.shareHosts} input[type="checkbox"]`)
-      for (const index of [0, 1, 2, 3]) await boxes.nth(index).check()
-      const count = await page.locator(css.shareHostCount).innerText()
       const canSend = await page.locator(selectorFor.shareAction("submit")).isEnabled()
       const evidence = await shot(page, options, engine, "budget")
       return {
-        count,
         evidence,
         failures: [
-          count.includes("4 of 16 selected")
-            ? null
-            : `the count read ${JSON.stringify(count)}`,
-          canSend ? null : "Share was held with a full pattern list and every host",
+          canSend ? null : "Share was held with full pattern lists",
           gate.sent.length === 0 ? null : "a change was sent",
         ].filter(Boolean),
       }

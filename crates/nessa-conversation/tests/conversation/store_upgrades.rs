@@ -127,7 +127,7 @@ async fn a_version_6_file_is_upgraded_and_keeps_its_conversations() {
     assert_eq!(version(&path), 6);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -144,7 +144,7 @@ async fn a_version_7_file_from_before_model_requests_gains_that_table() {
     assert_eq!(version(&path), 7);
 
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     drop(store);
     assert_eq!(shape(&path), current_shape());
@@ -161,13 +161,16 @@ async fn a_version_7_file_that_already_has_model_requests_is_raised_as_it_is() {
         connection
             .execute_batch(
                 "DROP TABLE agent_switches; DROP TABLE closed_threads;
-                 DROP TABLE owner_decisions; DROP TABLE decision_settings; ALTER TABLE summaries DROP COLUMN ask",
+                 DROP TABLE owner_decisions; DROP TABLE decision_settings;
+                 ALTER TABLE summaries DROP COLUMN ask;
+                 DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 7).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     drop(store);
     assert_eq!(shape(&path), current_shape());
 }
@@ -185,13 +188,15 @@ async fn a_version_8_file_gains_the_agent_switch_journal() {
             .execute_batch(
                 "DROP INDEX one_pending_agent_switch; DROP TABLE agent_switches;
                  DROP TABLE closed_threads; DROP TABLE owner_decisions; DROP TABLE decision_settings;
-                 ALTER TABLE summaries DROP COLUMN ask",
+                 ALTER TABLE summaries DROP COLUMN ask;
+                 DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 8).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert_eq!(
@@ -216,13 +221,15 @@ async fn a_version_9_file_gains_the_closed_threads() {
         connection
             .execute_batch(
                 "DROP TABLE closed_threads; DROP TABLE owner_decisions; DROP TABLE decision_settings;
-                 ALTER TABLE summaries DROP COLUMN ask",
+                 ALTER TABLE summaries DROP COLUMN ask;
+                 DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 9).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     assert!(!ConversationRepository::thread_closed(&store, &id)
@@ -251,12 +258,17 @@ async fn a_version_10_file_gains_the_ask_on_its_summaries() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE owner_decisions; DROP TABLE decision_settings; ALTER TABLE summaries DROP COLUMN ask")
+            .execute_batch(
+                "DROP TABLE owner_decisions; DROP TABLE decision_settings;
+                 ALTER TABLE summaries DROP COLUMN ask;
+                 DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
+            )
             .unwrap();
         connection.pragma_update(None, "user_version", 10).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     let id = ConversationId::new(CONVERSATION).unwrap();
     let kept = ConversationSummaries::load(&store, &id)
@@ -390,12 +402,16 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
     {
         let connection = Connection::open(&path).unwrap();
         connection
-            .execute_batch("DROP TABLE owner_decisions; DROP TABLE decision_settings")
+            .execute_batch(
+                "DROP TABLE owner_decisions; DROP TABLE decision_settings;
+                 DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
+            )
             .unwrap();
         connection.pragma_update(None, "user_version", 11).unwrap();
     }
     let store = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(version(&path), 12);
+    assert_eq!(version(&path), 13);
     assert_kept(&store).await;
     assert_eq!(
         ConversationSummaries::decisions(&store, &id).await.unwrap(),
@@ -455,6 +471,50 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
         .await
         .unwrap()
         .is_empty());
+}
+
+/// A version 12 file, from before conversations carried an app namespace,
+/// gains `conversations.app_namespace`: every conversation it already holds
+/// belongs to the built-in `nessa` namespace, and the file ends in the shape
+/// a new one is made in.
+#[tokio::test]
+async fn a_version_12_file_backfills_its_conversations_into_the_nessa_namespace() {
+    use nessa_auth::domain::{AppNamespace, DEFAULT_APP_NAMESPACE};
+    let (_directory, path) = private_path();
+    older_file(&path, true);
+    drop(LocalConversationStore::open(&path).unwrap());
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "DROP INDEX conversations_by_owner_namespace;
+                 ALTER TABLE conversations DROP COLUMN app_namespace",
+            )
+            .unwrap();
+        connection.pragma_update(None, "user_version", 12).unwrap();
+    }
+    assert_eq!(version(&path), 12);
+
+    let store = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(version(&path), 13);
+    let stored: String = Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT app_namespace FROM conversations WHERE id = ?1",
+            params![CONVERSATION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, DEFAULT_APP_NAMESPACE);
+    let id = ConversationId::new(CONVERSATION).unwrap();
+    let loaded = ConversationRepository::load(&store, &id)
+        .await
+        .unwrap()
+        .expect("the version 12 conversation is kept");
+    assert_eq!(loaded.app_namespace(), &AppNamespace::Nessa);
+    assert_kept(&store).await;
+    drop(store);
+    assert_eq!(shape(&path), current_shape());
 }
 
 /// The worst answer a decision keeps, a message of control characters that

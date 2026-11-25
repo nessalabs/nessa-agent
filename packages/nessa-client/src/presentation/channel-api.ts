@@ -7,7 +7,6 @@ import type {
   ChannelCreateParams,
   ChannelListResult,
   ChannelSetCoordinatorParams,
-  ChannelSetPlacementParams,
 } from "../generated/product.js"
 
 /**
@@ -33,13 +32,6 @@ export type ChannelApi = {
    */
   list(): Promise<ChannelListResult>
   /**
-   * Change where a made channel's agents run. Threads already made keep
-   * running where they started. Moving the main agent answers a fresh
-   * `coordinatorConversationId`: the next main-agent chat starts there, and
-   * the old one stays in the channel as an ordinary thread.
-   */
-  setPlacement(params: ChannelSetPlacementParams): Promise<Channel>
-  /**
    * Turn a made channel's coordinator on or off. Off keeps its main
    * conversation and threads; on again, the same `coordinatorConversationId`
    * is its coordinator.
@@ -54,12 +46,6 @@ export function createChannelApi(session: RpcRequester): ChannelApi {
       if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
         throw new Error("Invalid channel create response")
       return channel(answer.channel, "Invalid channel create response")
-    },
-    setPlacement: async (params) => {
-      const answer = await session.request(ProductMethod.ChannelSetPlacement, params)
-      if (!isRecord(answer) || !onlyKeys(answer, ["channel"]))
-        throw new Error("Invalid channel placement response")
-      return channel(answer.channel, "Invalid channel placement response")
     },
     setCoordinator: async (params) => {
       const answer = await session.request(ProductMethod.ChannelSetCoordinator, params)
@@ -138,8 +124,6 @@ const CHANNEL_KEYS = [
   "createdAtMs",
   "coordinatorConversationId",
   "coordinatorOn",
-  "coordinatorPlacement",
-  "threadPlacement",
 ] as const
 const MODES = new Set<string>(["ask", "auto", "full"])
 const CHANNEL_ID = /^(default|ch_[a-z2-7]{10})$/
@@ -151,8 +135,6 @@ function channel(value: unknown, invalid: string): Channel {
   if (
     !nullableText(value.coordinatorConversationId) ||
     typeof value.coordinatorOn !== "boolean" ||
-    !isPlace(value.coordinatorPlacement) ||
-    !isPlace(value.threadPlacement) ||
     typeof value.channelId !== "string" ||
     !CHANNEL_ID.test(value.channelId) ||
     typeof value.name !== "string" ||
@@ -177,21 +159,7 @@ function channel(value: unknown, invalid: string): Channel {
     createdAtMs: value.createdAtMs as number,
     coordinatorConversationId: value.coordinatorConversationId as string | null,
     coordinatorOn: value.coordinatorOn,
-    coordinatorPlacement: value.coordinatorPlacement as string,
-    threadPlacement: value.threadPlacement as string,
   }
-}
-
-/**
- * A channel place as the gateway words it: `local`, `boat`, `pool`, or one
- * computer by its place name; the gateway decides which names it serves.
- */
-function isPlace(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    new TextEncoder().encode(value).length <= 253
-  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

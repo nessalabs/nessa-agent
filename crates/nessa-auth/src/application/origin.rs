@@ -85,6 +85,7 @@ impl CredentialOrigin {
         match self.cause() {
             IssuanceCause::AdminIssue => true,
             IssuanceCause::Bootstrap
+            | IssuanceCause::AppIssue
             | IssuanceCause::WebhookIssue
             | IssuanceCause::DevicePairing
             | IssuanceCause::SurfaceProvision

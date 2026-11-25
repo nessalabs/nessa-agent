@@ -6,21 +6,18 @@ import type { CodexChatgptSignIn } from "../../../../provider-authentication/mod
 import {
   signInAction,
   type LeaseEnvironment,
-} from "../../../../provider-authentication/model/boat-sign-in"
+} from "../../../../provider-authentication/model/sign-in-action"
 import { useCallback, useMemo } from "react"
 import {
-  boatSignInAvailable,
   chatgptSignInAvailable,
   providerLoginAvailable,
   signInWithChatgpt,
-  signInForBoat,
   signInToProvider,
 } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 
 /** The workspace supplies the shared card's sign-in: this computer's
- * external login, a sign-in minted for Boat where the refused run was, or a
- * ChatGPT account for Codex on another computer. */
+ * external login, or a ChatGPT account for Codex on another computer. */
 export function ProviderSignIn({
   provider,
   environment,
@@ -30,14 +27,10 @@ export function ProviderSignIn({
 }) {
   const dispatch = useWorkspaceDispatch()
   const action = signInAction(provider, environment)
-  const canSignIn = useCallback(
-    () => dispatch(action === "boat" ? boatSignInAvailable() : providerLoginAvailable()),
-    [dispatch, action],
-  )
+  const canSignIn = useCallback(() => dispatch(providerLoginAvailable()), [dispatch])
   const signIn = useCallback(
-    (chosen: "claude" | "codex") =>
-      dispatch(action === "boat" ? signInForBoat() : signInToProvider(chosen)),
-    [dispatch, action],
+    (chosen: "claude" | "codex") => dispatch(signInToProvider(chosen)),
+    [dispatch],
   )
   const chatgpt = useMemo<CodexChatgptSignIn>(
     () => ({
@@ -48,11 +41,6 @@ export function ProviderSignIn({
   )
   if (action === "chatgpt") return <ChatgptSignInCard signIn={chatgpt} />
   return (
-    <ProviderSignInCard
-      provider={provider}
-      action={action}
-      onSignIn={signIn}
-      canSignIn={canSignIn}
-    />
+    <ProviderSignInCard provider={provider} onSignIn={signIn} canSignIn={canSignIn} />
   )
 }

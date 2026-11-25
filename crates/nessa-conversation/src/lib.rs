@@ -41,7 +41,6 @@ pub mod attachments;
 pub mod desktop_runtime;
 pub mod device_pairing;
 pub mod domain;
-pub mod env;
 pub mod infrastructure;
 pub mod limit_log;
 pub mod mcp_servers;

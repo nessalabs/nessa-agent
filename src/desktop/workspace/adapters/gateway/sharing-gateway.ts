@@ -2,8 +2,7 @@
  * The `SharingSource` over the window's gateway client (nessa_ui#128, #129):
  * `client.conversation.shares`, `.share` and `.unshare`, the linked devices
  * in `client.credentials.list()` (the one rule, `../../../adapters/linked-device.ts`,
- * which Settings reads too), and `client.agents.list()`'s `commandHosts`,
- * read into the model's words (`model/sharing.ts`). The bounds a Drive
+ * which Settings reads too), read into the model's words (`model/sharing.ts`). The bounds a Drive
  * grant is held to are the ones the schema publishes (`toolPolicyBounds`).
  * Grants are read a page at a time (`sharePage`) on one connection until a
  * page names no cursor. Each page names the catalogue revision it was read
@@ -32,7 +31,6 @@ import {
   NessaRpcError,
   sharePage,
   toolPolicyBounds,
-  type AgentsApi,
   type AuthApi,
   type ConversationApi,
   type ConversationCapability,
@@ -63,7 +61,6 @@ export interface SharingClient {
   readonly conversation: Pick<ConversationApi, "share" | "unshare" | "shares">
   readonly credentials: Pick<CredentialApi, "list">
   readonly auth: Pick<AuthApi, "session">
-  readonly agents: Pick<AgentsApi, "list">
 }
 
 /** Every conversation code, as what it means to sharing. */
@@ -95,7 +92,6 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.EnvironmentVersionMismatch]: "other",
   [ConversationErrorCode.EnvironmentPlatformUnsupported]: "other",
   [ConversationErrorCode.EnvironmentInstallFailed]: "other",
-  [ConversationErrorCode.LinkedFileUnreachable]: "other",
   [ConversationErrorCode.ModelUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeNotApplied]: "other",
@@ -247,17 +243,13 @@ function grantOf(share: ConversationShare): ShareGrant {
   }
 }
 
-/** The three answers what the form offers is made of, asked together. */
+/** The two answers what the form offers is made of, asked together. */
 function choicesFor(client: SharingClient) {
-  return Promise.all([
-    client.auth.session(),
-    client.credentials.list(),
-    client.agents.list(),
-  ])
+  return Promise.all([client.auth.session(), client.credentials.list()])
 }
 
 /** What the form offers, from the gateway's answers. A fault here is this build's, not the gateway's refusal. */
-function choicesOf([session, credentials, catalog]: Awaited<
+function choicesOf([session, credentials]: Awaited<
   ReturnType<typeof choicesFor>
 >): SharingChoices {
   return {
@@ -266,7 +258,9 @@ function choicesOf([session, credentials, catalog]: Awaited<
       const device = linkedDeviceOf(credential, session.credentialId)
       return device && !device.fullAccess ? [device] : []
     }),
-    commandHosts: catalog.commandHosts,
+    // Every gateway runs only its own agents (ADR 1417): no other host is
+    // left for a grant to run commands on.
+    commandHosts: [],
     limits: toolPolicyBounds,
   }
 }

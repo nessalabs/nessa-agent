@@ -94,7 +94,9 @@ case "${cmd}" in
     ;;
   busy)
     if ! healthy; then
-      if has_systemd && ! systemctl is-active --quiet "${unit}"; then
+      if unit_state="$(systemctl show --property=LoadState,ActiveState "${unit}" 2>/dev/null)" \
+        && grep -Fxq 'LoadState=loaded' <<<"${unit_state}" \
+        && grep -Fxq 'ActiveState=inactive' <<<"${unit_state}"; then
         printf '{"busy":false}\n'
       else
         printf '{"busy":true}\n'
@@ -107,8 +109,9 @@ case "${cmd}" in
       && out="$(jq -cn --argjson open "${open}" --argjson archived "${archived}" \
         --argjson terminals "${terminals}" \
         '{busy: (
-            ([$open, $archived] | any(.complete != true))
-            or ([$open.conversations[], $archived.conversations[]] | any(.running == true))
+            ([$open, $archived] | any(.complete != true or (.conversations | type) != "array"))
+            or (any(($open.conversations[], $archived.conversations[]); .running != false))
+            or ($terminals.terminals | type != "array")
             or ($terminals.terminals | any(.state != "exited"))
           )}')"; then
       printf '%s\n' "${out}"

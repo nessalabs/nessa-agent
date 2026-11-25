@@ -6,7 +6,6 @@ import {
   isImageFile,
   linkablePath,
   linkedFile,
-  linksFilesHere,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
@@ -69,14 +68,8 @@ const warmPreview = () => void import("./attachment-preview")
 export function useFileAttachments(
   chat: ReturnType<typeof useConversation>,
   resources: AttachmentResources,
-  // The gateway's default device: where a draft that chose nowhere runs.
-  defaultEnvironment?: string,
 ) {
   const store = useStore() as AppStore
-  const defaultDevice = React.useRef(defaultEnvironment)
-  React.useLayoutEffect(() => {
-    defaultDevice.current = defaultEnvironment
-  }, [defaultEnvironment])
   const currentScope = React.useRef({ store, resources, attachFiles: chat.attachFiles })
   React.useLayoutEffect(() => {
     currentScope.current = { store, resources, attachFiles: chat.attachFiles }
@@ -654,20 +647,6 @@ export function useFileAttachments(
     const unusable = linked.find((file) => !linkablePath(file.path))
     if (unusable) {
       refuse({ reason: "file-not-linkable", name: unusable.name }, destination)
-      return
-    }
-    // A conversation on an SSH host reads that host's files: a path on this
-    // machine would name nothing there, or something else. Images carry
-    // their bytes and still go.
-    const conversation = conversationsOf(destination).find(
-      (conversation) => conversation.id === destination.conversationId,
-    )
-    if (
-      linked.length &&
-      conversation &&
-      !linksFilesHere(conversation, defaultDevice.current)
-    ) {
-      refuse({ reason: "file-not-on-host", name: linked[0].name }, destination)
       return
     }
     if (!images.length) {

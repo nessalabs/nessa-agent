@@ -75,7 +75,7 @@ impl ToolPolicyEvaluator for CedarToolPolicyEvaluator {
                     ToolChoice::Preset(_) => None,
                     ToolChoice::Rules(rules) => Some(self.bundle.with(grant_policies(id, rules)?)?),
                 };
-                let principal = grant(id, policy, None)?;
+                let principal = grant(id, policy)?;
                 let policies = policies.as_ref().unwrap_or(self.bundle.policies());
                 self.decide(principal, policies, call)
             }

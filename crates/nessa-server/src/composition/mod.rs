@@ -43,22 +43,10 @@ pub(crate) use serving_restore::{
 
 pub use root::CompositionRoot;
 
-#[cfg(unix)]
-mod artifact_command;
 mod auth_command;
-#[cfg(unix)]
-mod boat_runtime_settings;
 mod credential_registry;
 #[cfg(unix)]
 mod current_agent;
-#[cfg(unix)]
-mod device_setup;
-#[cfg(unix)]
-mod env_dial_command;
-#[cfg(unix)]
-mod env_grant_command;
-#[cfg(unix)]
-mod env_serve_command;
 #[cfg(unix)]
 mod github;
 mod github_relay;
@@ -77,8 +65,6 @@ mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;
 mod peer_discovery;
-#[cfg(unix)]
-mod pool_settings;
 mod relay_command;
 #[cfg(unix)]
 mod tunnel;
@@ -98,15 +84,9 @@ mod attachments;
 mod desktop;
 
 #[cfg(unix)]
-mod background_command;
-#[cfg(unix)]
 mod background_tools;
 #[cfg(unix)]
-mod environment_tools;
-#[cfg(unix)]
 mod mcp_servers;
-#[cfg(unix)]
-mod paired_environments;
 
 mod provisioning;
 
@@ -120,9 +100,6 @@ mod backup_gateway_restore_tests;
 #[path = "../../tests/backup/restore.rs"]
 mod backup_restore_tests;
 mod cli;
-#[cfg(all(test, unix))]
-#[path = "../../tests/composition/paired_environment.rs"]
-mod paired_environment_tests;
 #[cfg(test)]
 #[path = "../../tests/composition/peer_reading.rs"]
 mod peer_reading_tests;
@@ -140,7 +117,3 @@ pub(crate) use root::cleanup_product;
 mod vault;
 
 mod vault_session;
-
-#[cfg(all(test, unix))]
-#[path = "../../tests/composition/vm_background_gateway.rs"]
-mod vm_background_gateway;

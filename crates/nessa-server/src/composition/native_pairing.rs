@@ -51,9 +51,9 @@ use nessa_auth::{
 };
 use nessa_device_pairing::application::{Announced, LinkingAnnouncement, LinkingAnnouncer};
 use nessa_device_pairing::infrastructure::{
-    restore_gateway_identity, EnvironmentPeers, GatewayPairing, InvitationEntropy,
-    NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
+    restore_gateway_identity, GatewayPairing, InvitationEntropy, NativeEnrollmentConnections,
+    NativeEnrollmentListener, PairingOwnerCommands, PairingRuntimeDependencies, RelayPermit,
+    TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
 };
 #[cfg(unix)]
 use nessa_device_pairing::tunnel::infrastructure::ingress::TunnelIngress;
@@ -116,8 +116,6 @@ pub(super) struct PreparedNative {
     audit: Arc<DurablePeerAudit>,
     /// Wall time for when a peer read finished.
     clock: Arc<dyn Clock>,
-    /// The paired environments `openEnvironment` reaches; `None` refuses it.
-    environments: Option<Arc<dyn EnvironmentPeers>>,
     /// The relay to serve through as well, if any.
     relay: Option<RelayAddress>,
     /// Host a wildcard bind is published as. The port is the listener's.
@@ -127,6 +125,8 @@ pub(super) struct PreparedNative {
     /// listener here so the port stays owned until accept.
     bound_socket: Option<TcpListener>,
     record_carrier: bool,
+    #[cfg(test)]
+    record_page_pair: bool,
     /// The web tunnel, when one is on.
     #[cfg(unix)]
     tunnel: Option<super::tunnel::PreparedTunnel>,
@@ -154,16 +154,17 @@ impl PreparedNative {
         self.gateway.bind_fence_capture(capture);
     }
 
-    /// Serve `openEnvironment` with `environments`.
-    pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
-        self.environments = Some(environments);
-        self
-    }
-
     /// Enable the normally unmounted record carrier in the private fixture.
     #[cfg(test)]
     pub(super) fn with_record_carrier(mut self) -> Self {
         self.record_carrier = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_record_page_pair(mut self) -> Self {
+        self.record_carrier = true;
+        self.record_page_pair = true;
         self
     }
 
@@ -275,11 +276,12 @@ pub(super) async fn prepare(
             peers: peers.clone(),
             audit,
             clock: wall,
-            environments: None,
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
             record_carrier: false,
+            #[cfg(test)]
+            record_page_pair: false,
             #[cfg(unix)]
             tunnel: None,
         },
@@ -377,11 +379,12 @@ pub(super) async fn bind(
         peers,
         audit,
         clock: wall,
-        environments,
         relay,
         advertised_address,
         bound_socket,
         record_carrier,
+        #[cfg(test)]
+        record_page_pair,
         #[cfg(unix)]
         tunnel,
     } = prepared;
@@ -415,10 +418,14 @@ pub(super) async fn bind(
                 .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
         }
     }
-    let sessions = Arc::new(NativeSessions::new(
-        product,
-        Arc::new(RegistryDevices(registry.clone())),
-    ));
+    let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry.clone())));
+    #[cfg(test)]
+    let sessions = if record_page_pair {
+        sessions.with_record_page_pair_for_test()
+    } else {
+        sessions
+    };
+    let sessions = Arc::new(sessions);
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
         .with_protected_sessions(sessions.clone())
         .with_discovery(Arc::new(RegistryDiscovery {
@@ -430,10 +437,7 @@ pub(super) async fn bind(
     } else {
         connections
     };
-    let connections = Arc::new(match environments {
-        Some(environments) => connections.with_environment_peers(environments),
-        None => connections,
-    });
+    let connections = Arc::new(connections);
     // With no relay the sender is dropped here, and the listener's relay
     // source is closed from the start.
     let (joined, relayed) = mpsc::channel::<Relayed<TcpStream, RelayPermit>>(RELAY_CAPACITY);

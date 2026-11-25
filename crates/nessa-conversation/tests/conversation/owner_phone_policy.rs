@@ -372,12 +372,33 @@ async fn owner_phone_reader_factory_requires_actual_original_holding_without_own
     );
     for deleted in [false, true] {
         assert_eq!(
-            reader.admit_entry(f.purpose.owner(), f.purpose.organization(), deleted),
+            reader.admit_entry(
+                f.purpose.owner(),
+                f.purpose.organization(),
+                &AppNamespace::DEFAULT,
+                deleted
+            ),
             Ok(())
         );
         assert_eq!(
-            reader.admit_entry(&foreign, f.purpose.organization(), deleted),
+            reader.admit_entry(
+                &foreign,
+                f.purpose.organization(),
+                &AppNamespace::DEFAULT,
+                deleted
+            ),
             Err(ReadRefusal::WrongOwner)
+        );
+        assert!(
+            reader
+                .admit_entry(
+                    f.purpose.owner(),
+                    f.purpose.organization(),
+                    &AppNamespace::extension("acme").expect("extension namespace"),
+                    deleted
+                )
+                .is_err(),
+            "an entry in another app namespace is refused"
         );
     }
     let deleted = owned

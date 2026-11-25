@@ -110,7 +110,6 @@ fn listing(limits: ConversationLimits) -> Listing {
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         limits,
         None,
@@ -168,7 +167,6 @@ fn stored(limits: ConversationLimits) -> Stored {
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         limits,
         None,
@@ -209,7 +207,10 @@ fn stored_many(
             ).unwrap();
             transaction
                 .execute(
-                    "INSERT INTO conversations VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask', ?5, ?5)",
+                    "INSERT INTO conversations (id, organization, owner, creator_surface, creation_action,
+                        creation_requested_at_ms, agent, model, approval_mode, creation_revision,
+                        change_revision, app_namespace)
+                     VALUES (?1, ?2, ?3, 'panel', 'create', ?4, 'claude', 'test-model', 'ask', ?5, ?5, 'nessa')",
                     params![conversation.to_string(), organization, principal, at(n) as i64, revision],
                 )
                 .unwrap();
@@ -1407,7 +1408,6 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -1538,7 +1538,6 @@ fn answering(
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

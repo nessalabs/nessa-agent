@@ -9,13 +9,17 @@ use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
 use nessa_protocol::{
     conversation::read_scope::validate_passive_read_selector,
-    pairing::wire::{
-        decode_reply, NativePairingReply, NativePairingRequest, RecordCarrierMode,
-        RecordCarrierOpen,
+    pairing::{
+        wire::{
+            decode_reply, NativePairingReply, NativePairingRequest, RecordCarrierMode,
+            RecordCarrierOpen,
+        },
+        NativeFrameError,
     },
 };
 use nessa_sync::replication::infrastructure::session::{
-    CapabilityRecordSession, InterruptibleSessionIo, SessionInterrupt, SessionLimits,
+    CapabilityRecordSession, InterruptibleSessionIo, RecordSessionError, SessionInterrupt,
+    SessionLimits,
 };
 use nessa_sync::replication::{
     application::{RecordSource, SourceError},
@@ -185,6 +189,9 @@ impl RetainedCache {
             },
             interrupt: RefCell::new(None),
         };
+        if ending.stop.is_stopped() {
+            return Err(ReadFailure::Stopped);
+        }
         let mut selected = select_native(
             access.address,
             &DeviceEvidence {
@@ -203,19 +210,13 @@ impl RetainedCache {
                 mode: RecordCarrierMode::Page,
             }),
         )
-        .map_err(failure)?;
-        let reply = selected.receive_envelope().map_err(|_| {
-            if ending.stop.is_stopped() {
-                ReadFailure::Stopped
-            } else {
-                ReadFailure::Unreachable
-            }
+        .map_err(|error| match failure(error) {
+            // After the explicit preflight, the stock opener cannot tell
+            // whether cancellation was a local stop or a budget cut.
+            ReadFailure::Stopped => ReadFailure::Unreachable,
+            other => other,
         })?;
-        match decode_reply(&reply).map_err(|_| ReadFailure::Protocol)? {
-            NativePairingReply::RecordCarrierV1Accepted => {}
-            NativePairingReply::Refused => return Err(ReadFailure::Refused),
-            _ => return Err(ReadFailure::Protocol),
-        }
+        accept_selection(selected.receive_envelope())?;
         let mut transport = selected.into_transport();
         let stream = transport.stream_mut();
         stream.begin_operation(
@@ -240,13 +241,7 @@ impl RetainedCache {
             },
             CapabilitySupport::current(),
         )
-        .map_err(|_| {
-            if ending.stop.is_stopped() {
-                ReadFailure::Stopped
-            } else {
-                ReadFailure::Protocol
-            }
-        })?;
+        .map_err(bind_failure)?;
         let (mut authorizer, mut source) = session.parts();
         let result = match cut {
             Some(cut) => self.one_record_page_for_test(
@@ -259,9 +254,86 @@ impl RetainedCache {
         // The driver is the sole cache owner. A teardown error must not
         // change the meaning of a previously successful durable commit.
         let _ = session.close();
-        if result.is_err() && ending.stop.is_stopped() {
-            return Err(ReadFailure::Stopped);
-        }
         result
+    }
+}
+
+fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {
+    let reply = frame.map_err(|error| match error {
+        NativeFrameError::Wire(_) => ReadFailure::Protocol,
+        NativeFrameError::Io(_) => ReadFailure::Unreachable,
+    })?;
+    match decode_reply(&reply).map_err(|_| ReadFailure::Protocol)? {
+        NativePairingReply::RecordCarrierV1Accepted => Ok(()),
+        NativePairingReply::Refused => Err(ReadFailure::Refused),
+        _ => Err(ReadFailure::Protocol),
+    }
+}
+
+fn bind_failure(error: RecordSessionError) -> ReadFailure {
+    match error {
+        RecordSessionError::Source(SourceError::Denied) => ReadFailure::Refused,
+        RecordSessionError::Source(SourceError::IdentityChanged | SourceError::Pruned) => {
+            ReadFailure::ResetRequired
+        }
+        RecordSessionError::Source(SourceError::Unavailable)
+        | RecordSessionError::Closed
+        | RecordSessionError::Io(_) => ReadFailure::Unreachable,
+        _ => ReadFailure::Protocol,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nessa_protocol::pairing::wire::{encode_record_carrier_accepted, encode_refused};
+
+    #[test]
+    fn only_an_explicit_selector_acceptance_admits_bind() {
+        assert_eq!(
+            accept_selection(Ok(encode_record_carrier_accepted().unwrap())),
+            Ok(())
+        );
+        assert_eq!(
+            accept_selection(Ok(encode_refused().unwrap())),
+            Err(ReadFailure::Refused)
+        );
+        assert_eq!(accept_selection(Ok(Vec::new())), Err(ReadFailure::Protocol));
+        for kind in [
+            ErrorKind::UnexpectedEof,
+            ErrorKind::ConnectionReset,
+            ErrorKind::TimedOut,
+        ] {
+            assert_eq!(
+                accept_selection(Err(NativeFrameError::Io(kind))),
+                Err(ReadFailure::Unreachable)
+            );
+        }
+    }
+
+    #[test]
+    fn bind_preserves_authoritative_status_but_never_guesses_a_stop() {
+        for (status, expected) in [
+            (SourceError::Denied, ReadFailure::Refused),
+            (SourceError::IdentityChanged, ReadFailure::ResetRequired),
+            (SourceError::Pruned, ReadFailure::ResetRequired),
+            (SourceError::Unavailable, ReadFailure::Unreachable),
+        ] {
+            assert_eq!(bind_failure(RecordSessionError::Source(status)), expected);
+        }
+        assert_eq!(
+            bind_failure(RecordSessionError::Closed),
+            ReadFailure::Unreachable
+        );
+        for kind in [
+            ErrorKind::UnexpectedEof,
+            ErrorKind::ConnectionReset,
+            ErrorKind::TimedOut,
+        ] {
+            assert_eq!(
+                bind_failure(RecordSessionError::Io(Error::from(kind))),
+                ReadFailure::Unreachable
+            );
+        }
     }
 }

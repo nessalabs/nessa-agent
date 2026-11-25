@@ -19,7 +19,7 @@ use super::{
     ConversationAccessPolicyEvaluator, ConversationFuture, Reader, RequestShape,
 };
 use crate::domain::{Capabilities, Conversation};
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{AppNamespace, OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationId, ConversationSummary};
 use nessa_sync::replication::catalogue::ManifestRequest;
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ pub struct CatalogueDescriptor {
     pub key: CatalogueKey,
     pub revision: u64,
     pub deleted: bool,
+    pub app_namespace: AppNamespace,
     /// The capabilities of the share grant the reader holds on the conversation,
     /// read with the row; `None` for the owner, who holds none.
     pub held: Option<Capabilities>,
@@ -158,16 +159,17 @@ pub enum CatalogueEntryAnswer {
 ///
 /// Within one read the reader, the organization and the owner are fixed:
 /// the rows are the owner's, as the store checks each record. An ask varies
-/// by entry only in whether it was deleted and the capabilities held, so each
-/// distinct pair is asked once and the answer reused: a page costs at most
-/// a handful of evaluations however many entries it has.
+/// by entry only in its app namespace, whether it was deleted and the
+/// capabilities held, so each distinct three is asked once and the answer
+/// reused: a page costs at most a handful of evaluations however many
+/// entries it has.
 pub struct CatalogueEntryAdmission<'a> {
     access: &'a CatalogueEntryAccess,
     organization: &'a OrganizationId,
     owner: &'a PrincipalId,
     receiver: &'a str,
     reader: &'a Reader,
-    decided: HashMap<(bool, Option<Capabilities>), CatalogueEntryAnswer>,
+    decided: HashMap<(AppNamespace, bool, Option<Capabilities>), CatalogueEntryAnswer>,
 }
 
 impl CatalogueEntryAdmission<'_> {
@@ -175,7 +177,7 @@ impl CatalogueEntryAdmission<'_> {
     /// SQL index found the entry by the reader's grant, so the policy
     /// refusing it means the two disagree.
     pub fn admits(&mut self, entry: &CatalogueDescriptor) -> CatalogueEntryAnswer {
-        let key = (entry.deleted, entry.held);
+        let key = (entry.app_namespace.clone(), entry.deleted, entry.held);
         let answer = match self.decided.get(&key) {
             Some(answer) => *answer,
             None => {
@@ -202,6 +204,7 @@ impl CatalogueEntryAdmission<'_> {
                 AccessSubject::Person {
                     organization: self.organization,
                     principal: &self.access.signed_in_as,
+                    app_namespace: &AppNamespace::DEFAULT,
                 }
             } else {
                 AccessSubject::PairedReader {
@@ -219,6 +222,7 @@ impl CatalogueEntryAdmission<'_> {
             resource: AccessResource::Conversation {
                 organization: self.organization,
                 owner: self.owner,
+                app_namespace: &entry.app_namespace,
                 deleted: entry.deleted,
                 created_by: None,
             },

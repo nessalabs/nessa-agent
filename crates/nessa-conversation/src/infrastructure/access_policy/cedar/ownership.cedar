@@ -15,7 +15,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // The owner acts on it until it is deleted: every command on it.
@@ -28,6 +29,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };
 
@@ -43,6 +45,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     resource.deleted
 };
 
@@ -56,6 +59,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };
 
@@ -69,11 +73,13 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };
 
 // Current admin membership admits an unpaired surface to its organization's
-// waiting reviews. Role interpretation belongs here, not in the Rust caller.
+// waiting reviews in the same app namespace. Role interpretation belongs here,
+// not in the Rust caller.
 @id("review.admin")
 permit (
     principal is NessaConversation::ReviewRecipient,
@@ -83,6 +89,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.membership == "admin" &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };
 
@@ -96,6 +103,7 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };
 
@@ -109,7 +117,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // The source turn can represent its owner only when that owner initiated it.
@@ -234,7 +243,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // The owner lists their own channels.
@@ -246,7 +256,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // The owner starts conversations in their own channels, so their agents work
@@ -315,7 +326,8 @@ permit (
 )
 when {
     principal.organization == resource.organization &&
-    principal.id == resource.owner
+    principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace
 };
 
 // Run opens a terminal where one of the owner's conversations works, until
@@ -329,5 +341,6 @@ permit (
 when {
     principal.organization == resource.organization &&
     principal.id == resource.owner &&
+    principal.appNamespace == resource.appNamespace &&
     !resource.deleted
 };

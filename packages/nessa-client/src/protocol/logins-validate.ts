@@ -34,7 +34,6 @@ const agents: readonly LoginAgent[] = [
   LoginAgent.Codex,
   LoginAgent.Opencode,
 ]
-const peerName = new RegExp(bounds.loginDevicePattern)
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ends = new Set<string>(Object.values(ChatgptSignInEnd))
@@ -120,7 +119,7 @@ function chatgptLogins(value: unknown): ChatgptLogins {
 }
 
 export function loginsStatus(value: unknown): LoginsStatus {
-  const item = record(value, ["logins", "devicesOn", "chatgpt"])
+  const item = record(value, ["logins", "chatgpt"])
   const logins = own(item, "logins")
   if (!Array.isArray(logins) || logins.length !== agents.length) invalid("logins")
   const read: SavedLogin[] = agents.map((agent, index) => {
@@ -130,17 +129,6 @@ export function loginsStatus(value: unknown): LoginsStatus {
     if (typeof saved !== "boolean") invalid("saved")
     return { agent, saved }
   })
-  const devicesOn = own(item, "devicesOn")
-  if (!Array.isArray(devicesOn) || devicesOn.length > bounds.maxLoginDevicesOn)
-    invalid("devicesOn")
-  const names: string[] = []
-  let last = ""
-  for (const name of devicesOn) {
-    if (typeof name !== "string" || !peerName.test(name)) invalid("devicesOn")
-    if (name <= last) invalid("devicesOn order")
-    names.push(name)
-    last = name
-  }
-  if (!Object.hasOwn(item, "chatgpt")) return { logins: read, devicesOn: names }
-  return { logins: read, devicesOn: names, chatgpt: chatgptLogins(own(item, "chatgpt")) }
+  if (!Object.hasOwn(item, "chatgpt")) return { logins: read }
+  return { logins: read, chatgpt: chatgptLogins(own(item, "chatgpt")) }
 }

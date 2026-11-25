@@ -485,12 +485,6 @@ impl ConversationService {
                     // it made, asked for as it was then. The source is not
                     // read again, so a source deleted, closed to the caller
                     // or moved to another model since cannot change it.
-                    let place = self
-                        .inner
-                        .environment
-                        .placement(&id)
-                        .await
-                        .map_err(target)?;
                     let channel = self.channel_id_of(&id).await.map_err(target)?;
                     return self
                         .create_command(
@@ -503,7 +497,7 @@ impl ConversationService {
                                 approval_mode: Some(existing.approval_mode()),
                                 environment: None,
                                 channel,
-                                fork: Some(place),
+                                fork: true,
                             },
                         )
                         .await;
@@ -536,13 +530,18 @@ impl ConversationService {
                     .map(|snapshot| snapshot.carried_history())
             })
             .unwrap_or_default();
-        let place = self
+        // A source an earlier build placed on another machine has its
+        // agent's session there: no fork of it can run here.
+        if self
             .inner
             .environment
-            .placement(&source)
+            .elsewhere(&source)
             .await
-            .map_err(target)?;
-        // A fork stays in its source's channel, as it stays on its host.
+            .map_err(target)?
+        {
+            return Err(target(ConversationError::EnvironmentNotConfigured));
+        }
+        // A fork stays in its source's channel.
         let channel = self.channel_id_of(&source).await.map_err(target)?;
         let actor = caller.actor().map_err(target)?;
         let at_ms = self.inner.clock.unix_milliseconds();
@@ -595,7 +594,7 @@ impl ConversationService {
                     approval_mode: Some(record.approval_mode()),
                     environment: None,
                     channel,
-                    fork: Some(place),
+                    fork: true,
                 },
             )
             .await;

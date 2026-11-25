@@ -128,8 +128,6 @@ function panel(choices?: ConversationChoices) {
             show({
               catalog: choices?.catalog ?? {
                 agents: [],
-                environments: [],
-                commandHosts: [],
                 nativeHooks: { claude: "off", codex: "off" },
               },
               chosenAgent: choices?.chosenAgent,
@@ -149,8 +147,6 @@ it("shows the catalog model beside the voice control on a new draft", async () =
   const choices: ConversationChoices = {
     chosenAgent: "claude",
     catalog: {
-      environments: [],
-      commandHosts: [],
       nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {
@@ -219,8 +215,6 @@ it("binds the displayed catalog fallback when the host choice is stale", async (
   const choices: ConversationChoices = {
     chosenAgent: "removed-agent",
     catalog: {
-      environments: [],
-      commandHosts: [],
       nativeHooks: { claude: "off", codex: "off" },
       agents: [
         {

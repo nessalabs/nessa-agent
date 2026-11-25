@@ -138,6 +138,7 @@ sequenceDiagram
 | G6 | Cloud VM Gateway `C` Connected | Laptop sleeps / Desktop disconnects | `C` Running (detached) | `C` keeps running agents and terminals. On Desktop wake, `GatewayRegistry` reconnects, re-lists conversations and terminals, and re-attaches open terminal views. |
 | G7 | Pairing new remote gateway | Pairing code redeemed over `wss://` | Registered (persisted) | Persist `(gatewayId, credential, url)` only after server confirms device enrollment; `gatewayId` is the gateway's own stable identity, so re-pairing the same gateway updates its endpoint/credential instead of duplicating it. |
 | G8 | Gateway `B` Connected | `B`'s tunnel URL rotates (quick tunnel restart) | `B` Reconnecting → Connected | Lookup updated tunnel address via paired relay secret (ADR 1150) using `gatewayId`; re-list and re-attach without losing client pane layout. |
+| G8a | Gateway `B` Reconnecting | An authenticated replacement transport reports gateway `A` | `B` Refused | Close the replacement before moving subscriptions or making its transport available for RPCs. Keep the registered gateway identity and its credential. |
 | G9 | Gateway `B` Connected | Device credential revoked on `B` | `B` AuthRefused | Stop automatic reconnect loop immediately; show typed re-pair prompt for `B` only. |
 | G10 | Two gateways `A` and `B` Connected | Both have a channel or terminal with the same raw `id` (e.g. `"default"`) | Both Connected | Composite key `(gatewayId, id)` isolates store entries, pane targets, and command routing; neither overwrites the other. |
 | G11 | Gateway `B` Removed by person | Person removes `B` from Settings | Removed | Close `B`'s socket, drop `B`'s views from store, close or mark `B`'s panes as removed; remote `nessa-server` and its files remain untouched unless Delete VM was explicitly requested. |
@@ -199,6 +200,21 @@ flowchart LR
 - Collapse `Place` in `nessa-conversation` to local execution (`Here`).
 - Update `docs/ARCHITECTURE.md`, `docs/codebase-structure.md`, and
   `docs/design/terminals.md`.
+
+Outcome: done. The crate, the lease protocol and its fingerprint, the SSH
+environment and installer, release host builds, paired-worker pools and
+placement, the native `openEnvironment` phase, the agent's environment tools,
+SFTP artifact channels, remote terminals and Boat's Claude sign-in are gone;
+`Place` holds only here. Kept on purpose: the old `config.json` keys
+(`sshHosts`, `defaultEnvironment`, `envServe`, `environmentTools`, `pool`)
+are read and ignored so an upgraded gateway starts; a conversation an older
+build placed elsewhere is refused `environment_not_configured` with its
+history readable; the `environment_*` refusal codes and a lease's `ssh` /
+`peer` environment are read only in history; the backup format's lease
+records store is restored as before. Left for follow-ups: saved logins and
+ChatGPT accounts have no consumer until Cloud Boxes take them, a share
+grant's `commandHosts` can only be empty, and the gateway's per-device login
+switches are unreachable code.
 
 ## Tradeoffs and Follow-ups
 

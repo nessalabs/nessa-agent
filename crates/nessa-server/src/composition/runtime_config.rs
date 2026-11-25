@@ -1,10 +1,7 @@
 //! File loading belongs to composition; consumers receive typed settings.
 use super::agent::AgentsConfig;
 use crate::{
-    conversation::{
-        domain::CommandPolicy,
-        infrastructure::{BoatRuntimeConfig, PoolConfig},
-    },
+    conversation::infrastructure::BoatRuntimeConfig,
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
@@ -12,8 +9,7 @@ use nessa_auth::{adapters::local::LocalStoreConfig, domain::pairing::OwnerPhoneR
 use nessa_device_pairing::tunnel::application::{TunnelMode, DEFAULT_TUNNEL_INGRESS};
 pub(super) use nessa_protocol::relay::RelayAddress;
 use nessa_protocol::tunnel::TunnelAddress;
-use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
-use serde::Deserialize;
+use serde::{de::IgnoredAny, Deserialize};
 use std::{
     io::Read,
     net::{IpAddr, SocketAddr},
@@ -49,36 +45,25 @@ pub(super) struct RuntimeConfig {
     pub agents: Option<AgentsConfig>,
     /// Ordinary VM lifetime defaults and channel overrides, never credentials.
     pub boat: BoatRuntimeConfig,
-    /// Which paired computers new work goes to first, which never, each
-    /// channel's own choice, and when a computer is too busy for new work.
-    /// Settings writes the order and left-out lists (`devices.setPool`).
-    #[allow(
-        dead_code,
-        reason = "parsed here so a bad section refuses the file; read by its own settings adapter"
-    )]
-    pub pool: PoolConfig,
     /// Native device pairing; absent, `null` or `"enabled": false` keeps it
     /// off (design rows S1, S2). Settings › Linked devices writes it
     /// (`native_linking`).
     #[serde(deserialize_with = "native_section")]
     pub native: Option<NativeConfig>,
-    /// The SSH hosts a conversation may be created on, each an OpenSSH
-    /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
-    /// names none, and no conversation reaches a host (issue #699).
-    pub ssh_hosts: Vec<String>,
-    /// The device a new conversation runs on when it names no environment
-    /// and no channel: one of `sshHosts`, or a paired environment's `peer:`
-    /// name. Absent is this machine. Devices writes it
-    /// (`devices.setDefault`); it is read at each creation.
-    pub default_environment: Option<String>,
-    /// What `nessa env serve` on this host offers a gateway beyond agents.
-    /// Absent offers nothing more. Read only where `env serve` runs: Unix.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub env_serve: EnvServeConfig,
-    /// The agent's environment tools, `environments_list` and `run`
-    /// (issue #700). Absent or `null` grants neither: the agent sees no such
-    /// tools.
-    pub environment_tools: Option<EnvironmentToolsConfig>,
+    /// Retired by ADR 1417: every gateway runs only its own agents, so
+    /// `sshHosts`, `defaultEnvironment`, `envServe`, `environmentTools` and
+    /// `pool` name nothing this build uses. A file an older build wrote is
+    /// still read, and what they say is ignored.
+    #[serde(rename = "sshHosts")]
+    pub(crate) _ssh_hosts: IgnoredAny,
+    #[serde(rename = "defaultEnvironment")]
+    pub(crate) _default_environment: IgnoredAny,
+    #[serde(rename = "envServe")]
+    pub(crate) _env_serve: IgnoredAny,
+    #[serde(rename = "environmentTools")]
+    pub(crate) _environment_tools: IgnoredAny,
+    #[serde(rename = "pool")]
+    pub(crate) _pool: IgnoredAny,
 }
 
 /// Namespace configuration; absence preserves recursive child Stop.
@@ -107,43 +92,6 @@ impl SubagentsConfig {
             .filter(|limit| *limit > 0)
     }
 }
-
-/// Where the agent may run commands, and which.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct EnvironmentToolsConfig {
-    /// The `sshHosts` entries commands are granted on. Every one must be
-    /// named there too.
-    pub command_hosts: Vec<String>,
-    /// When given, only these programs, each named by its file name.
-    #[serde(default)]
-    pub allow_programs: Option<Vec<String>>,
-    /// Never these programs, each named by its file name; a denial wins.
-    #[serde(default)]
-    pub deny_programs: Vec<String>,
-}
-
-/// Most programs `allowPrograms` or `denyPrograms` may name.
-pub(super) const MAX_POLICY_PROGRAMS: usize = 64;
-
-/// What this host serves a gateway beyond its agents' harnesses.
-#[derive(Default, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct EnvServeConfig {
-    /// Whether a gateway may run commands here under command leases
-    /// (issue #700). Off unless set: a command runs as this account with
-    /// nothing enclosing it.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub commands: bool,
-    /// Whether a gateway may place files its conversation holds in this
-    /// host's workspace, for its agent's `artifacts_fetch` (issue #701).
-    /// Off unless set: a fetched file is written as this account.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub artifacts_in: bool,
-}
-
-/// Most SSH hosts the configuration may name: what `agents.list` carries.
-pub(super) const MAX_SSH_HOSTS: usize = 16;
 
 /// Where the native enrollment listener binds. The address is numeric: serde's
 /// standard `SocketAddr` parser, so no hostname is ever looked up.
@@ -396,8 +344,6 @@ impl RuntimeConfig {
         config.registry.validate().map_err(refused)?;
         config.session()?;
         config.limits()?;
-        config.ssh_hosts()?;
-        config.command_policy()?;
         config.advertised_address()?;
         Ok(config)
     }
@@ -421,90 +367,6 @@ impl RuntimeConfig {
         Err(refused(
             "native.advertisedAddress must be a routable address of the wildcard listen family",
         ))
-    }
-
-    /// The agent's command policy; `None` when its environment tools are not
-    /// configured. A host is an SSH destination in `sshHosts` or a paired
-    /// environment's `peer:` name; any other host, or a program named by more
-    /// than its file name, refuses the configuration.
-    pub fn command_policy(&self) -> Result<Option<CommandPolicy>, RunError> {
-        let Some(tools) = &self.environment_tools else {
-            return Ok(None);
-        };
-        let hosts = self.ssh_hosts()?;
-        for host in &tools.command_hosts {
-            if !hosts.iter().any(|named| named.as_str() == host)
-                && PeerEnvironment::parse(host).is_err()
-            {
-                return Err(refused(format!(
-                    "environmentTools.commandHosts: {host:?} is neither in sshHosts nor a paired environment"
-                )));
-            }
-        }
-        let programs = |key: &str, names: &[String]| {
-            if names.len() > MAX_POLICY_PROGRAMS {
-                return Err(refused(format!(
-                    "environmentTools.{key} names more than {MAX_POLICY_PROGRAMS} programs"
-                )));
-            }
-            match names
-                .iter()
-                .find(|name| name.is_empty() || name.contains('/') || name.trim() != name.as_str())
-            {
-                Some(name) => Err(refused(format!(
-                    "environmentTools.{key}: {name:?} is not a program's file name"
-                ))),
-                None => Ok(()),
-            }
-        };
-        if let Some(allow) = &tools.allow_programs {
-            programs("allowPrograms", allow)?;
-        }
-        programs("denyPrograms", &tools.deny_programs)?;
-        Ok(Some(CommandPolicy::new(
-            tools.command_hosts.iter().cloned(),
-            tools.allow_programs.clone(),
-            tools.deny_programs.clone(),
-        )))
-    }
-
-    /// The configured SSH hosts, each read into its value object, which owns
-    /// what a destination may be: never an option to `ssh`, never a shell
-    /// word. A repeated or unreadable one refuses the configuration.
-    pub fn ssh_hosts(&self) -> Result<Vec<SshDestination>, RunError> {
-        if self.ssh_hosts.len() > MAX_SSH_HOSTS {
-            return Err(refused(format!(
-                "sshHosts names more than {MAX_SSH_HOSTS} hosts"
-            )));
-        }
-        let mut hosts: Vec<SshDestination> = Vec::with_capacity(self.ssh_hosts.len());
-        for host in &self.ssh_hosts {
-            let destination = SshDestination::new(host.as_str())
-                .map_err(|_| refused(format!("sshHosts: {host:?} is not an SSH destination")))?;
-            if hosts.contains(&destination) {
-                return Err(refused(format!("sshHosts names {host:?} twice")));
-            }
-            hosts.push(destination);
-        }
-        Ok(hosts)
-    }
-
-    /// The saved default device: a paired environment's `peer:` name or an
-    /// SSH host `sshHosts` names. A default that names neither (a host
-    /// since taken out of `sshHosts` by hand) is warned of and read as this
-    /// machine, as a default that is not offered is at creation: it never
-    /// stops the gateway starting.
-    pub fn default_environment(&self) -> Option<String> {
-        let name = self.default_environment.as_ref()?;
-        let hosts = self.ssh_hosts().unwrap_or_default();
-        if PeerEnvironment::parse(name).is_ok() || hosts.iter().any(|host| host.as_str() == name) {
-            return Some(name.clone());
-        }
-        tracing::warn!(
-            default = name.as_str(),
-            "defaultEnvironment names neither an SSH host in sshHosts nor a paired environment; new conversations run here"
-        );
-        None
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {
@@ -875,4 +737,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "../../tests/composition/runtime_config.rs"]
-mod ssh_hosts_tests;
+mod runtime_config_tests;

@@ -13,15 +13,8 @@ sources:
   - crates/nessa-conversation/src/infrastructure/background_tasks/mod.rs
   - crates/nessa-conversation/src/infrastructure/background_tasks/runner.rs
   - crates/nessa-server/src/composition/background_tools.rs
-  - crates/nessa-server/src/composition/background_command.rs
-  - crates/nessa-conversation/src/infrastructure/background_tasks/io.rs
-  - crates/nessa-conversation/tests/conversation/background_io.rs
-  - crates/nessa-conversation/src/infrastructure/background_tasks/transport.rs
-  - crates/nessa-conversation/tests/conversation/background_transport.rs
   - crates/nessa-server/tests/background_run_binary.rs
   - crates/nessa-conversation/tests/conversation/background_tasks.rs
-  - crates/nessa-conversation/src/infrastructure/workspaces.rs
-  - crates/nessa-conversation/tests/conversation/workspace_copies.rs
   - src/desktop/workspace/adapters/gateway/gateway-steps.ts
   - src/desktop/workspace/model/transcript.ts
 diagramLinks: {}
@@ -54,7 +47,11 @@ modelCheck:
 ---
 # Background tasks
 
-An agent can start a shell command in its local workspace or cloud VM and continue without waiting for it.
+An agent can start a shell command in its local workspace and continue without waiting for it.
+
+> Since ADR 1417 (#1421) every task runs on this gateway's own machine. What
+> this page says about a thread's cloud VM, SSH hosts and paired machines
+> describes the retired remote path and no longer runs.
 The existing tool waterfall keeps that call running until the command settles.
 Completion supplies the actual outcome to the same conversation as internal model
 input. The agent's reply is visible; the internal input creates no user bubble.
@@ -116,11 +113,18 @@ stream without a valid record settles interrupted with cleanup unconfirmed.
 Terminal output travels with the final record; live output updates are not
 published by this background-task API. Explicit cancellation, gateway
 shutdown and conversation deletion stop the owned scope. Cancellation intent,
-physical exit and verified cleanup remain separate evidence. An uncertain cleanup
-cannot become a successful shutdown or deletion. The existing service retains a
-failed owner for joining; unconfirmed cleanup can therefore keep a cloud thread
-from idle rest. Automatic reconciliation of that uncertainty remains outside
-this change, as it is for local tasks.
+physical exit and verified cleanup remain separate evidence. A stop answers for
+what it stops: an owner it joins whose cleanup is uncertain, or a record still
+unsettled, refuses the shutdown or deletion. The service retains such a failed
+owner for joining, so it can keep a cloud thread from idle rest. A record that
+settled with unconfirmed cleanup before the stop (interrupted by a restart, or a
+VM stream lost earlier) is different: no stop can confirm it, so it still
+refuses deleting its conversation and keeps its capacity, but it does not
+refuse gateway shutdown or retirement, which would otherwise keep an older
+gateway in place of every update. It stays saved and the stop logs it. An owner
+that only delivers a recovered outcome ran nothing and claims no cleanup.
+Automatic reconciliation of that uncertainty remains outside this change, as it
+is for local tasks.
 
 Each result retains a bounded output tail. The continuation can contain less than
 the retained result when the conversation's input limit is smaller; it says when

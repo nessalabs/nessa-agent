@@ -31,8 +31,6 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
-  mintClaudeSignIn,
-  claudeSignInMintAvailable,
   saveFile,
   writeClipboardText,
 } from "../host"
@@ -190,7 +188,6 @@ const dependencies = createDesktopDependencies({
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
-  mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   // The window's navigation policy hands an http(s) address to the person's
   // browser and keeps the window where it is (src-tauri/src/links.rs).
   openInBrowser: hasNativeHost() ? (url) => window.location.assign(url) : undefined,
@@ -289,127 +286,143 @@ if (!container) throw new Error("missing #root")
 // loads; loading it now means the first reply never shows as plain text.
 void preloadReplyMarkdown()
 
-createRoot(container).render(
-  <React.StrictMode>
-    <StartupMounted />
-    <VaultProvider source={dependencies.vault} autoUnlock={hasNativeHost()}>
-      <AgentSetupProvider source={agentSetup}>
-        <Provider store={store}>
-          <WidgetRegistryProvider registry={dependencies.widgets}>
-            {/* A seeded page freezes `now`. A duration, such as the light's
+/** Whether the workspace has read its index once: its gateway answers. Vault
+ * auto-unlock waits for it, so the dialog never asks a gateway that is not
+ * there yet and shows "Secure storage is unavailable" for it. */
+const readWorkspace = () => store.getState().workspace.status === "ready"
+function useWorkspaceRead(): boolean {
+  return React.useSyncExternalStore(store.subscribe, readWorkspace)
+}
+
+function DesktopRoot() {
+  const workspaceRead = useWorkspaceRead()
+  return (
+    <React.StrictMode>
+      <StartupMounted />
+      <VaultProvider
+        source={dependencies.vault}
+        autoUnlock={hasNativeHost() && workspaceRead}
+      >
+        <AgentSetupProvider source={agentSetup}>
+          <Provider store={store}>
+            <WidgetRegistryProvider registry={dependencies.widgets}>
+              {/* A seeded page freezes `now`. A duration, such as the light's
                 repaint, reads `elapsed` so that freeze cannot hold it open. */}
-            <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
-              <SubagentsProvider source={dependencies.subagents}>
-                {/* Every icon in the window resolves through the family chosen in Settings. */}
-                <DesktopIconFamilyProvider>
-                  <McpServersProvider
-                    gateway={dependencies.mcpServers}
-                    // The app's own gateway is on this computer: its config
-                    // file can be opened here, where the host has an opener
-                    // (macOS, Linux). A browser's may be anywhere.
-                    openConfig={
-                      backend === "host" &&
-                      (host.kind === "macos" || host.kind === "linux")
-                        ? openGatewayConfig
-                        : undefined
-                    }
-                  >
-                    <GatewayRegistryProvider registry={dependencies.gatewayRegistry}>
-                      <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                        <DevicesProvider gateway={dependencies.devices}>
-                          <ClipboardProvider write={writeClipboardText}>
-                            <SiteIconProvider render={faviconSiteIcon}>
-                              <HeldFilesProvider
-                                read={dependencies.heldFiles}
-                                save={saveFile}
-                              >
-                                <TerminalSourceProvider source={dependencies.terminals}>
-                                  <DecisionsProvider source={dependencies.decisions}>
-                                    <NativeHooksProvider
-                                      gateway={dependencies.nativeHooks}
-                                    >
-                                      <DecisionSettingsProvider
-                                        gateway={dependencies.decisionSettings}
+              <ClockProvider now={dependencies.now} elapsed={monotonicElapsed()}>
+                <SubagentsProvider source={dependencies.subagents}>
+                  {/* Every icon in the window resolves through the family chosen in Settings. */}
+                  <DesktopIconFamilyProvider>
+                    <McpServersProvider
+                      gateway={dependencies.mcpServers}
+                      // The app's own gateway is on this computer: its config
+                      // file can be opened here, where the host has an opener
+                      // (macOS, Linux). A browser's may be anywhere.
+                      openConfig={
+                        backend === "host" &&
+                        (host.kind === "macos" || host.kind === "linux")
+                          ? openGatewayConfig
+                          : undefined
+                      }
+                    >
+                      <GatewayRegistryProvider registry={dependencies.gatewayRegistry}>
+                        <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                          <DevicesProvider gateway={dependencies.devices}>
+                            <ClipboardProvider write={writeClipboardText}>
+                              <SiteIconProvider render={faviconSiteIcon}>
+                                <HeldFilesProvider
+                                  read={dependencies.heldFiles}
+                                  save={saveFile}
+                                >
+                                  <TerminalSourceProvider source={dependencies.terminals}>
+                                    <DecisionsProvider source={dependencies.decisions}>
+                                      <NativeHooksProvider
+                                        gateway={dependencies.nativeHooks}
                                       >
-                                        <PermissionRulesProvider
-                                          gateway={dependencies.permissionRules}
+                                        <DecisionSettingsProvider
+                                          gateway={dependencies.decisionSettings}
                                         >
-                                          <BoatProvider gateway={dependencies.boat}>
-                                            <ReplyStyleProvider
-                                              gateway={dependencies.replyStyle}
-                                            >
-                                              <Agent37Provider
-                                                gateway={dependencies.agent37}
+                                          <PermissionRulesProvider
+                                            gateway={dependencies.permissionRules}
+                                          >
+                                            <BoatProvider gateway={dependencies.boat}>
+                                              <ReplyStyleProvider
+                                                gateway={dependencies.replyStyle}
                                               >
-                                                <GithubProvider
-                                                  gateway={dependencies.github}
-                                                  avatar={githubAvatar}
+                                                <Agent37Provider
+                                                  gateway={dependencies.agent37}
                                                 >
-                                                  <VoiceKeyProvider
-                                                    gateway={dependencies.voiceKey}
+                                                  <GithubProvider
+                                                    gateway={dependencies.github}
+                                                    avatar={githubAvatar}
                                                   >
-                                                    <SavedLoginsProvider
-                                                      gateway={dependencies.savedLogins}
+                                                    <VoiceKeyProvider
+                                                      gateway={dependencies.voiceKey}
                                                     >
-                                                      <VoiceProvider
-                                                        controller={voice}
-                                                        title={(sessionId) => {
-                                                          const sessions =
-                                                            store.getState().workspace
-                                                              .sessions
-                                                          return Object.hasOwn(
-                                                            sessions,
-                                                            sessionId,
-                                                          )
-                                                            ? sessions[sessionId].title
-                                                            : null
-                                                        }}
-                                                        showChat={(sessionId) =>
-                                                          void store.dispatch(
-                                                            openSession({ sessionId }),
-                                                          )
-                                                        }
+                                                      <SavedLoginsProvider
+                                                        gateway={dependencies.savedLogins}
                                                       >
-                                                        {/* The window is dark only (desktop.html's
+                                                        <VoiceProvider
+                                                          controller={voice}
+                                                          title={(sessionId) => {
+                                                            const sessions =
+                                                              store.getState().workspace
+                                                                .sessions
+                                                            return Object.hasOwn(
+                                                              sessions,
+                                                              sessionId,
+                                                            )
+                                                              ? sessions[sessionId].title
+                                                              : null
+                                                          }}
+                                                          showChat={(sessionId) =>
+                                                            void store.dispatch(
+                                                              openSession({ sessionId }),
+                                                            )
+                                                          }
+                                                        >
+                                                          {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                                        <CodeBlockProvider mode="dark">
-                                                          <DesktopWindow
-                                                            hostKind={host.kind}
-                                                            browserSurface={
-                                                              host.kind === "browser"
-                                                            }
-                                                            inspectable={
-                                                              import.meta.env.DEV
-                                                            }
-                                                          />
-                                                        </CodeBlockProvider>
-                                                      </VoiceProvider>
-                                                    </SavedLoginsProvider>
-                                                  </VoiceKeyProvider>
-                                                </GithubProvider>
-                                              </Agent37Provider>
-                                            </ReplyStyleProvider>
-                                          </BoatProvider>
-                                        </PermissionRulesProvider>
-                                      </DecisionSettingsProvider>
-                                    </NativeHooksProvider>
-                                  </DecisionsProvider>
-                                </TerminalSourceProvider>
-                              </HeldFilesProvider>
-                            </SiteIconProvider>
-                          </ClipboardProvider>
-                        </DevicesProvider>
-                      </LinkedDevicesProvider>
-                    </GatewayRegistryProvider>
-                  </McpServersProvider>
-                </DesktopIconFamilyProvider>
-              </SubagentsProvider>
-            </ClockProvider>
-          </WidgetRegistryProvider>
-        </Provider>
-      </AgentSetupProvider>
-    </VaultProvider>
-  </React.StrictMode>,
-)
+                                                          <CodeBlockProvider mode="dark">
+                                                            <DesktopWindow
+                                                              hostKind={host.kind}
+                                                              browserSurface={
+                                                                host.kind === "browser"
+                                                              }
+                                                              inspectable={
+                                                                import.meta.env.DEV
+                                                              }
+                                                            />
+                                                          </CodeBlockProvider>
+                                                        </VoiceProvider>
+                                                      </SavedLoginsProvider>
+                                                    </VoiceKeyProvider>
+                                                  </GithubProvider>
+                                                </Agent37Provider>
+                                              </ReplyStyleProvider>
+                                            </BoatProvider>
+                                          </PermissionRulesProvider>
+                                        </DecisionSettingsProvider>
+                                      </NativeHooksProvider>
+                                    </DecisionsProvider>
+                                  </TerminalSourceProvider>
+                                </HeldFilesProvider>
+                              </SiteIconProvider>
+                            </ClipboardProvider>
+                          </DevicesProvider>
+                        </LinkedDevicesProvider>
+                      </GatewayRegistryProvider>
+                    </McpServersProvider>
+                  </DesktopIconFamilyProvider>
+                </SubagentsProvider>
+              </ClockProvider>
+            </WidgetRegistryProvider>
+          </Provider>
+        </AgentSetupProvider>
+      </VaultProvider>
+    </React.StrictMode>
+  )
+}
+
+createRoot(container).render(<DesktopRoot />)

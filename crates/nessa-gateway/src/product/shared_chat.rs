@@ -307,11 +307,10 @@ pub(super) async fn catalogue_admitted(
     let Some(service) = state.conversation.service.as_ref() else {
         return Ok(false);
     };
-    let caller = super::conversation::caller(session, String::new());
     if list {
-        service.admits_shared_list(&caller, &organization, &owner)
+        service.admits_shared_list(session.context(), &organization, &owner)
     } else {
-        service.admits_shared_read(&caller, &organization, &owner)
+        service.admits_shared_read(session.context(), &organization, &owner)
     }
 }
 
@@ -1492,8 +1491,6 @@ mod tests {
             None => crate::conversation_test_support::fixture(limits).0,
         };
         let catalog = serde_json::from_value(json!({
-            "environments": [],
-            "commandHosts": [],
             "agents": [{
                 "agent": "claude",
                 "defaultModel": "model",
@@ -1689,8 +1686,6 @@ mod tests {
         assert_eq!(missing_point.error.unwrap().code, "invalid_request");
 
         let bare = serde_json::from_value(json!({
-            "environments": [],
-            "commandHosts": [],
             "agents": [],
             "nativeHooks": {"claude": "off", "codex": "off"}
         }))

@@ -5,13 +5,13 @@ use std::fs;
 use std::path::Path;
 
 use async_trait::async_trait;
-use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
+use nessa_attachments::domain::Attachment;
 
-use crate::backup::infrastructure::capture_namespace;
-use crate::conversation::application::{ArtifactBudget, ChannelStore};
+use crate::backup::infrastructure::{capture_namespace, OUTBOX_BYTES, OUTBOX_FILES};
+use crate::conversation::application::ChannelStore;
 use crate::conversation::domain::{
-    Channel, ChannelDefaults, ChannelExecution, ChannelFolder, ChannelId, ChannelName,
-    ChannelNotes, ChannelParts, ChannelPath, ChannelResources, Place,
+    Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
+    ChannelPath, ChannelResources,
 };
 use crate::conversation::infrastructure::LocalChannelStore;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -426,7 +426,7 @@ async fn refuse_a_dangling_outbox_link() {}
 
 #[tokio::test]
 async fn an_outbox_past_the_lease_budget_aborts_the_cut() {
-    let files = usize::try_from(ArtifactBudget::LEASE.files).unwrap();
+    let files = OUTBOX_FILES;
     let too_many = tempfile::tempdir().unwrap();
     stage_device_marker(too_many.path());
     let crowded = too_many.path().join("environment/outbox/aa");
@@ -440,10 +440,10 @@ async fn an_outbox_past_the_lease_budget_aborts_the_cut() {
     stage_device_marker(too_large.path());
     let heavy = too_large.path().join("environment/outbox/aa");
     fs::create_dir_all(&heavy).unwrap();
-    let mut left = ArtifactBudget::LEASE.bytes;
+    let mut left = OUTBOX_BYTES;
     let mut index = 0u32;
     while left > 0 {
-        let len = left.min(MAX_ARTIFACT_BYTES);
+        let len = left.min(Attachment::MAX_BYTES);
         let file = fs::File::create(heavy.join(index.to_string())).unwrap();
         file.set_len(len).unwrap();
         left -= len;
@@ -645,7 +645,6 @@ async fn a_created_channel_is_placed_exported_and_reopened() {
     assert_eq!(again.defaults(), channel.defaults());
     assert_eq!(again.notes(), channel.notes());
     assert_eq!(again.resources(), channel.resources());
-    assert_eq!(again.execution(), channel.execution());
     assert_eq!(again.coordinator_id(), generation);
     assert_eq!(
         reopened.channel_of(&worker).await.unwrap(),
@@ -700,7 +699,6 @@ async fn a_channel_symlink_is_not_followed() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution().clone(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -743,7 +741,6 @@ async fn a_channel_database_holding_a_private_key_is_not_copied() {
         channel.organization().clone(),
         channel.owner().clone(),
         ChannelParts {
-            execution: channel.execution().clone(),
             name: channel.name().clone(),
             folder: channel.folder().clone(),
             defaults: channel.defaults().clone(),
@@ -786,7 +783,6 @@ fn channel_with_settings() -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: ChannelExecution::new(Place::CloudVm, Place::Here),
             name: ChannelName::new("design").unwrap(),
             folder: ChannelFolder {
                 path: path("/work/channel"),

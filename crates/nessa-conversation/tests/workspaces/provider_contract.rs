@@ -22,11 +22,3 @@ fn boat_v1_receipts_keep_workspace_and_ssh_trust_identity() {
         .is_ok());
     assert!(ssh.host_key.unwrap().starts_with("ssh-ed25519 "));
 }
-
-#[test]
-fn shipping_worker_covers_the_compiled_lease_protocol() {
-    assert!(
-        crate::workspaces::infrastructure::worker_image().is_some(),
-        "publish and pin the credential-free worker for this lease protocol before shipping"
-    );
-}

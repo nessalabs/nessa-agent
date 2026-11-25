@@ -76,10 +76,9 @@ export interface ChatgptView {
   readonly signIn: ChatgptSignInView
 }
 
-/** Which agents have a login saved, and which computers receive them. */
+/** Which agents have a login saved. */
 export interface SavedLogins {
   readonly saved: Readonly<Record<LoginAgent, boolean>>
-  readonly devicesOn: ReadonlySet<string>
   /** Codex's ChatGPT accounts; absent when the gateway keeps none. */
   readonly chatgpt?: ChatgptView
 }
@@ -94,7 +93,6 @@ export interface SavedLoginsGateway {
   read(): Promise<SavedLoginsOutcome>
   save(agent: LoginAgent, login: string): Promise<SavedLoginsOutcome>
   remove(agent: LoginAgent): Promise<SavedLoginsOutcome>
-  setDevice(environment: string, on: boolean): Promise<SavedLoginsOutcome>
   /** Start a ChatGPT sign-in: of `accountId` again, or of a new account. */
   chatgptSignIn(accountId?: string): Promise<SavedLoginsOutcome>
   chatgptCancel(): Promise<SavedLoginsOutcome>
@@ -106,7 +104,7 @@ export interface SavedLoginsGateway {
 function read(status: LoginsStatus): SavedLogins {
   const saved = { claude: false, codex: false, opencode: false }
   for (const login of status.logins) saved[login.agent] = login.saved
-  const logins = { saved, devicesOn: new Set(status.devicesOn) }
+  const logins = { saved }
   const chatgpt = status.chatgpt
   if (!chatgpt) return logins
   const { signIn } = chatgpt
@@ -142,7 +140,6 @@ export function savedLoginsGateway(
     read: () => ask((logins) => logins.status()),
     save: (agent, login) => ask((logins) => logins.save(agent, login)),
     remove: (agent) => ask((logins) => logins.remove(agent)),
-    setDevice: (environment, on) => ask((logins) => logins.setDevice(environment, on)),
     chatgptSignIn: (accountId) => ask((logins) => logins.chatgptSignIn(accountId)),
     chatgptCancel: () => ask((logins) => logins.chatgptCancel()),
     chatgptUse: (accountId) => ask((logins) => logins.chatgptUse(accountId)),

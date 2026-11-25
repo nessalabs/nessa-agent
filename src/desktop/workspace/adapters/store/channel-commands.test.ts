@@ -29,7 +29,6 @@ import {
   openChannelCreation,
   removeChannelResource,
   setChannelCoordinator,
-  setChannelPlacement,
   showContent,
   watchChannelDrops,
 } from "./commands"
@@ -136,14 +135,14 @@ describe("asking", () => {
     expect(flowOf(store)?.asking).toBe("name")
     store.dispatch(draftChannel({ change: { name: " design-review " } }))
     store.dispatch(answerChannelStep())
-    expect(flowOf(store)?.asking).toBe("placement")
+    expect(flowOf(store)?.asking).toBe("coordinator")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("model")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBe("notes")
     store.dispatch(answerChannelStep())
     expect(flowOf(store)?.asking).toBeNull()
-    expect(flowOf(store)?.answered).toEqual(["name", "placement", "model", "notes"])
+    expect(flowOf(store)?.answered).toEqual(["name", "coordinator", "model", "notes"])
   })
 
   it("asks all five with pickers, and a clicked line asks its step again", async () => {
@@ -155,7 +154,7 @@ describe("asking", () => {
     expect(flowOf(store)?.answered).toEqual([
       "name",
       "folder",
-      "placement",
+      "coordinator",
       "model",
       "notes",
       "resources",
@@ -460,71 +459,6 @@ describe("creating", () => {
     }
     expect(flowOf(store)?.failure).toBe("unavailable")
     expect(new ChannelCreationError("limit").reason).toBe("limit")
-  })
-})
-
-describe("moving", () => {
-  async function made() {
-    // The source lists a moved channel as moved, as the gateway's list does.
-    const kept = channels()
-    const source: ChannelSource = {
-      ...kept,
-      setPlacement: async (channelId, placement, requestId) => {
-        const moved = await kept.setPlacement!(channelId, placement, requestId)
-        const at = listed.findIndex((each) => each.id === moved.id)
-        if (at >= 0) listed[at] = { ...listed[at]!, ...moved }
-        return moved
-      },
-    }
-    const { store } = await storeWith({ channels: source })
-    store.dispatch(openChannelCreation())
-    store.dispatch(draftChannel({ change: { name: "moves" } }))
-    const id = await store.dispatch(createChannel())
-    if (!id) throw new Error("no channel made")
-    await settle()
-    const read = () => store.getState().workspace.channels.find((each) => each.id === id)
-    return { store, id, read }
-  }
-
-  it("keeps the main chat when only new threads move, and takes a fresh one when the main agent does", async () => {
-    const { store, id, read } = await made()
-    const first = read()?.coordinatorConversationId
-    expect(first).toBeDefined()
-    const local = { coordinatorPlacement: "local", threadPlacement: "local" } as const
-    await expect(
-      store.dispatch(
-        setChannelPlacement({
-          channelId: id,
-          placement: { ...local, threadPlacement: "boat" },
-        }),
-      ),
-    ).resolves.toBe(true)
-    expect(read()).toMatchObject({
-      threadPlacement: "boat",
-      coordinatorConversationId: first,
-    })
-    await store.dispatch(
-      setChannelPlacement({
-        channelId: id,
-        placement: { coordinatorPlacement: "boat", threadPlacement: "boat" },
-      }),
-    )
-    // The index read again after the move keeps the fresh main chat.
-    await settle()
-    expect(read()?.coordinatorPlacement).toBe("boat")
-    expect(read()?.coordinatorConversationId).not.toBe(first)
-  })
-
-  it("says it cannot where the window has no way to move a channel", async () => {
-    const { store } = await storeWith()
-    await expect(
-      store.dispatch(
-        setChannelPlacement({
-          channelId: "any",
-          placement: { coordinatorPlacement: "boat", threadPlacement: "boat" },
-        }),
-      ),
-    ).resolves.toBe(false)
   })
 })
 

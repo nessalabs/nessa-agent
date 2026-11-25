@@ -218,7 +218,7 @@ it("creates a draft with its exact selected agent, model and approval mode", asy
   })
 })
 
-it("creates a draft on the SSH host it was to run on", async () => {
+it("creates a draft here, naming no other place to run", async () => {
   const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
     conversationId,
   }))
@@ -232,14 +232,12 @@ it("creates a draft on the SSH host it was to run on", async () => {
     agent: "claude",
     model: "sonnet",
     approvalMode: "ask",
-    environment: "devbox",
   })
   expect(create).toHaveBeenCalledExactlyOnceWith({
     conversationId: "00000000-0000-4000-8000-000000000001",
     agent: "claude",
     model: "sonnet",
     approvalMode: "ask",
-    environment: "devbox",
   })
 })
 /** One open of a view subscription, as the fake gateway saw it. */

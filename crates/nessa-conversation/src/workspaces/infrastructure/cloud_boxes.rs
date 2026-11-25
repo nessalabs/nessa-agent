@@ -8,7 +8,7 @@ use crate::timer::clock;
 use crate::workspaces::{
     application::{
         ActiveWorkChecker, BoxFuture, CloudBoxAudit, CloudBoxAuditEvent, CloudBoxProvider,
-        CloudBoxStore, Provider, ProvisionedCloudBox, RestCause,
+        CloudBoxStore, Provider, ProvisionedCloudBox, RecoveryAudit, RecoveryEvent, RestCause,
     },
     domain::{
         Admitted, Cloud, CloudBoxEndpoint, CloudBoxError, CloudBoxId, CloudBoxName, CloudBoxRecord,
@@ -780,23 +780,40 @@ struct StoredAuditLine<'a> {
     initiator: &'a str,
 }
 
-impl CloudBoxAudit for FileCloudBoxAudit {
-    fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
+impl FileCloudBoxAudit {
+    /// Append `line` to `events.jsonl`, synced, one writer at a time.
+    fn append(&self, line: &impl Serialize) -> Result<(), String> {
         let _guard = self
             .write_lock
             .lock()
-            .map_err(|_| CloudBoxError::ReceiptUnavailable("audit lock poisoned".into()))?;
-        create_directory(&self.root)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        let dir = PrivateDirectory::open_root(&self.root)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        let at_ms = clock::wall_now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|d| u64::try_from(d.as_millis()).ok())
-            .unwrap_or(0);
+            .map_err(|_| "audit lock poisoned".to_owned())?;
+        create_directory(&self.root).map_err(|error| error.to_string())?;
+        let dir = PrivateDirectory::open_root(&self.root).map_err(|error| error.to_string())?;
+        let mut encoded = serde_json::to_vec(line).map_err(|error| error.to_string())?;
+        encoded.push(b'\n');
+        let mut file = dir
+            .open_file(OsStr::new("events.jsonl"), OpenMode::OpenOrCreate)
+            .map_err(|error| error.to_string())?;
+        file.seek(SeekFrom::End(0))
+            .map_err(|error| error.to_string())?;
+        file.write_all(&encoded)
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())
+    }
+}
+
+fn now_ms() -> u64 {
+    clock::wall_now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+impl CloudBoxAudit for FileCloudBoxAudit {
+    fn record(&self, event: CloudBoxAuditEvent) -> Result<(), CloudBoxError> {
         let line = StoredAuditLine {
-            at_ms,
+            at_ms: now_ms(),
             box_id: event.box_id.as_str(),
             cloud: event.cloud.map(Cloud::as_str),
             before: event.before.map(StoredState::from),
@@ -805,19 +822,40 @@ impl CloudBoxAudit for FileCloudBoxAudit {
             cause: &event.cause,
             initiator: &event.initiator,
         };
-        let mut encoded = serde_json::to_vec(&line)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        encoded.push(b'\n');
-        let mut file = dir
-            .open_file(OsStr::new("events.jsonl"), OpenMode::OpenOrCreate)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        file.seek(SeekFrom::End(0))
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        file.write_all(&encoded)
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        file.sync_all()
-            .map_err(|error| CloudBoxError::ReceiptUnavailable(error.to_string()))?;
-        Ok(())
+        self.append(&line)
+            .map_err(CloudBoxError::ReceiptUnavailable)
+    }
+}
+
+/// A change of the cloud new boxes go to, as kept beside the boxes' own
+/// events.
+#[derive(Serialize)]
+struct StoredChoiceLine<'a> {
+    at_ms: u64,
+    action: &'static str,
+    before: &'a str,
+    after: &'a str,
+    cause: &'a str,
+    initiator: &'a str,
+}
+
+impl RecoveryAudit for FileCloudBoxAudit {
+    fn record(&self, event: &RecoveryEvent) -> Result<(), Failure> {
+        let RecoveryEvent::CloudChosen {
+            before,
+            after,
+            cause,
+            by,
+        } = event;
+        self.append(&StoredChoiceLine {
+            at_ms: now_ms(),
+            action: "cloud_chosen",
+            before: before.as_str(),
+            after: after.as_str(),
+            cause: cause.as_str(),
+            initiator: by,
+        })
+        .map_err(|_| Failure::Storage)
     }
 }
 
@@ -871,7 +909,7 @@ impl ActiveWorkChecker for ProviderActiveWorkChecker {
 mod tests {
     use super::*;
     use crate::workspaces::{
-        application::{ServedCopy, WorkspaceReceipt, WorkspaceRuntime, WorkspaceStream},
+        application::{WorkspaceReceipt, WorkspaceRuntime},
         domain::{
             AdmissionRefusal, AdmissionRejection, BoatConnection, Cloud, CloudAccount,
             CloudBoxName, CloudBoxState, TemplateRelease, VmSpec,
@@ -886,12 +924,6 @@ mod tests {
 
     #[async_trait]
     impl WorkspaceRuntime for FakeRuntime {
-        async fn serve(&self, _copy: ServedCopy) -> Result<WorkspaceStream, Failure> {
-            Err(Failure::Provider)
-        }
-        async fn image_protocol(&self) -> Option<String> {
-            None
-        }
         async fn run(
             &self,
             _command: String,
@@ -1008,8 +1040,9 @@ mod tests {
         assert_eq!(listed[0].len(), 2);
         assert_eq!(listed[0].last().unwrap().as_summary().unwrap().vm, "vm-1");
 
-        audit
-            .record(CloudBoxAuditEvent {
+        CloudBoxAudit::record(
+            &audit,
+            CloudBoxAuditEvent {
                 box_id: id,
                 cloud: Some(Cloud::Agent37),
                 before: Some(CloudBoxState::Provisioning),
@@ -1017,8 +1050,9 @@ mod tests {
                 action: "create_admitted",
                 cause: "provisioned".into(),
                 initiator: "owner".into(),
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let logged = fs::read_to_string(dir.path().join("cloud-boxes-audit/events.jsonl")).unwrap();
         assert!(logged.contains("\"action\":\"create_admitted\""));
     }
