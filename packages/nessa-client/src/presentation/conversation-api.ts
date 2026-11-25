@@ -486,12 +486,11 @@ export type ConversationApi = {
    * `drive` needs `policy`; the others take none, and the gateway refuses
    * either mistake `invalid_request`, as it does a set that is not one of
    * those three and a policy past the schema's bounds (published in
-   * `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`,
-   * `maxCommandHosts`, `maxCommandHostBytes`). Comment and drive are the
+   * `bounds`: `maxToolPolicyPatterns`, `maxToolPatternBytes`). Comment and drive are the
    * capability on the grant, including for a gateway principal. A credential
    * that is not a paired reader is refused `capabilities_refused`.
    * `details.policies` names the Cedar policy ids, and is empty when no
-   * permit matched. Nothing is written. A grant that names no `commandHosts` runs commands nowhere.
+   * permit matched. Nothing is written.
    * The answer names the grant's `policyRevision`, the grant epoch, once the
    * share is made. `applied` is false when that same receiver and credential
    * already held those capabilities and constraints, and the epoch is kept.

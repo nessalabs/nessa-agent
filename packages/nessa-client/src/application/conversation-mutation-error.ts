@@ -141,9 +141,6 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.SandboxUnavailable:
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentUnavailable:
-    case ConversationErrorCode.EnvironmentVersionMismatch:
-    case ConversationErrorCode.EnvironmentPlatformUnsupported:
-    case ConversationErrorCode.EnvironmentInstallFailed:
       return true
     // The gateway could not read what it saved for this conversation. It caches
     // that and answers every later command from it without opening an agent, so

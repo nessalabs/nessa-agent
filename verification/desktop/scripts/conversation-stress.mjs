@@ -469,7 +469,7 @@ import { freePort } from "./lib/server.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import {
-  asEarlierPlaces,
+  asOlderHere,
   asOlderBuild,
   metadataFile,
   schemaVersion,
@@ -6776,26 +6776,22 @@ const steps = {
         const count = failures.length
         const old = run.client
         run.restarts += 1
-        let earlier
         await run.stack.gateway.restart("SIGTERM", async () => {
           older = asOlderBuild(path)
-          // And every place record as the two files an older build kept.
-          earlier = asEarlierPlaces(conversationsOf(run))
+          // And the main conversation's place as an older build kept it:
+          // this build writes no place record, and reads that one as here.
+          asOlderHere(conversationsOf(run), run.main.id)
           // And one of them as an older build placed it: on a paired
           // worker, which no build runs now (ADR 1417).
           strandOnWorker(conversationsOf(run), stranded)
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-        log(
-          `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
-        )
+        log(`upgrade: restarted on a version ${older} file and an older place record`)
         if (older === CURRENT_METADATA_VERSION)
           failures.push(
             "the conversation metadata could not be downgraded without losing its app namespace",
           )
-        if (!earlier.includes(run.main.id))
-          failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
         if (version !== CURRENT_METADATA_VERSION)
           failures.push(

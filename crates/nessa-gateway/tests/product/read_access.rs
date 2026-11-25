@@ -5,7 +5,7 @@ use crate::conversation::application::{
     ShareGrant, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_POLICY_REVISION,
     MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-use crate::conversation::domain::{Capabilities, CommandHosts, ShareAccess, ToolPolicy, ToolRules};
+use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolRules};
 use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
@@ -31,23 +31,15 @@ fn grant(n: i64, access: ShareAccess) -> ShareGrant {
 }
 
 /// The largest policy a Drive grant can hold: both pattern lists full, every
-/// pattern the character JSON spells longest, and every command host at its
-/// longest.
+/// pattern the character JSON spells longest.
 fn largest_policy() -> ToolPolicy {
     let pattern = "\"".repeat(ToolRules::MAX_RULE_BYTES);
     let full = ToolRules::MAX_RULES;
-    let hosts = CommandHosts::new(
-        (0..CommandHosts::MAX_HOSTS)
-            .map(|n| format!("{n:x}{}", "h".repeat(CommandHosts::MAX_HOST_BYTES - 1)))
-            .collect(),
-    )
-    .unwrap();
     ToolPolicy::rules(ToolRules::new(vec![pattern.clone(); full], vec![pattern; full]).unwrap())
-        .with_command_hosts(hosts)
 }
 
 /// Row J10: one `conversation.shares` page of grants at the largest policy,
-/// every command host at its longest, every identifier and pattern at its
+/// every identifier and pattern at its
 /// longest, the cursor naming the last of them, the catalogue revision at
 /// the largest safe integer, and the longest request id, still fits the
 /// frame a client takes. A page is not every grant a
@@ -161,14 +153,9 @@ fn the_schema_states_the_share_bounds_the_domain_enforces() {
             "{list}"
         );
     }
-    let hosts = &definitions["ConversationToolPolicy"]["properties"]["commandHosts"];
-    assert_eq!(
-        hosts["maxItems"].as_u64(),
-        Some(CommandHosts::MAX_HOSTS as u64)
-    );
-    let host_bytes = CommandHosts::MAX_HOST_BYTES as u64;
-    assert_eq!(hosts["items"]["maxLength"].as_u64(), Some(host_bytes));
-    assert_eq!(hosts["items"]["x-utf8MaxBytes"].as_u64(), Some(host_bytes));
+    assert!(definitions["ConversationToolPolicy"]["properties"]
+        .get("commandHosts")
+        .is_none());
     assert!(definitions["ConversationToolPolicy"]
         .get("x-maxEntries")
         .is_none());

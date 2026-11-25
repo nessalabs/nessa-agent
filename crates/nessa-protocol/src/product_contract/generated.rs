@@ -86,12 +86,6 @@ pub enum ConversationErrorCode {
     EnvironmentNotConfigured,
     #[serde(rename = "environment_unavailable")]
     EnvironmentUnavailable,
-    #[serde(rename = "environment_version_mismatch")]
-    EnvironmentVersionMismatch,
-    #[serde(rename = "environment_platform_unsupported")]
-    EnvironmentPlatformUnsupported,
-    #[serde(rename = "environment_install_failed")]
-    EnvironmentInstallFailed,
     #[serde(rename = "model_unavailable")]
     ModelUnavailable,
     #[serde(rename = "approval_mode_unavailable")]
@@ -227,9 +221,6 @@ impl ConversationErrorCode {
             Self::SandboxUnavailable => "sandbox_unavailable",
             Self::EnvironmentNotConfigured => "environment_not_configured",
             Self::EnvironmentUnavailable => "environment_unavailable",
-            Self::EnvironmentVersionMismatch => "environment_version_mismatch",
-            Self::EnvironmentPlatformUnsupported => "environment_platform_unsupported",
-            Self::EnvironmentInstallFailed => "environment_install_failed",
             Self::ModelUnavailable => "model_unavailable",
             Self::ApprovalModeUnavailable => "approval_mode_unavailable",
             Self::ApprovalModeNotApplied => "approval_mode_not_applied",

@@ -276,9 +276,6 @@ pub(super) async fn product_state(
     let vault = super::vault::compose(namespace);
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // One store per agent's saved login, shared by everything that reads
-    // or writes it (issue #1260).
-    let login_stores = crate::logins::infrastructure::login_stores(&vault.vault);
     #[cfg(unix)]
     let (workspace_service, cloud_boxes_service) = {
         let boat_settings = Arc::new(VaultSettings(vault.vault.clone()));
@@ -421,11 +418,6 @@ pub(super) async fn product_state(
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     // Voice calls, with their key in the same vault.
     let voice = super::voice::compose(namespace, vault.vault.clone());
-    // The agents' saved logins, in the same vault (issue #1260).
-    let login_changed: Arc<dyn Fn(nessa_protocol::agents::AgentId) + Send + Sync> =
-        Arc::new(|_| {});
-    let saved_logins =
-        super::logins::compose(namespace, vault.vault.clone(), login_stores, login_changed)?;
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.
@@ -595,7 +587,6 @@ pub(super) async fn product_state(
     if let Some(voice) = voice {
         product = product.with_voice(voice);
     }
-    product = product.with_logins(saved_logins);
     // Terminals (docs/design/terminals.md): the engine bootstrap prepared
     // before the async runtime, when this build and process have one. With
     // none, every `terminal.*` answers terminal_unavailable, list included,

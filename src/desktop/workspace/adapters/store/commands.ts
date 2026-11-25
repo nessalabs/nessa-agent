@@ -101,8 +101,6 @@ export {
   deny,
   pinSession,
   providerLoginAvailable,
-  signInWithChatgpt,
-  chatgptSignInAvailable,
   removeComposerImage,
   renameSession,
   forkSession,

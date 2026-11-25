@@ -8,26 +8,15 @@ use super::*;
 fn a_policy_reads_back_as_itself_within_its_bound() {
     let longest = "\"".repeat(ToolRules::MAX_RULE_BYTES);
     let patterns = |n: usize| vec![longest.clone(); n];
-    // Every host at its longest; a host has nothing JSON escapes.
-    let hosts = |n: usize| {
-        CommandHosts::new(
-            (0..n)
-                .map(|i| format!("{i:x}{}", "h".repeat(CommandHosts::MAX_HOST_BYTES - 1)))
-                .collect(),
-        )
-        .unwrap()
-    };
     let rules = |allow: usize, deny: usize| {
         ToolPolicy::rules(ToolRules::new(patterns(allow), patterns(deny)).unwrap())
     };
     let full = ToolRules::MAX_RULES;
-    let most = CommandHosts::MAX_HOSTS;
     let mut policies = vec![
         rules(full, full),
-        rules(full, full).with_command_hosts(hosts(most)),
-        rules(full, 0).with_command_hosts(hosts(most)),
-        rules(0, full).with_command_hosts(hosts(most)),
-        rules(full / 2, full / 2).with_command_hosts(hosts(most)),
+        rules(full, 0),
+        rules(0, full),
+        rules(full / 2, full / 2),
     ];
     for preset in [
         ToolPreset::ReadOnlyTools,
@@ -36,17 +25,7 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
         ToolPreset::All,
     ] {
         policies.push(ToolPolicy::preset(preset));
-        policies.push(ToolPolicy::preset(preset).with_command_hosts(hosts(most)));
     }
-    // Hosts are not counted against the patterns.
-    assert_eq!(
-        rules(full, full)
-            .with_command_hosts(hosts(1))
-            .command_hosts()
-            .names()
-            .len(),
-        1
-    );
     for policy in policies {
         let text = policy_text(&policy);
         assert!(text.len() <= MAX_POLICY_TEXT_BYTES, "{}", text.len());
@@ -60,49 +39,42 @@ fn a_policy_reads_back_as_itself_within_its_bound() {
         r#"{"allow":[],"deny":[""]}"#,
         r#"{"allow":[],"deny":[]}"#,
         r#"{"preset":"all","allow":[]}"#,
-        // Command hosts beside a policy, never alone, never empty, each a
-        // host `run` could name, once.
         r#"{"commandHosts":["devbox"]}"#,
-        r#"{"preset":"all","commandHosts":[]}"#,
-        r#"{"preset":"all","commandHosts":["here"]}"#,
-        r#"{"preset":"all","commandHosts":["devbox","devbox"]}"#,
-        r#"{"preset":"all","commandHosts":[" devbox"]}"#,
-        r#"{"preset":"all","commandHosts":"devbox"}"#,
     ] {
         assert_eq!(policy_from(damaged), None, "{damaged}");
     }
 }
 
-/// A policy stored before command hosts were has no `commandHosts` and
-/// names none; one that names hosts reads them back, and its text differs
-/// from the same tools on none, so changing a grant's hosts is a change.
+/// A policy an older build stored with command hosts, the machines its turns
+/// could run commands on before every gateway ran only its own agents
+/// (ADR 1417), reads as the same tools on no host, at the longest such a
+/// build wrote; written again, it is spelled without them.
 #[test]
-fn command_hosts_round_trip_and_a_policy_without_them_names_none() {
-    let stored = r#"{"preset":"all"}"#;
-    let old = policy_from(stored).unwrap();
-    assert_eq!(old, ToolPolicy::preset(ToolPreset::All));
-    assert!(old.command_hosts().is_empty());
-    assert_eq!(policy_text(&old), stored);
-
-    let hosts = CommandHosts::new(vec![
-        "peer:".to_owned() + &"ab".repeat(32),
-        "devbox".to_owned(),
-    ])
-    .unwrap();
-    let on = ToolPolicy::preset(ToolPreset::All).with_command_hosts(hosts.clone());
-    let text = policy_text(&on);
-    assert_eq!(policy_from(&text), Some(on.clone()));
-    assert_ne!(text, stored);
+fn a_policy_stored_with_command_hosts_reads_without_them() {
+    let host = |i: usize| format!("{i:x}{}", "h".repeat(252));
+    let hosts = (0..16).map(host).collect::<Vec<_>>();
+    let longest = "\"".repeat(ToolRules::MAX_RULE_BYTES);
+    let patterns = vec![longest; ToolRules::MAX_RULES];
+    let rules = ToolPolicy::rules(ToolRules::new(patterns.clone(), patterns.clone()).unwrap());
+    let stored = json!({ "allow": patterns, "commandHosts": hosts, "deny": patterns }).to_string();
+    assert!(stored.len() <= MAX_POLICY_TEXT_BYTES, "{}", stored.len());
+    assert_eq!(policy_from(&stored), Some(rules.clone()));
     assert_eq!(
-        policy_from(&text)
-            .unwrap()
-            .command_hosts()
-            .names()
-            .iter()
-            .collect::<Vec<_>>(),
-        ["devbox", &format!("peer:{}", "ab".repeat(32))]
+        policy_text(&rules),
+        policy_text(&policy_from(&stored).unwrap())
     );
-    let rules = ToolPolicy::rules(ToolRules::new(vec!["Read".into()], Vec::new()).unwrap())
-        .with_command_hosts(hosts);
-    assert_eq!(policy_from(&policy_text(&rules)), Some(rules));
+    assert!(!policy_text(&rules).contains("commandHosts"));
+
+    let preset = format!(
+        r#"{{"commandHosts":["devbox","peer:{}"],"preset":"all"}}"#,
+        "ab".repeat(32)
+    );
+    assert_eq!(
+        policy_from(&preset),
+        Some(ToolPolicy::preset(ToolPreset::All))
+    );
+    assert_eq!(
+        policy_text(&ToolPolicy::preset(ToolPreset::All)),
+        r#"{"preset":"all"}"#
+    );
 }

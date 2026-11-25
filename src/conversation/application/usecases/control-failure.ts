@@ -94,7 +94,7 @@ function nothingWasDone(
     case "agent-startup-deadline":
       return "The agent was still starting and ran out of time, so nothing was done. Starting it is slowest the first time after an install or update; once the runtime is warm this normally works."
     case "agent-sign-in-required":
-      return "The agent is not signed in on the machine this conversation runs on, so nothing was done. Save a login for it in Settings › Saved logins."
+      return "The agent is not signed in on the computer this conversation runs on, so nothing was done. Sign it in there, then try again."
     // This conversation's agent specifically, and not the gateway's agents in
     // general: a gateway that runs none at all answers
     // `conversations-not-configured` below, and this code is raised only for an
@@ -127,9 +127,6 @@ function nothingWasDone(
       return "An older version of Nessa ran this conversation on another computer, and each computer now runs only its own agents, so nothing was done. Its history stays readable; start a new conversation to carry on."
     // Answered only by builds that still ran agents on other computers.
     case "environment-unavailable":
-    case "environment-version-mismatch":
-    case "environment-platform-unsupported":
-    case "environment-install-failed":
       return "The computer this conversation ran on could not run its agent, so nothing was done."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."

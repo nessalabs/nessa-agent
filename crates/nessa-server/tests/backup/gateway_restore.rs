@@ -145,11 +145,8 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
     assert_eq!(code, 0, "{text}");
     let staged = lines(&text);
     assert_eq!(staged[0]["status"], "quarantined");
-    assert!(staged[0]["leases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|lease| lease == "lease-drill"));
+    // The ledger an older gateway left is not cut, so no lease is named.
+    assert!(staged[0].get("leases").is_none());
     assert!(!destination.join("live").exists());
     let quarantined = startup_authority(&destination.join("quarantine")).unwrap_err();
     assert!(
@@ -162,14 +159,6 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         "a gateway with no accepted pointer still starts as itself"
     );
 
-    let (code, text) = run(&[
-        arg("accept"),
-        arg("--destination"),
-        destination.as_os_str().to_os_string(),
-    ]);
-    assert_eq!(code, 1, "{text}");
-    assert_eq!(lines(&text)[0]["reason"], "executors-unfenced");
-    assert!(!destination.join("live").exists());
     let pointer = gateway.join("backup/accepted-restore.txt");
     nessa_local_storage::create_directory(pointer.parent().unwrap()).unwrap();
     fs::write(
@@ -193,8 +182,6 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         destination.as_os_str().to_os_string(),
         arg("--namespace"),
         gateway.as_os_str().to_os_string(),
-        arg("--receipt"),
-        arg("lease-drill=stopped-host-1"),
     ]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(lines(&text)[0]["status"], "accepted");
@@ -204,8 +191,6 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         destination.as_os_str().to_os_string(),
         arg("--namespace"),
         gateway.as_os_str().to_os_string(),
-        arg("--receipt"),
-        arg("lease-drill=stopped-host-1"),
     ]);
     assert_eq!(code, 0, "{text}");
     assert_eq!(lines(&text)[0]["status"], "accepted");
@@ -338,8 +323,6 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         destination.as_os_str().to_os_string(),
         arg("--namespace"),
         gateway.as_os_str().to_os_string(),
-        arg("--receipt"),
-        arg("lease-drill=stopped-host-1"),
     ]);
     assert_eq!(code, 0, "{text}");
 
@@ -361,8 +344,6 @@ async fn a_quarantined_backup_is_accepted_before_an_oversized_conversation_is_op
         destination.as_os_str().to_os_string(),
         arg("--namespace"),
         occupied.as_os_str().to_os_string(),
-        arg("--receipt"),
-        arg("lease-drill=stopped-host-1"),
     ]);
     assert_eq!(code, 1, "{text}");
     assert_eq!(lines(&text)[0]["reason"], "namespace-occupied");

@@ -937,55 +937,6 @@
       "destructive": true
     },
     {
-      "name": "logins.status",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "logins.save",
-      "params": "LoginsSaveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.remove",
-      "params": "LoginsRemoveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
-      "name": "logins.chatgptSignIn",
-      "params": "LoginsChatgptSignInParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptCancel",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptUse",
-      "params": "LoginsChatgptUseParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptRemove",
-      "params": "LoginsChatgptRemoveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
       "name": "voice.status",
       "params": null,
       "grant": "credential.manage",

@@ -353,7 +353,7 @@ export const css = {
   shareTargets: "[data-share-targets]", // the device cards
   shareRole: "[data-share-role]", // the role's segmented control
   sharePresets: "[data-share-presets]", // the Drive tool policy's cards
-  shareHosts: "[data-share-hosts]", // the Drive grant's host list
+  shareHosts: "[data-share-hosts]", // a Drive grant's host list, which no dialog draws any more (ADR 1417)
   shareNotes: "[data-share-notes]", // what a tool policy does not stop
   shareEmpty: '[data-share-targets="none"]', // the one line drawn when no device is linked
   shareLinkDevice: '[data-share-action="link-device"]', // that line's link to Settings › Linked devices
