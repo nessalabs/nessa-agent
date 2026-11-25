@@ -70,7 +70,6 @@ const panel = (
             <App
               onProviderSignIn={signInToProvider}
               canSignInToProvider={providerLoginAvailable}
-              chatgptSignIn={dependencies.codexChatgptSignIn}
               attachmentResources={dependencies.attachments}
               canChoosePaths={dependencies.canChoosePaths}
               digest={dependencies.digest}

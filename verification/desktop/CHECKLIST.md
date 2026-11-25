@@ -2623,8 +2623,8 @@ vault dialog blocking the main conversation click.
 
 - [ ] **Every agent runs on this gateway's own machine (ADR 1417).** No composer
   offers Run on, no channel is made or set up with a location, and Settings has
-  no auto-stop for VMs, no thread order and no device switches for saved
-  logins. A conversation an older build placed on another computer stays listed
+  no auto-stop for VMs, no thread order and no saved logins or ChatGPT
+  accounts. A conversation an older build placed on another computer stays listed
   and readable, and a new message to it is refused `environment_not_configured`.
   _Check:_ the conversation stress `channel` step (no location question, no
   placement in the listing) and `upgrade` step (the stranded conversation).

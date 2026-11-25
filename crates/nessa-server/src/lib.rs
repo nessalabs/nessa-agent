@@ -13,7 +13,7 @@ pub use nessa_conversation as conversation;
 pub use nessa_gateway::workspaces;
 pub use nessa_gateway::{
     agent_warm_up, agents, app, attachments, backup, browser_session, cli, core, desktop_runtime,
-    device_pairing, devices, env, external_events, github, github_relay, health, limits, logins,
+    device_pairing, devices, env, external_events, github, github_relay, health, limits,
     mcp_servers, product, relay, secrets, server, terminal, timer, vault, voice, webhooks,
 };
 

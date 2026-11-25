@@ -52,11 +52,6 @@
  *          └── adapters/github-avatar.tsx (the account's picture from
  *              GitHub, composed by `main.tsx`; the row alone draws an initial)
  *
- *   ui/saved-logins.tsx ──▶ adapters/saved-logins-gateway.ts
- *   (Accounts: a login per   (`client.logins` read into the window's
- *    agent; a computer's      words, with a sentence for each code)
- *    switch in Devices)
- *
  *   ui/review-notice-rows.tsx
  *   (Access: the button that asks the browser to allow a notification
  *    while a review waits)
@@ -74,7 +69,6 @@ export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
 export { GatewayRegistryProvider } from "./ui/gateways-tab"
 export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
-export { SavedLoginsProvider } from "./ui/saved-logins"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export { DecisionSettingsProvider, useAutoPickWords } from "./ui/decision-settings-rows"
 export {
@@ -104,11 +98,6 @@ export {
   type GithubGateway,
 } from "./adapters/github-gateway"
 export { githubAvatar } from "./adapters/github-avatar"
-export {
-  savedLoginsGateway,
-  type SavedLoginsClient,
-  type SavedLoginsGateway,
-} from "./adapters/saved-logins-gateway"
 export {
   permissionRulesGateway,
   type PermissionRulesClient,

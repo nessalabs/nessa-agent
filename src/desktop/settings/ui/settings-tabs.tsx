@@ -52,7 +52,6 @@ import {
 } from "./settings-controls"
 import { GithubRow } from "./github-row"
 import { VoiceKeyRow } from "./voice-key-row"
-import { SavedLoginsGroup } from "./saved-logins"
 import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { GatewaysTab } from "./gateways-tab"
@@ -318,7 +317,6 @@ function AccountsTab() {
         </Row>
         <TouchIdRow />
       </Group>
-      <SavedLoginsGroup />
     </>
   )
 }

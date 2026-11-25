@@ -982,7 +982,7 @@ command store and deterministic SDK execution. See [external events](design/exte
 
 The `nessa-gateway` crate (`crates/nessa-gateway/src/`) is the gateway's request
 path: the product socket and its routes (`product`), admission, the HTTP server
-(`server`), the gateway's features (agents, devices, logins, webhooks, voice and
+(`server`), the gateway's features (agents, devices, webhooks, voice and
 the rest), and process infrastructure (`core`: logging, launch, shutdown).
 nessa-server is composition only: `composition/` reads configuration, wires the
 gateway to its stores and features and starts it, `bootstrap.rs` runs the

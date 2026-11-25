@@ -16,7 +16,6 @@ import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
 import { assignedAgentReadiness, httpAgentReadiness } from "../onboarding/adapters/agents"
 import { loadAssignedGatewayEndpoint, loadChosenAgent, onSetupRecorded } from "../host"
-import { codexChatgptSignIn } from "../provider-authentication/model/chatgpt-sign-in"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 import { hasNativeHost } from "../host"
 import { PreparedOperationTable } from "../conversation/adapters/store/prepared-operation-table"
@@ -109,19 +108,7 @@ export function createDependencies(
   // conversation UI nor its gateway adapter reads `Date.now()` itself. It is a
   // steady wall timeline, so a countdown does not jump with an OS clock change.
   const now = options.now ?? monotonicWallClock()
-  const connectedLogins = () => {
-    const client = session.get()
-    if (!client) throw new Error("Not connected to the gateway")
-    return client.logins
-  }
   return {
-    // A ChatGPT account for Codex on other computers, kept by the same gateway.
-    codexChatgptSignIn: codexChatgptSignIn({
-      status: async () => (await connectedLogins().status()).chatgpt,
-      begin: async (accountId) =>
-        (await connectedLogins().chatgptSignIn(accountId)).chatgpt,
-      pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    }),
     agentInstallations: gatewayAgentInstallations(
       () => session.get()?.agents,
       () => globalThis.crypto.randomUUID(),
