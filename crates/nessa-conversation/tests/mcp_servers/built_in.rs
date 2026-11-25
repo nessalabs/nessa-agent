@@ -337,7 +337,6 @@ async fn a_stand_in_handed_out_for_another_configuration_or_line_too_long_is_tur
 
 #[tokio::test]
 async fn a_built_in_server_with_skills_serves_sep2640_and_binds_its_digest() {
-    use crate::mcp_servers::conversation_tools::ConversationTools;
     use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile, EXTENSION};
 
     struct WithSkills {
@@ -389,20 +388,39 @@ async fn a_built_in_server_with_skills_serves_sep2640_and_binds_its_digest() {
         built_in_digest(&key(), v2.as_ref())
     );
 
-    // ConversationTools (nessa-agents) ships its embedded skills through built_in::serve.
-    let agents: Arc<dyn BuiltInServer> = ConversationTools::new();
+    // BuiltInServer with skills serves SEP-2640 through built_in::serve on all platforms.
+    #[cfg(unix)]
+    let (served_server, expected_uri, expected_ref_uri, expected_ref_needle) = {
+        use crate::mcp_servers::conversation_tools::ConversationTools;
+        let agents: Arc<dyn BuiltInServer> = ConversationTools::new();
+        (
+            agents,
+            "skill://nessa-agents/SKILL.md",
+            "skill://nessa-agents/references/workflows.md",
+            "arrange_window",
+        )
+    };
+    #[cfg(not(unix))]
+    let (served_server, expected_uri, expected_ref_uri, expected_ref_needle) = (
+        v1 as Arc<dyn BuiltInServer>,
+        "skill://demo/SKILL.md",
+        "skill://demo/SKILL.md",
+        "First version",
+    );
+
     let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
     let grant = grants.grant(&SessionId::new("session-agents").unwrap());
     let token = grant.environment()[0].1.clone();
-    let relay = Arc::new(Relay::new(servers, grants.clone(), key()).with_built_in(agents.clone()));
-    let digest = built_in_digest(&key(), agents.as_ref());
+    let relay =
+        Arc::new(Relay::new(servers, grants.clone(), key()).with_built_in(served_server.clone()));
+    let digest = built_in_digest(&key(), served_server.as_ref());
     let (client, server) = tokio::io::duplex(1 << 20);
     let served = tokio::spawn(async move { relay.serve(server).await });
     let (from, mut to) = tokio::io::split(client);
     let mut from = BufReader::new(from);
     let hello = Hello {
-        server: agents.name().to_owned(),
+        server: served_server.name().to_owned(),
         configuration: digest,
         session: token,
     };
@@ -425,18 +443,15 @@ async fn a_built_in_server_with_skills_serves_sep2640_and_binds_its_digest() {
     let listed = client
         .ask(json!({"jsonrpc": "2.0", "id": 2, "method": "skills/list", "params": {}}))
         .await;
-    assert_eq!(
-        listed["result"]["skills"][0]["uri"],
-        "skill://nessa-agents/SKILL.md"
-    );
+    assert_eq!(listed["result"]["skills"][0]["uri"], expected_uri);
 
     let read_ref = client
-        .ask(json!({"jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": "skill://nessa-agents/references/workflows.md"}}))
+        .ask(json!({"jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": expected_ref_uri}}))
         .await;
     assert!(read_ref["result"]["contents"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("arrange_window"));
+        .contains(expected_ref_needle));
 
     let missing = client
         .ask(json!({"jsonrpc": "2.0", "id": 4, "method": "skills/get", "params": {"uri": "skill://nope/SKILL.md"}}))
