@@ -192,17 +192,6 @@ async fn open(
             };
             link.open(request, host.login_shell())
         }
-        TerminalPlace::Elsewhere => {
-            tracing::warn!(
-                target: "nessa::terminal",
-                principal = %link.owner().principal,
-                channel_id = ?params.channel_id,
-                conversation_id = ?params.conversation_id,
-                reason = "terminal_place_unsupported",
-                "terminal open refused"
-            );
-            return failure(&id, "terminal_place_unsupported");
-        }
     };
     match opened {
         Ok(entry) => {

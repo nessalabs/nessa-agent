@@ -484,25 +484,18 @@ async fn a_tunneled_key_with_no_credential_is_closed_before_its_first_request() 
     fixture.gateway.shutdown().await;
 }
 
-/// Every key may serve: what a paired worker's or phone's key holds.
-struct EveryKeyServes;
-impl nessa_device_pairing::infrastructure::EnvironmentPeers for EveryKeyServes {
-    fn admits<'a>(
-        &'a self,
-        _proof: &'a nessa_auth::application::pairing::DeviceConnectionProof,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<bool, nessa_auth::application::ports::AccessError>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async { Ok(true) })
+/// Every key holds a device credential: what a paired phone's key holds.
+struct EveryKeyIsPaired;
+impl nessa_device_pairing::infrastructure::ProtectedSessions for EveryKeyIsPaired {
+    fn admits(
+        &self,
+        _proof: &nessa_auth::application::pairing::DeviceConnectionProof,
+    ) -> Result<bool, nessa_auth::application::ports::AccessError> {
+        Ok(true)
     }
     fn serve(
         &self,
-        _stream: nessa_device_pairing::infrastructure::TlsStream,
+        _connection: nessa_device_pairing::infrastructure::ProtectedConnection,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
         Box::pin(async {})
     }
@@ -527,7 +520,7 @@ async fn a_credentialed_key_through_the_tunnel_cannot_pair() {
             fixture.gateway.clone(),
             RuntimeDependencies::default().clock,
         )
-        .with_environment_peers(Arc::new(EveryKeyServes)),
+        .with_protected_sessions(Arc::new(EveryKeyIsPaired)),
     );
     let permit = connections.tunnel_permit().expect("a tunnel permit");
     let (tunnel_server, tunnel_device) = sockets();

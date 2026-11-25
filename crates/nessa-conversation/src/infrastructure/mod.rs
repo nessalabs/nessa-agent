@@ -65,18 +65,15 @@
 //! `audit_context_drops` is the one recorder of every held MCP App context
 //! dropped unsent: the conversations' apps report each drop to it, through a
 //! channel, as they make it, and it writes the record on a task of its own.
-//! `InProcessEnvironment` is the `Environment` every conversation runs in
-//! unless it was placed on an SSH host: agents run as children of this
-//! gateway, and of a lease it is asked about after a restart it can say only
-//! that it holds nothing for it. `ssh_environment::SshEnvironment` is the
-//! other, one per host `config.json` names (#699): the harness runs on the
-//! host under `nessa env serve`, the binding stays here. `FilePlaces`
-//! keeps where each conversation runs.
+//! `InProcessEnvironment` is the `Environment` every conversation runs in:
+//! agents run as children of this gateway, and of a lease it is asked about
+//! after a restart it can say only that it holds nothing for it (ADR 1417:
+//! every gateway runs only its own agents). `FilePlaces` reads where a
+//! conversation was placed before remote places were retired, so one placed
+//! elsewhere is refused rather than run here.
 //! `CedarToolPolicyEvaluator` answers the `ToolPolicyEvaluator` port: may a
 //! turn's initiator call a tool (`tool_policy/cedar/`). Beside it in the same
-//! bundle, `CedarCommandPolicyEvaluator` answers `CommandPolicyEvaluator`
-//! (may the initiator use a host, run a program there) and
-//! `CedarAppCallPolicyEvaluator` answers `AppCallPolicyEvaluator` (may an
+//! bundle, `CedarAppCallPolicyEvaluator` answers `AppCallPolicyEvaluator` (may an
 //! MCP App reach a server, call a tool on it).
 //! `CedarConversationAccessPolicy` answers `ConversationAccessPolicyEvaluator`
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
@@ -126,8 +123,6 @@ mod receiver_authority;
 pub mod background_tasks;
 mod channels;
 mod scheduled_messages;
-#[cfg(unix)]
-pub mod ssh_environment;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub use store::GrantWritePause;
@@ -193,9 +188,7 @@ mod access_policy;
 pub use access_policy::CedarConversationAccessPolicy;
 
 mod tool_policy;
-pub use tool_policy::{
-    CedarAppCallPolicyEvaluator, CedarCommandPolicyEvaluator, CedarToolPolicyEvaluator,
-};
+pub use tool_policy::{CedarAppCallPolicyEvaluator, CedarToolPolicyEvaluator};
 
 mod permission_rules;
 pub use permission_rules::{PermissionMemory, PublishedReview, RulesOpenError};
@@ -226,15 +219,9 @@ pub use agent_tool_audit::DurableAgentToolAudit;
 
 mod ownership_audit;
 pub use ownership_audit::DurableOwnershipAudit;
-#[cfg(unix)]
-mod workspaces;
-#[cfg(unix)]
-pub use workspaces::{channel_cloud, ThreadWorkspaces};
 
 mod workspace_runtime_config;
 pub use workspace_runtime_config::BoatRuntimeConfig;
-pub mod pool_config;
-pub use pool_config::PoolConfig;
 
 #[cfg(any(unix, test, feature = "test-support"))]
 mod input_files;

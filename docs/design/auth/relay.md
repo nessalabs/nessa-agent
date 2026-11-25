@@ -203,7 +203,7 @@ Every paired reader gets the same order: **direct, then relay**.
 | --- | --- | --- |
 | Gateway | `native.relay: "host:port"` in `config.json`. While set, the gateway keeps its serve connection, redialing with a bounded backoff | `device_pairing` listener: see below |
 | Phone and peer-gateway reader | The record of the gateway carries an optional relay beside its address; `peer.enroll` takes it, and `peer.relay` sets or clears it on a peer already kept | `nessa-client-core`'s retained reader: its connector carries the optional relay |
-| Paired environment | `nessa env dial ADDRESS --relay host:port`. Asking whether the owner approved it, and every dial after, go direct, then through the relay; enrolling needs ADDRESS itself, since the relay is asked for a key the machine learns only by enrolling | `env_serve`'s dial and its pairing's status request, through the client core's `dial_gateway` |
+| ~~Paired environment~~ | Retired with the environment role (ADR 1417, #1421): no machine dials in to serve leases. | — |
 
 **On the gateway, the relay is a second source inside the one listening
 socket**, not a second listener. `NativeEnrollmentListener::run` takes one
@@ -256,7 +256,7 @@ so typing it once at pairing is enough for the first relay.
 | R2b-2 | The same for peer gateways: the peer record's relay, `peer.enroll` taking one, `peer.relay` setting or clearing it, and the peer poller's read and status dial both using it | A peer whose direct address is out of reach is read and asked its status through its relay |
 | R2c | End to end over the real relay, gateway and reader | A reader reads through the relay to **the same checkpoint**, the same head and the same bytes, that a direct read reaches; a relay that flips, drops, or records and replays TLS records leaves the cache unchanged; revoking the reader still refuses it through the relay; repeated `Connect{K}` cannot starve a direct reader |
 | R3 | The honest state: `away` in the reader's outcome and in a peer's `sync.state`, with the cache kept and readable | A gateway that stops serving is `away` to its reader within the keepalive bound, its cached conversations still read, and it reads fresh again once it is back; a busy gateway is `unreachable`, never `away` |
-| R4 | `nessa env dial --relay` | A paired environment with no direct path dials through the relay and serves a lease; this is slice I's "Direct and relay converge" line |
+| R4 | ~~`nessa env dial --relay`~~ | Retired with the environment role (ADR 1417, #1421) |
 | R5 | Measurements | What the relay and a network observer see, the bytes each joined pair costs over direct, and what the idle serve connection costs the gateway, measured and written down here (below) |
 
 ## State and order table

@@ -1,4 +1,3 @@
-import { boatClaudeSignIn } from "../provider-authentication/model/boat-sign-in"
 import { codexChatgptSignIn } from "../provider-authentication/model/chatgpt-sign-in"
 import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
@@ -214,12 +213,8 @@ export function createDesktopDependencies(
     workspace?: WorkspaceSource
     signInToProvider?: WorkspaceDependencies["signInToProvider"]
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
-    /** The host's Claude sign-in minting for Boat VMs, where it has one (`main.tsx`). */
-    mintClaudeSignIn?: { available: () => Promise<boolean>; mint: () => Promise<string> }
     /** Hands an address to the person's own browser, where the host can. */
     openInBrowser?: (url: string) => void
-    /** A Boat sign-in beside a given `workspace`; the gateway's own is composed here. */
-    boatClaudeSignIn?: WorkspaceDependencies["boatClaudeSignIn"]
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -378,17 +373,6 @@ export function createDesktopDependencies(
       : undefined,
     signInToProvider: options.signInToProvider,
     providerLoginAvailable: options.providerLoginAvailable,
-    // Minted by the host, kept by the gateway the window's conversations are on.
-    boatClaudeSignIn:
-      options.boatClaudeSignIn ??
-      (source && options.mintClaudeSignIn
-        ? boatClaudeSignIn({
-            available: options.mintClaudeSignIn.available,
-            mint: options.mintClaudeSignIn.mint,
-            save: async (token) =>
-              (await source.connected()).boat.saveClaudeSignIn({ token }),
-          })
-        : undefined),
     // A ChatGPT account for Codex on other computers, kept by the gateway.
     codexChatgptSignIn: source
       ? codexChatgptSignIn({

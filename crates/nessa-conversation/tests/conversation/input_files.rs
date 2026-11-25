@@ -82,7 +82,6 @@ impl Fixture {
                 environment: crate::infrastructure::in_process_environment().into(),
                 clock: Arc::new(TestClock),
                 access_policy: crate::conversation_test_support::access_policy(),
-                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             Some(

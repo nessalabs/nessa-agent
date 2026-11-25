@@ -13,3 +13,5 @@ pub use gateway::installed_restore;
 
 #[cfg(test)]
 pub use gateway::open_at_cut;
+#[cfg(test)]
+pub(crate) use outbox::{OUTBOX_BYTES, OUTBOX_FILES};

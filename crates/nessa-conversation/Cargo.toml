@@ -12,7 +12,6 @@ test-support = [
     "nessa-agent-install/test-support",
     "nessa-attachments/test-support",
     "nessa-device-pairing/test-support",
-    "nessa-env-serve/test-support",
     "nessa-sdk/test-support",
     "nessa-timer/test-support",
 ]
@@ -22,7 +21,6 @@ nessa-agent-install = { path = "../nessa-agent-install" }
 nessa-attachments = { path = "../nessa-attachments" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
 nessa-auth = { path = "../nessa-auth" }
-nessa-env-serve = { path = "../nessa-env-serve" }
 nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
 nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
@@ -35,7 +33,7 @@ nessa-vault = { path = "../nessa-vault" }
 async-trait = "0.1"
 base64 = "0.22"
 # The tool, access, owner-phone and usage-limit policies' evaluators, the
-# same pinned build nessa-auth, nessa-env-serve and nessa-backup embed.
+# same pinned build nessa-auth and nessa-backup embed.
 cedar-policy = { version = "=4.12.0", default-features = false }
 # A resolved Windows path without the `\\?\` prefix, so a channel's folder is
 # kept, shown and handed to an agent as the person knows it.
@@ -68,7 +66,6 @@ shepherd = { git = "https://github.com/nessalabs/shepherd", rev = "85ee0d55acabf
 nessa-agent-install = { path = "../nessa-agent-install", features = ["test-support"] }
 nessa-attachments = { path = "../nessa-attachments", features = ["test-support"] }
 nessa-device-pairing = { path = "../nessa-device-pairing", features = ["test-support"] }
-nessa-env-serve = { path = "../nessa-env-serve", features = ["test-support"] }
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
 nessa-timer = { path = "../nessa-timer", features = ["test-support"] }
 tokio = { version = "1", features = ["test-util", "io-util"] }

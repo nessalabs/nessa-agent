@@ -1,7 +1,6 @@
 //! A native TLS connection as an async byte stream, once its blocking phase
 //! is over: the protected product session ([`super::protected`]) frames on
-//! it, and an environment's lease frames ride it after `openEnvironment`,
-//! read and written by either end.
+//! it, read and written by either end.
 //!
 //! ```text
 //! tokio socket <--ciphertext--> BufferedIo <--> NativeTransport (TLS, proof)

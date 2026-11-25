@@ -31,8 +31,6 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
-  mintClaudeSignIn,
-  claudeSignInMintAvailable,
   saveFile,
   writeClipboardText,
 } from "../host"
@@ -190,7 +188,6 @@ const dependencies = createDesktopDependencies({
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
-  mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   // The window's navigation policy hands an http(s) address to the person's
   // browser and keeps the window where it is (src-tauri/src/links.rs).
   openInBrowser: hasNativeHost() ? (url) => window.location.assign(url) : undefined,

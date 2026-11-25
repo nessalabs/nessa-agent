@@ -10,7 +10,6 @@ sourceRevision: "77a6b620af4d94b234294f6d273fd74b3dfb44c7"
 sources:
   - crates/nessa-conversation/src/application/drive_tools.rs
   - crates/nessa-conversation/src/application/service.rs
-  - crates/nessa-conversation/src/application/service/environment_tools.rs
   - crates/nessa-conversation/tests/conversation/drive_tools.rs
   - crates/nessa-conversation/tests/conversation/leases.rs
   - docs/design/read-grants.md
@@ -57,7 +56,7 @@ Gateway `run`, `artifacts_publish` and `artifacts_fetch` record the exact turn, 
 
 The finite model follows one admitted grant revision, a possible replacement, queued versus native delivery and one gateway-tool decision. It checks save/steer revision evidence and decision-audit-before-effect. It excludes cryptography, exact policy text, provider-side operations that bypass permission review, the 64-entry cache eviction algorithm and durable command receipt restoration. Source and regression review covered revision-keyed policy lookup, missing/evicted policy refusal, J31 revision changes across admission/save/native-steer, and gateway decision audit. Regression sources were inspected, not executed. No eventual provider response is claimed.
 
-[Environment command tools](environment-tools.md) own remote command terms and issued records after this Drive decision. [Provider permission reviews](../sdk/README.md) have their own broader lifecycle.
+[Provider permission reviews](../sdk/README.md) have their own broader lifecycle.
 
 
 ## Bounded rule model

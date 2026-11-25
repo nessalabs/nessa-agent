@@ -18,8 +18,6 @@ describe("nativeHooksGateway", () => {
           client({
             list: () =>
               listed({
-                environments: [],
-                commandHosts: [],
                 nativeHooks: { claude: "on", codex: "off" },
                 agents: [],
               }),

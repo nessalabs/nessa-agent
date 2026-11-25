@@ -13,15 +13,8 @@ sources:
   - crates/nessa-conversation/src/infrastructure/background_tasks/mod.rs
   - crates/nessa-conversation/src/infrastructure/background_tasks/runner.rs
   - crates/nessa-server/src/composition/background_tools.rs
-  - crates/nessa-server/src/composition/background_command.rs
-  - crates/nessa-conversation/src/infrastructure/background_tasks/io.rs
-  - crates/nessa-conversation/tests/conversation/background_io.rs
-  - crates/nessa-conversation/src/infrastructure/background_tasks/transport.rs
-  - crates/nessa-conversation/tests/conversation/background_transport.rs
   - crates/nessa-server/tests/background_run_binary.rs
   - crates/nessa-conversation/tests/conversation/background_tasks.rs
-  - crates/nessa-conversation/src/infrastructure/workspaces.rs
-  - crates/nessa-conversation/tests/conversation/workspace_copies.rs
   - src/desktop/workspace/adapters/gateway/gateway-steps.ts
   - src/desktop/workspace/model/transcript.ts
 diagramLinks: {}
@@ -54,7 +47,11 @@ modelCheck:
 ---
 # Background tasks
 
-An agent can start a shell command in its local workspace or cloud VM and continue without waiting for it.
+An agent can start a shell command in its local workspace and continue without waiting for it.
+
+> Since ADR 1417 (#1421) every task runs on this gateway's own machine. What
+> this page says about a thread's cloud VM, SSH hosts and paired machines
+> describes the retired remote path and no longer runs.
 The existing tool waterfall keeps that call running until the command settles.
 Completion supplies the actual outcome to the same conversation as internal model
 input. The agent's reply is visible; the internal input creates no user bubble.

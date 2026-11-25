@@ -101,9 +101,7 @@ Policy bundles, each the decider for its question:
 | What a paired reader may do | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/readers.cedar` |
 | Who may share | `crates/nessa-conversation/src/infrastructure/access_policy/cedar/shares.cedar` |
 | Which tools a turn may call | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/tools.cedar` |
-| Which host and program a command may use | `crates/nessa-conversation/src/infrastructure/tool_policy/cedar/commands.cedar` |
 | Who may edit a remembered permission rule | `crates/nessa-conversation/src/infrastructure/permission_rules/cedar/rules.cedar` (the owner; a grant is refused) |
-| Which agent or command a peer may lease on a host | `crates/nessa-env-serve/src/infrastructure/cedar/policies.cedar` |
 
 The socket has one admission, `admit_request` in
 `crates/nessa-gateway/src/product/read_access.rs`. A paired command is

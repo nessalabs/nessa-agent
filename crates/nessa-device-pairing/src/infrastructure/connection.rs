@@ -3,9 +3,7 @@
 //! The socket each connection runs on, its phase deadlines and its wake, are
 //! `nessa_protocol::pairing::socket`, shared with the device's enrollment client.
 use super::{
-    environment_peers::EnvironmentPeers,
     protected::{ProtectedConnection, ProtectedSessions},
-    tls_stream::TlsStream,
     BeginPairing, GatewayPairing, PairingRuntimeError,
 };
 use nessa_auth::{
@@ -40,14 +38,11 @@ use tokio::{
 /// take the permits enrollment and pinned status need (design row PR10).
 /// Equal to the connection bound, which also sizes the wake report.
 const PRODUCT_SESSION_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
-/// Bound on paired environments' connections, a pool of their own for the
-/// same reason; also the connection bound, which sizes the wake report.
-const ENVIRONMENT_CAPACITY: usize = NATIVE_CONNECTION_CAPACITY;
 /// Bound on connections a relay joined, and on readers being accepted
 /// through it: a pool of their own, so readers a relay sends, however many,
 /// never take the connection permits direct readers need
 /// (`docs/design/auth/relay.md`). A relayed connection that opens a product
-/// session or an environment moves to that shared pool like a direct one;
+/// session moves to that shared pool like a direct one;
 /// only a paired key gets that far.
 pub const RELAY_CAPACITY: usize = 4;
 /// Bound on connections that came through the web tunnel, from before their
@@ -85,15 +80,6 @@ pub enum NativeConnectionFailure {
     ProductUnregistered,
     /// Whether the key holds a device credential could not be read.
     ProductUnverifiable,
-    /// `openEnvironment` arrived but no paired environments are composed.
-    EnvironmentUnavailable,
-    /// `openEnvironment` arrived while every environment permit is held, or
-    /// after shutdown closed environment admission.
-    EnvironmentCapacity,
-    /// `openEnvironment` from a key that holds no credential to serve.
-    EnvironmentUnregistered,
-    /// Whether the key holds a credential to serve could not be read.
-    EnvironmentUnverifiable,
     /// A connection through the tunnel whose key holds no active credential:
     /// closed after its handshake, before its first request is read.
     TunnelUnregistered,
@@ -138,8 +124,6 @@ impl From<DeadlineError> for NativeConnectionError {
 /// A connection whose first envelope is `openProduct` moves to a pool of its
 /// own, also eight, and returns its connection permit, so product sessions
 /// never take the permits enrollment and pinned status need (design row PR10).
-/// One whose first envelope is `openEnvironment` moves to a third pool, also
-/// eight, the same way.
 pub struct NativeEnrollmentConnections {
     record_carrier: Option<Arc<dyn RecordCarrier>>,
     gateway: Arc<GatewayPairing>,
@@ -149,8 +133,6 @@ pub struct NativeEnrollmentConnections {
     wake: Arc<Mutex<WakeEndpoints>>,
     product: Pool,
     sessions: Option<Arc<dyn ProtectedSessions>>,
-    environment: Pool,
-    peers: Option<Arc<dyn EnvironmentPeers>>,
     relay: Pool,
     tunnel: Pool,
     /// Discovery on `openDiscovery`. Without it the envelope is refused and
@@ -213,8 +195,6 @@ impl NativeEnrollmentConnections {
             wake: Arc::new(Mutex::new(WakeEndpoints::new())),
             product: Pool::new(PRODUCT_SESSION_CAPACITY),
             sessions: None,
-            environment: Pool::new(ENVIRONMENT_CAPACITY),
-            peers: None,
             relay: Pool::new(RELAY_CAPACITY),
             tunnel: Pool::new(TUNNEL_CAPACITY),
             discovery: None,
@@ -238,13 +218,6 @@ impl NativeEnrollmentConnections {
     /// `sessions`, on a product session permit (design rows PR1, PR10, PR13).
     pub fn with_protected_sessions(mut self, sessions: Arc<dyn ProtectedSessions>) -> Self {
         self.sessions = Some(sessions);
-        self
-    }
-    /// Serve a connection whose first envelope is `openEnvironment` with
-    /// `peers`, on an environment permit. Without it, `openEnvironment` is
-    /// refused.
-    pub fn with_environment_peers(mut self, peers: Arc<dyn EnvironmentPeers>) -> Self {
-        self.peers = Some(peers);
         self
     }
     /// Admit one accepted native TCP socket; the blocking worker owns all inputs.
@@ -368,10 +341,6 @@ impl NativeEnrollmentConnections {
                 sessions: sessions.clone(),
                 pool: admission(&self.product),
             }),
-            environment: self.peers.as_ref().map(|peers| EnvironmentAdmission {
-                peers: peers.clone(),
-                pool: admission(&self.environment),
-            }),
             discovery: self.discovery.clone(),
             record_carrier: self.record_carrier.clone(),
         };
@@ -394,7 +363,6 @@ impl NativeEnrollmentConnections {
             worker,
             lease,
             sessions: self.sessions.clone(),
-            peers: self.peers.clone(),
         })
     }
     pub(crate) fn close(&self) {
@@ -403,7 +371,6 @@ impl NativeEnrollmentConnections {
         wake.close();
         drop(wake);
         self.product.close();
-        self.environment.close();
         self.relay.close();
         self.tunnel.close();
     }
@@ -420,11 +387,6 @@ impl NativeEnrollmentConnections {
     pub fn product_wake_report(&self) -> Option<NativeWakeReport> {
         self.product.report()
     }
-    /// The paired environments' wake sweep from the first shutdown, if it
-    /// has happened; likewise not evidence of a drain.
-    pub fn environment_wake_report(&self) -> Option<NativeWakeReport> {
-        self.environment.report()
-    }
     /// The relayed connections' wake sweep from the first shutdown, if it
     /// has happened; likewise not evidence of a drain.
     pub fn relay_wake_report(&self) -> Option<NativeWakeReport> {
@@ -436,8 +398,7 @@ impl NativeEnrollmentConnections {
         self.tunnel.report()
     }
     /// Exclude new sockets and await actual blocked/unwinding closure drain,
-    /// of connections, relayed connections, product sessions and
-    /// environments alike. A relay permit a gateway took for a reader it is
+    /// of connections, relayed connections and product sessions alike. A relay permit a gateway took for a reader it is
     /// still accepting counts until that accept ends.
     pub async fn shutdown(&self) {
         self.close();
@@ -447,7 +408,6 @@ impl NativeEnrollmentConnections {
             notified.as_mut().enable();
             if self.capacity.available_permits() == NATIVE_CONNECTION_CAPACITY
                 && self.product.drained()
-                && self.environment.drained()
                 && self.relay.drained()
                 && self.tunnel.drained()
             {
@@ -461,14 +421,11 @@ pub(super) struct NativeConnectionTask {
     worker: JoinHandle<Result<Served, NativeConnectionError>>,
     lease: Arc<ConnectionPermit>,
     sessions: Option<Arc<dyn ProtectedSessions>>,
-    peers: Option<Arc<dyn EnvironmentPeers>>,
 }
 impl NativeConnectionTask {
     /// The blocking worker's outcome. A connection it handed to the product
     /// returns its connection permit and is served here on its product
-    /// session permit until the session ends (design rows PR1, PR10, PR11);
-    /// one it handed to the paired environments, likewise on its environment
-    /// permit.
+    /// session permit until the session ends (design rows PR1, PR10, PR11).
     pub(super) async fn complete(self) -> NativeConnectionCompletion {
         let mut lease = Some(self.lease);
         let outcome = self
@@ -496,21 +453,6 @@ impl NativeConnectionTask {
                     served
                 }
                 None => Err(NativeConnectionFailure::ProductUnavailable.into()),
-            },
-            Ok(Served::Environment(channel, environment)) => match self.peers {
-                Some(peers) => {
-                    drop(lease.take());
-                    let served = match TlsStream::open(channel.into_transport()) {
-                        Ok(stream) => {
-                            peers.serve(stream).await;
-                            Ok(())
-                        }
-                        Err(error) => Err(NativeConnectionFailure::Io(error.kind()).into()),
-                    };
-                    drop(environment);
-                    served
-                }
-                None => Err(NativeConnectionFailure::EnvironmentUnavailable.into()),
             },
             Err(error) => Err(error),
         };
@@ -592,29 +534,17 @@ impl std::fmt::Debug for TunnelPermit {
 struct Admissions {
     record_carrier: Option<Arc<dyn RecordCarrier>>,
     product: Option<ProductAdmission>,
-    environment: Option<EnvironmentAdmission>,
     discovery: Option<Arc<dyn GrantorDiscovery>>,
 }
 impl Admissions {
     /// The tunnel's edge: whether the key a connection proved holds an
-    /// active credential, as a paired device or as an environment that may
-    /// serve. The same reads `openProduct` and `openEnvironment` make before
-    /// they take a permit, asked before anything the connection sends.
-    fn admit_tunneled(
-        &self,
-        handle: &Handle,
-        proof: &DeviceConnectionProof,
-    ) -> Result<(), NativeConnectionError> {
+    /// active credential as a paired device. The same read `openProduct`
+    /// makes before it takes a permit, asked before anything the connection
+    /// sends.
+    fn admit_tunneled(&self, proof: &DeviceConnectionProof) -> Result<(), NativeConnectionError> {
         let mut unverifiable = false;
         if let Some(product) = &self.product {
             match product.sessions.admits(proof) {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
-                Err(_) => unverifiable = true,
-            }
-        }
-        if let Some(environment) = &self.environment {
-            match handle.block_on(environment.peers.admits(proof)) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {}
                 Err(_) => unverifiable = true,
@@ -632,12 +562,6 @@ impl Admissions {
 /// the first envelope is `openProduct`.
 struct ProductAdmission {
     sessions: Arc<dyn ProtectedSessions>,
-    pool: Admission,
-}
-/// Admission to the environment pool, taken by the blocking worker when the
-/// first envelope is `openEnvironment`.
-struct EnvironmentAdmission {
-    peers: Arc<dyn EnvironmentPeers>,
     pool: Admission,
 }
 /// One connection's way into a pool of its own.
@@ -674,7 +598,7 @@ impl Admission {
         })
     }
 }
-/// One product session's or environment's permit, held until it ends.
+/// One product session's permit, held until it ends.
 pub(super) struct PoolPermit {
     endpoint: Arc<WakeEndpoint>,
     wake: Arc<Mutex<WakeEndpoints>>,
@@ -701,9 +625,6 @@ pub(super) enum Served {
     /// The first envelope was `openProduct`: the TLS connection, for the
     /// product session, and its product session permit.
     Product(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
-    /// The first envelope was `openEnvironment`, answered `serving`: the TLS
-    /// connection, for the paired environment, and its environment permit.
-    Environment(Box<EnrollmentChannel<DeadlineStream>>, PoolPermit),
 }
 /// The mounted carrier, entered on the original finite native worker.
 pub trait RecordCarrier: Send + Sync {
@@ -804,7 +725,7 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     // credential to: no pairing, no status, no product (design row T2). The
     // refusal is the close itself, with nothing said.
     if tunneled {
-        admissions.admit_tunneled(handle, channel.device_proof())?;
+        admissions.admit_tunneled(channel.device_proof())?;
     }
     let mut channel = EnrollmentChannel::new(channel);
     let first = begin_enrollment_phase(&deadline)
@@ -844,16 +765,6 @@ fn serve_exchange<R: RngCore + CryptoRng>(
     };
     match result {
         Ok(Exchanged::ProductSelected(permit)) => Ok(Served::Product(Box::new(channel), permit)),
-        Ok(Exchanged::EnvironmentSelected(permit)) => {
-            let mut owned = PoolOwned {
-                io: channel,
-                permit,
-            };
-            write_reply(&mut owned.io, wire::encode_serving())
-                .map_err(|error| refuse_failed_exchange(&mut owned.io, error))?;
-            let PoolOwned { io, permit } = owned;
-            Ok(Served::Environment(Box::new(io), permit))
-        }
         Ok(Exchanged::Finished) => Ok(Served::Enrollment),
         Err(error) => Err(refuse_failed_exchange(&mut channel, error)),
     }
@@ -881,11 +792,7 @@ fn answers_with_refusal(failure: NativeConnectionFailure) -> bool {
         | NativeConnectionFailure::ProductUnavailable
         | NativeConnectionFailure::ProductCapacity
         | NativeConnectionFailure::ProductUnregistered
-        | NativeConnectionFailure::ProductUnverifiable
-        | NativeConnectionFailure::EnvironmentUnavailable
-        | NativeConnectionFailure::EnvironmentCapacity
-        | NativeConnectionFailure::EnvironmentUnregistered
-        | NativeConnectionFailure::EnvironmentUnverifiable => true,
+        | NativeConnectionFailure::ProductUnverifiable => true,
         NativeConnectionFailure::Capacity
         | NativeConnectionFailure::Crypto(_)
         | NativeConnectionFailure::Io(_)
@@ -902,14 +809,10 @@ enum Exchanged {
     Finished,
     /// The first envelope selected the product session, admitted to its pool.
     ProductSelected(PoolPermit),
-    /// The first envelope selected the environment phase, admitted to its
-    /// pool. The stream owner will answer `serving`.
-    EnvironmentSelected(PoolPermit),
 }
 /// One enrollment exchange. Only a first envelope can select the product
 /// session, only when `product` admission is composed, and only with a free
-/// product session permit (design rows PR1, PR2, PR10, PR13); the same holds
-/// for the environment phase and its admission.
+/// product session permit (design rows PR1, PR2, PR10, PR13).
 fn exchange<R: RngCore + CryptoRng>(
     gateway: &GatewayPairing,
     handle: &Handle,
@@ -921,12 +824,7 @@ fn exchange<R: RngCore + CryptoRng>(
 ) -> Result<Exchanged, NativeConnectionError> {
     // A credential lets a tunnel connection in, and only to its session:
     // pairing a code, a status and owner recovery need the local network.
-    if tunneled
-        && !matches!(
-            first,
-            NativePairingRequest::OpenProduct | NativePairingRequest::OpenEnvironment
-        )
-    {
+    if tunneled && !matches!(first, NativePairingRequest::OpenProduct) {
         return Err(NativeConnectionFailure::TunnelLocalOnly.into());
     }
     let public = match first {
@@ -980,24 +878,6 @@ fn exchange<R: RngCore + CryptoRng>(
                     Ok(Exchanged::Finished)
                 }
             };
-        }
-        NativePairingRequest::OpenEnvironment => {
-            let environment = admissions
-                .environment
-                .as_ref()
-                .ok_or(NativeConnectionFailure::EnvironmentUnavailable)?;
-            // Only a key that may serve takes an environment permit.
-            let admitted =
-                handle.block_on(environment.peers.admits(channel.transport().device_proof()));
-            match admitted {
-                Ok(true) => {}
-                Ok(false) => return Err(NativeConnectionFailure::EnvironmentUnregistered.into()),
-                Err(_) => return Err(NativeConnectionFailure::EnvironmentUnverifiable.into()),
-            }
-            let permit = environment
-                .pool
-                .admit(NativeConnectionFailure::EnvironmentCapacity)?;
-            return Ok(Exchanged::EnvironmentSelected(permit));
         }
         NativePairingRequest::Status(public) => {
             return send_status(gateway, handle, channel, public).map(|()| Exchanged::Finished);

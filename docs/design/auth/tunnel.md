@@ -56,10 +56,9 @@ A direct connection on the local network serves pairing: a new phone has
 no credential yet, so the gateway has to let an unknown key try a code.
 A tunnel connection does not: **the first thing the gateway does with a
 tunnel connection, right after the TLS handshake, is check that the key it
-proved holds an active credential** (a device credential, or one to serve
-as an environment). A key that holds none is closed before its first
+proved holds an active device credential**. A key that holds none is closed before its first
 request is read. A key that holds one may open only its session
-(`openProduct` or `openEnvironment`) as its first request; pairing
+(`openProduct`) as its first request; pairing
 (`hello`, `begin`), a status read and owner recovery close the connection
 too. So pairing can only happen on the local network, where the code was
 shown, and the internet sees a TLS handshake and nothing else from a key
@@ -206,7 +205,7 @@ users of the machine can see it (see below).
 | T1 | A tunnel connection whose key holds an active device credential opens a product session | Served exactly as on the local network: same authentication, same Cedar | gateway |
 | T2 | A tunnel connection whose key holds no credential, whatever its first request (`hello`, `begin`, `status`, `openProduct`) | Closed after the TLS handshake, before its first request is read | gateway |
 | T2a | A tunnel connection whose key holds a credential asks for `hello`, `status` or owner recovery | Closed without an answer | gateway |
-| T3 | A tunnel connection whose key holds a credential to serve opens `openEnvironment` | Served as on the local network | stress `tunnel` |
+| T3 | ~~A tunnel connection whose key holds a credential to serve opens `openEnvironment`~~ | Retired with the environment role (ADR 1417): `openEnvironment` is no request any more and is refused like any unknown one; stress `tunnel` keeps the tunnel across a restart | gateway |
 | T4 | A fifth WebSocket from a paired device arrives while four tunnel permits are held | Refused before a bridge; direct readers are admitted as before | gateway |
 | T4a | A stranger holds connections open at the public address, with no secret or a revoked one | Refused with no permit taken. A paired device still connects | gateway |
 | T4b | A device is unpaired or its credential is revoked | Its tunnel secret no longer matches. The issue and the revocation are audited | gateway |

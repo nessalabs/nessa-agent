@@ -13,14 +13,12 @@ import {
 import { chatgptEndSentence, savedLoginsGateway } from "./saved-logins-gateway"
 import { ChatgptSignInEnd } from "@nessa/client"
 
-const peer = `peer:${"cd".repeat(32)}`
 const status: LoginsStatus = {
   logins: [
     { agent: "claude", saved: false },
     { agent: "codex", saved: true },
     { agent: "opencode", saved: false },
   ],
-  devicesOn: [peer],
 }
 
 function over(answer: () => Promise<LoginsStatus>) {
@@ -28,7 +26,6 @@ function over(answer: () => Promise<LoginsStatus>) {
     status: answer,
     save: answer,
     remove: answer,
-    setDevice: answer,
     chatgptSignIn: answer,
     chatgptCancel: answer,
     chatgptUse: answer,
@@ -37,12 +34,11 @@ function over(answer: () => Promise<LoginsStatus>) {
   return savedLoginsGateway(() => Promise.resolve({ logins }))
 }
 
-it("reads which agents have a login and which computers are on", async () => {
+it("reads which agents have a login", async () => {
   const outcome = await over(() => Promise.resolve(status)).read()
   expect(outcome.kind).toBe("read")
   if (outcome.kind !== "read") return
   expect(outcome.logins.saved).toEqual({ claude: false, codex: true, opencode: false })
-  expect([...outcome.logins.devicesOn]).toEqual([peer])
 })
 
 it("says every refusal in a sentence, and one for no answer", async () => {

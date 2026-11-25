@@ -1,4 +1,4 @@
-import { HERE, type ConversationSelection } from "../../conversation"
+import type { ConversationSelection } from "../../conversation"
 import type {
   ConversationChoices,
   FollowConversationChoices,
@@ -7,8 +7,8 @@ import * as React from "react"
 
 /**
  * The choices the pickers offer, held while the gateway is available: the
- * catalog is followed, not read once, so a paired environment that connects
- * or goes while the panel is open is offered, or no longer, as it happens.
+ * catalog is followed, not read once, so an agent that is installed or
+ * removed while the panel is open is offered, or no longer, as it happens.
  * Nothing is offered until the first catalog arrives; the follow is stopped
  * when the gateway goes or the panel unmounts.
  */
@@ -29,10 +29,7 @@ export function useConversationChoices(
 
 /**
  * Creation reads the stored draft choice, so bind the catalog choice shown by
- * the panel. The catalog is what the gateway offers now: a draft that names a
- * host it no longer offers (`environments`, once the catalog is known) drops
- * that host and runs here, as "Run on" then shows, rather than keep a choice
- * nobody can see and every send would be refused for.
+ * the panel to a draft that has none yet.
  */
 export function useBindCatalogFallback({
   id,
@@ -40,7 +37,6 @@ export function useBindCatalogFallback({
   serverConversationId,
   agent,
   model,
-  environments,
   setSelection,
 }: {
   id: string
@@ -48,23 +44,10 @@ export function useBindCatalogFallback({
   serverConversationId?: string
   agent?: string
   model?: string
-  environments?: readonly string[]
   setSelection: (id: string, selection: ConversationSelection) => void
 }): void {
   React.useLayoutEffect(() => {
-    if (serverConversationId) return
-    if (!selection) {
-      if (agent && model) setSelection(id, { agent, model, approvalMode: "ask" })
-      return
-    }
-    if (
-      selection.environment !== undefined &&
-      selection.environment !== HERE &&
-      environments &&
-      !environments.includes(selection.environment)
-    ) {
-      const { environment: _unoffered, ...offered } = selection
-      setSelection(id, offered)
-    }
-  }, [id, selection, serverConversationId, agent, model, environments, setSelection])
+    if (serverConversationId || selection) return
+    if (agent && model) setSelection(id, { agent, model, approvalMode: "ask" })
+  }, [id, selection, serverConversationId, agent, model, setSelection])
 }

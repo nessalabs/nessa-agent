@@ -21,8 +21,6 @@ const made: WireChannel = {
   approvalMode: "auto",
   coordinatorConversationId: null,
   coordinatorOn: false,
-  coordinatorPlacement: "local",
-  threadPlacement: "local",
   createdAtMs: 1,
 }
 
@@ -45,8 +43,6 @@ describe("making a channel on the gateway", () => {
       name: "design-review",
       agent: "codex",
       model: "gpt-5.6-terra",
-      coordinatorPlacement: "local",
-      threadPlacement: "local",
       approvalMode: "auto",
       notes: "Check every export.",
       resources: ["/Users/me/brand-kit"],
@@ -71,8 +67,6 @@ describe("making a channel on the gateway", () => {
       folder: "/repo",
       agent: "codex",
       model: "gpt-5.6-terra",
-      coordinatorPlacement: "local",
-      threadPlacement: "local",
       approvalMode: "ask",
     })
   })
@@ -100,31 +94,6 @@ describe("the flow's bounds", () => {
   it("are the ones the client publishes from the protocol", () => {
     const { maxChannels: _, ...asked } = publishedRules
     expect(channelRules).toEqual(asked)
-  })
-
-  it("changes a made channel's run location and answers the index's channel", async () => {
-    const setPlacement = vi.fn().mockResolvedValue({
-      ...made,
-      coordinatorPlacement: "boat",
-      coordinatorConversationId: "fresh-main",
-      coordinatorOn: true,
-    })
-    const source = channelGateway({
-      connected: async () => ({ channels: { create: vi.fn(), setPlacement } }),
-    })
-    const channel = await source.setPlacement?.(
-      made.channelId,
-      { coordinatorPlacement: "boat", threadPlacement: "local" },
-      "req-place",
-    )
-    expect(setPlacement).toHaveBeenCalledWith({
-      requestId: "req-place",
-      channelId: made.channelId,
-      coordinatorPlacement: "boat",
-      threadPlacement: "local",
-    })
-    expect(channel?.coordinatorPlacement).toBe("boat")
-    expect(channel?.coordinatorConversationId).toBe("fresh-main")
   })
 
   it("switches a made channel's coordinator and keeps its main chat while off", async () => {
@@ -165,20 +134,5 @@ describe("the flow's bounds", () => {
       source.setCoordinator?.(gatewayChannel.id, true, "r"),
     ).rejects.toMatchObject({ reason: "forbidden" })
     expect(setCoordinator).not.toHaveBeenCalled()
-  })
-
-  it("refuses to place the default channel without asking", async () => {
-    const setPlacement = vi.fn()
-    const source = channelGateway({
-      connected: async () => ({ channels: { create: vi.fn(), setPlacement } }),
-    })
-    await expect(
-      source.setPlacement?.(
-        gatewayChannel.id,
-        { coordinatorPlacement: "boat", threadPlacement: "boat" },
-        "r",
-      ),
-    ).rejects.toMatchObject({ reason: "forbidden" })
-    expect(setPlacement).not.toHaveBeenCalled()
   })
 })

@@ -1,11 +1,8 @@
 import { normalizedPath } from "./rust-boundaries.mjs"
 
-/** The files that may implement the port in product source: the in-process
- * adapter, and the SSH one (issue #699). */
-const ADAPTERS = [
-  "crates/nessa-conversation/src/infrastructure/environment.rs",
-  "crates/nessa-conversation/src/infrastructure/ssh_environment/environment.rs",
-]
+/** The one file that may implement the port in product source: the
+ * in-process adapter. Every gateway runs only its own agents (ADR 1417). */
+const ADAPTERS = ["crates/nessa-conversation/src/infrastructure/environment.rs"]
 
 /** Where product source may name the port: the service, its adapter, and composition. */
 const HOLDERS = [
@@ -54,7 +51,7 @@ function code(source) {
 
 /**
  * The Environment port (ADR 252) sits below the conversation service's Agent,
- * and has two adapters in product source: the in-process one and the SSH one. A surface — a
+ * and has one adapter in product source: the in-process one. A surface — a
  * product method, the protocol's view, the desktop runtime — that could reach
  * the port could pick where an agent runs without the lease that says so, so
  * only the service, the adapter and composition name it. Tests are outside

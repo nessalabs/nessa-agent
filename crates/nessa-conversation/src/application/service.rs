@@ -11,9 +11,9 @@ mod opening_resources;
 mod owned_threads;
 use opening_resources::OpeningResources;
 mod parent_stop;
-mod pool_preferences;
 mod records;
 mod reply_styles;
+mod running;
 mod scheduled_messages;
 mod terminals;
 mod thread_report_admission;
@@ -29,32 +29,28 @@ use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer, Taken},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{
-        confirmed_despite, issue, open_lease_on, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
+        confirmed_despite, issue, open_lease, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
     },
     live_changes::LiveChanges,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
-    place_decision::{decide_place, Creation, PlaceAsk},
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    tool_config::EnvironmentToolConfig,
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
-    AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
-    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
-    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
-    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
-    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
-    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
-    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
-    ConversationSummaries, DeletionFailures, FetchRequests, ListedConversation, ObservationCursor,
-    ObservedConversations, OwnerAccess, PairedAccess, PairedParty, PublishRequests, Reader,
+    AgentToolAudit, AttachmentRelease, AttachmentReleaseCause, CatalogueHead,
+    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
+    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
+    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
+    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
+    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
+    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
+    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty, Reader,
     RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
     UnfinishedDeletions,
 };
 use crate::domain::{
-    Conversation, ConversationDeletion, Place, ProviderSessionErasure, ProviderSessionLink,
-    RestCause, ToolSource,
+    Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
 pub use agent_tools::{AccessRequestOutcome, ASK_OWNER_TOOL, READ_TURN_TOOL, REQUEST_ACCESS_TOOL};
 pub use channels::{
@@ -320,16 +316,15 @@ pub struct RequestedConversation {
     pub agent: Option<RequestedAgent>,
     pub model: Option<String>,
     pub approval_mode: Option<ConversationApprovalMode>,
-    /// The SSH host it runs on, by the destination the configuration names
-    /// it by; `None` runs it here. Kept as asked: a name the configuration
-    /// does not have is refused where it would be used.
+    /// Where it runs, as asked: `None` or `here`. Kept as asked: any other
+    /// name is refused, since every conversation runs on this gateway
+    /// (ADR 1417).
     pub environment: Option<String>,
     /// The channel it is in for its whole life; `None` is the default one.
     pub channel: Option<crate::domain::ChannelId>,
-    /// A fork's: where its source runs, read from the source's record. A
-    /// fork runs there and names no `environment`; it asks for its source's
-    /// `channel` too.
-    pub fork: Option<Place>,
+    /// Whether it is a fork. A fork runs here, as its source does, and
+    /// names no `environment`; it asks for its source's `channel` too.
+    pub fork: bool,
 }
 
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
@@ -344,10 +339,6 @@ pub struct ConversationLimits {
     /// How long an idle agent nobody watches keeps running before it is
     /// parked (`service/parking.rs`); `None` never parks one.
     pub park_after: Option<Duration>,
-    /// How long an idle agent in a cloud workspace of its own keeps running,
-    /// watched or not, before it is parked and its VM stopped, while nothing
-    /// it started in the background runs (`service/parking.rs`).
-    pub workspace_idle: Duration,
 }
 impl ConversationLimits {
     /// Whether `text` is past what one message may say: the one bound a
@@ -357,10 +348,6 @@ impl ConversationLimits {
         text.len() > self.max_input_bytes
     }
 }
-/// How long a cloud thread's agent sits idle before its VM stops: the person
-/// has moved on, and nothing it runs in the background is left.
-pub const WORKSPACE_IDLE: Duration = Duration::from_secs(5 * 60);
-
 /// A small service's limits. The gateway does not use these: it passes
 /// `limits.liveConversations` from its configuration.
 impl Default for ConversationLimits {
@@ -369,7 +356,6 @@ impl Default for ConversationLimits {
             max_conversations: 32,
             max_input_bytes: 8192,
             park_after: None,
-            workspace_idle: WORKSPACE_IDLE,
         }
     }
 }
@@ -823,11 +809,6 @@ struct LiveConversation {
     /// the epoch of this opening of it.
     app_reviews: Arc<AppReviews>,
     app_epoch: u64,
-    /// The publishes its agent asked for under its lease and not yet
-    /// offered (`artifacts_publish`), shared with its lease's collector.
-    publishes: Arc<PublishRequests>,
-    /// The fetches its agent asked for under its lease (`artifacts_fetch`).
-    fetches: Arc<FetchRequests>,
     /// Whose organization the conversation is, as its record says.
     organization_id: OrganizationId,
     /// Who names its agent's tools, when every call that agent makes outside
@@ -990,8 +971,6 @@ struct Inner {
     deletion_budgets: ConversationDeletionBudgets,
     /// Where agents run; every opening is leased from it.
     environment: Environments,
-    /// The environment tools' command policy and artifact waits.
-    tool_config: EnvironmentToolConfig,
     clock: Arc<dyn Clock>,
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
@@ -1099,10 +1078,6 @@ struct Inner {
     /// on its own task until that task ends, so a caller that goes and comes
     /// back cannot leave calls running past the bound.
     app_calls: Arc<Semaphore>,
-    /// Held-file ranges `artifacts_fetch` reads at once, across every
-    /// conversation: apart from the product socket's own reads, so fetches
-    /// never lock a surface out of reading.
-    fetch_reads: Arc<Semaphore>,
     /// Principal command receipts. Composition binds the shared record runtime.
     /// Absent storage refuses command admission rather than skipping the receipt.
     commands: Arc<OnceLock<Arc<dyn CreationStorage>>>,
@@ -1326,11 +1301,9 @@ pub struct ConversationDependencies {
     pub provider_sessions: ProviderSessionErasers,
     /// How long a delete waits to stop the agent and to lease the history.
     pub deletion_budgets: ConversationDeletionBudgets,
-    /// Where conversations' agents run, under a lease each: here, and the
-    /// SSH hosts the configuration names.
+    /// Where conversations' agents run, under a lease each: always here;
+    /// a conversation an older build placed elsewhere is refused.
     pub environment: Environments,
-    /// The environment tools' command policy and artifact waits.
-    pub tool_config: EnvironmentToolConfig,
     pub clock: Arc<dyn Clock>,
     /// Decides who may locate, act on and read a conversation: every
     /// command's admission asks it ([`OwnerAccess`]).
@@ -1541,7 +1514,6 @@ impl ConversationService {
             provider_sessions,
             deletion_budgets,
             environment,
-            tool_config,
             clock,
             access_policy,
         } = dependencies;
@@ -1575,7 +1547,6 @@ impl ConversationService {
                 provider_sessions,
                 deletion_budgets,
                 environment,
-                tool_config,
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 before_open: OnceLock::new(),
@@ -1620,7 +1591,6 @@ impl ConversationService {
                 mcp_apps,
                 live_changes: Arc::default(),
                 app_calls: Arc::new(Semaphore::new(app_calls::MAX_APP_CALLS)),
-                fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
                 unfinished_turns: OnceLock::new(),
@@ -1745,24 +1715,17 @@ impl ConversationService {
         let channel = service
             .channel_for_creation(&caller, requested.channel.as_ref())
             .await?;
-        // Where it will run, by the one rule in `decide_place`. Recorded
-        // below, before it exists.
-        let place_asked = decide_place(PlaceAsk {
-            asked: requested.environment.as_deref(),
-            channel: channel.as_ref().map(|channel| {
-                if id == channel.coordinator_id() {
-                    channel.execution().coordinator().clone()
-                } else {
-                    channel.execution().threads().clone()
-                }
-            }),
-            default_device: service.inner.environment.default_place(),
-            creation: match (new_only, requested.fork.clone()) {
-                (_, Some(source)) => Creation::Fork(source),
-                (true, None) => Creation::Thread,
-                (false, None) => Creation::Person,
-            },
-        })?;
+        // Every conversation runs here (ADR 1417). A person names a place
+        // only outside a channel, and a fork names none; the only name
+        // there is is `here`.
+        if let Some(asked) = requested.environment.as_deref() {
+            if requested.fork || (!new_only && channel.is_some()) {
+                return Err(ConversationError::InvalidInput);
+            }
+            if asked != "here" {
+                return Err(ConversationError::EnvironmentNotConfigured);
+            }
+        }
         // What the caller left out starts as its channel says. The channel's
         // model is its agent's, so it is the default only on that agent.
         let defaults = channel.as_ref().map(|channel| channel.defaults());
@@ -1781,9 +1744,7 @@ impl ConversationService {
         // Only the model it would start on is asked here: the prompt it is
         // told is built when it opens.
         let place = AgentBrief {
-            place: channel
-                .as_ref()
-                .map(|channel| AgentPlace::of(channel, place_asked.is_remote())),
+            place: channel.as_ref().map(AgentPlace::of),
             job: None,
             style: None,
         };
@@ -1852,20 +1813,8 @@ impl ConversationService {
                 Err(error) => return Err(error),
             }
         };
-        // Where it runs is recorded before the conversation exists, under the
-        // creation lock, so it never exists without knowing; a host the
-        // configuration does not name creates nothing.
-        service
-            .inner
-            .environment
-            .place(
-                &id,
-                &place_asked,
-                channel.as_ref().map(|channel| channel.id()),
-            )
-            .await?;
         service.place_in_channel(&id, channel.as_ref()).await?;
-        // How its agent talks is fixed now, before it exists, as where it runs is.
+        // How its agent talks is fixed now, before it exists.
         service
             .pin_reply_style(&id, &caller, channel.as_ref())
             .await?;
@@ -2307,118 +2256,36 @@ impl ConversationService {
                                     cause: ConversationError::InvalidInput,
                                     holds: false,
                                 })?;
-                            // Where it runs was decided when it was
-                            // created; a placement that cannot be read, or
-                            // names a host no longer configured, opens it
-                            // nowhere. On any worker of the pool, a worker
-                            // that refuses it as it starts draining is left
-                            // for another.
+                            // Every conversation runs here; one an earlier
+                            // build placed on another machine, or whose
+                            // placement cannot be read, opens nowhere.
                             let ownership = match owned_preparation {
                                 Some(ref gate) => Some(gate.clone()),
                                 None => service.ownership_gate(&id, &actor, Some(owner.acquisition.clone())).await
                                     .map_err(|cause| OpeningFailure { cause, holds: false })?,
                             };
-                            // On the pool, its channel says which workers
-                            // go first and which are left out.
-                            let channel = service.channel_id_of(&id).await.map_err(|cause| {
-                                OpeningFailure { cause, holds: false }
-                            })?;
-                            let mut avoid = Vec::new();
-                            // The last acknowledged refusal is the fallback if
-                            // placement cannot find another worker.
-                            let mut last_refusal = None;
-                            let selection = loop {
-                                let place = match service
-                                    .inner
-                                    .environment
-                                    .for_lease(&id, &avoid, channel.as_ref())
-                                    .await
-                                {
-                                    Ok(place) => place,
-                                    // Another worker could not be placed: the
-                                    // refusal already given stands, and is
-                                    // recorded as any refusal is.
-                                    Err(_) if last_refusal.is_some() => {
-                                        break Err(OpeningFailure {
-                                            cause: ConversationError::LeaseRefused(last_refusal.expect("one refusal left")),
-                                            holds: false,
-                                        });
-                                    }
-                                    Err(cause) => {
-                                        break Err(OpeningFailure {
-                                            cause,
-                                            holds: false,
-                                        })
-                                    }
-                                };
-                                let worker =
-                                    place.context.as_ref().map(|context| context.worker());
-                                // No other worker to ask: the refusal it gave stands.
-                                if worker.as_ref().is_some_and(|worker| avoid.contains(worker)) {
-                                    if let Some(refusal) = last_refusal {
-                                        break Err(OpeningFailure {
-                                            cause: ConversationError::LeaseRefused(refusal),
-                                            holds: false,
-                                        });
-                                    }
-                                }
-                                // Placement may wait or select another worker.
-                                // Check the same lifetime after that wait and
-                                // before each environment lease is acquired.
-                                if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
-                                    break Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
-                                }
-                                let opening = open_lease_on(
-                                    place.environment.as_ref(),
-                                    LeaseRequest {
-                                        work: work.clone(),
-                                        sandbox: SandboxProfile::HarnessDefault,
-                                        binding: configured.sandbox,
-                                    },
-                                    configured.provider.clone(),
-                                    service.inner.clock.as_ref(),
-                                    place.context,
-                                )
-                                .await;
-                                match worker {
-                                    Some(worker)
-                                        if opening.refusal.is_some()
-                                            && !avoid.contains(&worker)
-                                            && service
-                                                .inner
-                                                .environment
-                                                .left_the_pool(&worker) =>
-                                    {
-                                        tracing::info!(
-                                            conversation_id = %id,
-                                            worker = worker.name(),
-                                            refusal = ?opening.refusal,
-                                            "a worker that left the pool refused the lease; asking another"
-                                        );
-                                        // The refusal is consequential evidence,
-                                        // including when the next placement waits
-                                        // until this lifetime has sealed.
-                                        manager.prepare_for_lease_record(opening.fence.as_ref()).await.map_err(|cause| OpeningFailure {
-                                            cause: ConversationError::Agent(cause), holds: false,
-                                        })?;
-                                        let recorded = issue(&manager, place.environment.as_ref(), &opening, &actor).await;
-                                        let recorded = match recorded {
-                                            Err(LeaseIssueError::Record(LeaseRecordError::Storage(_))) => manager
-                                                .save_retained_lease_records().await
-                                                .map_err(|error| LeaseIssueError::Record(LeaseRecordError::Storage(error))),
-                                            result => result,
-                                        };
-                                        if let Err(error) = recorded {
-                                            tracing::error!(conversation_id = %id, %error, "a draining worker refusal could not be recorded");
-                                            break Err(OpeningFailure { cause: error.into(), holds: false });
-                                        }
-                                        avoid.push(worker);
-                                        last_refusal = opening.refusal;
-                                    }
-                                    _ => break Ok((place.environment, opening)),
-                                }
-                            };
-                            let (environment, opening) = selection?;
+                            let environment = service
+                                .inner
+                                .environment
+                                .for_lease(&id)
+                                .await
+                                .map_err(|cause| OpeningFailure { cause, holds: false })?;
+                            // Check the same lifetime before the lease is
+                            // acquired.
+                            if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
+                                return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
+                            }
+                            let opening = open_lease(
+                                environment.as_ref(),
+                                LeaseRequest {
+                                    work: work.clone(),
+                                    sandbox: SandboxProfile::HarnessDefault,
+                                    binding: configured.sandbox,
+                                },
+                                configured.provider.clone(),
+                                service.inner.clock.as_ref(),
+                            )
+                            .await;
                             // Its machine reached, the agent is started there
                             // next: a setup step where a machine was made ready.
                             if opening.refusal.is_none() {
@@ -2436,14 +2303,13 @@ impl ConversationService {
                             service.note_workplace(&id, &opening.terms.environment, workspace.as_ref());
                             let background_target = match &opening.terms.environment {
                                 EnvironmentRef::Here => workspace.clone().map(BackgroundTarget::Local),
-                                EnvironmentRef::Boat => opening.workspace.clone().map(|workspace| BackgroundTarget::Vm { conversation: id.clone(), workspace }),
                                 _ => None,
                             };
-                            if let (Some(attachments), Some(hold), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
+                            if let (Some(attachments), Some(_), Some(delivery)) = (&service.inner.attachments, &opening.hold, &service.inner.input_files) {
                                 if let Some(workspace) = workspace {
                                     let local = matches!(opening.terms.environment, nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Here).then(|| delivery.local.clone());
                                     opening.fence.set_input_files(Arc::new(super::ConversationInputFiles::new(
-                                        attachments.clone(), service.inner.file_link_audit.clone(), service.inner.clock.clone(), record.organization().clone(), record.owner().clone(), id.clone(), opening.lease.clone(), hold.clone(), workspace, local, opening.fence.input_stop(),
+                                        attachments.clone(), service.inner.file_link_audit.clone(), service.inner.clock.clone(), record.organization().clone(), record.owner().clone(), id.clone(), opening.lease.clone(), workspace, local, opening.fence.input_stop(),
                                             service.inner.input_file_slots.clone(),
                                             delivery.timer.clone(),
                                     )));
@@ -2689,29 +2555,11 @@ impl ConversationService {
                                 opening_failure,
                                 app_reviews,
                                 app_epoch,
-                                publishes: Arc::default(),
-                                fetches: Arc::default(),
                                 organization_id: record.organization().clone(),
                                 tool_source,
                                 admitted_policies,
                                 unsettled_raise: raised_access::UnsettledRaise::default(),
                             });
-                            // What the host publishes under the lease is
-                            // kept for as long as the lease is held.
-                            if let Some(offers) = live.lease.artifacts() {
-                                service.collect_artifacts(
-                                    Arc::downgrade(&live),
-                                    offers,
-                                    ArtifactCollector::new(
-                                        record.organization().clone(),
-                                        id.clone(),
-                                        live.lease.id().clone(),
-                                        actor.clone(),
-                                        service.inner.attachments.clone(),
-                                        ArtifactBudget::LEASE,
-                                    ),
-                                );
-                            }
                             Ok(live)
                         };
                         let result = match AssertUnwindSafe(preparation).catch_unwind().await {
@@ -2854,27 +2702,6 @@ impl ConversationService {
                 .await
             {
                 tracing::warn!(conversation_id = %id, ?stop, "an environment-ended lease's stop did not confirm cleanup");
-            }
-        });
-    }
-    /// Keep each file published under a live conversation's lease, one at
-    /// a time, until the lease is no longer held and its offers end. An
-    /// offer that arrives once the conversation is let go is answered not
-    /// kept, by its answer's drop.
-    fn collect_artifacts(
-        &self,
-        live: std::sync::Weak<LiveConversation>,
-        mut offers: tokio::sync::mpsc::Receiver<ArtifactOffer>,
-        mut collector: ArtifactCollector,
-    ) {
-        tokio::spawn(async move {
-            while let Some(offer) = offers.recv().await {
-                let Some(live) = live.upgrade() else {
-                    continue;
-                };
-                collector
-                    .collect(offer, &live.agent, &live.lease, &live.publishes)
-                    .await;
             }
         });
     }
@@ -4070,21 +3897,6 @@ impl ConversationService {
         Ok((execution, message))
     }
 
-    /// Refuse a message linking files by path for a conversation that runs
-    /// where this machine's files are not its own (an SSH host): before
-    /// anything of it is recorded or sent, so the same request, corrected,
-    /// can be sent again. Images carry their bytes and are not refused here.
-    async fn refuse_linked_files_elsewhere(
-        &self,
-        id: &ConversationId,
-        links_files: bool,
-    ) -> Result<(), ConversationError> {
-        if links_files && !self.inner.environment.reads_this_machine(id).await? {
-            return Err(ConversationError::LinkedFileUnreachable);
-        }
-        Ok(())
-    }
-
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
     pub async fn submit(
         &self,
@@ -4403,9 +4215,6 @@ impl ConversationService {
                 &execution_id,
                 message,
             )?;
-            service
-                .refuse_linked_files_elsewhere(&id, !message.files().is_empty())
-                .await?;
             // A deferred restored conversation is fetched before a message
             // opens an agent. A missing source refuses the send, and does not
             // start a fresh session over the history that was not fetched.
@@ -6852,16 +6661,15 @@ impl ConversationService {
         record: &Conversation,
         session: ExecutionSessionId,
     ) -> Result<ProviderSessionErasure, AskFailure> {
-        // A conversation placed on a host kept its harness's session there,
-        // which no handler on this machine can reach: said as no handler,
-        // never asked of a local binding.
+        // A conversation an earlier build placed on another machine kept its
+        // harness's session there, which no handler on this machine can
+        // reach: said as no handler, never asked of a local binding.
         if self
             .inner
             .environment
-            .placement(record.id())
+            .elsewhere(record.id())
             .await
             .map_err(AskFailure::Failed)?
-            .is_remote()
         {
             return Ok(ProviderSessionErasure::NoHandler);
         }
@@ -7614,9 +7422,6 @@ impl ConversationService {
                             if on_confirm != ConfirmedClose::HoldSlot {
                                 self.release_slot(id, &slot).await;
                             }
-                            if let Some(rest) = super::rest_cause(cause) {
-                                self.rest_workspace(id, rest);
-                            }
                         }
                         closed
                     }
@@ -7640,15 +7445,6 @@ impl ConversationService {
             }
             ready.await;
         }
-    }
-
-    /// Stop `id`'s VM, keeping its disk, on a task of its own, once its
-    /// agent has stopped: nothing for a conversation that has none, nor
-    /// while anything still uses it. The next message resumes it.
-    fn rest_workspace(&self, id: &ConversationId, cause: RestCause) {
-        let service = self.clone();
-        let id = id.clone();
-        tokio::spawn(async move { service.inner.environment.rest(&id, cause).await });
     }
 
     /// Close `live`'s agent under its lease for `cause`, on a task of its
@@ -8332,13 +8128,6 @@ fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
-mod artifact_fetch;
-pub use artifact_fetch::{
-    FetchAnswer, FetchCall, FetchCallRefusal, FETCH_BUSY_BACKOFF, FETCH_READS,
-};
-mod artifact_publish;
-pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
-mod environment_tools;
 mod event_read;
 mod handoffs;
 mod notes;
@@ -8346,9 +8135,6 @@ mod parking;
 mod raised_access;
 use parking::ParkWhen;
 mod resumption;
-pub use environment_tools::{
-    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
-};
 pub use event_read::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,

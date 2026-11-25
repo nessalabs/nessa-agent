@@ -4,7 +4,6 @@ use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, ObservedPolicy,
     Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
-use crate::domain::Place;
 use crate::{
     application::{
         ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits,
@@ -154,7 +153,6 @@ fn fixture_with_sessions(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment,
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -1482,141 +1480,78 @@ async fn wait_marker(root: &Path, name: &str, child: &mut ChildOwner, log: &Path
     .unwrap();
 }
 
-/// An environment that runs elsewhere and is never reached: what a
-/// conversation placed on an SSH host refuses before it opens.
-struct Elsewhere;
-
-impl crate::application::Environment for Elsewhere {
-    fn declaration(&self) -> crate::application::EnvironmentDeclaration {
-        crate::application::EnvironmentDeclaration {
-            environment: nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Ssh(
-                nessa_sdk::domain::agent_execution::leases::SshDestination::new("devbox").unwrap(),
-            ),
-            sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
-        }
-    }
-    fn open<'a>(
-        &'a self,
-        _lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-        _grant: &'a nessa_sdk::domain::agent_execution::leases::LeaseTerms,
-        _binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Result<
-            crate::application::EnvironmentLease,
-            nessa_sdk::domain::agent_execution::leases::LeaseRefusal,
-        >,
-    > {
-        Box::pin(async {
-            Err(nessa_sdk::domain::agent_execution::leases::LeaseRefusal::EnvironmentUnreachable)
-        })
-    }
-    fn account<'a>(
-        &'a self,
-        _lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Option<nessa_sdk::domain::agent_execution::leases::LeaseCleanup>,
-    > {
-        Box::pin(async { None })
-    }
-}
-
-/// The wire's submit refuses a file linked by path for a conversation on a
-/// host before its command is staged, so the corrected request can be sent
-/// again under the same identity.
+/// A conversation an earlier build placed on another computer is never run
+/// here (ADR 1417): its history stays readable, while a message to it and a
+/// fork of it are refused `EnvironmentNotConfigured` and no agent opens.
 #[tokio::test]
-async fn a_submit_linking_a_file_is_refused_on_a_host_before_it_is_staged() {
+async fn a_conversation_placed_elsewhere_by_an_earlier_build_is_refused_never_run_here() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
-    let provider = Arc::new(ProviderFactory::default());
     nessa_local_storage::create_directory(&root).unwrap();
-    let placements = Arc::new(crate::infrastructure::FilePlaces::new(&root).unwrap());
-    let environments = crate::application::Environments::new(
-        crate::infrastructure::in_process_environment(),
-        std::collections::BTreeMap::from([(
-            "devbox".to_string(),
-            Arc::new(Elsewhere) as Arc<dyn crate::application::Environment>,
-        )]),
-        placements,
-    );
-    let (service, storage, metadata) = fixture_in(&root, provider.clone(), environments);
-    let target = id();
-    service
-        .inner
-        .environment
-        .place(&target, &Place::named("devbox").unwrap(), None)
-        .await
-        .unwrap();
-    let mut linking = message("read this");
-    linking.files = vec![crate::application::SubmittedFile {
-        path: "/Users/me/notes.txt".into(),
-    }];
-    let refused = service
+    let places = || {
+        crate::application::Environments::new(
+            crate::infrastructure::in_process_environment(),
+            Arc::new(crate::infrastructure::FilePlaces::new(&root)),
+        )
+    };
+    let source = id();
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture_in(&root, provider.clone(), places());
+        opened(&service, &provider, &source).await;
+        retire(service, storage, metadata).await;
+    }
+    // What an earlier build kept for a conversation it placed on `devbox`.
+    {
+        use std::io::Write;
+        let folder = root.join("places");
+        nessa_local_storage::create_directory(&folder).unwrap();
+        let mut record = nessa_local_storage::PrivateTempFile::new_in(&folder).unwrap();
+        record
+            .as_file_mut()
+            .write_all(br#"{"schemaVersion":1,"placed":"devbox"}"#)
+            .unwrap();
+        record
+            .persist(&folder.join(format!("{source}.json")))
+            .unwrap();
+    }
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture_in(&root, provider.clone(), places());
+    assert!(service.read(source.clone(), caller("read")).await.is_ok());
+    let sent = service
         .submit_command(
             storage.clone(),
-            target,
+            source.clone(),
             caller("submit"),
             Initiation::owner(),
             true,
             "turn".into(),
-            linking,
+            message("hello"),
             SubmissionMode::Queue,
         )
         .await;
-    assert!(matches!(
-        refused,
-        Err(MutationFailure::Target(
-            ConversationError::LinkedFileUnreachable
-        ))
-    ));
-    assert_eq!(command_rows(&root), 0);
-    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
-    retire(service, storage, metadata).await;
-}
-
-/// A fork runs where its source runs: a source here forks here though a
-/// default device was set since, which a creation naming no place would go
-/// to.
-#[tokio::test]
-async fn a_fork_of_a_conversation_here_runs_here_whatever_the_default_device() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("data");
-    let provider = Arc::new(ProviderFactory::default());
-    nessa_local_storage::create_directory(&root).unwrap();
-    let placements = Arc::new(crate::infrastructure::FilePlaces::new(&root).unwrap());
-    let (default, default_device) = tokio::sync::watch::channel(None);
-    let environments = crate::application::Environments::new(
-        crate::infrastructure::in_process_environment(),
-        std::collections::BTreeMap::from([(
-            "devbox".to_string(),
-            Arc::new(Elsewhere) as Arc<dyn crate::application::Environment>,
-        )]),
-        placements,
-    )
-    .with_default(default_device);
-    let (service, storage, metadata) = fixture_in(&root, provider.clone(), environments);
-    let source = id();
-    opened(&service, &provider, &source).await;
-    default.send(Some("devbox".into())).unwrap();
-    assert_eq!(
-        service.inner.environment.default_place(),
-        Some(Place::named("devbox").unwrap())
+    assert!(
+        matches!(
+            sent,
+            Err(MutationFailure::Target(
+                ConversationError::EnvironmentNotConfigured
+            ))
+        ),
+        "a message to it is refused"
     );
-    let fork = id();
-    service
+    let forked = service
         .fork(
             storage.clone() as Arc<dyn CreationStorage>,
-            fork.clone(),
+            id(),
             caller("fork"),
             source.clone(),
         )
-        .await
-        .unwrap();
-    assert_eq!(
-        service.inner.environment.placement(&fork).await.unwrap(),
-        Place::Here
+        .await;
+    assert!(
+        format!("{forked:?}").contains("EnvironmentNotConfigured"),
+        "{forked:?}"
     );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     retire(service, storage, metadata).await;
 }
 

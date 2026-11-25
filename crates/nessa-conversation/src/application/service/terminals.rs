@@ -8,7 +8,7 @@ use crate::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
     RequestShape,
 };
-use crate::domain::{ChannelId, Place};
+use crate::domain::ChannelId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::EnvironmentRef;
 use std::collections::HashMap;
@@ -28,11 +28,9 @@ pub enum TerminalOrigin {
 /// Where a terminal runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalPlace {
-    /// This gateway's machine, in `folder`.
+    /// This gateway's machine, in `folder`: every agent runs here, and
+    /// another machine runs a gateway of its own (ADR 1417).
     Here { folder: PathBuf },
-    /// Somewhere other than this gateway; open the terminal on that machine's
-    /// own gateway directly (ADR 1417).
-    Elsewhere,
 }
 
 /// Where each open conversation's agent works now, as its opening found it.
@@ -92,8 +90,7 @@ impl ConversationService {
                         owner: &caller.principal_id,
                     },
                 )?;
-                self.channel_terminal_place(caller, channel.as_ref(), None)
-                    .await
+                self.channel_terminal_place(caller, channel.as_ref()).await
             }
             TerminalOrigin::Conversation(id) => {
                 let record = load_conversation(self.inner.metadata.as_ref(), id)
@@ -106,8 +103,7 @@ impl ConversationService {
                 }
                 // Not open now: where its agent would work, by its channel.
                 let channel = self.channel_id_of(id).await?;
-                self.channel_terminal_place(caller, channel.as_ref(), Some(id))
-                    .await
+                self.channel_terminal_place(caller, channel.as_ref()).await
             }
         }
     }
@@ -116,7 +112,6 @@ impl ConversationService {
         &self,
         caller: &ConversationCaller,
         channel: Option<&ChannelId>,
-        conversation: Option<&ConversationId>,
     ) -> Result<TerminalPlace, ConversationError> {
         match channel.filter(|id| !id.is_default()) {
             None => self
@@ -131,14 +126,9 @@ impl ConversationService {
                 let channel = self
                     .channel_for_action(caller, id, AccessAction::ChannelUse)
                     .await?;
-                let is_coordinator =
-                    conversation.is_none_or(|conv| *conv == channel.coordinator_id());
-                let place = if is_coordinator {
-                    channel.execution().coordinator()
-                } else {
-                    channel.execution().threads()
-                };
-                Ok(place_for(place, channel.folder().path.as_path()))
+                Ok(TerminalPlace::Here {
+                    folder: channel.folder().path.as_path().to_path_buf(),
+                })
             }
         }
     }
@@ -167,6 +157,9 @@ impl ConversationService {
     }
 }
 
+/// Where an agent opened in `environment` with `workspace` works: here,
+/// in its folder. `None` with no folder, or for a lease an earlier build
+/// placed elsewhere, which never opens now.
 fn workplace_for(
     environment: &EnvironmentRef,
     workspace: Option<&String>,
@@ -175,33 +168,17 @@ fn workplace_for(
         (EnvironmentRef::Here, Some(folder)) => Some(TerminalPlace::Here {
             folder: PathBuf::from(folder),
         }),
-        (EnvironmentRef::Here, None) => None,
-        (EnvironmentRef::Ssh(_) | EnvironmentRef::Boat | EnvironmentRef::Peer(_), _) => {
-            Some(TerminalPlace::Elsewhere)
-        }
-    }
-}
-
-fn place_for(place: &Place, folder: &std::path::Path) -> TerminalPlace {
-    match place {
-        Place::Here => TerminalPlace::Here {
-            folder: folder.to_path_buf(),
-        },
-        Place::Host(_) | Place::CloudVm | Place::Peer(_) | Place::Pool => TerminalPlace::Elsewhere,
+        _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
-    use std::path::Path;
 
     #[test]
-    fn workplace_maps_here_with_folder_and_refuses_non_local_environments() {
+    fn a_workplace_is_here_in_its_folder() {
         let folder = "/tmp/project".to_owned();
-        let host = SshDestination::new("devbox").unwrap();
-        let peer = PeerEnvironment::new([1; 32]);
         assert_eq!(
             workplace_for(&EnvironmentRef::Here, Some(&folder)),
             Some(TerminalPlace::Here {
@@ -209,40 +186,6 @@ mod tests {
             })
         );
         assert_eq!(workplace_for(&EnvironmentRef::Here, None), None);
-        assert_eq!(
-            workplace_for(&EnvironmentRef::Ssh(host), Some(&folder)),
-            Some(TerminalPlace::Elsewhere)
-        );
-        assert_eq!(
-            workplace_for(&EnvironmentRef::Boat, Some(&folder)),
-            Some(TerminalPlace::Elsewhere)
-        );
-        assert_eq!(
-            workplace_for(&EnvironmentRef::Peer(peer), None),
-            Some(TerminalPlace::Elsewhere)
-        );
-    }
-
-    #[test]
-    fn channel_place_maps_here_and_refuses_non_local_places() {
-        let folder = Path::new("/tmp/channel");
-        let host = SshDestination::new("devbox").unwrap();
-        let peer = PeerEnvironment::new([1; 32]);
-        assert_eq!(
-            place_for(&Place::Here, folder),
-            TerminalPlace::Here {
-                folder: PathBuf::from("/tmp/channel"),
-            }
-        );
-        assert_eq!(
-            place_for(&Place::Host(host), folder),
-            TerminalPlace::Elsewhere
-        );
-        assert_eq!(place_for(&Place::CloudVm, folder), TerminalPlace::Elsewhere);
-        assert_eq!(
-            place_for(&Place::Peer(peer), folder),
-            TerminalPlace::Elsewhere
-        );
-        assert_eq!(place_for(&Place::Pool, folder), TerminalPlace::Elsewhere);
+        assert_eq!(workplace_for(&EnvironmentRef::Boat, Some(&folder)), None);
     }
 }

@@ -67,8 +67,6 @@ export {
   vaultBiometrics,
   signInToProvider,
   providerLoginAvailable,
-  mintClaudeSignIn,
-  claudeSignInMintAvailable,
   hasNativeHost,
   installUpdate,
   type ChosenAgent,

@@ -811,7 +811,7 @@ async fn run(
                         approval_mode: None,
                         environment: args.environment,
                         channel: None,
-                        fork: None,
+                        fork: false,
                     },
                 )
                 .await
