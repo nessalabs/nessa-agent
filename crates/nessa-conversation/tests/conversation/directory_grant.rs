@@ -2439,6 +2439,79 @@ fn a_refused_read_or_write_records_who_asked_and_the_path() {
 }
 
 #[test]
+fn a_write_of_a_symlink_is_an_audited_boundary_and_is_recovered_later() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    let secret = root.path().join("secret.txt");
+    fs::write(&secret, b"secret").unwrap();
+    std::os::unix::fs::symlink(&secret, shared.join("linked")).unwrap();
+    std::os::unix::fs::symlink(&secret, shared.join("jump")).unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [26; BINDING_LEN],
+    );
+    share_read(&access, shared.to_str().unwrap(), "peer");
+    let refused = access.write("peer", "linked", b"pwned").unwrap_err();
+    assert!(matches!(
+        refused,
+        DirectoryRefusal::Outside {
+            leave: PathLeave::Symlink,
+            audit_recorded: true,
+        }
+    ));
+    assert_eq!(fs::read(&secret).unwrap(), b"secret");
+    let read = access.read("peer", "jump/leaf").unwrap_err();
+    assert!(matches!(
+        read,
+        DirectoryRefusal::Outside {
+            leave: PathLeave::Symlink,
+            audit_recorded: true,
+        }
+    ));
+    let outside = root.path().join("elsewhere");
+    fs::create_dir(&outside).unwrap();
+    let jumped = shared.join("out");
+    std::os::unix::fs::symlink(&outside, &jumped).unwrap();
+    let exec = access
+        .exec(ExecAsk {
+            subject: "peer",
+            program: "ls",
+            argv: &[],
+            shell: None,
+            profile: SandboxKind::Container,
+            roots: &[jumped.to_str().unwrap().to_owned()],
+            hooks_answer_first: false,
+        })
+        .unwrap_err();
+    assert!(
+        matches!(exec, DirectoryRefusal::Exec { .. }),
+        "a symlink root is a boundary refusal, not I/O: {exec:?}"
+    );
+    *audit.fail.lock().unwrap() = true;
+    match access.write("peer", "linked", b"again").unwrap_err() {
+        DirectoryRefusal::Outside {
+            leave: PathLeave::Symlink,
+            audit_recorded,
+        } => assert!(!audit_recorded),
+        other => panic!("{other:?}"),
+    }
+    *audit.fail.lock().unwrap() = false;
+    access.reconcile().unwrap();
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| { line.cause == "path-leaves" && line.after.as_deref() == Some("linked") }));
+    assert_eq!(fs::read(&secret).unwrap(), b"secret");
+}
+
+#[test]
 fn a_refused_read_keeps_its_reason_when_the_audit_is_not_recorded() {
     let root = private();
     let shared = root.path().join("shared");

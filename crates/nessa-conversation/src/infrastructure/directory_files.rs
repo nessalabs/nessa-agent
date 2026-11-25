@@ -50,7 +50,16 @@ impl DirectoryFiles for LocalDirectoryFiles {
         let marker = c_name(MARKER_NAME)?;
         let fd = unsafe { libc::openat(root.as_raw_fd(), marker.as_ptr(), flags, 0o600) };
         if fd < 0 {
-            return Err(io(std::io::Error::last_os_error()));
+            let error = std::io::Error::last_os_error();
+            // `O_EXCL` reports an existing symlink as `EEXIST`, not `ELOOP`.
+            // The name was not opened, so it is the same boundary refusal.
+            if error.raw_os_error() == Some(libc::EEXIST) && is_symlink(root.as_raw_fd(), &marker) {
+                return Err(DirectoryRefusal::Outside {
+                    leave: PathLeave::Symlink,
+                    audit_recorded: true,
+                });
+            }
+            return Err(no_follow_boundary(root.as_raw_fd(), &marker, error));
         }
         let file = unsafe { File::from_raw_fd(fd) };
         if let Err(error) = (&file).write_all(bytes) {
@@ -159,13 +168,7 @@ impl DirectoryFiles for LocalDirectoryFiles {
         }
         let parent = parent_file(root.as_raw_fd(), relative)?;
         let name = final_name(relative)?;
-        let flags = libc::O_CREAT | libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        let name = c_name(&name)?;
-        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, 0o600) };
-        if fd < 0 {
-            return Err(io(std::io::Error::last_os_error()));
-        }
-        let mut file = unsafe { File::from_raw_fd(fd) };
+        let mut file = open_write_nofollow(parent.as_raw_fd(), &name)?;
         if is_marker(root.as_raw_fd(), file.as_raw_fd()) {
             return Err(DirectoryRefusal::MarkerName {
                 audit_recorded: true,
@@ -273,13 +276,7 @@ impl DirectorySession for HeldDirectory {
         }
         let parent = parent_file(self.root.as_raw_fd(), relative)?;
         let name = final_name(relative)?;
-        let flags = libc::O_CREAT | libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        let name = c_name(&name)?;
-        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, 0o600) };
-        if fd < 0 {
-            return Err(io(std::io::Error::last_os_error()));
-        }
-        let mut file = unsafe { File::from_raw_fd(fd) };
+        let mut file = open_write_nofollow(parent.as_raw_fd(), &name)?;
         if self.same_marker(file.as_raw_fd()) {
             return Err(DirectoryRefusal::MarkerName {
                 audit_recorded: true,
@@ -700,18 +697,47 @@ fn open_at(dir: RawFd, name: &str, directory: bool) -> Result<File, DirectoryRef
         return Ok(file);
     }
     let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ELOOP) || is_symlink(dir, &name) {
-        return Err(DirectoryRefusal::Outside {
-            leave: PathLeave::Symlink,
-            audit_recorded: true,
-        });
-    }
     // A socket or device fails open before there is an fd to classify.
-    // The same refusal as a FIFO the open did return.
+    // The same refusal as a FIFO the open did return. A symlink is not one
+    // of those: it is the boundary refusal below.
     if entry_is_special(dir, &name) {
         return Err(DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput));
     }
-    Err(io(error))
+    Err(no_follow_boundary(dir, &name, error))
+}
+
+/// `O_NOFOLLOW` rejected a symlink (`ELOOP`). On an intermediate component
+/// opened with `O_DIRECTORY`, macOS reports that swap as `ENOTDIR`; the name
+/// is a symlink, so it is the same refusal. Any other error stays I/O.
+fn no_follow_boundary(
+    dir: RawFd,
+    name: &std::ffi::CStr,
+    error: std::io::Error,
+) -> DirectoryRefusal {
+    let errno = error.raw_os_error();
+    let swapped_link =
+        errno == Some(libc::ELOOP) || (errno == Some(libc::ENOTDIR) && is_symlink(dir, name));
+    if swapped_link {
+        return DirectoryRefusal::Outside {
+            leave: PathLeave::Symlink,
+            audit_recorded: true,
+        };
+    }
+    io(error)
+}
+
+fn open_write_nofollow(dir: RawFd, name: &str) -> Result<File, DirectoryRefusal> {
+    let flags = libc::O_CREAT | libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let name = c_name(name)?;
+    let fd = unsafe { libc::openat(dir, name.as_ptr(), flags, 0o600) };
+    if fd < 0 {
+        return Err(no_follow_boundary(
+            dir,
+            &name,
+            std::io::Error::last_os_error(),
+        ));
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 fn entry_is_special(dir: RawFd, name: &std::ffi::CStr) -> bool {
@@ -728,7 +754,7 @@ fn entry_is_special(dir: RawFd, name: &std::ffi::CStr) -> bool {
 fn is_symlink(dir: RawFd, name: &std::ffi::CStr) -> bool {
     let mut info: libc::stat = unsafe { std::mem::zeroed() };
     let result = unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) };
-    result == 0 && (info.st_mode & libc::S_IFMT) == libc::S_IFLNK
+    result == 0 && mode_bits(info.st_mode) & mode_bits(libc::S_IFMT) == mode_bits(libc::S_IFLNK)
 }
 
 fn is_marker(root: RawFd, opened: RawFd) -> bool {
@@ -921,6 +947,182 @@ mod marker_identity {
             .unwrap());
         assert_eq!(std::fs::read(shared.join(&occupied)).unwrap(), b"user-data");
         assert!(!shared.join(MARKER_NAME).exists());
+    }
+
+    #[test]
+    fn a_write_open_of_a_symlink_is_a_boundary_and_leaves_the_target() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join("note")).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        let error = open_write_nofollow(directory.as_raw_fd(), "note").unwrap_err();
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Outside {
+                leave: PathLeave::Symlink,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn a_read_open_of_a_symlink_is_a_boundary_and_an_intermediate_swap_is_too() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join("note")).unwrap();
+        let path = shared.to_str().unwrap();
+        let error = LocalDirectoryFiles.read_inside(path, "note").unwrap_err();
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Outside {
+                leave: PathLeave::Symlink,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+        // An intermediate component opened with `O_DIRECTORY|O_NOFOLLOW`.
+        // Linux returns `ELOOP`. macOS returns `ENOTDIR` when that component
+        // is a symlink to a file; the classifier covers both.
+        std::os::unix::fs::symlink(&secret, shared.join("file-link")).unwrap();
+        let through_file = LocalDirectoryFiles
+            .read_inside(path, "file-link/leaf")
+            .unwrap_err();
+        assert!(matches!(
+            through_file,
+            DirectoryRefusal::Outside {
+                leave: PathLeave::Symlink,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn enotdir_is_a_boundary_only_when_the_component_is_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::write(shared.join("file"), b"x").unwrap();
+        std::os::unix::fs::symlink("elsewhere", shared.join("link")).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        let link = c_name("link").unwrap();
+        let file = c_name("file").unwrap();
+        let swapped = no_follow_boundary(
+            directory.as_raw_fd(),
+            &link,
+            std::io::Error::from_raw_os_error(libc::ENOTDIR),
+        );
+        assert!(matches!(
+            swapped,
+            DirectoryRefusal::Outside {
+                leave: PathLeave::Symlink,
+                ..
+            }
+        ));
+        let ordinary = no_follow_boundary(
+            directory.as_raw_fd(),
+            &file,
+            std::io::Error::from_raw_os_error(libc::ENOTDIR),
+        );
+        assert!(matches!(
+            ordinary,
+            DirectoryRefusal::Io(std::io::ErrorKind::NotADirectory)
+        ));
+        let transient = no_follow_boundary(
+            directory.as_raw_fd(),
+            &link,
+            std::io::Error::from_raw_os_error(libc::EIO),
+        );
+        assert!(matches!(transient, DirectoryRefusal::Io(_)));
+    }
+
+    #[test]
+    fn creating_a_marker_does_not_follow_a_symlink_at_its_name() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join(MARKER_NAME)).unwrap();
+        let error = LocalDirectoryFiles
+            .create_marker(shared.to_str().unwrap(), &[2; BINDING_LEN])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Outside {
+                leave: PathLeave::Symlink,
+                ..
+            }
+        ));
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+        assert!(shared
+            .join(MARKER_NAME)
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn unlinking_a_marker_name_does_not_remove_a_symlink_target() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join(MARKER_NAME)).unwrap();
+        LocalDirectoryFiles
+            .unlink_marker(shared.to_str().unwrap())
+            .unwrap();
+        assert!(!shared.join(MARKER_NAME).exists());
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+        std::os::unix::fs::symlink(&secret, shared.join("aside-link")).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        unlink_named(directory.as_raw_fd(), "aside-link").unwrap();
+        assert!(!shared.join("aside-link").exists());
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn renaming_a_symlink_does_not_replace_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join("from")).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        rename_at(directory.as_raw_fd(), "from", "to", true).unwrap();
+        assert!(!shared.join("from").exists());
+        assert_eq!(std::fs::read_link(shared.join("to")).unwrap(), secret);
+        assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn opening_a_symlink_marker_does_not_read_its_target() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let secret = root.path().join("secret.txt");
+        std::fs::write(&secret, b"secret-bytes-that-are-not-the-marker").unwrap();
+        std::os::unix::fs::symlink(&secret, shared.join(MARKER_NAME)).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        let error = open_marker_file(directory.as_raw_fd()).unwrap_err();
+        assert!(matches!(
+            error,
+            DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
+        ));
+        assert_eq!(
+            std::fs::read(&secret).unwrap(),
+            b"secret-bytes-that-are-not-the-marker"
+        );
     }
 
     #[test]
