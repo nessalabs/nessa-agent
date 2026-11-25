@@ -37,6 +37,7 @@
 //! policy to each action and handle expiry and revision invalidation. A DTO that
 //! says “admin” is never permission to update a membership.
 
+pub mod app_credential;
 pub mod credential_admin;
 mod credential_journal;
 pub mod credential_registry;
