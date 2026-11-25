@@ -3991,7 +3991,10 @@ async fn review_claim_ignores_summary_changes_but_not_resource_identity_or_delet
     let before = store.load_admission_snapshot(&id).await.unwrap().unwrap();
     let claim = before.review_claim().unwrap();
     for at in 1..=3 {
-        store.record(&id, said("ordinary summary", at)).await.unwrap();
+        store
+            .record(&id, said("ordinary summary", at))
+            .await
+            .unwrap();
         let now = store.load_admission_snapshot(&id).await.unwrap().unwrap();
         assert_ne!(now.token(), before.token());
         assert_eq!(now.review_claim(), Some(claim.clone()));
@@ -4031,7 +4034,10 @@ async fn review_claim_ignores_summary_changes_but_not_resource_identity_or_delet
     assert_ne!(other_catalogue.review_claim().unwrap(), claim);
     drop(connection);
 
-    store.record_deletion(&id, deletion("review-claim")).await.unwrap();
+    store
+        .record_deletion(&id, deletion("review-claim"))
+        .await
+        .unwrap();
     let deleted = store.load_admission_snapshot(&id).await.unwrap().unwrap();
     assert_ne!(deleted.review_claim(), other_catalogue.review_claim());
 }

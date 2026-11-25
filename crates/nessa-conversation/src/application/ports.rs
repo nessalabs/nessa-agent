@@ -72,7 +72,9 @@ impl ConversationAdmissionSnapshot {
     /// The identity is stored with those facts; catalogue content churn does
     /// not change it. No other admission uses this narrower proof.
     pub fn review_claim(&self) -> Option<ReviewNoticeClaim> {
-        if self.token.incarnation.is_empty() || self.token.conversation_id != *self.conversation.id() {
+        if self.token.incarnation.is_empty()
+            || self.token.conversation_id != *self.conversation.id()
+        {
             return None;
         }
         let conversation = &self.conversation;
