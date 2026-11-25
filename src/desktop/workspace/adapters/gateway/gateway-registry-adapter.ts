@@ -20,6 +20,7 @@
  */
 import {
   NessaClient,
+  NessaGatewayIdentityError,
   type AttachmentApi,
   type ConnectionState,
   type NessaClient as NessaClientType,
@@ -71,6 +72,7 @@ export type RemoteClient = GatewayClient &
     close(): void | Promise<void>
   }
 
+/** The returned client's recovered transports must keep its authenticated gateway ID. */
 export type RemoteClientConnector = (params: {
   readonly url: string
   readonly credential: string
@@ -141,6 +143,7 @@ function defaultConnectRemote(params: {
 }): Promise<RemoteClient> {
   return NessaClient.connect({
     url: params.url,
+    pinGatewayIdentity: true,
     auth: { credential: params.credential },
     role: "surface",
     surface: { kind: "desktop", instance: crypto.randomUUID() },
@@ -292,6 +295,17 @@ export function createGatewayRegistry(
     notifyTopology()
   }
 
+  function markIdentityRefused(
+    entry: ManagedRemoteEntry,
+    error: NessaGatewayIdentityError,
+  ) {
+    if (entry.disposed) return
+    entry.status = "refused"
+    entry.detail = error.message
+    entry.updatedAtMs = options.now()
+    notifyTopology()
+  }
+
   function mountRemote(
     record: PersistedRemoteGateway,
     preconnected?: RemoteClient,
@@ -338,6 +352,8 @@ export function createGatewayRegistry(
           } else if (state.status === "closed") {
             if (isAuthError(state.error)) {
               markAuthRefused(entry, "Credentials were rejected — re-pair this gateway.")
+            } else if (state.error instanceof NessaGatewayIdentityError) {
+              markIdentityRefused(entry, state.error)
             } else if (entry.status !== "auth-refused") {
               entry.status = "disconnected"
               entry.updatedAtMs = options.now()
@@ -388,11 +404,7 @@ export function createGatewayRegistry(
           } catch {
             // Ignore close failure on rejected identity.
           }
-          entry.status = "refused"
-          entry.detail = "Connected endpoint reported a different gateway identity."
-          entry.updatedAtMs = options.now()
-          notifySnapshots()
-          throw new GatewayRegistryError("connect-failed", entry.detail)
+          throw new NessaGatewayIdentityError()
         }
         bindClientState(client)
         entry.status = "connected"
@@ -401,11 +413,15 @@ export function createGatewayRegistry(
         notifyTopology()
         return client
       } catch (error) {
+        if (error instanceof NessaGatewayIdentityError) {
+          markIdentityRefused(entry, error)
+          throw new GatewayRegistryError("connect-failed", error.message)
+        }
         if (isAuthError(error)) {
           markAuthRefused(entry, "Credentials were rejected — re-pair this gateway.")
           throw error
         }
-        if (entry.status !== "refused") {
+        if (!entry.disposed) {
           entry.status = "disconnected"
           entry.detail =
             error instanceof Error ? error.message : "Could not reach gateway"

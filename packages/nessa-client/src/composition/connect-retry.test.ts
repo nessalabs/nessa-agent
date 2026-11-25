@@ -4,6 +4,10 @@ import { NessaClient } from "../presentation/nessa-client.js"
 import { NessaProtocolCompatibilityError } from "../application/protocol-compatibility-error.js"
 import { NessaEndpointDiscoveryError } from "../application/gateway-endpoint.js"
 import {
+  NessaGatewayIdentityError,
+  NessaSessionUnavailableError,
+} from "../application/managed-session.js"
+import {
   retryProductConnection,
   RetryableConnectError,
   resolveConnectRetry,
@@ -15,6 +19,7 @@ import { join } from "node:path"
 
 type Scenario =
   | "ready"
+  | "different-gateway"
   | "no-open"
   | "no-challenge"
   | "drop"
@@ -108,7 +113,8 @@ class FakeSocket extends EventTarget {
       ok: true,
       payload: {
         version: 1,
-        gatewayId: "gateway",
+        gatewayId:
+          this.scenario === "different-gateway" ? "different-gateway" : "gateway",
         audienceId: "gateway",
         principalId: "reader",
         organizationId: "org",
@@ -247,6 +253,7 @@ describe("product connection recovery", () => {
       auth: undefined,
       endpointSource,
       credentialSource,
+      pinGatewayIdentity: true,
       config: new NessaClientConfig({
         reconnect: { initialDelayMs: 0, maxDelayMs: 0, jitter: false },
       }),
@@ -283,6 +290,60 @@ describe("product connection recovery", () => {
     expect(uploadRequest.mock.calls[0]?.[1]).toMatchObject({
       headers: { "x-nessa-upload-ticket": ticket },
     })
+    client.close()
+  })
+
+  it("rejects a different gateway before restoring a pinned client's events or RPCs", async () => {
+    scenarios = ["ready", "different-gateway"]
+    const connecting = NessaClient.connect({ ...options, pinGatewayIdentity: true })
+    await vi.runAllTimersAsync()
+    const client = await connecting
+    const states = vi.fn()
+    const listed = vi.fn()
+    client.onConnectionStateChange(states)
+    client.on("terminal.listed", listed)
+
+    sockets[0].close(1012)
+    await vi.runAllTimersAsync()
+    sockets[1].message({
+      type: "event",
+      event: "terminal.listed",
+      seq: 2,
+      stateVersion: 0,
+      payload: { terminals: [] },
+    })
+    await expect(client.terminals.list()).rejects.toBeInstanceOf(
+      NessaSessionUnavailableError,
+    )
+    await expect(
+      client.attachments.fetch("0b9a3c1e-5d2f-4a7b-8c6d-1e2f3a4b5c6d", {
+        digest: `sha256:${"b".repeat(64)}`,
+        mimeType: "image/png",
+        size: 7,
+      }),
+    ).rejects.toMatchObject({ code: "unreachable" })
+    expect(client.connectionState).toMatchObject({
+      status: "closed",
+      error: expect.any(NessaGatewayIdentityError),
+    })
+    expect(states.mock.calls.map(([state]) => state.status)).toEqual([
+      "reconnecting",
+      "closed",
+    ])
+    expect(sockets[1].readyState).toBe(3)
+    expect(sockets[1].sent.map(({ method }) => method)).toEqual(["session.authenticate"])
+    expect(listed).not.toHaveBeenCalled()
+  })
+
+  it("lets an unpinned client recover across gateway identities", async () => {
+    scenarios = ["ready", "different-gateway"]
+    const connecting = NessaClient.connect(options)
+    await vi.runAllTimersAsync()
+    const client = await connecting
+    sockets[0].close(1012)
+    await vi.runAllTimersAsync()
+    expect(client.productSession.gatewayId).toBe("different-gateway")
+    expect(client.connectionState.status).toBe("connected")
     client.close()
   })
 
