@@ -2,6 +2,36 @@
 // The harness resolves each document through the catalog and never edits its model.
 export const probes = [
   {
+    document: "gateway-pool-membership",
+    name: "Retain a completed endpoint in the pool registry",
+    expectedRules: ["RegistryFits"],
+    mutate: (spec) => spec.replace("members' = members \\ {c}", "UNCHANGED members"),
+  },
+  {
+    document: "gateway-pool-membership",
+    name: "Skip registration on successful admission",
+    expectedRules: ["EveryPermitCanBeWoken"],
+    mutate: (spec) => spec.replace("members' = (members \\cap retained) \\cup {c}", "UNCHANGED members"),
+  },
+  {
+    document: "gateway-cloud-box-sleep",
+    name: "Report success when receipt persistence fails",
+    expectedRules: ["SuccessRequiresReceipt"],
+    mutate: (spec) => spec.replace("THEN \"Auditing\" ELSE \"Unrecorded\"", "THEN \"Auditing\" ELSE \"Done\""),
+  },
+  {
+    document: "gateway-cloud-box-sleep",
+    name: "Persist sleep after provider failure",
+    expectedRules: ["EffectBeforeReceipt"],
+    mutate: (spec) => spec.replace("THEN \"Recording\" ELSE \"Failed\"", "THEN \"Recording\" ELSE \"Recording\""),
+  },
+  {
+    document: "gateway-cloud-box-sleep",
+    name: "Treat an unknown observation as idle",
+    expectedRules: ["IdleEvidenceBeforeStop"],
+    mutate: (spec) => spec.replace("IF evidence' = \"Idle\"", "IF evidence' # \"Busy\""),
+  },
+  {
     document: "host-startup-save-provider-credentials-and-download-a-runtime",
     name: "Write a provider key without acknowledged intent",
     expectedRules: ["IntentBeforeEffect"],
