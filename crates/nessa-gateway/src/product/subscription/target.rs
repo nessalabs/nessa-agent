@@ -10,10 +10,8 @@
 //!
 //! Every batch is admitted by [`authorize_batch`] and nothing else.
 //!
-//! The agent catalog (`agents.subscribe`) is followed the same way, with two
-//! wake sources: the paired environments' count of connection changes
-//! (`PeerEnvironments::connections`) and the native hooks choice's count of
-//! commands. Its batch is the catalog `agents.list`
+//! The agent catalog (`agents.subscribe`) is followed the same way, with one
+//! wake source: the native hooks choice's count of commands. Its batch is the catalog `agents.list`
 //! answers, read again; nothing of a conversation is read or watched for it.
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
@@ -212,12 +210,8 @@ pub(super) struct Sources {
     records: Option<CommittedChangeWatch>,
     catalogue: Option<CatalogueChangeWatch>,
     live: Option<watch::Receiver<u64>>,
-    /// The paired environments' connection changes, for the agent catalog.
-    environments: Option<watch::Receiver<u64>>,
     /// The native hooks choice's commands, for the agent catalog.
     hooks: Option<watch::Receiver<u64>>,
-    /// The default device, saved from Devices, for the agent catalog.
-    default_device: Option<watch::Receiver<Option<String>>>,
     /// A granted chat was added or withdrawn from a peer cache.
     shared_chats: Option<watch::Receiver<u64>>,
 }
@@ -257,9 +251,7 @@ impl Sources {
                 records: Some(records()?.watch(conversation).map_err(closed)?),
                 catalogue: None,
                 live: None,
-                environments: None,
                 hooks: None,
-                default_device: None,
                 shared_chats: None,
             },
             Target::View { conversation, .. } => Self {
@@ -271,9 +263,7 @@ impl Sources {
                         .ok_or_else(not_configured)?
                         .live_changes(conversation),
                 ),
-                environments: None,
                 hooks: None,
-                default_device: None,
                 // A retained transcript moves in the peer cache, not in the
                 // local records this view also watches.
                 shared_chats: state
@@ -299,9 +289,7 @@ impl Sources {
                     records: Some(records()?.watch_any().map_err(closed)?),
                     catalogue: Some(catalogue),
                     live: None,
-                    environments: None,
                     hooks: None,
-                    default_device: None,
                     shared_chats: state
                         .linking
                         .peers
@@ -309,17 +297,14 @@ impl Sources {
                         .map(|peers| peers.shared_chat_changes()),
                 }
             }
-            // Only the paired environments, the native hooks choice and the
-            // default device change the catalog after startup; a gateway with
-            // none of them has no source, and the catalog's first frame is
-            // its last (row AC1).
+            // Only the native hooks choice changes the catalog after startup;
+            // a gateway with none has no source, and the catalog's first
+            // frame is its last (row AC1).
             Target::Agents => Self {
                 records: None,
                 catalogue: None,
                 live: None,
-                environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
-                default_device: state.default_device_changes(),
                 shared_chats: None,
             },
             // The grant task watches the log itself.
@@ -327,9 +312,7 @@ impl Sources {
                 records: None,
                 catalogue: None,
                 live: None,
-                environments: None,
                 hooks: None,
-                default_device: None,
                 shared_chats: None,
             },
         })
@@ -373,21 +356,9 @@ impl Sources {
                 None => std::future::pending().await,
             }
         };
-        let environments = async {
-            match self.environments.as_mut() {
-                Some(environments) => environments.changed().await,
-                None => std::future::pending().await,
-            }
-        };
         let hooks = async {
             match self.hooks.as_mut() {
                 Some(hooks) => hooks.changed().await,
-                None => std::future::pending().await,
-            }
-        };
-        let default_device = async {
-            match self.default_device.as_mut() {
-                Some(default) => default.changed().await,
                 None => std::future::pending().await,
             }
         };
@@ -398,10 +369,6 @@ impl Sources {
             }
         };
         tokio::select! {
-            changed = default_device => match changed {
-                Ok(()) => Wake::Changed,
-                Err(_) => Wake::Closed,
-            },
             state = records => match state {
                 ChangeWatchState::Dirty => Wake::Changed,
                 ChangeWatchState::Closed => Wake::Closed,
@@ -411,10 +378,6 @@ impl Sources {
                 CatalogueWatchState::Closed | CatalogueWatchState::NotificationFailed => Wake::Closed,
             },
             changed = live => match changed {
-                Ok(()) => Wake::Changed,
-                Err(_) => Wake::Closed,
-            },
-            changed = environments => match changed {
                 Ok(()) => Wake::Changed,
                 Err(_) => Wake::Closed,
             },
@@ -1448,9 +1411,7 @@ mod tests {
                 Box::new(Unregistered),
             )),
             live: Some(receiver),
-            environments: None,
             hooks: None,
-            default_device: None,
             shared_chats: None,
         };
         assert!(!sources.drain().await.catalogue, "nothing waiting");
@@ -1489,9 +1450,7 @@ mod tests {
             records: Some(records),
             catalogue: None,
             live: None,
-            environments: None,
             hooks: None,
-            default_device: None,
             shared_chats: None,
         };
         drop(changes);

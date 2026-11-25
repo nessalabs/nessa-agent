@@ -1,5 +1,10 @@
 # Worker pool preferences
 
+> **Retired (ADR 1417, #1421).** Every gateway now runs only its own agents,
+> so nothing below runs in this build. Kept as the record of the earlier
+> design; a conversation an older build placed elsewhere is refused
+> `environment_not_configured` and its history stays readable.
+
 A conversation placed on `peer:any` (a channel's threads set to **Any
 computer**, or `create_thread` with `environment: "peer:any"`) runs on one of
 the gateway's paired computers. This document says which one, who decides it,

@@ -31,7 +31,7 @@ import {
 } from "../adapters/saved-logins-gateway"
 import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { AgentMark } from "../../../onboarding/ui/agent-mark"
-import { ItemRow, RowAction, RowLink, SettingGroup, Toggle } from "./settings-controls"
+import { ItemRow, RowAction, RowLink, SettingGroup } from "./settings-controls"
 
 const SavedLoginsContext = createContext<SavedLoginsGateway | undefined>(undefined)
 
@@ -174,7 +174,7 @@ export function SavedLoginsGroup({ pollMs }: { pollMs?: number } = {}) {
     <SettingGroup
       id="saved-logins"
       pending={!state.gateway}
-      note="Agents on your SSH hosts and cloud workspaces (Boat, Agent37) sign in with these, and on a paired computer once you turn it on in Devices. A computer's own login wins."
+      note="Kept on this gateway, locked with Nessa. A computer's own login wins."
     >
       {agents.map((agent) => (
         <SavedLoginRow key={agent.id} agent={agent} state={state} />
@@ -289,8 +289,8 @@ function ChatgptAccounts({
   return (
     <div className="settings-chatgpt" data-chatgpt-accounts={accounts.length}>
       <p>
-        Or use your ChatGPT plan: Codex on your SSH hosts and cloud workspaces then runs
-        on the account in use instead of the key.
+        Or use your ChatGPT plan: Codex then runs on the account in use instead of the
+        key.
       </p>
       {accounts.length > 0 && (
         <ul className="settings-chatgpt-accounts">
@@ -390,42 +390,6 @@ function ChatgptAccounts({
           {ended}
         </p>
       )}
-    </div>
-  )
-}
-
-/**
- * A paired computer's "Use my saved logins here" switch, as one fact of its
- * page in Devices (a `<dl>` entry). Off until turned on; applies to
- * agents opened there after it. Nothing without a gateway.
- */
-export function DeviceLoginsSwitch({ environment }: { environment: string }) {
-  const { gateway, logins, busy, error, act } = useSavedLogins()
-  if (!gateway) return null
-  const on = logins?.devicesOn.has(environment) === true
-  return (
-    <div data-device-logins={on ? "on" : "off"}>
-      <dt>Use my saved logins here</dt>
-      <dd>
-        <Toggle
-          label="Use my saved logins here"
-          checked={on}
-          // Unread (a locked vault), it shows off and still works: the
-          // change unlocks first, and the gateway answers how it stands.
-          disabled={busy}
-          onChange={(next) =>
-            void act((gateway, current) =>
-              // Read only once unlocked: turned from how it stands, not from
-              // the "off" an unread switch shows.
-              gateway.setDevice(
-                environment,
-                current && !logins ? !current.devicesOn.has(environment) : next,
-              ),
-            )
-          }
-        />
-        {error && <p role="alert">{error}</p>}
-      </dd>
     </div>
   )
 }

@@ -97,7 +97,6 @@ export const RUST_TEST_PACKAGES = [
   "nessa-mcp-authorization",
   "nessa-webhooks",
   "nessa-device-pairing",
-  "nessa-env-serve",
   "nessa-backup",
 ]
 

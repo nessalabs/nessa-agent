@@ -18,10 +18,9 @@ use crate::workspaces::{
     },
 };
 use async_trait::async_trait;
-use std::{collections::BTreeMap, io::Write, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use workspace_sdk::{
     boat_client::{Api, ClientConfig},
-    ports::SocketForward,
     providers::{
         boat_machines::{
             self as machines, BoatMachines, Budget, Created, Disposition, IMachineEvents,
@@ -46,13 +45,9 @@ const MACHINE_TYPE: &str = "small";
 const WORKSPACES: &str = "/home/user/.nessa/workspaces";
 /// The workspace supervisor the image carries.
 const VM_SUPERVISOR: &str = "/opt/nessa/bin/workspace-supervisor";
-/// Writing the configuration is one short command.
-const CONFIG_WRITE: Duration = Duration::from_secs(30);
 
 pub struct BoatProvider {
     pub api_base: String,
-    pub relay_socket: std::path::PathBuf,
-    pub relay_program: std::path::PathBuf,
 }
 impl BoatProvider {
     fn machines(&self, account: &BoatAccount) -> Result<BoatMachines, Failure> {
@@ -94,24 +89,13 @@ impl BoatProvider {
         let backend = workspace_sdk::IProvider::attach(&provider, request)
             .await
             .map_err(|_| Failure::Provider)?;
-        let root = backend.descriptor().root;
-        let forward =
-            SocketForward::new(self.relay_socket.clone()).map_err(|_| Failure::InvalidInput)?;
         let link = backend
             .connections()
             .ok_or(Failure::Provider)?
-            .connection(Some(forward))
+            .connection(None)
             .await
             .map_err(|_| Failure::Provider)?;
-        write_config(link.as_ref(), &root, super::ssh::BOAT_DATA_DIR).await?;
-        let access = super::ssh::VmLink::new(
-            link,
-            self.relay_socket.clone(),
-            self.relay_program.clone(),
-            root,
-            vm,
-            super::ssh::BOAT_DATA_DIR,
-        )?;
+        let access = super::ssh::VmLink::new(link, vm);
         Ok(Arc::new(super::runtime::BoatRuntime { access }))
     }
 }
@@ -261,60 +245,6 @@ fn nessa_environment(name: &str) -> Result<(), Failure> {
     } else {
         Err(Failure::EnvironmentUnavailable)
     }
-}
-
-/// What every VM's `nessa` is configured with, as data: the agents the
-/// image carries and how each is started. Only the workspace is the
-/// thread's own, added by [`vm_config`].
-const VM_CONFIG_TEMPLATE: &str = include_str!("vm_config.json");
-
-/// The VM's `config.json` for a thread whose workspace is `root`.
-pub fn vm_config(root: &str) -> Result<serde_json::Value, Failure> {
-    let mut config: serde_json::Value =
-        serde_json::from_str(VM_CONFIG_TEMPLATE).map_err(|_| Failure::Provider)?;
-    config
-        .pointer_mut("/agents")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or(Failure::Provider)?
-        .insert("workspace".into(), root.into());
-    Ok(config)
-}
-
-/// The VM's `nessa` configuration, `config.json` in its `data_dir`: its
-/// agents run in the thread's workspace `root`. Written through the connection's standard input, so
-/// nothing of it is in a command line, and only its account can read it.
-pub(super) async fn write_config(
-    link: &dyn workspace_sdk::ports::IConnection,
-    root: &str,
-    data_dir: &str,
-) -> Result<(), Failure> {
-    let config = vm_config(root)?;
-    let mut input = tempfile::tempfile().map_err(|_| Failure::Storage)?;
-    input
-        .write_all(config.to_string().as_bytes())
-        .and_then(|()| std::io::Seek::rewind(&mut input))
-        .map_err(|_| Failure::Storage)?;
-    let written = link
-        .run(
-            &format!(
-                "umask 077 && mkdir -p {data_dir} && chmod 700 {data_dir} \
-                 && cat > {data_dir}/config.json.new && chmod 600 {data_dir}/config.json.new \
-                 && mv -f {data_dir}/config.json.new {data_dir}/config.json"
-            ),
-            Some(input),
-            CONFIG_WRITE,
-        )
-        .await
-        .map_err(|_| Failure::Provider)?;
-    if written.end != workspace_sdk::ports::ProcessEnd::Exited(0) {
-        // The VM's own words: logged a line at a time, each escaped.
-        crate::infrastructure::ssh_environment::log_stderr(
-            "boat configuration",
-            std::io::Cursor::new(written.stderr.into_bytes()),
-        );
-        return Err(Failure::Provider);
-    }
-    Ok(())
 }
 
 /// What the SDK's machines tell Nessa's logs. Stops Nessa asked for are

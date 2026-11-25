@@ -92,8 +92,6 @@ pub enum ConversationErrorCode {
     EnvironmentPlatformUnsupported,
     #[serde(rename = "environment_install_failed")]
     EnvironmentInstallFailed,
-    #[serde(rename = "linked_file_unreachable")]
-    LinkedFileUnreachable,
     #[serde(rename = "model_unavailable")]
     ModelUnavailable,
     #[serde(rename = "approval_mode_unavailable")]
@@ -232,7 +230,6 @@ impl ConversationErrorCode {
             Self::EnvironmentVersionMismatch => "environment_version_mismatch",
             Self::EnvironmentPlatformUnsupported => "environment_platform_unsupported",
             Self::EnvironmentInstallFailed => "environment_install_failed",
-            Self::LinkedFileUnreachable => "linked_file_unreachable",
             Self::ModelUnavailable => "model_unavailable",
             Self::ApprovalModeUnavailable => "approval_mode_unavailable",
             Self::ApprovalModeNotApplied => "approval_mode_not_applied",

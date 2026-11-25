@@ -223,13 +223,6 @@ export const probes = [
       ),
   },
   {
-    document: "gateway-channel-workspaces",
-    name: "Grant workspace authority without verification",
-    expectedRules: ["VerifyBeforeAuthority"],
-    mutate: (spec) =>
-      spec.replaceAll("verified' = (phase' = \"Ready\")", "verified' = FALSE"),
-  },
-  {
     document: "gateway-github-reads",
     name: "Return an answer on a refused read",
     expectedRules: ["RefusalHasNoAnswer"],
@@ -453,38 +446,11 @@ export const probes = [
         ),
   },
   {
-    document: "gateway-environment-tools",
-    name: "Accept wider timeout or foreign sandbox from the remote command grant",
-    expectedRules: ["GrantedTermsDoNotWiden"],
-    mutate: (spec) =>
-      spec.replace('/\\ granted <= asked /\\ sandbox = "None" /\\ hold', "/\\ hold"),
-  },
-  {
-    document: "gateway-environment-tools",
-    name: "Invoke a granted command before saving CommandIssued",
-    expectedRules: ["SaveIssueBeforeRun"],
-    mutate: (spec) =>
-      spec.replace(
-        'Run == /\\ phase = "Issued" /\\ issued /\\ hold',
-        'Run == /\\ phase = "Granted" /\\ hold',
-      ),
-  },
-  {
     document: "gateway-drive-tool-admission",
     name: "Save a Drive turn under a replaced grant revision",
     expectedRules: ["SaveUsesHeldRevision"],
     mutate: (spec) =>
       spec.replace("retained /\\ current = admitted /\\ held", "retained /\\ held"),
-  },
-  {
-    document: "gateway-environment-tools",
-    name: "Keep and record unverified artifact bytes",
-    expectedRules: ["ArtifactRecordHasVerifiedHold"],
-    mutate: (spec) =>
-      spec.replace(
-        'artifact = "None" /\\ valid /\\ artifact',
-        'artifact = "None" /\\ artifact',
-      ),
   },
   {
     document: "gateway-record-read-discovery",

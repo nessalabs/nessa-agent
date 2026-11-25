@@ -74,7 +74,7 @@ export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
 export { GatewayRegistryProvider } from "./ui/gateways-tab"
 export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
-export { DeviceLoginsSwitch, SavedLoginsProvider } from "./ui/saved-logins"
+export { SavedLoginsProvider } from "./ui/saved-logins"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export { DecisionSettingsProvider, useAutoPickWords } from "./ui/decision-settings-rows"
 export {

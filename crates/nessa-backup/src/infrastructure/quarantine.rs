@@ -5295,22 +5295,22 @@ fn a_mount_point_with_a_space_is_that_filesystem() {
     assert_eq!(decode_mount_field(r"\011\012\134"), "\t\n\\");
 }
 
-/// The ended line is the environment ledger's `ended` record.
+/// The ended line is the `ended` record the retired environment ledger wrote,
+/// so a backup taken by an older build restores with its open leases closed.
 #[cfg(all(test, unix))]
 #[test]
 fn an_interrupted_lease_line_is_the_ledger_ended_record() {
-    use nessa_env_serve::application::{EndCause, LedgerEntry};
-    use nessa_protocol::lease::Cleanup;
-
     let line = ended_lease_line("lease-1").unwrap();
     let parsed: Value = serde_json::from_str(&line).unwrap();
-    let entry = LedgerEntry::Ended {
-        lease: "lease-1".into(),
-        cleanup: Cleanup::Uncertain,
-        cause: EndCause::Lost,
-    };
-    let expected = serde_json::to_value(&entry).unwrap();
-    assert_eq!(parsed, expected);
+    assert_eq!(
+        parsed,
+        json!({
+            "kind": "ended",
+            "lease": "lease-1",
+            "cleanup": {"outcome": "uncertain"},
+            "cause": "lost"
+        })
+    );
 }
 
 #[cfg(target_os = "macos")]

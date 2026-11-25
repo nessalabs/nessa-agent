@@ -5,7 +5,6 @@
  */
 import { agentChoice, type AgentId } from "../../../onboarding/model/onboarding"
 import type { AccessMode } from "./access"
-import type { ChannelPlace } from "./channel-place"
 import {
   agentForProvider,
   composerModels,
@@ -39,13 +38,6 @@ export interface Channel {
    * channel). Off keeps its chat and threads; on again opens the same chat.
    */
   readonly coordinatorOn?: boolean
-  /** Where its main agent runs ({@link ChannelPlace}). */
-  readonly coordinatorPlacement?: ChannelPlace
-  /**
-   * Where its new threads run ({@link ChannelPlace}); `pool`: any paired
-   * computer, by the pool's order (Devices › Thread order).
-   */
-  readonly threadPlacement?: ChannelPlace
   /** The local folder its agents work in, where the source says. */
   readonly folder?: string
   /**

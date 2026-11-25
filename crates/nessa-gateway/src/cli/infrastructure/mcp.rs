@@ -3,9 +3,10 @@
 //! Each `tools/call` is [`crate::cli::application::invoke`] on the gateway this
 //! process authenticated. One call at a time: the product socket is one
 //! exchange, and a second line waits until it finishes.
-use crate::cli::application::{invoke, refusal_body, tools, Gateway};
+use crate::cli::application::{invoke, refusal_body, skills, tools, Gateway};
+use nessa_sdk::infrastructure::mcp::{handle_skill_method, insert_server_skills_capabilities};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 
 const MAX_LINE: usize = 1_048_576;
@@ -73,16 +74,22 @@ pub fn serve(
                     .and_then(|params| params.get("protocolVersion"))
                     .and_then(Value::as_str)
                     .filter(|version| {
-                        matches!(*version, "2024-11-05" | "2025-03-26" | "2025-06-18")
+                        matches!(
+                            *version,
+                            "2024-11-05" | "2025-03-26" | "2025-06-18" | "2026-07-28"
+                        )
                     })
                     .unwrap_or("2025-06-18");
+                let mut capabilities = Map::new();
+                capabilities.insert("tools".to_owned(), json!({}));
+                insert_server_skills_capabilities(&mut capabilities);
                 success(
                     id,
                     json!({
                         "protocolVersion": version,
-                        "capabilities": {"tools": {}},
+                        "capabilities": Value::Object(capabilities),
                         "serverInfo": {"name": "nessa", "version": env!("CARGO_PKG_VERSION")},
-                        "instructions": "Each tool is one gateway method. The call uses this process's nessa-mcp credential. Cedar on the gateway decides.",
+                        "instructions": "Each tool is one gateway method. The call uses this process's nessa-mcp credential. Cedar on the gateway decides. Read skill://drive-nessa/SKILL.md for workflows.",
                     }),
                 )
             }
@@ -90,7 +97,14 @@ pub fn serve(
             _ if !initialized => error(id, -32002, "initialize first"),
             "tools/list" => success(id, json!({"tools": tools()})),
             "tools/call" => success(id, call_tool(gateway, request.params.as_ref())),
-            _ => error(id, -32601, "method not found"),
+            other => {
+                let params = request.params.as_ref().unwrap_or(&Value::Null);
+                match handle_skill_method(skills(), other, params) {
+                    Some(Ok(result)) => success(id, result),
+                    Some(Err((code, message))) => error(id, code, &message),
+                    None => error(id, -32601, "method not found"),
+                }
+            }
         };
         write_message(&mut output, response)?;
     }

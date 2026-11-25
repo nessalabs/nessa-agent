@@ -11,7 +11,6 @@
 //! listener --> connection --> runtime --> application (owner, read_status) --> Auth
 //! connection --> nessa_protocol::pairing (enrollment_channel, wire, socket)
 //! connection --> protected (framed tls_stream) --> ProtectedSessions (product)
-//! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
 //! linking_audit --> application's LinkingAudit (pairing.setLinking's records)
 //! announcer --> application's LinkingAnnouncer (multicast DNS-SD while listening on the network)
@@ -29,7 +28,6 @@ mod announcer;
 #[cfg(target_os = "macos")]
 mod announcer_macos;
 mod connection;
-mod environment_peers;
 mod identity;
 #[cfg(unix)]
 mod linking_audit;
@@ -62,7 +60,6 @@ pub use connection::{
     PendingRecordCarrier, RecordCarrier, RelayPermit, SelectedRecordCarrier, TunnelPermit,
 };
 pub use connection::{RELAY_CAPACITY, TUNNEL_CAPACITY};
-pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
 #[cfg(unix)]
 pub use linking_audit::DurableLinkingAudit;

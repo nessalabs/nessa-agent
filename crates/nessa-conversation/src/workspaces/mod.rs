@@ -1,15 +1,12 @@
-//! Channel-selected workspaces: Nessa owns placement and VM receipts; the SDK
-//! owns the workspace process and file mechanisms behind infrastructure ports.
+//! Cloud accounts and Cloud Boxes (ADR 1417): Nessa owns the connection to
+//! each cloud and each box's receipt; the SDK owns the VM mechanisms behind
+//! infrastructure ports.
 //!
-//! channel -> application::Workspaces -> Settings / Assignments / Provider
-//!                                      infrastructure -> workspace-sdk / Boat
+//! cloud.boxes.* -> application::CloudBoxes -> Settings / Provider
+//!                                           infrastructure -> workspace-sdk / Boat / Agent37
 pub mod application;
 pub mod domain;
 pub mod infrastructure;
-
-#[cfg(test)]
-#[path = "../../tests/workspaces/assignments.rs"]
-mod assignment_tests;
 
 #[cfg(test)]
 #[path = "../../tests/workspaces/settings.rs"]

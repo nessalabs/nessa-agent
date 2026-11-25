@@ -1640,40 +1640,7 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-input {
   flex: 0 1 260px;
 }
-.settings-boat-runtime {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-.settings-boat-runtime > p {
-  flex-basis: 100%;
-}
-/* Its row spans the line, so the lifetime's menu ends where every row's does. */
-.settings-boat-runtime > .settings-row {
-  flex: 1 1 100%;
-}
-/* Auto-stop's length: an amount, then its unit's menu, ending the row. */
-.settings-boat-lifetime {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.settings-boat-runtime .settings-boat-amount {
-  inline-size: 64px;
-  block-size: 32px;
-  padding-inline: 10px;
-  font-size: var(--desktop-text-body);
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-  /* Filled like the unit's menu beside it, not outlined. */
-  border-color: transparent;
-  background: var(--secondary);
-}
-.settings-boat-runtime .settings-boat-amount[aria-invalid="true"] {
-  border-color: var(--destructive);
-}
-/* Auto-pick's wait: an amount, then its unit's menu, as Auto-stop's length. */
+/* Auto-pick's wait: an amount, then its unit's menu, ending the row. */
 .settings-decisions-wait {
   display: inline-flex;
   align-items: center;
@@ -1770,19 +1737,4 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   font-size: var(--desktop-text-footnote);
   font-weight: 500;
   line-height: 1.4;
-}
-
-/* Auto-stop is its own row, wrapped for its checks: it takes a row's hairline. */
-.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime {
-  position: relative;
-}
-
-.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: var(--settings-hairline);
 }

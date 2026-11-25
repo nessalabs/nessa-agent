@@ -24,6 +24,9 @@ use tokio::{
 pub(super) const CHART: &str = "ui://fixture/chart.html";
 pub(super) const CHART_HTML: &str = "<!doctype html><p>chart</p>";
 
+/// Optional custom JSON-RPC reply hook for fixture servers.
+pub(super) type RequestHook = Arc<dyn Fn(&Value) -> Option<Value> + Send + Sync>;
+
 /// How a fixture server behaves. The default is a well-behaved server with
 /// one tool with UI (`show_chart`), one without (`report`), and its app.
 #[derive(Clone)]
@@ -36,6 +39,8 @@ pub(super) struct Behaviour {
     pub resources: BTreeMap<String, Value>,
     /// Methods the server never answers.
     pub silent: HashSet<&'static str>,
+    /// Optional custom JSON-RPC reply hook run before default handling.
+    pub on_request: Option<RequestHook>,
 }
 impl Default for Behaviour {
     fn default() -> Self {
@@ -53,6 +58,7 @@ impl Default for Behaviour {
                                            "permissions": { "camera": {} }, "prefersBorder": true } } }),
             )]),
             silent: HashSet::new(),
+            on_request: None,
         }
     }
 }
@@ -254,6 +260,18 @@ async fn serve(
             continue;
         };
         if behaviour.silent.contains(method) {
+            continue;
+        }
+        if let Some(custom) = behaviour
+            .on_request
+            .as_ref()
+            .and_then(|hook| hook(&message))
+        {
+            let mut line = serde_json::to_vec(&custom).unwrap();
+            line.push(b'\n');
+            if output.write_all(&line).await.is_err() {
+                return;
+            }
             continue;
         }
         let ok = |result: Value| json!({ "jsonrpc": "2.0", "id": id, "result": result });

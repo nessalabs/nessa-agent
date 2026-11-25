@@ -78,6 +78,44 @@ impl BuiltInServer for ConversationTools {
     fn configuration(&self) -> Vec<String> {
         vec!["conversation-tools/1".into()]
     }
+    fn skills(&self) -> Option<&nessa_sdk::domain::mcp_skills::SkillCatalog> {
+        static SKILLS: OnceLock<nessa_sdk::domain::mcp_skills::SkillCatalog> = OnceLock::new();
+        Some(SKILLS.get_or_init(|| {
+            use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile};
+            SkillCatalog::new(vec![SkillDefinition {
+                skill_path: "nessa-agents".to_owned(),
+                files: vec![
+                    SkillFile::markdown(
+                        "SKILL.md",
+                        "---\n\
+name: nessa-agents\n\
+description: Orchestrate child threads, manage desktop panes and windows, and request owner input or access in Nessa.\n\
+---\n\n\
+# Driving Nessa agents and windows\n\n\
+Use this server to coordinate multi-thread work and desktop layout.\n\n\
+## Core workflow\n\n\
+1. Create a thread with `create_thread` (optionally passing `requestId` for idempotent retry and `environment: \"peer:any\"` to schedule across paired machines).\n\
+2. Subscribe to thread progress with `subscribe` before or right after sending work with `send_message`.\n\
+3. Inspect completed turns with `read_turn` and stop runaway work with `stop_thread` or `close_thread`.\n\
+4. Read `references/workflows.md` for window/pane arrangement and owner approval patterns.\n",
+                    ),
+                    SkillFile::markdown(
+                        "references/workflows.md",
+                        "# Nessa agent & window workflows\n\n\
+## Window and pane layout\n\
+- Call `read_window` before `arrange_window` so pane references match the live layout.\n\
+- Use `open_thread`, `focus_pane`, `close_pane`, and `show_panel_tab` to surface active threads to the person.\n\n\
+## Owner interaction\n\
+- Use `ask_owner` for structured decisions that require human input.\n\
+- Use `request_access` when a turn needs elevated workspace or tool access.\n\n\
+## Concurrency limits\n\
+- If `create_thread` returns `thread_limit_reached`, finish your turn; a child thread's completion wakes you to spawn the next one.\n",
+                    ),
+                ],
+            }])
+            .expect("built-in nessa-agents skill catalog is valid")
+        }))
+    }
     fn tools(&self) -> Vec<Value> {
         let identity = json!({
             "type": "string",
@@ -86,14 +124,13 @@ impl BuiltInServer for ConversationTools {
         vec![
             json!({
                 "name": "create_thread",
-                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model; in a channel you made it stays in your conversation's channel and starts on your conversation's approval mode, wherever it runs. environment \"peer:any\" lets the gateway pick a paired computer by the person's priority order and current load (see environments_list). When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
+                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model; in a channel you made it stays in your conversation's channel and starts on your conversation's approval mode. It runs on this computer, like every thread this gateway runs. When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "requestId": identity,
                         "agent": {"type": "string", "enum": AgentId::ALL.iter().map(|agent| agent.name()).collect::<Vec<_>>()},
                         "model": {"type": "string"},
-                        "environment": {"type": "string"},
                     },
                     "additionalProperties": false,
                 },
@@ -355,8 +392,6 @@ struct Create {
     agent: Option<AgentId>,
     #[serde(default, deserialize_with = "supplied")]
     model: Option<String>,
-    #[serde(default, deserialize_with = "supplied")]
-    environment: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -809,9 +844,9 @@ async fn run(
                         agent: args.agent.map(RequestedAgent::Known),
                         model: args.model,
                         approval_mode: None,
-                        environment: args.environment,
+                        environment: None,
                         channel: None,
-                        fork: None,
+                        fork: false,
                     },
                 )
                 .await

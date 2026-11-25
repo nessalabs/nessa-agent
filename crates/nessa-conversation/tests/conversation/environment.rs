@@ -85,7 +85,6 @@ fn the_lease_fence_reads_the_provider_trace_store() {
         LeaseId::new("lease").unwrap(),
         Arc::new(Traced(binding(), store.clone())),
         FencePhase::Live,
-        None,
     );
     assert!(Arc::ptr_eq(&store, &fence.traces().unwrap()));
 }
@@ -410,100 +409,6 @@ fn l11_l12_l16_a_lease_an_earlier_run_left_is_accounted_for_from_where_it_stood(
     assert_eq!(next_revision(Some(&live), &[]), LeaseRevision::FIRST);
 }
 
-/// Bytes that hand out `chunks`, then their end.
-struct Chunks(VecDeque<Vec<u8>>);
-impl super::super::ArtifactBytes for Chunks {
-    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
-        let next = self.0.pop_front();
-        Box::pin(async move { Ok(next) })
-    }
-}
-
-/// A file still being read when its lease's end is asked is cut off, its
-/// end included, so it is never kept under a lease that is ending.
-#[tokio::test]
-async fn a_published_file_is_read_only_while_its_lease_is_live() {
-    let opening = open_lease(
-        in_process_environment().as_ref(),
-        request(SandboxProfiles::HARNESS_DEFAULT),
-        binding(),
-        &At(0),
-    )
-    .await;
-    let live = LiveLease::new(&opening);
-    assert!(live.is_live());
-    let mut bytes = live.while_live(Box::new(Chunks(VecDeque::from([b"one".to_vec()]))));
-    assert_eq!(bytes.next().await, Ok(Some(b"one".to_vec())));
-    opening.fence.ending();
-    assert!(!live.is_live());
-    assert_eq!(
-        bytes.next().await,
-        Err(super::super::ArtifactReadFailure::LeaseEnded)
-    );
-}
-
-/// Bytes whose next chunk never comes, as from a host that stopped
-/// answering.
-struct Stalled;
-impl super::super::ArtifactBytes for Stalled {
-    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
-        Box::pin(std::future::pending())
-    }
-}
-
-/// A read already waiting when its lease's end is asked is cut off then,
-/// not when the host answers: the offer holds the lease's End back until it
-/// is answered.
-#[tokio::test]
-async fn a_read_waiting_when_its_lease_ends_is_cut_off_at_once() {
-    let opening = open_lease(
-        in_process_environment().as_ref(),
-        request(SandboxProfiles::HARNESS_DEFAULT),
-        binding(),
-        &At(0),
-    )
-    .await;
-    let live = LiveLease::new(&opening);
-    let mut bytes = live.while_live(Box::new(Stalled));
-    let read = tokio::spawn(async move { bytes.next().await });
-    tokio::task::yield_now().await;
-    opening.fence.ending();
-    let read = tokio::time::timeout(std::time::Duration::from_secs(5), read)
-        .await
-        .expect("a waiting read ends with its lease")
-        .unwrap();
-    assert_eq!(read, Err(super::super::ArtifactReadFailure::LeaseEnded));
-}
-
-/// Bytes whose read fails as their lease's end is asked, as a channel the
-/// host closes when it ends the lease.
-struct FailsAsItEnds(Arc<LeaseFence>);
-impl super::super::ArtifactBytes for FailsAsItEnds {
-    fn next(&mut self) -> super::super::ArtifactChunk<'_> {
-        self.0.ending();
-        Box::pin(async { Err(super::super::ArtifactReadFailure::Unavailable) })
-    }
-}
-
-/// A read that fails as its lease ends is answered as the lease ended, not
-/// as the failure its channel saw.
-#[tokio::test]
-async fn a_read_that_fails_as_its_lease_ends_is_answered_as_ended() {
-    let opening = open_lease(
-        in_process_environment().as_ref(),
-        request(SandboxProfiles::HARNESS_DEFAULT),
-        binding(),
-        &At(0),
-    )
-    .await;
-    let live = LiveLease::new(&opening);
-    let mut bytes = live.while_live(Box::new(FailsAsItEnds(opening.fence.clone())));
-    assert_eq!(
-        bytes.next().await,
-        Err(super::super::ArtifactReadFailure::LeaseEnded)
-    );
-}
-
 /// A wall clock a test moves.
 struct Stepping(std::sync::atomic::AtomicU64);
 impl Clock for Stepping {
@@ -623,7 +528,6 @@ async fn a_model_target_and_its_normalized_factory_keep_the_original_lease_fence
         LeaseId::new("another-lease").unwrap(),
         raw,
         FencePhase::Live,
-        None,
     );
     assert!(
         ModelChange::between(fence.as_ref(), another.as_ref()).is_err(),
@@ -710,7 +614,6 @@ async fn hosted_lease_fence_and_normalization_delegate_the_captured_host_owner()
         LeaseId::new("hosted-lease").unwrap(),
         original,
         FencePhase::Live,
-        None,
     );
     assert!(fence.harness_host_identity() == HarnessHostIdentity::hosted(&host));
     let make = |host| {

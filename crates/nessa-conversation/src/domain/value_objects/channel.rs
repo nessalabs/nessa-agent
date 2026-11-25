@@ -14,8 +14,6 @@
 //! a request can select stays a choice between places the owner already made
 //! (`composition/agent.rs`). Every value here is checked when it is made and
 //! when it is read back; a stored row that is not one is not a channel.
-use super::Cloud;
-use super::Place;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
@@ -251,123 +249,6 @@ pub struct ChannelDefaults {
     pub mode: ConversationApprovalMode,
 }
 
-/// Where the channel's main agent and its threads run. The two are chosen
-/// apart, and each may be any [`Place`]: here, a cloud VM of each
-/// conversation's own on one named cloud, any paired computer (the pool, in
-/// the order the pool's preferences give, a cloud VM as overflow), or one
-/// named computer. Stored and sent as one word each: `local` and `pool` for
-/// those kinds, a cloud by its name ([`Cloud::as_str`]: `boat`, `agent37`),
-/// and a named computer by its place name (an SSH destination, or a paired
-/// computer's `peer:<key>`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChannelExecution {
-    coordinator: ChannelSpot,
-    threads: ChannelSpot,
-}
-
-/// One of a channel's two places, and the cloud its VMs are made on when
-/// that place is a cloud VM.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ChannelSpot {
-    place: Place,
-    cloud: Option<Cloud>,
-}
-
-impl ChannelSpot {
-    fn of(place: Place) -> Self {
-        let cloud = matches!(place, Place::CloudVm).then_some(Cloud::Boat);
-        Self { place, cloud }
-    }
-}
-
-/// A word that names no place a channel can run in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnknownChannelPlace;
-
-/// The place `word` names: a kind of place by its channel word, a cloud by
-/// its name, else one named computer by its place name. A kind is spelled
-/// one way only, so `here`, `peer:any` and `boat:thread` name nothing here,
-/// and the kind and cloud words are kept for them: an SSH host named
-/// `local`, `pool` or a cloud's name cannot be a channel's computer.
-fn channel_place(word: &str) -> Result<ChannelSpot, UnknownChannelPlace> {
-    if let Some(cloud) = Cloud::parse(word) {
-        return Ok(ChannelSpot {
-            place: Place::CloudVm,
-            cloud: Some(cloud),
-        });
-    }
-    match word {
-        "local" => Ok(ChannelSpot::of(Place::Here)),
-        "pool" => Ok(ChannelSpot::of(Place::Pool)),
-        named => match Place::named(named) {
-            Ok(computer @ (Place::Host(_) | Place::Peer(_))) => Ok(ChannelSpot::of(computer)),
-            _ => Err(UnknownChannelPlace),
-        },
-    }
-}
-
-/// `spot`'s channel word, as [`channel_place`] reads it.
-fn channel_word(spot: &ChannelSpot) -> String {
-    match &spot.place {
-        Place::Here => "local".to_owned(),
-        Place::CloudVm => spot.cloud.unwrap_or(Cloud::Boat).as_str().to_owned(),
-        Place::Pool => "pool".to_owned(),
-        place @ (Place::Host(_) | Place::Peer(_)) => place.name(),
-    }
-}
-
-impl Default for ChannelExecution {
-    /// Both here.
-    fn default() -> Self {
-        Self::new(Place::Here, Place::Here)
-    }
-}
-
-impl ChannelExecution {
-    /// The main agent on `coordinator` and threads on `threads`; a cloud VM
-    /// among them is on Boat.
-    pub fn new(coordinator: Place, threads: Place) -> Self {
-        Self {
-            coordinator: ChannelSpot::of(coordinator),
-            threads: ChannelSpot::of(threads),
-        }
-    }
-    /// The places the channel words `coordinator` and `threads` name.
-    ///
-    /// # Errors
-    /// [`UnknownChannelPlace`] for a word that names none.
-    pub fn parse(coordinator: &str, threads: &str) -> Result<Self, UnknownChannelPlace> {
-        Ok(Self {
-            coordinator: channel_place(coordinator)?,
-            threads: channel_place(threads)?,
-        })
-    }
-    /// Where the main agent runs.
-    pub fn coordinator(&self) -> &Place {
-        &self.coordinator.place
-    }
-    /// Where the channel's threads run.
-    pub fn threads(&self) -> &Place {
-        &self.threads.place
-    }
-    /// The cloud the main agent's VM is made on, when it runs on a cloud VM.
-    pub fn coordinator_cloud(&self) -> Option<Cloud> {
-        self.coordinator.cloud
-    }
-    /// The cloud a thread's VM is made on, when threads run on a cloud VM.
-    pub fn threads_cloud(&self) -> Option<Cloud> {
-        self.threads.cloud
-    }
-    /// The main agent's place as its channel word.
-    pub fn coordinator_word(&self) -> String {
-        channel_word(&self.coordinator)
-    }
-    /// The threads' place as its channel word.
-    pub fn threads_word(&self) -> String {
-        channel_word(&self.threads)
-    }
-}
-
 /// One stored channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
@@ -378,7 +259,6 @@ pub struct Channel {
     name: ChannelName,
     folder: ChannelFolder,
     defaults: ChannelDefaults,
-    execution: ChannelExecution,
     notes: ChannelNotes,
     resources: ChannelResources,
     request_id: String,
@@ -395,7 +275,6 @@ pub struct ChannelParts {
     pub name: ChannelName,
     pub folder: ChannelFolder,
     pub defaults: ChannelDefaults,
-    pub execution: ChannelExecution,
     pub notes: ChannelNotes,
     pub resources: ChannelResources,
 }
@@ -425,7 +304,6 @@ impl Channel {
             name,
             folder,
             defaults,
-            execution,
             notes,
             resources,
         } = parts;
@@ -438,7 +316,6 @@ impl Channel {
             name,
             folder,
             defaults,
-            execution,
             notes,
             resources,
             request_id,
@@ -475,17 +352,6 @@ impl Channel {
     ) -> Self {
         Self {
             coordinator,
-            ..self.clone()
-        }
-    }
-    pub fn execution(&self) -> &ChannelExecution {
-        &self.execution
-    }
-    /// This channel with its agents running where `execution` says: the
-    /// one setting a person changes after the channel is made.
-    pub fn with_execution(&self, execution: ChannelExecution) -> Self {
-        Self {
-            execution,
             ..self.clone()
         }
     }
@@ -537,29 +403,21 @@ impl Channel {
     /// What every agent in this channel is told about it, besides working
     /// in its folder: its name, the person's notes, and the files and folders
     /// attached to it. One rule, so every agent in the same place hears the
-    /// same words.
-    ///
-    /// The folder and the attached paths are this gateway's, so only an
-    /// agent that runs here is told them: one that runs elsewhere (Boat, or
-    /// another computer) could not open them, and works in the folder its
-    /// own computer gives it. `remote` is that agent's own placement, fixed
-    /// when its conversation was made, never the channel's current one,
-    /// which may have moved since.
-    pub fn instructions(&self, remote: bool) -> String {
+    /// same words. Every agent runs on this gateway (ADR 1417), so the
+    /// folder and the attached paths are its own.
+    pub fn instructions(&self) -> String {
         let mut text = format!(
             "This conversation is in the person's channel \"{}\".",
             self.name.as_str()
         );
-        if !remote {
-            text.push_str(" Its folder is ");
-            text.push_str(self.folder.path.as_str());
-            text.push('.');
-        }
+        text.push_str(" Its folder is ");
+        text.push_str(self.folder.path.as_str());
+        text.push('.');
         if !self.notes.is_empty() {
             text.push_str("\n\nThe person's notes for every conversation in this channel:\n");
             text.push_str(self.notes.as_str());
         }
-        if !remote && !self.resources.is_empty() {
+        if !self.resources.is_empty() {
             text.push_str(
                 "\n\nFiles and folders the person attached to this channel. Read them when they are relevant to the request:",
             );
@@ -580,7 +438,6 @@ pub struct ChannelRequest {
     pub name: ChannelName,
     pub folder: Option<ChannelPath>,
     pub defaults: ChannelDefaults,
-    pub execution: ChannelExecution,
     pub notes: ChannelNotes,
     pub resources: ChannelResources,
     /// Whether it starts with a coordinator. It can be switched later, so a

@@ -189,7 +189,6 @@ async fn run_local_conversation_while(root: &Path, hold_discovery: bool) -> Evid
             message_commit_clock: Arc::new(FixedWallClock(RuntimeMessageCommitClock::new())),
             clock,
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,

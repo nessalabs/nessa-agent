@@ -12,7 +12,7 @@
  * await store.dispatch(createChannel())
  * ```
  */
-import { channelFailure, type ChannelPlacement } from "../../application/ports"
+import { channelFailure } from "../../application/ports"
 import { canCreate, type ChannelDraft, type ChannelStep } from "../../model/channel-draft"
 import { defaultModel } from "../../model/workspace-index"
 import { loadWorkspace, type WorkspaceCommand } from "./commands"
@@ -167,28 +167,6 @@ export function watchChannelDrops({
       dropped: (drop, added, unread) =>
         dispatch(channelDropSettled({ drop, added, unread })),
     })
-  }
-}
-
-/**
- * Changes where a made channel's agents run, from its settings. The index
- * takes the answer at once (a moved main agent names a fresh main chat) and
- * is read again so every list agrees. Answers whether it was changed; a
- * refusal throws its `ChannelCreationError` for the settings to word.
- */
-export function setChannelPlacement({
-  channelId,
-  placement,
-}: {
-  channelId: string
-  placement: ChannelPlacement
-}): WorkspaceCommand<Promise<boolean>> {
-  return async (dispatch, _getState, { channels, newId }) => {
-    if (!channels?.setPlacement) return false
-    const channel = await channels.setPlacement(channelId, placement, newId())
-    dispatch(channelPlaced({ channel }))
-    void dispatch(loadWorkspace())
-    return true
   }
 }
 

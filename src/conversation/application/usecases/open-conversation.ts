@@ -36,10 +36,7 @@ export function chooseModel(
       item.id === tabs.activeId
         ? {
             ...item,
-            selection: {
-              ...selection,
-              environment: selection.environment ?? item.selection?.environment,
-            },
+            selection,
           }
         : item,
     ),

@@ -18,8 +18,6 @@ import {
   createSubscriptionGate,
   subscriptionLimits,
   viewEntryBounds,
-  type BoatVmLifetime,
-  type BoatRuntimeSettings,
   type Channel as WireChannel,
   type ChannelCreateParams,
   type ConnectionState,
@@ -87,8 +85,6 @@ const defaultChannel: WireChannel = {
   approvalMode: "ask",
   coordinatorConversationId: null,
   coordinatorOn: false,
-  coordinatorPlacement: "local",
-  threadPlacement: "local",
   createdAtMs: 0,
 }
 
@@ -545,17 +541,6 @@ export function fakeGateway(
     readonly now?: () => number
   } = {},
 ): FakeGateway {
-  let defaultLifetime: BoatVmLifetime = { mode: "never" }
-  const lifetimeOverrides = new Map<string, BoatVmLifetime>()
-  const runtimeSettings = (channelId?: string): BoatRuntimeSettings => {
-    const override =
-      channelId === undefined ? undefined : lifetimeOverrides.get(channelId)
-    return {
-      ...{ defaultLifetime },
-      ...(channelId === undefined ? {} : { channelId }),
-      ...(override === undefined ? {} : { channelOverride: override }),
-    }
-  }
   const calls: FakeGateway["calls"] = []
   const windows: FakeGateway["windows"] = []
   const windowAnswers: FakeGateway["windowAnswers"] = []
@@ -709,23 +694,9 @@ export function fakeGateway(
   }
   const client: FakeGatewayClient = {
     boat: {
-      runtimeSettings: async (params) => runtimeSettings(params?.channelId),
-      setRuntimeSettings: async (params) => {
-        const lifetime: BoatVmLifetime =
-          params.mode === "after"
-            ? { mode: "after", seconds: params.seconds }
-            : { mode: "never" }
-        if (params.channelId === undefined) defaultLifetime = lifetime
-        else if (params.mode === "default") lifetimeOverrides.delete(params.channelId)
-        else lifetimeOverrides.set(params.channelId, lifetime)
-        return runtimeSettings(params.channelId)
-      },
       status: async () => ({ state: "disconnected" as const }),
       save: async () => {
         throw new Error("Boat provisioning is unavailable in this fixture")
-      },
-      saveClaudeSignIn: async () => {
-        throw new Error("Boat sign-in is unavailable in this fixture")
       },
       disconnect: async () => ({ state: "disconnected" as const }),
     },
@@ -1049,8 +1020,6 @@ export function fakeGateway(
             approvalMode: params.approvalMode ?? "ask",
             coordinatorConversationId: null,
             coordinatorOn: params.coordinator ?? true,
-            coordinatorPlacement: params.coordinatorPlacement ?? "local",
-            threadPlacement: params.threadPlacement ?? "local",
             createdAtMs: channels.length + 1,
           }
           channels.push({ requestId: params.requestId, params, channel })

@@ -74,7 +74,6 @@ async fn conversation() -> (
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         // The launch workspace. Every path below is outside it on purpose.
@@ -505,7 +504,6 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         Some("/workspace".into()),

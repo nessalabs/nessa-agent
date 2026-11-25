@@ -38,15 +38,6 @@ use tokio::sync::Notify;
 mod hosted_release;
 #[path = "parent_stop/placement.rs"]
 mod placement;
-#[cfg(unix)]
-#[path = "parent_stop/preparation.rs"]
-mod preparation;
-#[cfg(unix)]
-#[path = "parent_stop/release_authority.rs"]
-mod release_authority;
-#[cfg(unix)]
-#[path = "parent_stop/release_evidence.rs"]
-mod release_evidence;
 pub(super) async fn bind(
     service: &ConversationService,
     storage: &Arc<RecordStorage>,

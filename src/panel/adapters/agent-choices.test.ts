@@ -35,11 +35,10 @@ function retries() {
   }
 }
 
-const catalog = (...environments: string[]): AgentsListResult => ({
+/** Two catalogs told apart by Claude's hooks switch. */
+const catalog = (claude: "on" | "off"): AgentsListResult => ({
   agents: [],
-  environments,
-  commandHosts: [],
-  nativeHooks: { claude: "off", codex: "off" },
+  nativeHooks: { claude, codex: "off" },
 })
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -53,17 +52,16 @@ it("shows each catalog the gateway sends, with the agent setup chose", async () 
     async () => "codex",
   )(show)
   await settle()
-  opens[0].handlers.catalog(catalog("devbox"))
+  opens[0].handlers.catalog(catalog("off"))
   await settle()
   expect(show).toHaveBeenLastCalledWith({
-    catalog: catalog("devbox"),
+    catalog: catalog("off"),
     chosenAgent: "codex",
   })
-  const peer = `peer:${"ab".repeat(32)}`
-  opens[0].handlers.catalog(catalog("devbox", peer))
+  opens[0].handlers.catalog(catalog("on"))
   await settle()
   expect(show).toHaveBeenLastCalledWith({
-    catalog: catalog("devbox", peer),
+    catalog: catalog("on"),
     chosenAgent: "codex",
   })
   expect(show).toHaveBeenCalledTimes(2)
@@ -80,13 +78,13 @@ it("never shows an older catalog over a newer one whose agent was answered first
     () => new Promise((resolve) => answers.push(resolve)),
   )(show)
   await settle()
-  opens[0].handlers.catalog(catalog("old"))
-  opens[0].handlers.catalog(catalog("new"))
+  opens[0].handlers.catalog(catalog("off"))
+  opens[0].handlers.catalog(catalog("on"))
   answers[1](undefined)
   answers[0](undefined)
   await settle()
   expect(show).toHaveBeenCalledExactlyOnceWith({
-    catalog: catalog("new"),
+    catalog: catalog("on"),
     chosenAgent: undefined,
   })
   stop()
@@ -103,7 +101,7 @@ it("gives its subscription up when stopped and shows nothing it says after", asy
   await settle()
   stop()
   expect(opens[0].signal.aborted).toBe(true)
-  opens[0].handlers.catalog(catalog("devbox"))
+  opens[0].handlers.catalog(catalog("off"))
   await settle()
   expect(show).not.toHaveBeenCalled()
 })
@@ -130,11 +128,11 @@ it("opens again at once after lagging, and on the retry after any other end", as
   await settle()
   expect(agents).toHaveBeenCalledTimes(3)
   // An earlier open's frames apply nothing.
-  opens[1].handlers.catalog(catalog("stale"))
-  opens[2].handlers.catalog(catalog("fresh"))
+  opens[1].handlers.catalog(catalog("off"))
+  opens[2].handlers.catalog(catalog("on"))
   await settle()
   expect(show).toHaveBeenCalledExactlyOnceWith({
-    catalog: catalog("fresh"),
+    catalog: catalog("on"),
     chosenAgent: undefined,
   })
   stop()
@@ -177,10 +175,10 @@ it("shows a choice setup recorded against the catalog already shown", async () =
   recorded?.()
   await settle()
   expect(show).not.toHaveBeenCalled()
-  opens[0].handlers.catalog(catalog("devbox"))
+  opens[0].handlers.catalog(catalog("off"))
   await settle()
   expect(show).toHaveBeenLastCalledWith({
-    catalog: catalog("devbox"),
+    catalog: catalog("off"),
     chosenAgent: "claude",
   })
   // A replay finished on another agent, and the gateway sent no new catalog.
@@ -188,7 +186,7 @@ it("shows a choice setup recorded against the catalog already shown", async () =
   recorded?.()
   await settle()
   expect(show).toHaveBeenLastCalledWith({
-    catalog: catalog("devbox"),
+    catalog: catalog("off"),
     chosenAgent: "codex",
   })
   stop()

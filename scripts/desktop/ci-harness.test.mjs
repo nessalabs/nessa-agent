@@ -79,7 +79,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   }
   assert.match(
     workflow,
-    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup -- --check/,
+    /cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-backup -- --check/,
   )
   assert.equal(
     root.scripts.architecture,
@@ -91,17 +91,17 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-backup\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
-    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup\b/,
+    /run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-backup\b/,
   )
   // Both Windows partitions compile the same package graph; the remaining
   // partition owns dependency crates' tests, including the vault's regressions.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-backup\r?\n/,
   )
   // The coverage gate runs the same SDK tests again, instrumented, in its own job.
   assert.match(
@@ -110,7 +110,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   )
   assert.match(
     workflow,
-    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-env-serve -p nessa-backup --all-targets -- -D warnings/,
+    /cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-conversation -p nessa-gateway -p nessa-protocol -p nessa-projection -p nessa-types -p nessa-client-core -p nessa-device-client -p nessa-sdk -p nessa-timer -p nessa-vault -p nessa-agent-install -p nessa-attachments -p nessa-peer-gateways -p nessa-mcp-authorization -p nessa-webhooks -p nessa-device-pairing -p nessa-backup --all-targets -- -D warnings/,
   )
   // The database opener's privacy checks answer differently on each OS, so
   // they run in the matrix, as `pnpm check` runs them locally.
@@ -384,8 +384,6 @@ test("apt installs and every CI job are bounded", () => {
     "release.yml": {
       version: 10,
       "updater-key": 30,
-      "host-builds": 60,
-      "host-pins": 10,
       build: 120,
       release: 15,
     },
@@ -746,7 +744,6 @@ test("nothing in a release is built or published before the key pairing gate", (
   )
   assert.match(workflow, /NESSA_REQUIRE_UPDATER_KEY_PAIRING: "1"/)
   assert.match(workflow, /needs: \[version, updater-key\]/)
-  assert.match(workflow, /needs: \[version, updater-key, host-pins\]/)
   assert.match(workflow, /needs: \[version, build\]/)
 })
 

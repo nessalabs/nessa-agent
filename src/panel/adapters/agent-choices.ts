@@ -18,9 +18,9 @@ export type FollowConversationChoices = (
 
 /**
  * Follow the gateway's agent catalog (`agents.subscribe`): it is sent first
- * and again whenever a paired environment connects, disconnects or is
- * revoked, so "Run on" offers the places a conversation can start on now
- * rather than the ones there were when the panel opened.
+ * and again whenever it changes (an agent's hooks switched on or off), so
+ * the pickers offer what the gateway offers now rather than what it offered
+ * when the panel opened.
  *
  * A subscription that ends lagging is opened again at once; one that could
  * not open or ended for any other reason, the connection lost included, is

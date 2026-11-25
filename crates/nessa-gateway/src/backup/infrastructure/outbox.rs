@@ -21,7 +21,7 @@
 //! observe a copy in progress or a row removed halfway through.
 //! `an_environment_outbox_cut_waits_for_the_writer_lock`.
 //! The files and bytes kept are at most what one lease may keep
-//! (`ArtifactBudget::LEASE`); past that the source fails before those
+//! ([`OUTBOX_FILES`], [`OUTBOX_BYTES`]); past that the source fails before those
 //! bodies are read. `an_outbox_past_the_lease_budget_aborts_the_cut`.
 
 use std::fs::{self, File, OpenOptions};
@@ -29,11 +29,10 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
+use nessa_attachments::domain::Attachment;
 use nessa_local_storage::{create_directory, open, OpenMode};
-use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use super::gateway::content_is_secret;
-use crate::conversation::application::ArtifactBudget;
 use nessa_backup::application::{CopiedStore, ExportSource, PinnedStore};
 use nessa_backup::domain::{outbox_watermark, CapturedRecord, Sensitivity, SourceCut, StoreKind};
 
@@ -140,17 +139,22 @@ fn list_rows(directory: &Path, pending: &mut Vec<PathBuf>, total: &mut u64) -> R
     Ok(())
 }
 
+/// The most files one outbox read keeps: what one lease could keep when
+/// older builds wrote environment outboxes.
+pub(crate) const OUTBOX_FILES: usize = 64;
+/// The most bytes one outbox read keeps, all files together.
+pub(crate) const OUTBOX_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// Count one more file toward the snapshot copied while admission is held.
 ///
 /// The ceiling is the files and bytes one lease may keep. Past either, the
 /// body is not read. `an_outbox_past_the_lease_budget_aborts_the_cut`.
 fn count_toward_budget(counted: usize, total: &mut u64, len: u64) -> Result<(), ()> {
-    let files = usize::try_from(ArtifactBudget::LEASE.files).map_err(|_| ())?;
-    if counted >= files {
+    if counted >= OUTBOX_FILES {
         return Err(());
     }
     let next = total.checked_add(len).ok_or(())?;
-    if next > ArtifactBudget::LEASE.bytes {
+    if next > OUTBOX_BYTES {
         return Err(());
     }
     *total = next;
@@ -220,7 +224,7 @@ fn read_row(root: &Path, path: &Path) -> Result<Row, ()> {
         return Err(());
     }
     let len = opened.len();
-    if len > MAX_ARTIFACT_BYTES {
+    if len > Attachment::MAX_BYTES {
         return Err(());
     }
     let mut bytes = Vec::new();

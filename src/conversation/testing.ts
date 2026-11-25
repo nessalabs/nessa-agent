@@ -60,7 +60,6 @@ export {
   isImageFile,
   linkablePath,
   linkedFile,
-  linksFilesHere,
   previewableImage,
   validDraftAttachments,
 } from "./model"

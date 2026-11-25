@@ -13,14 +13,12 @@ function session(answer: (method: string, params: unknown) => unknown) {
   return { api: createLoginsApi({ request }), calls }
 }
 
-const peer = `peer:${"ab".repeat(32)}`
 const status = {
   logins: [
     { agent: "claude", saved: true },
     { agent: "codex", saved: false },
     { agent: "opencode", saved: false },
   ],
-  devicesOn: [peer],
 }
 
 describe("client.logins", () => {
@@ -29,12 +27,10 @@ describe("client.logins", () => {
     expect(await api.status()).toEqual(status)
     await api.save("codex", "sk-1")
     await api.remove("claude")
-    await api.setDevice(peer, false)
     expect(calls).toEqual([
       { method: "logins.status", params: {} },
       { method: "logins.save", params: { agent: "codex", login: "sk-1" } },
       { method: "logins.remove", params: { agent: "claude" } },
-      { method: "logins.setDevice", params: { environment: peer, on: false } },
     ])
   })
 
@@ -45,8 +41,8 @@ describe("client.logins", () => {
       { ...status, logins: [{ ...first, login: "sk-1" }, ...rest] },
       { ...status, logins: rest },
       { ...status, logins: [rest[0], first, rest[1]] },
-      { ...status, devicesOn: ["studio"] },
-      { ...status, devicesOn: [peer, peer] },
+      // No paired machine is handed a login any more (ADR 1417).
+      { ...status, devicesOn: [] },
     ]) {
       const { api } = session(() => answer)
       const error = await api.status().catch((caught: unknown) => caught)

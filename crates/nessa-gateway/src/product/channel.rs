@@ -6,9 +6,6 @@
 //!   ──▶ ConversationService::create_channel ──▶ { channel } | its ChannelErrorCode
 //! channel.list ──▶ ConversationService::list_channels
 //!   ──▶ the default channel first, then the stored ones ──▶ cut to one frame
-//! channel.setPlacement ──▶ ConversationService::set_channel_execution
-//!   (channel.settings on the channel; the default one is forbidden)
-//!   ──▶ { channel }, naming a fresh main conversation when the main agent moved
 //! channel.setCoordinator ──▶ ConversationService::set_channel_coordinator
 //!   (channel.settings, audited) ──▶ { channel }, the same main conversation
 //! ```
@@ -16,8 +13,8 @@ use super::socket::{failure, success};
 use super::state::ProductRouteState;
 use crate::conversation::application::{ChannelError, ChannelListing, FolderRefusal};
 use crate::conversation::domain::{
-    Channel, ChannelDefaults, ChannelExecution, ChannelId, ChannelName, ChannelNotes, ChannelPath,
-    ChannelRequest, ChannelResources,
+    Channel, ChannelDefaults, ChannelId, ChannelName, ChannelNotes, ChannelPath, ChannelRequest,
+    ChannelResources,
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::agents::AgentId;
@@ -25,7 +22,7 @@ use nessa_protocol::conversation::domain::{ConversationApprovalMode, Conversatio
 use nessa_protocol::product::generated::{
     ApprovalMode, Channel as WireChannel, ChannelCreateParams, ChannelCreateResult,
     ChannelErrorCode, ChannelListParams, ChannelListResult, ChannelSetCoordinatorParams,
-    ChannelSetCoordinatorResult, ChannelSetPlacementParams, ChannelSetPlacementResult,
+    ChannelSetCoordinatorResult,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use std::path::PathBuf;
@@ -99,24 +96,6 @@ pub(super) async fn dispatch(
                 Err(error) => refused(&frame.id, error),
             }
         }
-        "channel.setPlacement" => {
-            let Some((params, channel, execution)) = placement_request(frame.params) else {
-                return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
-            };
-            let caller = super::conversation::caller(session, params.request_id);
-            match service
-                .set_channel_execution(&caller, &channel, execution)
-                .await
-            {
-                Ok(channel) => success(
-                    &frame.id,
-                    &ChannelSetPlacementResult {
-                        channel: wire_channel(&channel),
-                    },
-                ),
-                Err(error) => refused(&frame.id, error),
-            }
-        }
         "channel.setCoordinator" => {
             let Some((params, channel)) =
                 serde_json::from_value::<ChannelSetCoordinatorParams>(frame.params)
@@ -149,12 +128,6 @@ pub(super) async fn dispatch(
 fn channel_request(params: &ChannelCreateParams) -> Option<ChannelRequest> {
     let path = |text: &str| ChannelPath::new(PathBuf::from(text)).ok();
     Some(ChannelRequest {
-        // Either left out runs here.
-        execution: ChannelExecution::parse(
-            params.coordinator_placement.as_deref().unwrap_or("local"),
-            params.thread_placement.as_deref().unwrap_or("local"),
-        )
-        .ok()?,
         name: ChannelName::new(&params.name).ok()?,
         folder: match &params.folder {
             Some(folder) => Some(path(folder)?),
@@ -203,8 +176,6 @@ fn wire_channel(channel: &Channel) -> WireChannel {
         approval_mode: wire_mode(defaults.mode),
         coordinator_conversation_id: Some(channel.coordinator_id().to_string()),
         coordinator_on: channel.coordinator_on(),
-        coordinator_placement: channel.execution().coordinator_word(),
-        thread_placement: channel.execution().threads_word(),
         created_at_ms: channel.created_at_ms(),
     }
 }
@@ -233,8 +204,6 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
                 approval_mode: ApprovalMode::Ask,
                 coordinator_conversation_id: None,
                 coordinator_on: false,
-                coordinator_placement: ChannelExecution::default().coordinator_word(),
-                thread_placement: ChannelExecution::default().threads_word(),
                 created_at_ms: 0,
             })
             .into_iter()
@@ -302,24 +271,10 @@ fn refused(request_id: &str, error: ChannelError) -> OutgoingMessage {
         ChannelError::ResourceNotFound => ChannelErrorCode::ChannelResourceNotFound,
         ChannelError::LimitReached => ChannelErrorCode::ChannelLimitReached,
         ChannelError::RequestConflict => ChannelErrorCode::ChannelRequestConflict,
-        ChannelError::PlaceUnavailable => ChannelErrorCode::ChannelPlaceUnavailable,
         ChannelError::Unavailable => ChannelErrorCode::TemporarilyUnavailable,
     };
     tracing::info!(code = code.as_str(), "channel command refused");
     failure(request_id, code.as_str())
-}
-
-/// A `channel.setPlacement` that names a channel id and two known run
-/// locations, or nothing: anything else is refused before the service.
-fn placement_request(
-    params: serde_json::Value,
-) -> Option<(ChannelSetPlacementParams, ChannelId, ChannelExecution)> {
-    let params = serde_json::from_value::<ChannelSetPlacementParams>(params).ok()?;
-    let channel = ChannelId::new(&params.channel_id).ok()?;
-    // The main agent runs in one place: the pool is for threads.
-    let execution =
-        ChannelExecution::parse(&params.coordinator_placement, &params.thread_placement).ok()?;
-    Some((params, channel, execution))
 }
 
 #[cfg(test)]

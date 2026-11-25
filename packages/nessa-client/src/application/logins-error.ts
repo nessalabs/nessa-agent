@@ -29,7 +29,6 @@ export type LoginsMethod =
   | "logins.status"
   | "logins.save"
   | "logins.remove"
-  | "logins.setDevice"
   | "logins.chatgptSignIn"
   | "logins.chatgptCancel"
   | "logins.chatgptUse"

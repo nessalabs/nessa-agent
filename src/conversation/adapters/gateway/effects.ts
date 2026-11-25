@@ -200,7 +200,6 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   environment_version_mismatch: "environment-version-mismatch",
   environment_platform_unsupported: "environment-platform-unsupported",
   environment_install_failed: "environment-install-failed",
-  linked_file_unreachable: "linked-file-unreachable",
   conversation_state_unreadable: "conversation-state-unreadable",
   // Opening a restored conversation asks for its recorded version before any
   // message is taken. The source is gone, or it no longer matches, so the
@@ -297,8 +296,6 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   environment_version_mismatch: "unavailable",
   environment_platform_unsupported: "unavailable",
   environment_install_failed: "unavailable",
-  // A message's refusal; no read is ever answered with it.
-  linked_file_unreachable: "unavailable",
   attachment_capacity: "unavailable",
   attachment_cleanup_unavailable: "unavailable",
   attachment_not_found: "unavailable",
@@ -552,7 +549,6 @@ export function gatewayEffects(
               ...(selection
                 ? { model: selection.model, approvalMode: selection.approvalMode }
                 : {}),
-              ...(selection?.environment ? { environment: selection.environment } : {}),
             })
           } catch (error) {
             throw submissionFailure(error, agent)

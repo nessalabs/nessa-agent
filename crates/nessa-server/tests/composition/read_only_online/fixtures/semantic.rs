@@ -119,7 +119,6 @@ fn service(
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -137,8 +136,6 @@ pub(super) fn catalog() -> AgentsListResult {
 /// As [`catalog`], with Claude's one model named `model`.
 pub(super) fn catalog_for(model: &str) -> AgentsListResult {
     serde_json::from_value(json!({
-        "environments": [],
-        "commandHosts": [],
         "agents": [{
             "agent": "claude",
             "defaultModel": model,

@@ -379,8 +379,6 @@
     ]
   },
   "AgentsListResult": {
-    "environments": ["devbox"],
-    "commandHosts": ["devbox"],
     "agents": [
       {
         "agent": "claude",

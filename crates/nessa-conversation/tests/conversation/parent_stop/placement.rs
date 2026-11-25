@@ -7,7 +7,6 @@ use nessa_sdk::application::agent_execution::sessions::{
     SessionStorageLease, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
-use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 
 struct PausedPlacement {
@@ -17,17 +16,10 @@ struct PausedPlacement {
     release: Notify,
 }
 impl ConversationPlaces for PausedPlacement {
-    fn write<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-        record: &'a crate::application::PlaceRecord,
-    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
-        self.inner.write(conversation, record)
-    }
     fn read<'a>(
         &'a self,
         conversation: &'a ConversationId,
-    ) -> EnvironmentFuture<'a, Result<crate::application::PlaceRecord, PlacementError>> {
+    ) -> EnvironmentFuture<'a, Result<(), PlacementError>> {
         Box::pin(async move {
             if self.pause.swap(false, Ordering::SeqCst) {
                 self.entered.notify_one();
@@ -72,7 +64,7 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     let placements = Arc::new(PausedPlacement {
-        inner: FilePlaces::new(&root).unwrap(),
+        inner: FilePlaces::new(&root),
         pause: AtomicBool::new(false),
         entered: Notify::new(),
         release: Notify::new(),
@@ -84,7 +76,7 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
     let (service, storage, metadata) = fixture_in(
         &root,
         provider.clone(),
-        Environments::new(environment.clone(), BTreeMap::new(), placements.clone()),
+        Environments::new(environment.clone(), placements.clone()),
     );
     let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
     let parent = id();
@@ -208,7 +200,7 @@ async fn a_root_sealed_during_first_placement_closes_from_its_actual_opening() {
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     let placements = Arc::new(PausedPlacement {
-        inner: FilePlaces::new(&root).unwrap(),
+        inner: FilePlaces::new(&root),
         pause: AtomicBool::new(false),
         entered: Notify::new(),
         release: Notify::new(),
@@ -220,7 +212,7 @@ async fn a_root_sealed_during_first_placement_closes_from_its_actual_opening() {
     let (service, storage, metadata) = fixture_in(
         &root,
         provider.clone(),
-        Environments::new(environment.clone(), BTreeMap::new(), placements.clone()),
+        Environments::new(environment.clone(), placements.clone()),
     );
     let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
     let target = id();
@@ -352,7 +344,7 @@ async fn a_root_sealed_during_first_placement_closes_from_its_actual_opening() {
     let (service, storage, metadata) = fixture_in(
         &root,
         provider.clone(),
-        Environments::new(environment.clone(), BTreeMap::new(), placements.clone()),
+        Environments::new(environment.clone(), placements.clone()),
     );
     let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
     assert_eq!(

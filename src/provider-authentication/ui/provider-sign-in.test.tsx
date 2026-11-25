@@ -70,73 +70,26 @@ it("keeps unsupported and superseded capability checks from enabling login", asy
   }
 })
 
-it("authenticates Boat once, says it is waiting, and says when it is kept", async () => {
+it("says when sign-in could not open, and offers it again", async () => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   const container = document.createElement("div")
   const root = createRoot(container)
-  let finish: () => void = () => {}
-  const onSignIn = vi.fn(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve
-      }),
-  )
   const button = () => container.querySelector("button")
   try {
     await React.act(async () =>
       root.render(
         <ProviderSignInCard
           provider="claude"
-          action="boat"
-          onSignIn={onSignIn}
+          onSignIn={async () => {
+            throw new Error("no browser")
+          }}
           canSignIn={async () => true}
         />,
       ),
     )
-    expect(button()?.textContent).toBe("Authenticate")
     await React.act(async () => button()?.click())
-    await React.act(async () => button()?.click())
-    expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(button()?.disabled).toBe(true)
-    expect(container.textContent).toContain("Finish signing in in your browser.")
-    await React.act(async () => finish())
-    expect(button()).toBeNull()
-    expect(container.textContent).toContain(
-      "Signed in for cloud workspaces. Send your message again.",
-    )
-  } finally {
-    await React.act(async () => root.unmount())
-  }
-})
-
-it("says which Boat stage failed and offers Authenticate again", async () => {
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  const { BoatSignInFailure } = await import("../model/boat-sign-in")
-  const container = document.createElement("div")
-  const root = createRoot(container)
-  const button = () => container.querySelector("button")
-  try {
-    for (const [stage, text] of [
-      ["minted", "Could not sign in. Try again."],
-      ["saved", "Could not save the sign-in. Unlock Nessa and try again."],
-    ] as const) {
-      await React.act(async () =>
-        root.render(
-          <ProviderSignInCard
-            key={stage}
-            provider="claude"
-            action="boat"
-            onSignIn={async () => {
-              throw new BoatSignInFailure(stage)
-            }}
-            canSignIn={async () => true}
-          />,
-        ),
-      )
-      await React.act(async () => button()?.click())
-      expect(container.textContent).toContain(text)
-      expect(button()?.disabled).toBe(false)
-    }
+    expect(container.textContent).toContain("Could not open sign-in. Try again.")
+    expect(button()?.disabled).toBe(false)
   } finally {
     await React.act(async () => root.unmount())
   }

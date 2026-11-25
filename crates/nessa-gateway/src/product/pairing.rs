@@ -55,7 +55,6 @@ pub(super) async fn dispatch(
                 None | Some(PairingEnrollee::Device) => ConsentClass::DeviceRead,
                 Some(PairingEnrollee::OwnerPhone) => ConsentClass::OwnerPhoneReadWrite,
                 Some(PairingEnrollee::Gateway) => ConsentClass::PeerRead,
-                Some(PairingEnrollee::Environment) => ConsentClass::PeerEnvironment,
             };
             match pairing
                 .create(session, class, params.same_person.unwrap_or(false))
@@ -261,10 +260,6 @@ fn linking_refusal(error: nessa_device_pairing::application::LinkingError) -> Pa
         LinkingError::AuditUnavailable => PairingErrorCode::PairingAuditUnavailable,
         LinkingError::LinkingOff => PairingErrorCode::PairingLinkingOff,
         LinkingError::TunnelIncomplete => PairingErrorCode::PairingTunnelIncomplete,
-        // Only an SSH host's change meets the bound; no pairing method makes one.
-        LinkingError::HostLimit | LinkingError::InstallFailed => {
-            PairingErrorCode::PairingUnavailable
-        }
     }
 }
 
