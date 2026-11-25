@@ -30,7 +30,7 @@ import {
   waitingOn,
 } from "./sharing"
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
+const limits = { patterns: 16 }
 const grant = (
   credentialId: string,
   policyRevision = 1,
@@ -38,7 +38,6 @@ const grant = (
 ): ShareGrant => ({ credentialId, role, policyRevision, grantedAtMs: 1 })
 const choices = (credentialId = "a"): SharingChoices => ({
   targets: [{ credentialId, issuedAt: 1, fullAccess: false }],
-  commandHosts: [],
   limits,
 })
 const ok = <T>(value: T) => ({ ok: true as const, value })

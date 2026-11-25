@@ -3431,7 +3431,7 @@
     "ConversationToolPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. An allowed run goes only to a host commandHosts names and the gateway grants commands on, and runs only a program the gateway allows. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
+      "description": "The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads.",
       "properties": {
         "preset": {
           "$ref": "#/$defs/ConversationToolPreset",
@@ -3458,17 +3458,6 @@
             "x-utf8MaxBytes": 48
           },
           "description": "Tools the holder's turns may never call. Present with allow, without preset."
-        },
-        "commandHosts": {
-          "type": "array",
-          "maxItems": 16,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 253,
-            "x-utf8MaxBytes": 253
-          },
-          "description": "The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host."
         }
       },
       "required": []

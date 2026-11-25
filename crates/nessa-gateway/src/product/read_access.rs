@@ -36,9 +36,7 @@ use crate::conversation::application::{
     ReviewNoticeAuditFailure, SelectReviewNotice, ShareConversation, ShareGrant,
     MAX_POLICY_REVISION,
 };
-use crate::conversation::domain::{
-    CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
-};
+use crate::conversation::domain::{ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
 use crate::conversation::infrastructure::PublishedReview;
 use crate::webhooks::application::{AdmitDelivery, ShareWebhookConversation};
 use nessa_auth::application::session::AuthenticatedSession;
@@ -1062,38 +1060,29 @@ fn expected_revision(value: Option<u64>) -> Result<Option<u64>, ConversationErro
 }
 
 /// A wire policy as the domain's: `preset` alone, or `allow` and `deny`
-/// together, each checked by `ToolRules::new`, with `commandHosts` beside
-/// either, checked by `CommandHosts::new`; absent or empty, it names none.
-/// Hosts are not counted against the patterns. Any other shape is
+/// together, each checked by `ToolRules::new`. Any other shape is
 /// `InvalidInput` (row J3).
 fn tool_policy(policy: ConversationToolPolicy) -> Result<ToolPolicy, ConversationError> {
-    let hosts = CommandHosts::new(policy.command_hosts.unwrap_or_default())
-        .map_err(|_| ConversationError::InvalidInput)?;
-    let tools = match (policy.preset, policy.allow, policy.deny) {
-        (Some(named), None, None) => ToolPolicy::preset(preset(named)),
+    match (policy.preset, policy.allow, policy.deny) {
+        (Some(named), None, None) => Ok(ToolPolicy::preset(preset(named))),
         (None, Some(allow), Some(deny)) => ToolRules::new(allow, deny)
             .map(ToolPolicy::rules)
-            .map_err(|_| ConversationError::InvalidInput)?,
-        _ => return Err(ConversationError::InvalidInput),
-    };
-    Ok(tools.with_command_hosts(hosts))
+            .map_err(|_| ConversationError::InvalidInput),
+        _ => Err(ConversationError::InvalidInput),
+    }
 }
 
 fn wire_policy(policy: &ToolPolicy) -> ConversationToolPolicy {
-    let hosts = policy.command_hosts();
-    let command_hosts = (!hosts.is_empty()).then(|| hosts.names().iter().cloned().collect());
     match policy.tools() {
         ToolChoice::Preset(named) => ConversationToolPolicy {
             preset: Some(wire_preset(*named)),
             allow: None,
             deny: None,
-            command_hosts,
         },
         ToolChoice::Rules(rules) => ConversationToolPolicy {
             preset: None,
             allow: Some(rules.allow().to_vec()),
             deny: Some(rules.deny().to_vec()),
-            command_hosts,
         },
     }
 }

@@ -135,7 +135,7 @@ function scriptedGateway(scenario = {}) {
     {
       credentialId: "device-phone-0001",
       capabilities: ["read", "comment", "drive"],
-      policy: { preset: "read_only_tools", commandHosts: ["devbox"] },
+      policy: { preset: "read_only_tools" },
       policyRevision: revision,
       grantedAtMs: 1_700_000_000_000,
     },
@@ -463,7 +463,7 @@ Usage: node verification/desktop/scripts/share-dialog.mjs [options] [--shots <di
 
 Per engine, against a scripted product session:
   open      Share… on a session's menu opens one dialog, focus inside it,
-            its grant listed with role, tools and hosts in words
+            its grant listed with role and tools in words
   drive     a Drive grant with a preset is sent as the wire takes it, with
             no host to pick (each gateway runs only its own agents), naming
             revision 0 as a first grant, said as done, and listed as the
@@ -534,7 +534,7 @@ await main(meta, async ({ options, rep, url }) => {
         failures: [
           focusInside ? null : "focus was not inside the dialog",
           heading.includes(title) ? null : `the title was ${JSON.stringify(heading)}`,
-          row.includes("Drive · Read-only tools, commands on devbox")
+          /Drive · Read-only tools(?!,)/.test(row)
             ? null
             : `the grant read ${JSON.stringify(row)}`,
           (await page.locator(css.shareDialog).count()) === 1 ? null : "not one dialog",
@@ -580,9 +580,7 @@ await main(meta, async ({ options, rep, url }) => {
       await need(page, css.shareNotes, "the Drive notes")
       const notes = await page.locator(css.shareNotes).innerText()
       await choose(page, css.sharePresets, "No shell")
-      const offered = await page
-        .locator(`${css.shareHosts} input[type="checkbox"]`)
-        .count()
+      const offered = await page.locator(css.shareHosts).count()
       const evidence = await shot(page, options, engine, "drive")
       await page.locator(selectorFor.shareAction("submit")).click()
       await page.waitForFunction(
@@ -616,11 +614,11 @@ await main(meta, async ({ options, rep, url }) => {
           share?.params?.expectedPolicyRevision === 0
             ? null
             : `a first grant expected ${share?.params?.expectedPolicyRevision}`,
-          offered === 0 ? null : `${offered} hosts were offered`,
+          offered === 0 ? null : "a host list was offered",
           notes.includes("sandbox")
             ? null
             : "the note on what a policy cannot stop was missing",
-          row.includes("Drive · No shell, commands nowhere")
+          /Drive · No shell(?!,)/.test(row)
             ? null
             : `the new grant read ${JSON.stringify(row)}`,
         ].filter(Boolean),

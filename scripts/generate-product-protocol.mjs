@@ -633,7 +633,7 @@ const bounds = {
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
-  // patterns, and the hosts on their own.
+  // patterns.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
     toolPolicy.allow.maxItems,
     toolPolicy.deny.maxItems,
@@ -642,8 +642,6 @@ const bounds = {
     toolPolicy.allow.items["x-utf8MaxBytes"],
     toolPolicy.deny.items["x-utf8MaxBytes"],
   ]),
-  maxCommandHosts: toolPolicy.commandHosts.maxItems,
-  maxCommandHostBytes: toolPolicy.commandHosts.items["x-utf8MaxBytes"],
   maxShareGrants: schema.$defs.ConversationSharesResult["x-maxGrants"],
   maxSharePage: sharePage,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
