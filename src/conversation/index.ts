@@ -106,9 +106,6 @@ export {
   isImageFile,
   linkablePath,
   linkedFile,
-  linksFilesHere,
-  chosenEnvironment,
-  HERE,
   previewableImage,
   validDraftAttachments,
 } from "./model"

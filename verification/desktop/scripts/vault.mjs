@@ -11,7 +11,7 @@ import {
 import { attempt } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { openAccounts } from "./lib/boat-runtime-settings.mjs"
+import { openAccounts } from "./lib/settings-pages.mjs"
 await main(
   {
     name: "vault",

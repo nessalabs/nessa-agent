@@ -2723,7 +2723,6 @@ function reasonFor(
     case ConversationErrorCode.EnvironmentNotConfigured:
     case ConversationErrorCode.EnvironmentVersionMismatch:
     case ConversationErrorCode.EnvironmentPlatformUnsupported:
-    case ConversationErrorCode.LinkedFileUnreachable:
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ImageInputUnsupported:
     case ConversationErrorCode.ApprovalModeUnavailable:

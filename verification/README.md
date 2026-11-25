@@ -109,7 +109,6 @@ verification/
       resize-observers.mjs  native ErrorEvent and pageerror checks on initial pane fitting and viewport changes, Chromium and WebKit
       scripted-e2e.mjs      one signed-out command: native resize and gateway-backed checks in Chromium and WebKit, one verdict line (`pnpm test:e2e:scripted`)
       lib/stress-native-context.mjs focused native request/marker and durable audit evidence for the drift cold-reopen boundary
-      boat-runtime-settings.mjs global lifetime default and saved-channel override/reset, ordinary config persistence and invalid request refusals through a real gateway, both engines/layouts; no Boat token or cloud VM
       drag.mjs              pane drag: pointer path, zones, cancels, selection
       focus.mjs             where the caret lands after each pane and dialog change
       lib/overview-keyboard.mjs atomic observation/action for incrementally mounted overview rows

@@ -1491,8 +1491,6 @@ mod tests {
             None => crate::conversation_test_support::fixture(limits).0,
         };
         let catalog = serde_json::from_value(json!({
-            "environments": [],
-            "commandHosts": [],
             "agents": [{
                 "agent": "claude",
                 "defaultModel": "model",
@@ -1688,8 +1686,6 @@ mod tests {
         assert_eq!(missing_point.error.unwrap().code, "invalid_request");
 
         let bare = serde_json::from_value(json!({
-            "environments": [],
-            "commandHosts": [],
             "agents": [],
             "nativeHooks": {"claude": "off", "codex": "off"}
         }))

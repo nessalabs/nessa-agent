@@ -66,8 +66,6 @@ async fn fake(made: Value) -> (Agent37Provider, Shared) {
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     (
         Agent37Provider {
-            relay_socket: "/tmp/nessa-relay.sock".into(),
-            relay_program: "/usr/bin/true".into(),
             endpoints: Some((
                 format!("http://{address}/v1"),
                 "ws://127.0.0.1:9/{id}".into(),
@@ -255,11 +253,7 @@ async fn agent37_live_a_thread_vm_is_made_connected_stopped_and_deleted() {
     let place = tempfile::tempdir().unwrap();
     let relay = place.path().join("relay.sock");
     let _listening = tokio::net::UnixListener::bind(&relay).unwrap();
-    let provider = Agent37Provider {
-        relay_socket: relay,
-        relay_program: "/usr/bin/true".into(),
-        endpoints: None,
-    };
+    let provider = Agent37Provider { endpoints: None };
     let account = connection.account();
     let spec = connection.new_vm(
         None,
@@ -287,9 +281,6 @@ async fn agent37_live_a_thread_vm_is_made_connected_stopped_and_deleted() {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
         let runtime = runtime.expect("never connected");
-        let protocol = runtime.image_protocol().await;
-        eprintln!("the image's nessa speaks {protocol:?}");
-        assert_eq!(protocol.as_deref(), Some(crate::env::LEASE_PROTOCOL));
         drop(runtime);
         provider
             .stop(&account, &receipt.vm, RestCause::Closed)

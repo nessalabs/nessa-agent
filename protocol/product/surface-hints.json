@@ -371,10 +371,6 @@
     "readOnly": true,
     "destructive": false
   },
-  "channel.setPlacement": {
-    "readOnly": false,
-    "destructive": false
-  },
   "channel.setCoordinator": {
     "readOnly": false,
     "destructive": false
@@ -427,10 +423,6 @@
     "readOnly": false,
     "destructive": false
   },
-  "boat.saveClaudeSignIn": {
-    "readOnly": false,
-    "destructive": false
-  },
   "boat.disconnect": {
     "readOnly": false,
     "destructive": true
@@ -479,34 +471,6 @@
     "readOnly": false,
     "destructive": true
   },
-  "devices.pool": {
-    "readOnly": true,
-    "destructive": false
-  },
-  "devices.setPool": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "devices.sshHosts": {
-    "readOnly": true,
-    "destructive": false
-  },
-  "devices.connectSsh": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "devices.setDefault": {
-    "readOnly": false,
-    "destructive": false
-  },
-  "boat.runtimeSettings": {
-    "readOnly": true,
-    "destructive": false
-  },
-  "boat.setRuntimeSettings": {
-    "readOnly": false,
-    "destructive": false
-  },
   "conversation.webhook.cursor": {
     "readOnly": false,
     "destructive": false
@@ -542,10 +506,6 @@
   "logins.remove": {
     "readOnly": false,
     "destructive": true
-  },
-  "logins.setDevice": {
-    "readOnly": false,
-    "destructive": false
   },
   "logins.chatgptSignIn": {
     "readOnly": false,

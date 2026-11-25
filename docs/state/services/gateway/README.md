@@ -62,9 +62,6 @@ flowchart TB
 - [Webhook credential issuance and receipt identity](webhook-issuance.md)
 - [Durable outbound webhook state and audit](webhook-outbox.md)
 
-[Channel workspaces](channel-workspaces.md) describes independent Local/Boat
-placement, durable VM assignments, approved local access and main-chat replacement.
-
 ## Model coverage
 
 This component index routes to the feature owners. Their finite models check only the safety slices stated on each owner page; no single aggregate application lifecycle is claimed. Source checkpoints do not inherit to child pages.
@@ -80,7 +77,6 @@ models link back to the source that owns those decisions.
 - [Delegate to another agent thread](agent-thread-tools.md)
 - [Enroll, read and forget peer gateways](peer-gateways.md)
 - [Announce a paired gateway on the local network](peer-discovery.md)
-- [Run harnesses through environment leases](environment-leases.md)
 - [Reach a gateway through a tunnel](tunnel-connectivity.md)
 - [Pair a device through current receiver holding](device-pairing.md)
 - [Pair a gateway as the same person and recover attribution](same-person.md)

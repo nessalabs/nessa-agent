@@ -51,9 +51,9 @@ use nessa_auth::{
 };
 use nessa_device_pairing::application::{Announced, LinkingAnnouncement, LinkingAnnouncer};
 use nessa_device_pairing::infrastructure::{
-    restore_gateway_identity, EnvironmentPeers, GatewayPairing, InvitationEntropy,
-    NativeEnrollmentConnections, NativeEnrollmentListener, PairingOwnerCommands,
-    PairingRuntimeDependencies, RelayPermit, TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
+    restore_gateway_identity, GatewayPairing, InvitationEntropy, NativeEnrollmentConnections,
+    NativeEnrollmentListener, PairingOwnerCommands, PairingRuntimeDependencies, RelayPermit,
+    TcpEnrollmentAccept, RELAY_CAPACITY, TUNNEL_CAPACITY,
 };
 #[cfg(unix)]
 use nessa_device_pairing::tunnel::infrastructure::ingress::TunnelIngress;
@@ -116,8 +116,6 @@ pub(super) struct PreparedNative {
     audit: Arc<DurablePeerAudit>,
     /// Wall time for when a peer read finished.
     clock: Arc<dyn Clock>,
-    /// The paired environments `openEnvironment` reaches; `None` refuses it.
-    environments: Option<Arc<dyn EnvironmentPeers>>,
     /// The relay to serve through as well, if any.
     relay: Option<RelayAddress>,
     /// Host a wildcard bind is published as. The port is the listener's.
@@ -154,12 +152,6 @@ impl PreparedNative {
     /// which does not call the credential admin.
     pub(super) fn bind_fence_capture(&self, capture: Arc<dyn FenceCapture>) {
         self.gateway.bind_fence_capture(capture);
-    }
-
-    /// Serve `openEnvironment` with `environments`.
-    pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
-        self.environments = Some(environments);
-        self
     }
 
     /// Enable the normally unmounted record carrier in the private fixture.
@@ -284,7 +276,6 @@ pub(super) async fn prepare(
             peers: peers.clone(),
             audit,
             clock: wall,
-            environments: None,
             relay: config.relay.clone(),
             advertised_address: config.advertised_address,
             bound_socket: None,
@@ -388,7 +379,6 @@ pub(super) async fn bind(
         peers,
         audit,
         clock: wall,
-        environments,
         relay,
         advertised_address,
         bound_socket,
@@ -447,10 +437,7 @@ pub(super) async fn bind(
     } else {
         connections
     };
-    let connections = Arc::new(match environments {
-        Some(environments) => connections.with_environment_peers(environments),
-        None => connections,
-    });
+    let connections = Arc::new(connections);
     // With no relay the sender is dropped here, and the listener's relay
     // source is closed from the start.
     let (joined, relayed) = mpsc::channel::<Relayed<TcpStream, RelayPermit>>(RELAY_CAPACITY);

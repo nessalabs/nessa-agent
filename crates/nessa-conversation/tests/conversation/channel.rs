@@ -3,7 +3,6 @@
 //! What its agents are told about it is one text, the same for every agent.
 use super::*;
 use crate::conversation_test_support::absolute;
-use crate::domain::{ChannelExecution, Place};
 
 fn path(text: &str) -> ChannelPath {
     ChannelPath::new(PathBuf::from(text)).unwrap()
@@ -11,7 +10,6 @@ fn path(text: &str) -> ChannelPath {
 
 fn parts(folder: ChannelFolder) -> ChannelParts {
     ChannelParts {
-        execution: ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder,
         defaults: ChannelDefaults {
@@ -161,7 +159,6 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         made: true,
     });
     let mut asked = ChannelRequest {
-        execution: ChannelExecution::default(),
         name: made.name().clone(),
         folder: None,
         defaults: made.defaults().clone(),
@@ -170,9 +167,6 @@ fn a_retry_is_the_same_channel_only_when_it_asks_for_the_same_folder() {
         coordinator_on: true,
     };
     assert!(made.made_of(&asked));
-    // Moved since it was made, a retry of its creation is still the same channel.
-    let moved = made.with_execution(ChannelExecution::new(Place::CloudVm, Place::CloudVm));
-    assert!(moved.made_of(&asked));
     asked.defaults.mode = ConversationApprovalMode::Ask;
     assert!(
         !made.made_of(&asked),
@@ -198,7 +192,7 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
         path: path(&absolute("/repo")),
         made: false,
     });
-    let text = made.instructions(false);
+    let text = made.instructions();
     assert!(text.contains("\"design-review\""), "{text}");
     assert!(
         text.contains(&format!("Its folder is {}.", absolute("/repo"))),
@@ -209,18 +203,4 @@ fn agents_are_told_the_name_folder_notes_and_resources() {
         text.contains(&format!("\n- {}", absolute("/home/me/brand-kit"))),
         "{text}"
     );
-}
-
-#[test]
-fn an_agent_elsewhere_is_told_the_name_and_notes_but_no_path_of_this_gateway() {
-    let made = channel(ChannelFolder {
-        path: path(&absolute("/repo")),
-        made: false,
-    });
-    let text = made.instructions(true);
-    assert!(text.contains("\"design-review\""), "{text}");
-    assert!(text.contains("Check every export."), "{text}");
-    assert!(!text.contains(&absolute("/repo")), "{text}");
-    assert!(!text.contains(&absolute("/home/me/brand-kit")), "{text}");
-    assert!(!text.contains("folder"), "{text}");
 }

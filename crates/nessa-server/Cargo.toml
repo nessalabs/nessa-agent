@@ -42,7 +42,6 @@ nessa-peer-gateways = { path = "../nessa-peer-gateways" }
 nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
 nessa-webhooks = { path = "../nessa-webhooks" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
-nessa-env-serve = { path = "../nessa-env-serve" }
 nessa-backup = { path = "../nessa-backup" }
 nessa-conversation = { path = "../nessa-conversation" }
 base64 = "0.22"
@@ -106,7 +105,6 @@ nessa-device-client = { path = "../nessa-device-client" }
 nessa-peer-gateways = { path = "../nessa-peer-gateways", features = ["test-support"] }
 nessa-webhooks = { path = "../nessa-webhooks", features = ["test-support"] }
 nessa-device-pairing = { path = "../nessa-device-pairing", features = ["test-support"] }
-nessa-env-serve = { path = "../nessa-env-serve", features = ["test-support"] }
 nessa-backup = { path = "../nessa-backup", features = ["test-support"] }
 # Plants an unmarked session record. A production build of this crate does not
 # enable it.

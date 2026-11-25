@@ -28,9 +28,8 @@ mod stage_port;
 pub use config::key::{HOST, PORT, STAGE};
 pub use environment::{home_folder_from_system, Environment};
 pub use error::EnvironmentError;
-pub use nessa_conversation::env::{
-    BUNDLED_HOST_BUILDS, HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL, VERSION,
-};
+/// This build's version, as Cargo names it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use source::MockEnv;
 pub use stage::Stage;
 pub use stage_port::stage_port;

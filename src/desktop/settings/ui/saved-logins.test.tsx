@@ -16,7 +16,7 @@ import type {
 } from "../adapters/saved-logins-gateway"
 import { VaultProvider, useVaultUnlock, type VaultSource } from "../../../vault"
 import type { VoiceKeyGateway } from "../../voice/adapters/voice-gateway"
-import { DeviceLoginsSwitch, SavedLoginsGroup, SavedLoginsProvider } from "./saved-logins"
+import { SavedLoginsGroup, SavedLoginsProvider } from "./saved-logins"
 import { VoiceKeyProvider, VoiceKeyRow } from "./voice-key-row"
 
 let root: Root
@@ -34,12 +34,9 @@ afterEach(async () => {
   host.remove()
 })
 
-const peer = `peer:${"ef".repeat(32)}`
-
 function fake({ chatgpt = false }: { chatgpt?: boolean } = {}) {
   let logins: SavedLogins = {
     saved: { claude: false, codex: false, opencode: false },
-    devicesOn: new Set(),
     ...(chatgpt ? { chatgpt: { accounts: [], signIn: { kind: "idle" as const } } } : {}),
   }
   const accounts = () => logins.chatgpt?.accounts ?? []
@@ -62,14 +59,6 @@ function fake({ chatgpt = false }: { chatgpt?: boolean } = {}) {
     remove: (agent: LoginAgent) => {
       calls.push(["remove", agent])
       logins = { ...logins, saved: { ...logins.saved, [agent]: false } }
-      return answer()
-    },
-    setDevice: (environment: string, on: boolean) => {
-      calls.push(["setDevice", environment, on])
-      const devicesOn = new Set(logins.devicesOn)
-      if (on) devicesOn.add(environment)
-      else devicesOn.delete(environment)
-      logins = { ...logins, devicesOn }
       return answer()
     },
     chatgptSignIn: (accountId?: string) => {
@@ -194,103 +183,10 @@ it("rests without a gateway", async () => {
     root.render(
       <SavedLoginsProvider gateway={undefined}>
         <SavedLoginsGroup />
-        <dl>
-          <DeviceLoginsSwitch environment={peer} />
-        </dl>
       </SavedLoginsProvider>,
     ),
   )
   expect(input("claude").disabled).toBe(true)
-  expect(host.querySelector("[data-device-logins]")).toBeNull()
-})
-
-it("turns a paired computer's switch on and off", async () => {
-  const { gateway, calls } = fake()
-  await act(async () =>
-    root.render(
-      <SavedLoginsProvider gateway={gateway}>
-        <dl>
-          <DeviceLoginsSwitch environment={peer} />
-        </dl>
-      </SavedLoginsProvider>,
-    ),
-  )
-  const fact = () => need(host.querySelector("[data-device-logins]"))
-  const flip = () =>
-    need(fact().querySelector<HTMLButtonElement>('[role="switch"]')).click()
-  expect(fact().getAttribute("data-device-logins")).toBe("off")
-  await act(async () => flip())
-  expect(calls).toEqual([["setDevice", peer, true]])
-  expect(fact().getAttribute("data-device-logins")).toBe("on")
-  await act(async () => flip())
-  expect(calls.at(-1)).toEqual(["setDevice", peer, false])
-  expect(fact().getAttribute("data-device-logins")).toBe("off")
-})
-
-it("turns an unread switch from how it stands once read", async () => {
-  const { gateway, calls } = fake()
-  await gateway.setDevice(peer, true)
-  calls.length = 0
-  let reads = 0
-  const read = gateway.read
-  const locked: SavedLoginsGateway = {
-    ...gateway,
-    // The first read, on mount, meets a locked vault.
-    read: () =>
-      reads++ === 0
-        ? Promise.resolve({
-            kind: "refused",
-            sentence: "Unlock Nessa to change saved logins.",
-          })
-        : read(),
-  }
-  await act(async () =>
-    root.render(
-      <SavedLoginsProvider gateway={locked}>
-        <dl>
-          <DeviceLoginsSwitch environment={peer} />
-        </dl>
-      </SavedLoginsProvider>,
-    ),
-  )
-  const fact = () => need(host.querySelector("[data-device-logins]"))
-  expect(fact().getAttribute("data-device-logins")).toBe("off")
-  await act(async () =>
-    need(fact().querySelector<HTMLButtonElement>('[role="switch"]')).click(),
-  )
-  // It was on: the click turns it off, not on again.
-  expect(calls).toEqual([["setDevice", peer, false]])
-  expect(fact().getAttribute("data-device-logins")).toBe("off")
-})
-
-it("shows how things stand after a change that was made but not recorded", async () => {
-  const { gateway } = fake()
-  const unrecorded: SavedLoginsGateway = {
-    ...gateway,
-    // The switch changes, but the gateway answers that its record could not be kept.
-    setDevice: async (environment, on) => {
-      await gateway.setDevice(environment, on)
-      return {
-        kind: "refused",
-        sentence: "Changed, but Nessa couldn’t keep a record of it.",
-      }
-    },
-  }
-  await act(async () =>
-    root.render(
-      <SavedLoginsProvider gateway={unrecorded}>
-        <dl>
-          <DeviceLoginsSwitch environment={peer} />
-        </dl>
-      </SavedLoginsProvider>,
-    ),
-  )
-  const fact = () => need(host.querySelector("[data-device-logins]"))
-  await act(async () =>
-    need(fact().querySelector<HTMLButtonElement>('[role="switch"]')).click(),
-  )
-  expect(fact().getAttribute("data-device-logins")).toBe("on")
-  expect(host.textContent).toContain("Changed, but Nessa couldn’t keep a record of it.")
 })
 
 const button = (selector: string) => need(host.querySelector<HTMLButtonElement>(selector))

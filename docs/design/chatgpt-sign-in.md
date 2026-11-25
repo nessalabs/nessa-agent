@@ -1,5 +1,10 @@
 # ChatGPT sign-in for Codex on other machines
 
+> **No machine is handed a token now (ADR 1417, #1421).** Every gateway runs
+> only its own agents, so the hand-off below has no consumer in this build.
+> Signing in and keeping the accounts in Settings stays; whether it goes, or
+> serves Cloud Boxes, is a follow-up.
+
 Issue #1403. Codex on a Boat VM, an SSH host or a paired machine can run on a
 person's ChatGPT plan, not only on an OpenAI API key. The gateway signs in to
 ChatGPT once per account, keeps the tokens in its vault, and hands each

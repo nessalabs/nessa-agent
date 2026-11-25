@@ -11,13 +11,12 @@
  */
 import type { AccessMode } from "./access"
 import type { Channel, ModelRef } from "./workspace-index"
-import type { ChannelPlace } from "./channel-place"
 
 /** The questions, in the order they are asked. */
 export const channelSteps = [
   "name",
   "folder",
-  "placement",
+  "coordinator",
   "model",
   "notes",
   "resources",
@@ -57,8 +56,6 @@ export interface ChannelDraft {
   readonly folder: string | null
   readonly model: ModelRef
   readonly access: AccessMode
-  readonly coordinatorPlacement: ChannelPlace
-  readonly threadPlacement: ChannelPlace
   /** Whether the channel starts with a coordinator; on unless turned off. */
   readonly coordinator: boolean
   readonly notes: string
@@ -73,8 +70,6 @@ export function emptyDraft(model: ModelRef): ChannelDraft {
   return {
     name: "",
     folder: null,
-    coordinatorPlacement: "local",
-    threadPlacement: "local",
     coordinator: true,
     model,
     access: "ask",
@@ -172,7 +167,6 @@ export type ChannelFailure =
   | "conflict"
   | "invalid"
   | "forbidden"
-  | "place-unavailable"
   | "unavailable"
 
 /** The step a failure sends the person back to; null when it is no one step's. */
@@ -184,8 +178,6 @@ export function failureStep(failure: ChannelFailure): ChannelStep | null {
       return "folder"
     case "resource-not-found":
       return "resources"
-    case "place-unavailable":
-      return "placement"
     case "invalid":
     case "limit":
     case "conflict":
@@ -214,8 +206,6 @@ export function failureText(failure: ChannelFailure): string {
       return "Something here isn’t one a channel can hold. Check the name and notes."
     case "forbidden":
       return "This window can’t make channels."
-    case "place-unavailable":
-      return "That computer isn’t connected now. Choose another place, or connect it first."
     case "unavailable":
       return "Nessa didn’t answer. Try again."
   }

@@ -88,34 +88,3 @@ fn chatgpt_authority() -> Option<OpenaiSignIn> {
     }
     authority
 }
-
-/// The environments' seam over the service: which login a harness started
-/// on a machine is handed.
-#[cfg(unix)]
-pub(super) struct ServiceLogins(pub(super) Arc<SavedLoginsService>);
-
-#[cfg(unix)]
-impl crate::conversation::infrastructure::ssh_environment::SavedLogins for ServiceLogins {
-    fn login<'a>(
-        &'a self,
-        environment: &'a nessa_sdk::domain::agent_execution::leases::EnvironmentRef,
-        agent: AgentId,
-        lease: &'a str,
-    ) -> crate::conversation::application::EnvironmentFuture<
-        'a,
-        Option<crate::conversation::infrastructure::ssh_environment::HandedLogin>,
-    > {
-        let service = self.0.clone();
-        let environment = environment.clone();
-        let lease = lease.to_owned();
-        Box::pin(async move {
-            service.hand(environment, agent, lease).await.map(|handed| {
-                crate::conversation::infrastructure::ssh_environment::HandedLogin {
-                    login: handed.login,
-                    renew_by_ms: handed.renew_by_ms,
-                    account: handed.account.map(|account| account.as_str().to_owned()),
-                }
-            })
-        })
-    }
-}

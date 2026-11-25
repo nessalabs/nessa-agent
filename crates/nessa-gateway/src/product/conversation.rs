@@ -1519,7 +1519,7 @@ fn requested_conversation(
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
         channel: requested_channel(params.channel_id.as_deref())?,
-        fork: None,
+        fork: false,
     })
 }
 /// A channel id as asked: one that is not an id is an invalid request.
@@ -1548,7 +1548,7 @@ fn requested_conversation_from_receipt(
         approval_mode: params.approval_mode.map(approval_mode),
         environment: params.environment.clone(),
         channel: requested_channel(params.channel_id.as_deref())?,
-        fork: None,
+        fork: false,
     })
 }
 fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {

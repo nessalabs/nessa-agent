@@ -58,8 +58,6 @@ it("clears a saved token and ignores an older status read, then disconnects", as
   let finishRead!: (value: BoatStatus) => void
   const calls: string[] = []
   const gateway: BoatGateway = {
-    runtimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
-    setRuntimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
     read: () =>
       new Promise((resolve) => {
         finishRead = resolve
@@ -100,8 +98,6 @@ it("clears a saved token and ignores an older status read, then disconnects", as
 
 it("reports a rejected save without claiming a connection", async () => {
   const gateway: BoatGateway = {
-    runtimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
-    setRuntimeSettings: async () => ({ defaultLifetime: { mode: "never" } }),
     read: async () => ({ state: "disconnected" }),
     save: async () => {
       throw new Error("fixture provider unavailable")

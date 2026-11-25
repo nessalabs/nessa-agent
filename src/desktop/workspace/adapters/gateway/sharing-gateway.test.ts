@@ -9,7 +9,6 @@ import {
   NessaRpcError,
   sharePage,
   toolPolicyBounds,
-  type AgentsListResult,
   type ConversationCapability,
   type ConversationSharesResult,
 } from "@nessa/client"
@@ -104,23 +103,12 @@ function client(
         methods: [],
       })),
     },
-    agents: {
-      list: vi.fn(
-        async () =>
-          ({
-            agents: [],
-            environments: ["here", "devbox"],
-            commandHosts: ["devbox"],
-            nativeHooks: [],
-          }) as unknown as AgentsListResult,
-      ),
-    },
   }
   return fake as typeof fake & SharingClient
 }
 
 describe("reading a session's sharing", () => {
-  it("reads its grants, the linked devices, the owner's command hosts and the schema's bounds", async () => {
+  it("reads its grants, the linked devices and the schema's bounds, with no command hosts to offer", async () => {
     const gateway = client()
     const source = sharingGateway({ connected: async () => gateway })
     const grants = await source.grants("c1")
@@ -148,7 +136,7 @@ describe("reading a session's sharing", () => {
     // Not the session's own, not revoked, not one holding more than reading,
     // and not the owner's phone, which reads every chat already.
     expect(read.targets.map((target) => target.credentialId)).toEqual(["phone", "tablet"])
-    expect(read.commandHosts).toEqual(["devbox"])
+    expect(read.commandHosts).toEqual([])
     expect(read.limits).toBe(toolPolicyBounds)
     expect(read.limits).toEqual({
       patterns: 16,

@@ -170,8 +170,6 @@ function Panel() {
             chosenAgent: undefined,
             catalog: {
               agents: [],
-              environments: [],
-              commandHosts: [],
               nativeHooks: { claude: "off", codex: "off" },
             },
           })

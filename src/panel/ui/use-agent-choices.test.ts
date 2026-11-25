@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 /**
- * A draft's choices are bound to what the gateway's catalog offers now. A
- * host the catalog no longer offers is not kept in the draft: "Run on" shows
- * only offered hosts, so a host nobody can see any more would make every
- * send fail with `environment_not_configured` and no way to change it.
+ * A draft with no choice yet is bound to what the gateway's catalog offers
+ * now; a choice it already holds, or a created conversation's, is left alone.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import * as React from "react"
@@ -22,7 +20,6 @@ const setSelection = vi.fn()
 function Draft(props: {
   selection?: ConversationSelection
   serverConversationId?: string
-  environments?: readonly string[]
 }) {
   useBindCatalogFallback({
     id: "draft",
@@ -45,51 +42,26 @@ afterEach(() => {
   act(() => root.unmount())
 })
 
-const onDevbox: ConversationSelection = {
+const chosen: ConversationSelection = {
   agent: "claude",
   model: "sonnet",
   approvalMode: "auto",
-  environment: "devbox",
 }
 
-it("drops a host the catalog no longer offers from a draft, keeping its other choices", () => {
-  act(() =>
-    root.render(
-      React.createElement(Draft, { selection: onDevbox, environments: ["other"] }),
-    ),
-  )
-  expect(setSelection).toHaveBeenCalledWith("draft", {
-    agent: "claude",
-    model: "sonnet",
-    approvalMode: "auto",
-  })
-})
-
-it("keeps an offered host, and any host while the catalog is not known", () => {
-  act(() =>
-    root.render(
-      React.createElement(Draft, { selection: onDevbox, environments: ["devbox"] }),
-    ),
-  )
-  act(() => root.render(React.createElement(Draft, { selection: onDevbox })))
+it("keeps a draft's own choice", () => {
+  act(() => root.render(React.createElement(Draft, { selection: chosen })))
   expect(setSelection).not.toHaveBeenCalled()
 })
 
-it("leaves a created conversation's selection alone", () => {
+it("leaves a created conversation alone", () => {
   act(() =>
-    root.render(
-      React.createElement(Draft, {
-        selection: onDevbox,
-        serverConversationId: "conversation",
-        environments: [],
-      }),
-    ),
+    root.render(React.createElement(Draft, { serverConversationId: "conversation" })),
   )
   expect(setSelection).not.toHaveBeenCalled()
 })
 
 it("binds the catalog's default to a draft with no selection", () => {
-  act(() => root.render(React.createElement(Draft, { environments: [] })))
+  act(() => root.render(React.createElement(Draft, {})))
   expect(setSelection).toHaveBeenCalledWith("draft", {
     agent: "claude",
     model: "sonnet",
@@ -103,7 +75,7 @@ function Choices(props: {
   follow: (show: (choices: ConversationChoices) => void) => () => void
 }) {
   const choices = useConversationChoices(props.available, props.follow)
-  return React.createElement("p", null, choices?.catalog.environments.join(",") ?? "none")
+  return React.createElement("p", null, choices?.catalog.nativeHooks.claude ?? "none")
 }
 
 it("replaces the choices with each catalog the follow sends, and stops it on unmount", () => {
@@ -117,29 +89,18 @@ it("replaces the choices with each catalog the follow sends, and stops it on unm
   expect(container.textContent).toBe("none")
   act(() =>
     show?.({
-      catalog: {
-        agents: [],
-        environments: ["devbox"],
-        commandHosts: [],
-        nativeHooks: OFF,
-      },
+      catalog: { agents: [], nativeHooks: OFF },
       chosenAgent: undefined,
     }),
   )
-  expect(container.textContent).toBe("devbox")
-  const peer = `peer:${"ab".repeat(32)}`
+  expect(container.textContent).toBe("off")
   act(() =>
     show?.({
-      catalog: {
-        agents: [],
-        environments: ["devbox", peer],
-        commandHosts: [],
-        nativeHooks: OFF,
-      },
+      catalog: { agents: [], nativeHooks: { ...OFF, claude: "on" } },
       chosenAgent: undefined,
     }),
   )
-  expect(container.textContent).toBe(`devbox,${peer}`)
+  expect(container.textContent).toBe("on")
   expect(follow).toHaveBeenCalledOnce()
   expect(stop).not.toHaveBeenCalled()
   act(() => root.unmount())
@@ -158,12 +119,7 @@ it("stops the follow and offers nothing while the gateway is unavailable", () =>
   act(() => root.render(React.createElement(Choices, { available: true, follow })))
   act(() =>
     show?.({
-      catalog: {
-        agents: [],
-        environments: ["devbox"],
-        commandHosts: [],
-        nativeHooks: OFF,
-      },
+      catalog: { agents: [], nativeHooks: OFF },
       chosenAgent: undefined,
     }),
   )

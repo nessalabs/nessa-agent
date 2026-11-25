@@ -86,14 +86,13 @@ impl BuiltInServer for ConversationTools {
         vec![
             json!({
                 "name": "create_thread",
-                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model; in a channel you made it stays in your conversation's channel and starts on your conversation's approval mode, wherever it runs. environment \"peer:any\" lets the gateway pick a paired computer by the person's priority order and current load (see environments_list). When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
+                "description": "Create an empty thread owned by the person whose turn is calling. Returns its threadId. Uses the configured default agent/model; in a channel you made it stays in your conversation's channel and starts on your conversation's approval mode. It runs on this computer, like every thread this gateway runs. When the configuration bounds how many threads one conversation may have at work, past it this answers thread_limit_reached: end your turn, and a thread's report wakes you to create the next.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "requestId": identity,
                         "agent": {"type": "string", "enum": AgentId::ALL.iter().map(|agent| agent.name()).collect::<Vec<_>>()},
                         "model": {"type": "string"},
-                        "environment": {"type": "string"},
                     },
                     "additionalProperties": false,
                 },
@@ -355,8 +354,6 @@ struct Create {
     agent: Option<AgentId>,
     #[serde(default, deserialize_with = "supplied")]
     model: Option<String>,
-    #[serde(default, deserialize_with = "supplied")]
-    environment: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -809,9 +806,9 @@ async fn run(
                         agent: args.agent.map(RequestedAgent::Known),
                         model: args.model,
                         approval_mode: None,
-                        environment: args.environment,
+                        environment: None,
                         channel: None,
-                        fork: None,
+                        fork: false,
                     },
                 )
                 .await

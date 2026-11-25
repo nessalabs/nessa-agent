@@ -96,57 +96,6 @@ export type ConversationSelection = {
   agent: string
   model: string
   approvalMode: ApprovalMode
-  /** Where the conversation runs for its whole life: an SSH host or paired
-   * machine the gateway's catalog names, or {@link HERE} for the gateway's
-   * own machine. Absent runs it on the gateway's default device (the
-   * catalog's `defaultEnvironment`), or its own machine when it has none. */
-  environment?: string
-}
-
-/** The gateway's own machine, named outright: a draft that chose it keeps
- * it even when another device is the default. */
-export const HERE = "here"
-
-/**
- * Where a draft will run, as the gateway places it: what it chose, else the
- * default device `fallback` names. `undefined` is the gateway's own machine.
- */
-export function chosenEnvironment(
-  selection: ConversationSelection | undefined,
-  fallback: string | undefined,
-): string | undefined {
-  const chosen = selection?.environment ?? fallback
-  return chosen === HERE ? undefined : chosen
-}
-
-/**
- * Whether a file on this machine can be linked into the conversation by its
- * path: only when its agent runs here. One placed on an SSH host or another
- * computer — chosen for this tab, named by its lease, or, for a draft not yet
- * created that chose nowhere, the default device `defaultEnvironment` names —
- * reads that machine's files, where this machine's path names nothing, or
- * something else. The gateway refuses such a message
- * (`linked_file_unreachable`); this is the panel's early word for it. Images
- * travel with their bytes and are unaffected.
- */
-export function linksFilesHere(
-  conversation: {
-    selection?: ConversationSelection
-    remote?: { lease?: { environment?: "here" | "ssh" | "peer" | "boat" } }
-    serverConversationId?: string
-    turns?: readonly unknown[]
-  },
-  defaultEnvironment?: string,
-): boolean {
-  const environment = conversation.remote?.lease?.environment
-  // The default applies where the gateway applies it: at creation, to a
-  // conversation that names no place. Once created, its lease says.
-  const draft = !conversation.serverConversationId && !conversation.turns?.length
-  const chosen = chosenEnvironment(
-    conversation.selection,
-    draft ? defaultEnvironment : undefined,
-  )
-  return chosen === undefined && environment !== "ssh" && environment !== "peer"
 }
 
 /** Creation fixes the selection before the first send or attachment upload. */
@@ -209,32 +158,20 @@ export type CommandFailure =
   | "agent-sign-in-required"
   /** No lease was granted: the sandbox the agent runs in could not be given. */
   | "sandbox-unavailable"
-  /** This conversation runs on an SSH host the gateway does not name any more. */
+  /**
+   * An older build ran this conversation on another computer; every gateway
+   * now runs only its own agents (ADR 1417), so it cannot run.
+   */
   | "environment-not-configured"
-  /** Its SSH host could not be reached, is busy, or cannot run its agent. */
+  /**
+   * The rest are answered only by builds that still ran agents on other
+   * computers: the computer could not be reached, ran another build, had no
+   * build for its platform, or could not install one. Nothing was sent.
+   */
   | "environment-unavailable"
-  /**
-   * Its SSH host's copy of this build, where the gateway installs it, speaks
-   * another lease protocol; nothing was sent there.
-   */
   | "environment-version-mismatch"
-  /**
-   * Its SSH host had no copy of this build, and runs on a system or processor
-   * this build has no copy for (its own, or a release's build of it for that
-   * platform); nothing was installed or sent there.
-   */
   | "environment-platform-unsupported"
-  /**
-   * Its SSH host had no copy of this build, and installing one failed: it
-   * could not be downloaded, did not verify, did not run there, or could not
-   * be stored. Nothing was sent.
-   */
   | "environment-install-failed"
-  /**
-   * The message links a file by its path on this machine, and the
-   * conversation runs on an SSH host, which cannot read it. Nothing was sent.
-   */
-  | "linked-file-unreachable"
   | "conversation-state-unreadable"
   /**
    * A restored conversation's recorded source is gone. The command was not

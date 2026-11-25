@@ -11,7 +11,6 @@ import { NessaBoatError, type BoatStatus } from "@nessa/client"
 import { Dialog } from "@nessa-ui/react/dialog"
 import type { BoatGateway } from "../adapters/boat-gateway"
 import { useVaultUnlock } from "../../../vault"
-import { BoatRuntimeControl } from "./boat-runtime-control"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 const BoatContext = createContext<BoatGateway | undefined>(undefined)
@@ -139,12 +138,11 @@ export function useBoatConnection(
   }
 }
 
-/** The token form, the VM lifetime, and any error: Boat's settings wherever they are shown. */
+/** The token form and any error: Boat's settings wherever they are shown. */
 export function BoatConnectionFields({ connection }: { connection: BoatConnection }) {
   return (
     <div className="settings-boat">
       <BoatTokenForm connection={connection} />
-      <BoatRuntimeControl gateway={connection.gateway} />
       {connection.error && <p role="alert">{connection.error}</p>}
     </div>
   )
@@ -245,8 +243,7 @@ export function BoatConnected({ connection }: { connection: BoatConnection }) {
 
 /**
  * Settings › Connections › Accounts › Boat: one word of where it stands and
- * one button. The token is pasted in a dialog that Connect… opens; how long
- * VMs live is its own row, beside it (`BoatRuntimeControl`).
+ * one button. The token is pasted in a dialog that Connect… opens.
  */
 export function BoatRow({
   onChange,
@@ -309,7 +306,6 @@ export function BoatRow({
           )
         }
       />
-      <BoatRuntimeControl gateway={connection.gateway} />
       {asking ? (
         <Dialog
           open

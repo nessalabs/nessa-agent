@@ -6,9 +6,7 @@
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
 use crate::conversation::application::{
-    ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
-    PUBLISH_CALL_WAIT,
 };
 use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
 use crate::conversation::domain::{CommandHosts, ToolRules};
@@ -17,14 +15,11 @@ use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_B
 use crate::product::passive_read::deadlines::RECORD_SEND_TIMEOUT;
 use crate::product::{OperationalLimits, SessionSettings, RECORD_LANE, RECORD_SLOT, REFUSAL_LANE};
 use nessa_attachments::application::{AttachmentLimits, HeldReads};
+use nessa_attachments::domain::Attachment;
 use nessa_peer_gateways::application::DISCOVERY_WINDOW;
 use nessa_peer_gateways::infrastructure::{
     AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
     WITHDRAWN_PER_READ,
-};
-use nessa_protocol::lease::{
-    COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_READS_IN_FLIGHT,
-    MAX_DATA_BYTES, MAX_FETCHES_IN_FLIGHT, MAX_OPEN_PUBLISHERS,
 };
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_GRANT_SUBSCRIPTIONS,
@@ -34,7 +29,6 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
-use nessa_sdk::domain::agent_execution::leases::{CommandOutput, CommandWork, Lease};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -330,50 +324,14 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "artifact.max_file_bytes",
             tier: "fixed",
-            owner: "nessa_protocol::lease MAX_ARTIFACT_BYTES",
-            meaning: "a host refuses to publish a larger file, and the gateway to keep one",
-        },
-        Limit {
-            id: "artifact.host_in_flight",
-            tier: "fixed",
-            owner: "nessa_protocol::lease MAX_ARTIFACTS_IN_FLIGHT",
-            meaning: "a publish past this many unanswered under one lease is answered busy",
-        },
-        Limit {
-            id: "artifact.paired_reads_in_flight",
-            tier: "fixed",
-            owner: "nessa_protocol::lease MAX_ARTIFACT_READS_IN_FLIGHT",
-            meaning: "the reads of one published file an environment holds over a paired connection until each answer is handed to its writer; one more is refused busy",
-        },
-        Limit {
-            id: "artifact.host_open_publishers",
-            tier: "fixed",
-            owner: "nessa_protocol::lease MAX_OPEN_PUBLISHERS",
-            meaning: "a publisher connecting while this many are open waits to be accepted",
-        },
-        Limit {
-            id: "artifact.environment_files",
-            tier: "fixed",
-            owner: "conversation ArtifactBudget::LEASE.files",
-            meaning: "a file one lease publishes past this many kept is refused unread",
-        },
-        Limit {
-            id: "artifact.environment_bytes",
-            tier: "fixed",
-            owner: "conversation ArtifactBudget::LEASE.bytes",
-            meaning: "a file that would take one lease's total kept bytes past this is refused unread",
+            owner: "attachments Attachment::MAX_BYTES",
+            meaning: "the gateway refuses to keep a larger file",
         },
         Limit {
             id: "artifact.conversation_records",
             tier: "fixed",
             owner: "nessa-sdk ArtifactRecord::MAX_PER_CONVERSATION",
             meaning: "a file published once a conversation records this many is refused unread",
-        },
-        Limit {
-            id: "artifact.read_resumes",
-            tier: "fixed",
-            owner: "conversation ARTIFACT_READ_RESUMES",
-            meaning: "a published file's read, or a fetched file's write, whose channel fails more often than this is refused channelUnavailable; each resumes from the offset acknowledged",
         },
         Limit {
             id: "artifact.read_range_bytes",
@@ -410,42 +368,6 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "attachments AttachmentLimits::publish_deadline",
             meaning: "a published file not read and checked by then is refused, and nothing held",
-        },
-        Limit {
-            id: "artifact.publish_call_wait",
-            tier: "fixed",
-            owner: "conversation PUBLISH_CALL_WAIT",
-            meaning: "an artifacts_publish call whose file is not kept this long after it asked answers timed_out; counted from the ask, so it covers staging and any wait behind files already offered under the lease as well as the read; a timed_out file may still be kept, named for the call's person",
-        },
-        Limit {
-            id: "artifact.fetch_bytes",
-            tier: "fixed",
-            owner: "conversation ArtifactBudget::LEASE.fetch_bytes",
-            meaning: "an artifacts_fetch that would take one lease's fetched bytes past this is refused budget_exceeded before the environment is asked; a fetch's size is given back when its answer says it placed nothing, or when no answer came and every byte was never said delivered",
-        },
-        Limit {
-            id: "artifact.fetch_call_wait",
-            tier: "fixed",
-            owner: "conversation FETCH_CALL_WAIT",
-            meaning: "an artifacts_fetch call not answered this long after it asked answers timed_out; stopped before every byte was written, the environment places nothing, and after, it may still place the file",
-        },
-        Limit {
-            id: "server.fetch_reads",
-            tier: "fixed",
-            owner: "conversation FETCH_READS",
-            meaning: "held-file ranges artifacts_fetch reads at once across the gateway, apart from server.artifact_reads so fetches never lock a surface out; one more waits for a permit, within its call's wait",
-        },
-        Limit {
-            id: "artifact.fetch_busy_backoff",
-            tier: "fixed",
-            owner: "conversation FETCH_BUSY_BACKOFF",
-            meaning: "the longest a fetch's range waits, its read permit let go, before asking again after the store answered busy; it waits 250 then 500 ms, then this each time, within its call's wait",
-        },
-        Limit {
-            id: "artifact.host_fetches_in_flight",
-            tier: "fixed",
-            owner: "CurrentLease::MAX_ASKED_FETCHES (the gateway), nessa_protocol::lease MAX_FETCHES_IN_FLIGHT (the host)",
-            meaning: "a fetch past this many under way under one lease is refused busy by the gateway before the host is asked, with nothing recorded; the host refuses busy past this many unanswered as well, for any gateway",
         },
         Limit {
             id: "record.discovery_steps",
@@ -503,60 +425,6 @@ fn catalogue() -> &'static [Limit] {
             meaning: "how long one LAN announcement token is the token for its window; a paired peer also accepts the window on either side. The window index is Unix milliseconds divided by this, with integer division",
         },
         Limit {
-            id: "command.default_timeout_ms",
-            tier: "fixed",
-            owner: "CommandWork::DEFAULT_TIMEOUT_MS",
-            meaning: "a `run` naming no timeout is stopped after this, as timed out",
-        },
-        Limit {
-            id: "command.max_timeout_ms",
-            tier: "fixed",
-            owner: "CommandWork::MAX_TIMEOUT_MS",
-            meaning: "a `run` asking a longer timeout is refused before anything is recorded",
-        },
-        Limit {
-            id: "command.stop_wait_ms",
-            tier: "fixed",
-            owner: "lease protocol COMMAND_STOP_WAIT",
-            meaning: "a host that has not answered a command this long past its timeout, or past its stop, leaves it unanswered",
-        },
-        Limit {
-            id: "command.capture_bytes",
-            tier: "fixed",
-            owner: "lease protocol MAX_DATA_BYTES",
-            meaning: "a command's output past this, both streams together, is dropped from its start and counted",
-        },
-        Limit {
-            id: "command.retained_tail_bytes",
-            tier: "fixed",
-            owner: "CommandOutput::MAX_TAIL_BYTES",
-            meaning: "of each stream, only the newest this many bytes are kept in the command's record",
-        },
-        Limit {
-            id: "command.live_per_lease",
-            tier: "fixed",
-            owner: "Lease::MAX_LIVE_COMMANDS",
-            meaning: "a `run` while this many run under the agent's lease is refused `budget_exceeded`",
-        },
-        Limit {
-            id: "command.max_args",
-            tier: "fixed",
-            owner: "CommandWork::MAX_ARGS",
-            meaning: "a `run` with more arguments is refused before anything is recorded",
-        },
-        Limit {
-            id: "command.max_argv_bytes",
-            tier: "fixed",
-            owner: "CommandWork::MAX_ARGV_BYTES",
-            meaning: "a `run` whose arguments together are longer is refused before anything is recorded",
-        },
-        Limit {
-            id: "command.max_cwd_bytes",
-            tier: "fixed",
-            owner: "CommandWork::MAX_CWD_BYTES",
-            meaning: "a `run` whose working directory is longer is refused before anything is recorded",
-        },
-        Limit {
             id: "mcp.built_in_calls",
             tier: "fixed",
             owner: "built-in MCP server MAX_BUILT_IN_CALLS",
@@ -567,12 +435,6 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "MAX_EVENT_READERS in crates/nessa-conversation/src/application/agent_tools.rs",
             meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
-        },
-        Limit {
-            id: "boat.retained_environments",
-            tier: "fixed",
-            owner: "MAX_RETAINED_ENVIRONMENTS in crates/nessa-conversation/src/application/placement.rs",
-            meaning: "when full, release only environments with no opening caller, command or lease owner; if all are retained, refuse new opens as unavailable rather than grow or evict active work",
         },
         Limit {
             id: "agent_tools.source_admissions",
@@ -724,23 +586,11 @@ pub fn effective_json(
     );
     put("record.read_work_budget", millis(limits.read_work_budget()));
     put("record.discovery_steps", count(DISCOVERY_STEPS_PER_READ));
-    put("artifact.max_file_bytes", MAX_ARTIFACT_BYTES);
-    put("artifact.host_in_flight", count(MAX_ARTIFACTS_IN_FLIGHT));
-    put(
-        "artifact.paired_reads_in_flight",
-        count(MAX_ARTIFACT_READS_IN_FLIGHT),
-    );
-    put("artifact.host_open_publishers", count(MAX_OPEN_PUBLISHERS));
-    put(
-        "artifact.environment_files",
-        u64::from(ArtifactBudget::LEASE.files),
-    );
-    put("artifact.environment_bytes", ArtifactBudget::LEASE.bytes);
+    put("artifact.max_file_bytes", Attachment::MAX_BYTES);
     put(
         "artifact.conversation_records",
         count(ArtifactRecord::MAX_PER_CONVERSATION),
     );
-    put("artifact.read_resumes", u64::from(ARTIFACT_READ_RESUMES));
     put(
         "artifact.read_range_bytes",
         count(HeldReads::MAX_RANGE_BYTES),
@@ -759,18 +609,6 @@ pub fn effective_json(
         "artifact.publish_deadline",
         millis(AttachmentLimits::default().publish_deadline),
     );
-    put("artifact.publish_call_wait", millis(PUBLISH_CALL_WAIT));
-    put("artifact.fetch_bytes", ArtifactBudget::LEASE.fetch_bytes);
-    put("artifact.fetch_call_wait", millis(FETCH_CALL_WAIT));
-    put("server.fetch_reads", count(FETCH_READS));
-    put(
-        "artifact.fetch_busy_backoff",
-        millis(FETCH_BUSY_BACKOFF[FETCH_BUSY_BACKOFF.len() - 1]),
-    );
-    put(
-        "artifact.host_fetches_in_flight",
-        count(MAX_FETCHES_IN_FLIGHT),
-    );
     put("peer.poll_interval", millis(POLL_INTERVAL));
     put("peer.poll_backoff_cap", millis(POLL_BACKOFF_CAP));
     put("peer.read_budget", millis(READ_BUDGET));
@@ -779,28 +617,9 @@ pub fn effective_json(
     put("peer.audit_queue", count(AUDIT_QUEUE));
     put("peer.withdrawn_per_read", count(WITHDRAWN_PER_READ));
     put("peer.discovery_window", millis(DISCOVERY_WINDOW));
-    put(
-        "command.default_timeout_ms",
-        CommandWork::DEFAULT_TIMEOUT_MS,
-    );
-    put("command.max_timeout_ms", CommandWork::MAX_TIMEOUT_MS);
-    put("command.stop_wait_ms", millis(COMMAND_STOP_WAIT));
-    put("command.capture_bytes", count(MAX_DATA_BYTES));
-    put(
-        "command.retained_tail_bytes",
-        count(CommandOutput::MAX_TAIL_BYTES),
-    );
-    put("command.live_per_lease", count(Lease::MAX_LIVE_COMMANDS));
-    put("command.max_args", count(CommandWork::MAX_ARGS));
-    put("command.max_argv_bytes", count(CommandWork::MAX_ARGV_BYTES));
-    put("command.max_cwd_bytes", count(CommandWork::MAX_CWD_BYTES));
     put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
     put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
-    put(
-        "boat.retained_environments",
-        count(crate::conversation::application::MAX_RETAINED_ENVIRONMENTS),
-    );
     put(
         "agent_tools.source_admissions",
         count(MAX_AGENT_TOOL_ADMISSIONS),

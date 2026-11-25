@@ -2619,40 +2619,15 @@ denial checks still apply. The minimized sequence is seed 2 with one pool step
 and one notice step; pool precedes notice, whose page reload used to leave the
 vault dialog blocking the main conversation click.
 
-## Boat VM lifetime settings
+## Where agents run
 
-- [ ] The global default saves from Settings → Connections → Accounts without a
-  Boat token. A saved channel's gear opens its settings in both layouts. A new
-  channel inherits the global lifetime; picking a choice saves it at once (no
-  Save button); an explicit Never overrides
-  it, and Use Nessa default removes only that override. Invalid, null-scope and
-  contradictory commands leave the default unchanged. _Check:_
-  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
-  gateway; the same shared check runs in the conversation stress `channel` step.
-- [ ] The dialog's controls remain usable by keyboard and Escape closes it.
-  It says nothing beyond "Auto-stop VMs" and the choice, except under Never,
-  which adds that VMs keep billing until stopped in Boat. _Check:_ manual
-  screenshot/focus review and the settings control's rendered tests.
-- [ ] **A channel's settings read as one column in the desktop's type
-  (#1340).** Every setting's name, its detail line and the "Order for “Any”"
-  heading start at the dialog title's left edge, within 1 px; names are the
-  desktop's body size (`--desktop-text-body`) and details and headings its
-  footnote size (`--desktop-text-footnote`), both resolved inside the dialog;
-  the order for Any has its heading. _Check:_ `boat-runtime-settings.mjs`
-  (`default-override-reset`) measures each in Chromium and WebKit, columns and
-  sidebar; with `src` at the parent commit it fails on the unresolved type
-  tokens and the 16 px row inset.
-- [ ] **Each of a channel's choices is a menu at its row's end (#1340).** Main
-  agent, new threads, auto-stop and the order for Any are each a button that
-  says the choice and opens a menu; This Mac, Boat and Any computer come first,
-  then each connected computer by name, and a computer saved earlier but not
-  connected is still listed. Every button ends one inset from the dialog's
-  right edge (the title's left inset, within 1 px), and the dialog has no row
-  of tabs, and no note under the order explaining how Any picks a computer
-  (Devices keeps it). _Check:_ `boat-runtime-settings.mjs` measures the four menus and
-  picks through them in Chromium and WebKit, columns and sidebar; the
-  conversation stress `channel` and `place` steps pick Boat, This Mac and a
-  paired worker from them; `channel-settings.test.tsx` lists the menu's items.
+- [ ] **Every agent runs on this gateway's own machine (ADR 1417).** No composer
+  offers Run on, no channel is made or set up with a location, and Settings has
+  no auto-stop for VMs, no thread order and no device switches for saved
+  logins. A conversation an older build placed on another computer stays listed
+  and readable, and a new message to it is refused `environment_not_configured`.
+  _Check:_ the conversation stress `channel` step (no location question, no
+  placement in the listing) and `upgrade` step (the stranded conversation).
 
 
 ## Background tasks
@@ -2661,13 +2636,6 @@ vault dialog blocking the main conversation click.
   the MCP relay. Its original waterfall row stays running after the calling turn
   finishes, then settles with the command's actual output. Exactly one internal
   continuation reaches the conversation and no synthetic user bubble appears.
-- The `vmBackground` step places its conversation on Boat through a test-only
-  gateway composition. Its fake provider uses the real workspace holds, verified
-  helper installer and Shepherd subprocess, with no Boat HTTP or SSH. Send is
-  through the composer. The task runs in its admitted VM cwd, remains running
-  past the fixture’s accelerated idle limit (3 seconds; production remains
-  5 minutes), settles the original row once, and permits rest afterward. Run its
-  default count and raised `--vmBackgroundTasks 3`; the nightly load uses 3.
 - Check the running and completed row in Chromium and WebKit. Ordinary foreground
   tools still settle when their calling turn ends. No separate task list is added.
 

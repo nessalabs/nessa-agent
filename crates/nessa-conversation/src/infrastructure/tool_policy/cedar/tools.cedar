@@ -30,8 +30,7 @@ permit (
 when {
   ["read_only_tools", "no_shell"].contains(principal.toolPreset) &&
   ((resource.source == "claude" && ["Read", "Glob", "Grep", "LS", "ToolSearch"].contains(resource.name)) ||
-   (resource.source == "codex" && resource.name == "read") ||
-   (resource.source == "gateway" && resource.name == "environments_list"))
+   (resource.source == "codex" && resource.name == "read"))
 };
 
 // Tools that change files or reach the network but run no command, for

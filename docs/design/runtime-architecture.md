@@ -17,6 +17,22 @@ delivery), [0010](../adr/done/0010-local-authentication.md) (identity),
 redefines none of their protocols. Nothing here authorizes a runtime rewrite;
 each slice is an issue of its own.
 
+> **Retired in part (ADR 1417, #1421).** Every gateway now runs only its own
+> agents: a conversation runs where its gateway is, and a machine of your own
+> or a Cloud Box runs a gateway of its own that the desktop and phone reach
+> directly. The SSH environment role (`nessa env serve`, `env dial`, the lease
+> protocol and its fingerprint), first-use install and release host builds,
+> paired-worker pools, SFTP artifact channels, the agent's
+> `environments_list` / `run` tools and remote terminals are gone from the
+> code. The sections below that describe them ([Slice B](#slice-b-a-conversation-on-an-ssh-host-699),
+> [Slice C](#slice-c-environments_list-and-run-for-the-agent-700),
+> [Slice F](#slice-f-first-use-install-over-ssh-703),
+> [Three transports](#three-transports-one-contract) and
+> [Artifacts across devices](#artifacts-across-devices)) are kept as the
+> record of that design, not as a description of this build. A conversation
+> an older build placed elsewhere is refused `environment_not_configured`
+> and its history stays readable.
+
 ## How to read this
 
 Start with [the words](#the-words), then [the picture](#the-picture), then

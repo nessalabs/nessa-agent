@@ -1,5 +1,10 @@
 # Saved logins
 
+> **No machine is handed a login now (ADR 1417, #1421).** Every gateway runs
+> only its own agents, so paired machines and SSH hosts are gone and the
+> per-device switch with them. Saving a login in Settings stays; handing it
+> to Cloud Boxes is a follow-up.
+
 Issue #1260. Sign in an agent once, on the gateway, and every machine in
 Devices that runs agents for it can use that sign-in.
 

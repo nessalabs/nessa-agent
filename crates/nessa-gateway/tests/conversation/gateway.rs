@@ -136,8 +136,6 @@ mod gateway {
         state.verifier = authority;
         state.with_agents_catalog(
             serde_json::from_value(serde_json::json!({
-                "environments": [],
-                "commandHosts": [],
                 "agents": [{
                     "agent": "claude",
                     "defaultModel": "test",
@@ -266,62 +264,6 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 assert_eq!(response.error.unwrap().code, "forbidden");
             }
         }
-    }
-    /// Review finding on #748: a paired environment is a place a new
-    /// conversation may run only while it is connected, so the catalog lists
-    /// it, after the SSH hosts, as connected when asked, never as composed.
-    #[tokio::test]
-    async fn the_agent_catalog_lists_the_paired_environments_connected_when_asked() {
-        let connected = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let listed = connected.clone();
-        let state =
-            chat_state().with_connected_environments(crate::product::ConnectedEnvironments {
-                names: Arc::new(move || listed.lock().unwrap().clone()),
-                changes: tokio::sync::watch::Sender::new(0).subscribe(),
-            });
-        let session = chat_session(&state, "owner-phone").await;
-        let places = |response: ResponseFrame| response.payload.unwrap()["environments"].clone();
-        let before = places(chat_request(&state, &session, "agents.list", json!({})).await);
-        let peer = format!("peer:{}", "ab".repeat(32));
-        connected.lock().unwrap().push(peer.clone());
-        let mut expected = before.as_array().unwrap().clone();
-        expected.push(json!(peer));
-        assert_eq!(
-            places(chat_request(&state, &session, "agents.list", json!({})).await),
-            json!(expected)
-        );
-        connected.lock().unwrap().clear();
-        assert_eq!(
-            places(chat_request(&state, &session, "agents.list", json!({})).await),
-            before
-        );
-    }
-    /// nessa_ui#129: `agents.list` names, beside its places, the ones the
-    /// owner's turns may run commands on, read from the conversation service
-    /// as the catalog is read; and none where the gateway runs no
-    /// conversations, so a share dialog offers a Drive grant no host.
-    #[tokio::test]
-    async fn the_agent_catalog_names_the_places_that_take_the_owners_commands() {
-        let state = chat_state();
-        let session = chat_session(&state, "owner-phone").await;
-        let hosts =
-            |response: ResponseFrame| response.payload.unwrap()["commandHosts"].clone();
-        assert_eq!(
-            hosts(chat_request(&state, &session, "agents.list", json!({})).await),
-            json!([])
-        );
-        let mut catalog = serde_json::to_value(state.agents.catalog.as_deref().unwrap()).unwrap();
-        catalog["environments"] = json!(["agentbox", "build.example", "devbox"]);
-        let root = tempfile::tempdir().unwrap();
-        let service =
-            crate::conversation_test_support::service_with_command_hosts(root.path());
-        let state = state
-            .with_agents_catalog(serde_json::from_value(catalog).unwrap())
-            .with_conversations(Arc::new(service));
-        let response = chat_request(&state, &session, "agents.list", json!({})).await;
-        let payload = response.payload.unwrap();
-        assert_eq!(payload["environments"], json!(["agentbox", "build.example", "devbox"]));
-        assert_eq!(payload["commandHosts"], json!(["devbox"]));
     }
     pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input
@@ -583,7 +525,6 @@ policy: &nessa_auth::adapters::cedar::CedarPolicyEvaluator::new().unwrap(),
                 ),
                 clock: Arc::new(conversation_support::TestClock),
                 environment: crate::conversation::infrastructure::in_process_environment().into(),
-                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             Some("/workspace".into()),

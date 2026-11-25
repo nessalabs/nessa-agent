@@ -2,7 +2,7 @@
  * Composite `ChannelSource` across 1..N gateways (ADR 1417, #1419).
  *
  * Routes channel creation to `draft.gatewayId ?? LOCAL_GATEWAY_ID` and channel
- * placement/coordinator mutations to the channel's owning gateway, qualifying
+ * coordinator mutations to the channel's owning gateway, qualifying
  * returned channel IDs at the boundary without cross-gateway fallback (G1, G2, G10).
  */
 import {
@@ -13,11 +13,7 @@ import {
 } from "../../model/gateway-id"
 import type { ChannelDraft } from "../../model/channel-draft"
 import type { Channel } from "../../model/workspace-index"
-import {
-  ChannelCreationError,
-  type ChannelPlacement,
-  type ChannelSource,
-} from "../../application/ports"
+import { ChannelCreationError, type ChannelSource } from "../../application/ports"
 
 export interface ManagedChannelGateway {
   readonly gatewayId: string
@@ -71,20 +67,6 @@ export function multiChannelGateway(backing: MultiGatewayChannelBacking): Channe
       const gateway = resolveGateway(targetGatewayId)
       const created = await gateway.channels.create(draft, requestId)
       return qualifyChannel(gateway.gatewayId, created)
-    },
-
-    async setPlacement(
-      channelId: string,
-      placement: ChannelPlacement,
-      requestId: string,
-    ): Promise<Channel> {
-      const { gatewayId, rawId } = parseQualifiedId(channelId)
-      const gateway = resolveGateway(gatewayId)
-      if (!gateway.channels.setPlacement) {
-        throw new ChannelCreationError("unavailable")
-      }
-      const updated = await gateway.channels.setPlacement(rawId, placement, requestId)
-      return qualifyChannel(gateway.gatewayId, updated)
     },
 
     async setCoordinator(
