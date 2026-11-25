@@ -348,7 +348,7 @@ impl NativeEnrollmentClient {
                 if saved.gateway_pin() != route.pin() {
                     return Err(NativeClientError::Phase);
                 }
-                let (stream, deadline) = route
+                let (stream, deadline, _) = route
                     .join(&episode, wake, &reactor)
                     .map_err(|error| NativeClientError::Io(error.kind()))?;
                 status_exchange(stream, &deadline, pending, saved, received.as_ref())

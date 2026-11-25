@@ -6,6 +6,7 @@ use nessa_protocol::{
     pairing::socket::{check_deadline, DeadlineStream, NativeDeadline, NativeSocket, WakeEndpoint},
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
+use nessa_sync::replication::infrastructure::session::SessionInterrupt;
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result, Write},
@@ -71,6 +72,14 @@ pub(crate) trait JoinedStatusDial: Send + Sync {
     fn dial(&self, address: SocketAddr) -> JoinedDialFuture;
 }
 
+// The stream remains the sole registration owner. Consuming this result
+// hands the next protocol the original stream, never a rewrapped raw socket.
+pub(crate) type JoinedStream = (
+    DeadlineStream<JoinedStatusSocket>,
+    Arc<NativeDeadline>,
+    Arc<dyn SessionInterrupt>,
+);
+
 pub(crate) struct JoinedStatusRoute {
     address: SocketAddr,
     pin: [u8; 44],
@@ -109,7 +118,7 @@ impl JoinedStatusRoute {
         episode: &JoinedEpisode,
         wake: Arc<WakeEndpoint>,
         reactor: &tokio::runtime::Handle,
-    ) -> Result<(DeadlineStream<JoinedStatusSocket>, Arc<NativeDeadline>)> {
+    ) -> Result<JoinedStream> {
         // Only the already-admitted blocking worker calls this, while the
         // caller runtime is driving status_completed. Do not create a runtime,
         // spawn a second reader, or move a pending dial out of this owner.
@@ -122,6 +131,7 @@ impl JoinedStatusRoute {
         })?;
         raw.set_nonblocking(false)?;
         let handle = episode.stop.register(&Arc::new(()), &raw)?;
+        let interrupt = handle.clone();
         let socket = JoinedStatusSocket {
             raw,
             stop: episode.stop.clone(),
@@ -136,7 +146,7 @@ impl JoinedStatusRoute {
         match read_frame(&mut io)? {
             RelayFrame::Joined => {
                 check_deadline(&deadline).map_err(deadline_io)?;
-                Ok((io, deadline))
+                Ok((io, deadline, interrupt))
             }
             other => Err(RelayRefusal::of(other)
                 .map_or_else(|| Error::from(ErrorKind::InvalidData), Error::from)),
@@ -248,7 +258,7 @@ mod tests {
             JoinedStatusRoute::new(addr, pin, Arc::new(crate::retained::TokioJoinedDial)).unwrap();
         let reactor = tokio::runtime::Handle::current();
         let worker_stop = stop.clone();
-        let (mut joined, _) = tokio::task::spawn_blocking(move || {
+        let (mut joined, _, interrupt) = tokio::task::spawn_blocking(move || {
             let episode = JoinedEpisode::new(Arc::new(Time), worker_stop, 2500);
             route.join(&episode, WakeEndpoint::new(addr), &reactor)
         })
@@ -256,13 +266,17 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(stop.lock().len(), 1);
+        interrupt.interrupt().unwrap();
+        assert!(!stop.is_stopped(), "socket interruption must not stop the episode");
+        assert_eq!(stop.lock().len(), 1);
         stop.stop();
         assert_eq!(
             joined.write(b"first TLS byte").unwrap_err().kind(),
             ErrorKind::ConnectionAborted
         );
         drop(joined);
-        assert!(stop.lock().is_empty());
+        assert!(stop.lock().is_empty(), "dropping the stream unregisters it");
+        drop(interrupt);
         peer.join().unwrap();
     }
 
