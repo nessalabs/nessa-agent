@@ -67,9 +67,9 @@ stateDiagram-v2
 
 ## Reconnect a remote terminal view
 
-A mounted pane for a listed remote terminal keeps its latest measured fit while the gateway is offline. The list retains the gateway's last confirmed terminals through a connection replacement. The next successful list confirms which terminals still exist, and removing a gateway clears its entries immediately. When the gateway connects, the view attaches to the same terminal using its raw ID. The last focused view restores its size ownership. Keys typed while the owner was offline are discarded. Closing the pane stops it from attaching when the gateway returns.
+A mounted pane for a listed remote terminal keeps its latest measured fit while the gateway is offline. The list retains the gateway's last confirmed terminals through a connection replacement. The next successful list confirms which terminals still exist, and removing a gateway clears its entries immediately. When the gateway connects, the view attaches to the same terminal using its raw ID. An idle pane also reconnects when the workspace adopts a replacement client. The last focused view restores its size ownership. A pending restoration attaches before a later resize or detach reaches the gateway. Keys typed while the owner was offline are discarded. Closing the pane stops future restoration.
 
-The working-tree adapter regressions cover opening a pane offline, receipt of the first output, replacement of the owner's terminal source, retention of the last focus owner, and closure before recovery. [Composite adapter tests](../../../../../src/desktop/workspace/adapters/gateway/multi-terminal-gateway.test.ts) · [Terminal gateway tests](../../../../../src/desktop/workspace/adapters/gateway/terminal-gateway.test.ts)
+The adapter regressions cover opening a pane offline, receipt of the first output, replacement of the owner's terminal source and adopted client, retention of the last focus owner, and closure before or during recovery. [Composite adapter tests](../../../../../src/desktop/workspace/adapters/gateway/multi-terminal-gateway.test.ts) · [Terminal gateway tests](../../../../../src/desktop/workspace/adapters/gateway/terminal-gateway.test.ts) · [Desktop composition tests](../../../../../src/desktop/dependencies.test.ts)
 
 ## Bounded rule model
 

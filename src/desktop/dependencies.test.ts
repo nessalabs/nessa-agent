@@ -29,7 +29,7 @@ import {
   WidgetRegistryError,
 } from "./widgets"
 import { deferred, fakeGateway, view } from "./workspace/adapters/gateway/fake-gateway"
-import { qualifyEntityId, sampleAppSession } from "./workspace"
+import { defaultGatewayTiming, qualifyEntityId, sampleAppSession } from "./workspace"
 import { fakeSource } from "./workspace/testing"
 
 /** What a fake client holds for Settings' servers: nothing these tests ask of it. */
@@ -381,6 +381,88 @@ function gatewayWithApp() {
 }
 
 describe("the window's workspace", () => {
+  it("rebinds idle terminal panes when their workspace adopts a replacement client", async () => {
+    const local = fakeGateway()
+    const first = fakeGateway()
+    const replacement = fakeGateway()
+    const fit = { cols: 80, rows: 24 }
+    const terminal = await first.client.terminals.open({
+      requestId: "first-term",
+      ...fit,
+    })
+    const firstAttach = vi.spyOn(first.client.terminals, "attach")
+    const replacementList = vi
+      .spyOn(replacement.client.terminals, "list")
+      .mockResolvedValue([terminal])
+    const replacementAttach = vi
+      .spyOn(replacement.client.terminals, "attach")
+      .mockResolvedValue(undefined)
+    const replacementFocus = vi
+      .spyOn(replacement.client.terminals, "focus")
+      .mockResolvedValue(undefined)
+    const connectRemote = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...first.client,
+        productSession: { gatewayId: "cloud-1" },
+      })
+      .mockResolvedValueOnce({
+        ...replacement.client,
+        productSession: { gatewayId: "cloud-1" },
+      })
+    const newId = vi.fn(() => "desktop-view")
+    const { gatewayRegistry, terminals, workspace } = createDesktopDependencies({
+      gateway: async () => ({
+        ...local.client,
+        ...settingsParts,
+        mcpApps: {} as McpAppsApi,
+      }),
+      gatewayStore: { read: () => [], write: () => {} },
+      connectRemote,
+      newId,
+    })
+    if (!gatewayRegistry || !terminals) throw new Error("missing desktop gateway")
+    await gatewayRegistry.add({
+      label: "Cloud Box",
+      url: "wss://cloud.example",
+      credential: "test",
+    })
+    const terminalId = qualifyEntityId("cloud-1", terminal.terminalId)
+    const listed = vi.fn()
+    const stopWorkspace = workspace.subscribe(() => {})
+    const stop = terminals.follow(listed)
+    await vi.waitFor(() =>
+      expect(listed).toHaveBeenLastCalledWith([
+        expect.objectContaining({ id: terminalId }),
+      ]),
+    )
+    const view = terminals.view(terminalId)
+    view.focus(fit)
+    await vi.waitFor(() => expect(firstAttach).toHaveBeenCalledTimes(1))
+
+    vi.useFakeTimers()
+    try {
+      first.setState({ status: "closed", error: new Error("retry exhausted") })
+      await vi.advanceTimersByTimeAsync(defaultGatewayTiming.retryMs)
+    } finally {
+      vi.useRealTimers()
+    }
+    await vi.waitFor(() => expect(replacementFocus).toHaveBeenCalledTimes(1))
+    expect(newId).toHaveBeenCalledTimes(1)
+    expect(connectRemote).toHaveBeenCalledTimes(2)
+    expect(replacementList).toHaveBeenCalledTimes(1)
+    expect(replacementAttach).toHaveBeenCalledExactlyOnceWith({
+      terminalId: terminal.terminalId,
+      viewId: "desktop-view",
+      ...fit,
+    })
+    view.release()
+    stop()
+    stopWorkspace()
+    await settled()
+    gatewayRegistry.dispose()
+  })
+
   it("reads held attachments from the conversation's owning gateway", async () => {
     const local = fakeGateway()
     const remote = fakeGateway()

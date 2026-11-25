@@ -424,6 +424,7 @@ export function createGatewayRegistry(
     entry.source = source
     entry.terminals = terminalGateway({
       connected: source.connected,
+      followClient: source.followClient,
       newId,
     })
     entry.channels = channelGateway({

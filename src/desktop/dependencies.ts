@@ -301,6 +301,7 @@ export function createDesktopDependencies(
   const localTerminals = source
     ? terminalGateway({
         connected: () => source.connected(),
+        followClient: source.followClient,
         newId,
       })
     : undefined

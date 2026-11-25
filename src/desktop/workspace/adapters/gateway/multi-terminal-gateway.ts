@@ -231,7 +231,7 @@ export function multiTerminalGateway(
           if (existing && existing.terminals !== entry.terminals) {
             existing.unsub()
             childUnsubs.delete(entry.gatewayId)
-            rawListsByGateway.delete(entry.gatewayId)
+            // The replacement confirms which terminals it still holds on its first list.
             changed = true
           }
           if (!childUnsubs.has(entry.gatewayId)) {

@@ -165,7 +165,7 @@ describe("multiTerminalGateway (ADR 1417 G1, G2, G10, G11)", () => {
     unsub()
   })
 
-  it("attaches a mounted offline pane to its owner on recovery and outlives a source replacement", () => {
+  it("attaches a mounted offline pane to its owner on recovery and outlives a source replacement", async () => {
     const local = fakeTerminalSource()
     const cloud = fakeTerminalSource()
     const replacement = fakeTerminalSource()
@@ -192,6 +192,15 @@ describe("multiTerminalGateway (ADR 1417 G1, G2, G10, G11)", () => {
     }
     const terminals = multiTerminalGateway(backing)
     const terminalId = qualifyEntityId("cloud-1", RAW_TERM_ID)
+    const listed = vi.fn<(entries: readonly TerminalEntry[]) => void>()
+    const stopFollowing = terminals.follow(listed)
+    const confirmed = await cloud.source.open({ kind: "shell" }, "listed-request", {
+      cols: 80,
+      rows: 24,
+    })
+    cloud.pushList([confirmed])
+    const listedIds = () => listed.mock.lastCall?.[0].map((terminal) => terminal.id)
+    expect(listedIds()).toEqual([terminalId])
     const abandoned = terminals.view(terminalId)
     abandoned.fit({ cols: 60, rows: 20 })
     abandoned.release()
@@ -232,8 +241,10 @@ describe("multiTerminalGateway (ADR 1417 G1, G2, G10, G11)", () => {
       .mockReturnValueOnce(otherReplacement)
     remote = { ...remote, status: "reconnecting", terminals: replacement.source }
     for (const listener of topology) listener()
+    expect(listedIds()).toEqual([terminalId])
     remote = { ...remote, status: "connected" }
     for (const listener of topology) listener()
+    expect(listedIds()).toEqual([terminalId])
     expect(cloud.view.release).toHaveBeenCalledTimes(1)
     expect(replacement.view.focus).toHaveBeenCalledExactlyOnceWith(latest)
     expect(otherReplacement.focus).not.toHaveBeenCalled()
@@ -243,9 +254,12 @@ describe("multiTerminalGateway (ADR 1417 G1, G2, G10, G11)", () => {
     expect(output.mock.calls).toEqual([[{ type: "checkpoint" }], [{ type: "frame" }]])
     expect(local.source.view).not.toHaveBeenCalled()
 
+    replacement.pushList([])
+    expect(listedIds()).toEqual([])
     mounted.release()
     mounted.release()
     otherPane.release()
+    stopFollowing()
     expect(replacement.view.release).toHaveBeenCalledTimes(1)
     expect(topology.size).toBe(0)
   })
