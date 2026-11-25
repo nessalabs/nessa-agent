@@ -116,11 +116,18 @@ stream without a valid record settles interrupted with cleanup unconfirmed.
 Terminal output travels with the final record; live output updates are not
 published by this background-task API. Explicit cancellation, gateway
 shutdown and conversation deletion stop the owned scope. Cancellation intent,
-physical exit and verified cleanup remain separate evidence. An uncertain cleanup
-cannot become a successful shutdown or deletion. The existing service retains a
-failed owner for joining; unconfirmed cleanup can therefore keep a cloud thread
-from idle rest. Automatic reconciliation of that uncertainty remains outside
-this change, as it is for local tasks.
+physical exit and verified cleanup remain separate evidence. A stop answers for
+what it stops: an owner it joins whose cleanup is uncertain, or a record still
+unsettled, refuses the shutdown or deletion. The service retains such a failed
+owner for joining, so it can keep a cloud thread from idle rest. A record that
+settled with unconfirmed cleanup before the stop (interrupted by a restart, or a
+VM stream lost earlier) is different: no stop can confirm it, so it still
+refuses deleting its conversation and keeps its capacity, but it does not
+refuse gateway shutdown or retirement, which would otherwise keep an older
+gateway in place of every update. It stays saved and the stop logs it. An owner
+that only delivers a recovered outcome ran nothing and claims no cleanup.
+Automatic reconciliation of that uncertainty remains outside this change, as it
+is for local tasks.
 
 Each result retains a bounded output tail. The continuation can contain less than
 the retained result when the conversation's input limit is smaller; it says when
