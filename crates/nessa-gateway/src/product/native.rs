@@ -61,6 +61,8 @@ pub trait DeviceCredentials: Send + Sync {
 pub struct NativeSessions {
     state: ProductRouteState,
     proof: Arc<DeviceProof>,
+    #[cfg(feature = "test-support")]
+    record_page_pair: bool,
 }
 impl NativeSessions {
     /// Serve native product sessions with the composed product state and the
@@ -69,7 +71,18 @@ impl NativeSessions {
         Self {
             state,
             proof: Arc::new(DeviceProof(credentials)),
+            #[cfg(feature = "test-support")]
+            record_page_pair: false,
         }
+    }
+}
+#[cfg(feature = "test-support")]
+impl NativeSessions {
+    /// Let the private pair fixture spend two Page reads on one connection.
+    #[doc(hidden)]
+    pub fn with_record_page_pair_for_test(mut self) -> Self {
+        self.record_page_pair = true;
+        self
     }
 }
 impl ProtectedSessions for NativeSessions {
@@ -97,7 +110,11 @@ impl RecordCarrier for NativeSessions {
             credentials: self.proof.0.as_ref(),
             proof: &proof,
         };
-        super::record_read::probe::serve(runtime, &self.state, &verifier, selection, opening)
+        #[cfg(feature = "test-support")]
+        let pair = self.record_page_pair;
+        #[cfg(not(feature = "test-support"))]
+        let pair = false;
+        super::record_read::probe::serve(runtime, &self.state, &verifier, selection, opening, pair)
     }
 }
 
