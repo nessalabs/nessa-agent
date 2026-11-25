@@ -16,7 +16,7 @@ operator ──▶ Cedar (stage | accept | fetch)
 stage ──▶ verify the bundle and keep that authenticated listing
             ├── omit fenced grants, credentials, and live metadata rows
             ├── delete a fenced conversation from a session database, then vacuum
-            ├── append an uncertain end on each still-open lease
+            ├── leave out an older cut's lease ledger (ADR 1417)
             └── seal the quarantine directory
 accept ──▶ hold the restore-root lock, seal still matches, live path absent
             └── rename quarantine → live, then store the audit, then release
@@ -101,8 +101,7 @@ anchored is refused under its Unicode caller spelling. A path that is not Unicod
 A published name is an exclusive rename. An empty directory at the
 destination is occupied. The source stays. A leftover name is either absent
 or recorded retained, and it is not acceptable. A `.partial` session file
-is not a helper. A lease and its receipt are percent-encoded, so a space in
-either value is not the separator.
+is not a helper.
 
 A fetched session has a second identity: the publication written beside the
 session file while namespace protection remains held. An `available` effect
@@ -170,7 +169,7 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
 | Journal and deferred metadata are rewritten together before open | The bytes no longer name the journal recorded by stage or acceptance | Refused before reading the session source | Tamper |
 | Deferred metadata changes after the layout hashes the tree | The second read must still match the journal's deferred-file fingerprint | Refused before reading the session source | Tamper |
 | Open on a staged root whose readiness was retired | No current ready staging id, even if its sealed audit remains | Refused before reading the session source | Tamper |
-| Live rename completed but source retirement failed | The live directory owns the validated copy; source retirement remains uncertain | The staging id was spent before promotion, then `verified → live`, cause `retained` (or `retained-unsynced` when a parent sync also failed), with the journal digest and lease receipts | Retained; no unchanged refusal |
+| Live rename completed but source retirement failed | The live directory owns the validated copy; source retirement remains uncertain | The staging id was spent before promotion, then `verified → live`, cause `retained` (or `retained-unsynced` when a parent sync also failed), with the journal digest | Retained; no unchanged refusal |
 | Available line not stored, and the file was removed or emptied | No readable publication | The available line is absent | Audit |
 | Available line not stored, and the file is still readable | The file. Not a publication the audit named | No available line for this publication | Retained. A later open does not serve it |
 | Protected output and sidecar exist, then protection release fails | The owned protected file and sidecar | No fresh available receipt is stored | Cleanup retires the owned objects or returns Retained; a later open does not serve them |
@@ -223,7 +222,6 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
 | Marker publication leaves a valid marker but readiness or binding fails; marker retirement and spend audit also fail | The generation remains pending despite its marker | No matching ready completion exists | Stage fails; accept and fetch refuse that generation |
 | Ready completion storage fails after marker and binding succeed | The pending generation; cleanup retains its exact owner | No completed ready receipt | Cleanup retires it or returns Retained; neither accept nor fetch treats the marker as completion |
 | Ready completion is orphaned, mismatched, or follows a newer stage intent | No completed authority for that receipt | A current matching pending stage is required; no fallback to an older generation | Tamper |
-| Lease `a b` with receipt `c`, and lease `a` with receipt `b c` | Two attestations | `a%20b c` and `a b%20c` | Distinct lines |
 | Stage begin creates a partial directory but its native construction/readback fails and returns Retained | The retained partial, with no readiness authority | `absent → unready`, cause `retained`; a failed outcome append cannot replace Retained with Audit | Retained; no unchanged line, no staging writes or readiness completion |
 | Quarantine rename whose parent sync fails, and the tree is removed | No quarantine | `unchanged → unchanged` | Unreadable |
 | Quarantine rename whose parent sync fails, and the tree remains | The quarantine, unready | `absent → unready`, cause `retained` | Retained. Not an unchanged refusal |
@@ -261,7 +259,7 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
 - The quarantine path and the live path are different absolute paths, and
   neither is a prefix of the other, after `.` and `..` are removed and an
   existing ancestor is resolved. `a_restore_refuses_to_use_live_data_as_quarantine`,
-  `paths_and_receipts_are_constrained`
+  `paths_are_constrained`
 - A failure before the rename does not create the live path and does not
   modify a sentinel beside it. `a_tampered_bundle_does_not_touch_live_data`,
   `a_partial_copy_removes_quarantine_and_leaves_live_data`
@@ -387,13 +385,8 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
 - Quarantine is built from the listing whose mac `authenticated_bundle` just
   checked. A later manifest read is not a second source.
   `a_replaced_manifest_is_not_what_quarantine_seals`
-- Acceptance records each open lease and the operator receipt that covered
-  it, on the accepted audit line, before success.
-  `an_unfenced_executor_blocks_acceptance`
 - The deletion-inventory body is checked against the authenticated fingerprint
   before its fences are applied. `a_changed_inventory_body_is_not_a_fence`
-- Lease lines are one ledger in line order. A grant closed by a later line
-  does not stay open. `a_closed_lease_across_lines_needs_no_receipt`
 - Fetch checks the journal seal before it trusts `deferred.txt`.
   `a_changed_deferred_line_is_not_fetched`
 - If the sealed audit is not stored, exact-file retirement empties the owned
@@ -461,11 +454,13 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
   A sync that fails after the rename leaves the tree live and records
   `unsynced`. The rename is not undone.
   `a_promoted_tree_stays_live_when_the_parent_sync_fails`
-- A lease line `granted` or `command_granted` without a later `ended` gains
-  one `ended` line with uncertain cleanup. Accept then requires an operator
-  receipt for each such lease. No receipt leaves the tree quarantined.
-  `an_open_lease_is_interrupted_in_quarantine`,
-  `an_unfenced_executor_blocks_acceptance`
+- A cut an older gateway took may hold a remote worker's lease ledger. Its
+  lines are checked against their fingerprints with the rest of the cut, and
+  are not placed: no worker runs for one any more (ADR 1417), so accept asks
+  for no receipt and the accepted audit line attests nothing. A `lease` line
+  in a journal an older build staged is read past.
+  `an_older_cuts_lease_ledger_is_checked_and_not_placed`,
+  `a_lease_an_older_build_journaled_is_read_past`
 - Deferred lines are not payload. Opening one publishes a session file only
   when the written stream's size and fingerprint equal the sealed line.
   The fetch audit names the anchored root. The available line is stored
@@ -508,7 +503,7 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
   case-sensitive. Linux vfat, exFAT, NTFS, and casefolded ext4 fold. Two
   paths on different volumes do not fold into each other. The drive letter
   folds with the name. The refusal happens before either lock is taken.
-  `paths_and_receipts_are_constrained`,
+  `paths_are_constrained`,
   `a_folding_volume_orders_spellings_together`,
   `case_for_a_reported_filesystem_follows_the_volume`
 - A mount point is compared after mountinfo octal escapes are decoded. A
@@ -538,9 +533,9 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
   `an_injected_publication_suffix_is_not_promoted`,
   `a_readiness_directory_sync_failure_clears_the_marker`,
   `a_marker_that_cannot_be_cleared_is_retained`,
-  `paths_and_receipts_are_constrained`
+  `paths_are_constrained`
 - A path that is not Unicode is not an audit identity.
-  `a_non_unicode_root_is_not_audited`, `paths_and_receipts_are_constrained`
+  `a_non_unicode_root_is_not_audited`, `paths_are_constrained`
 - An interrupted fetch that cannot remove its partial session returns
   retained and does not record unchanged. A later open refuses that file.
   `an_interrupted_fetch_that_cannot_be_removed_is_retained`,
@@ -549,9 +544,6 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
   `absent → unready` and returns retained.
   `a_partial_directory_that_survives_a_failed_write_is_unready`,
   `a_discarded_partial_directory_is_removed`
-- A lease and its receipt are percent-encoded. `a b` with receipt `c` is
-  not the same attestation as lease `a` with receipt `b c`.
-  `paths_and_receipts_are_constrained`
 
 ## Decisions that bound this
 
@@ -560,5 +552,5 @@ adapters; `pending_acceptance_invalidates_an_older_live_generation` and
 | Where is the mac key? | The operator supplies the same key the verifier uses. The bundle does not contain it. Without the key, restore does not start |
 | What is fresh? | The cut's inventory, or a later file sealed with that key whose fence keys are a superset. This is not a clock of every revocation in the world |
 | Which identity returns? | None. `identity.txt` says `re-pair`. Peers are not told that this process is the old gateway |
-| What fences a remote executor? | Nothing on the network. An open lease without an operator receipt blocks accept. The receipt is audited; it is not a claim that we reached the host |
-| Which omissions block accept? | A public body whose fingerprint does not match, an unreadable grant or lease line, or a failed seal. Deferred, redacted, and named skips do not |
+| What fences a remote executor? | None runs: every gateway runs only its own agents (ADR 1417), so an older cut's lease ledger is left out and accept asks for no receipt |
+| Which omissions block accept? | A public body whose fingerprint does not match, an unreadable grant line, or a failed seal. Deferred, redacted, and named skips do not |

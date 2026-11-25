@@ -2283,15 +2283,6 @@ async fn dispatch_authorized(
         | ProductMethod::GithubConnect
         | ProductMethod::GithubCancel
         | ProductMethod::GithubDisconnect => super::github::dispatch(state, session, frame).await,
-        ProductMethod::LoginsStatus
-        | ProductMethod::LoginsSave
-        | ProductMethod::LoginsRemove
-        | ProductMethod::LoginsChatgptSignIn
-        | ProductMethod::LoginsChatgptCancel
-        | ProductMethod::LoginsChatgptUse
-        | ProductMethod::LoginsChatgptRemove => {
-            super::logins::dispatch(state, session, frame).await
-        }
         ProductMethod::VoiceStatus
         | ProductMethod::VoiceSaveKey
         | ProductMethod::VoiceForgetKey
@@ -3138,9 +3129,6 @@ mod tests {
     }
     mod vault_tests {
         include!("../../tests/product/socket/vault.rs");
-    }
-    mod logins_tests {
-        include!("../../tests/product/socket/logins.rs");
     }
 
     mod voice_tests {

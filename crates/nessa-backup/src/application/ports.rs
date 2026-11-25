@@ -618,11 +618,6 @@ pub trait DeferredSessionSource {
     ) -> Result<(), SessionSourceError>;
 }
 
-/// An operator attestation that one restored lease's executor was stopped.
-pub trait LeaseReceipts {
-    fn receipt(&self, lease_id: &str) -> Option<String>;
-}
-
 impl Authenticator for MacKey {
     /// HMAC-SHA256 of `canonical`. The key stays in `self`.
     fn mac(&self, canonical: &str) -> Result<Fingerprint, MacError> {

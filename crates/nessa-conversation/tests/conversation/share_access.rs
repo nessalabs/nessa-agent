@@ -1,8 +1,7 @@
 //! A share's role and tool policy, tested without storage or a socket
 //! (`docs/design/read-grants.md`, rows J1 and J3).
 use super::{
-    Capabilities, CommandHosts, ShareAccess, ShareAccessError, ToolPolicy, ToolPolicyError,
-    ToolPreset, ToolRules,
+    Capabilities, ShareAccess, ShareAccessError, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
 };
 
 fn rules(allow: &[&str], deny: &[&str]) -> Result<ToolRules, ToolPolicyError> {
@@ -103,72 +102,4 @@ fn tool_rules_are_bounded_and_plain() {
             "{malformed:?}"
         );
     }
-}
-
-/// A Drive policy's command hosts are names `run` could take, each once, at
-/// most `MAX_HOSTS`; none is the default, and a policy keeps them beside its
-/// tools.
-#[test]
-fn command_hosts_are_bounded_and_named_as_run_names_them() {
-    let names = |hosts: &[&str]| hosts.iter().map(|host| (*host).to_owned()).collect();
-    let peer = format!("peer:{}", "0f".repeat(32));
-    let kept = CommandHosts::new(names(&["devbox", "user@build.example", &peer])).unwrap();
-    assert_eq!(
-        kept.names().iter().map(String::as_str).collect::<Vec<_>>(),
-        ["devbox", &peer, "user@build.example"]
-    );
-    assert!(CommandHosts::new(Vec::new()).unwrap().is_empty());
-    assert_eq!(CommandHosts::new(Vec::new()).unwrap(), CommandHosts::none());
-    let full: Vec<String> = (0..CommandHosts::MAX_HOSTS)
-        .map(|n| format!("h{n}"))
-        .collect();
-    assert!(CommandHosts::new(full.clone()).is_ok());
-    let mut over = full;
-    over.push("one-more".into());
-    assert_eq!(CommandHosts::new(over), Err(ToolPolicyError::TooManyHosts));
-    for malformed in [
-        "",
-        "here",
-        " devbox",
-        "-devbox",
-        "dev box",
-        "peer:",
-        "peer:ZZ",
-        &format!("peer:{}", "0F".repeat(32)),
-        &"h".repeat(CommandHosts::MAX_HOST_BYTES + 1),
-    ] {
-        assert_eq!(
-            CommandHosts::new(names(&[malformed])),
-            Err(ToolPolicyError::MalformedHost),
-            "{malformed:?}"
-        );
-    }
-    assert_eq!(
-        CommandHosts::new(names(&["devbox", "devbox"])),
-        Err(ToolPolicyError::MalformedHost)
-    );
-    assert!(CommandHosts::new(vec!["h".repeat(CommandHosts::MAX_HOST_BYTES)]).is_ok());
-    // Hosts have their own budget: both pattern lists full, and every host.
-    let full: Vec<String> = (0..ToolRules::MAX_RULES).map(|n| format!("t{n}")).collect();
-    let rules = ToolPolicy::rules(ToolRules::new(full.clone(), full).unwrap());
-    let hosts = CommandHosts::new(
-        (0..CommandHosts::MAX_HOSTS)
-            .map(|n| format!("h{n}"))
-            .collect(),
-    )
-    .unwrap();
-    let with_hosts = rules.clone().with_command_hosts(hosts.clone());
-    assert_eq!(with_hosts.command_hosts(), &hosts);
-    assert_eq!(
-        rules
-            .with_command_hosts(CommandHosts::none())
-            .command_hosts(),
-        &CommandHosts::none()
-    );
-    let policy = ToolPolicy::preset(ToolPreset::NoShell);
-    assert!(policy.command_hosts().is_empty());
-    let on = policy.clone().with_command_hosts(kept.clone());
-    assert_eq!(on.command_hosts(), &kept);
-    assert_eq!(on.tools(), policy.tools());
-    assert_ne!(on, policy);
 }

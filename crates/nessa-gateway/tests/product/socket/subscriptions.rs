@@ -4525,125 +4525,45 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }
 
-/// ADR 803 step 4: a Drive grant's `commandHosts` goes through
-/// `conversation.share` into the store and back out of `conversation.shares`
-/// as named; an empty list is a policy naming none, accepted and listed
-/// without the key. A full allow and deny list may still name a host at the
-/// longest destination `config.json` accepts. `here`, a host named twice,
-/// more than `CommandHosts::MAX_HOSTS`, and a host one byte past that
-/// destination are refused `invalid_request` and change nothing.
+/// A Drive grant's policy names its tools and nothing else: `commandHosts`,
+/// the machines an older build let its turns run commands on, is no field
+/// since every gateway runs only its own agents (ADR 1417), so a share
+/// naming it, even empty, is refused `invalid_request` and changes nothing.
 #[tokio::test]
-async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() {
-    use crate::conversation::application::ShareGrants;
-    use crate::conversation::domain::{CommandHosts, ToolRules};
+async fn a_drive_policy_naming_command_hosts_is_refused() {
     let fixture = sharing_fixture().await;
-    // Phone and tablet are one principal, so one drive grant. The policy
-    // updates below replace that grant; the bounds are refused first, while
-    // the named hosts are what it holds.
-    let share = |request: &str, credential: &str, policy: Value| {
+    let share = |request: &str, policy: Value| {
         json!({
             "conversationId": fixture.id.to_string(),
             "requestId": request,
-            "credentialId": credential,
+            "credentialId": "phone",
             "capabilities": ["read", "comment", "drive"],
             "policy": policy,
         })
     };
-    let policy_of = |credential: &'static str| {
-        let fixture = &fixture;
-        async move {
-            let shares = fixture
-                .call(
-                    "conversation.shares",
-                    json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
-                )
-                .await;
-            shares["payload"]["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|item| item["credentialId"] == credential)
-                .unwrap()["policy"]
-                .clone()
-        }
-    };
-    let peer = format!("peer:{}", "ab".repeat(32));
-    let named = json!({"preset": "all", "commandHosts": ["devbox", peer]});
-    let answer = fixture
-        .call("conversation.share", share("named", "phone", named.clone()))
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await, named);
-    let held = fixture.metadata.grants(&fixture.id).await.unwrap().grants;
-    assert_eq!(
-        held[0]
-            .access
-            .policy()
-            .unwrap()
-            .command_hosts()
-            .names()
-            .iter()
-            .collect::<Vec<_>>(),
-        ["devbox", &peer]
-    );
-
-    let too_long = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES));
-    let refused = [
-        json!({"preset": "all", "commandHosts": ["here"]}),
-        json!({"preset": "all", "commandHosts": ["devbox", "devbox"]}),
-        json!({
-            "preset": "all",
-            "commandHosts": (0..=CommandHosts::MAX_HOSTS)
-                .map(|n| format!("host{n}"))
-                .collect::<Vec<_>>(),
-        }),
-        json!({"preset": "all", "commandHosts": [too_long]}),
-    ];
-    for (n, policy) in refused.into_iter().enumerate() {
+    for (n, policy) in [
+        json!({"preset": "all", "commandHosts": ["devbox"]}),
+        json!({"preset": "no_shell", "commandHosts": []}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let answer = fixture
-            .call(
-                "conversation.share",
-                share(&format!("refused-{n}"), "phone", policy.clone()),
-            )
+            .call("conversation.share", share(&format!("hosts-{n}"), policy.clone()))
             .await;
         assert_eq!(
             answer["error"]["code"], "invalid_request",
             "{policy}: {answer}"
         );
     }
-    assert_eq!(policy_of("phone").await, named);
-
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share(
-                "empty",
-                "phone",
-                json!({"preset": "no_shell", "commandHosts": []}),
-            ),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await, json!({"preset": "no_shell"}));
-
-    fn pattern(n: usize) -> String {
-        format!("t{n}")
-    }
-    let full = ToolRules::MAX_RULES;
-    let longest_host = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES - 1));
-    let full_policy = json!({
-        "allow": (0..full).map(pattern).collect::<Vec<_>>(),
-        "deny": (0..full).map(pattern).collect::<Vec<_>>(),
-        "commandHosts": [longest_host],
-    });
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share("full-hosts", "phone", full_policy.clone()),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await["commandHosts"][0], longest_host);
+    assert!(fixture
+        .metadata
+        .grants(&fixture.id)
+        .await
+        .unwrap()
+        .grants
+        .iter()
+        .all(|grant| grant.access.policy().is_none()));
 }
 
 /// `conversation.shares` returns one page and resumes after the cursor it

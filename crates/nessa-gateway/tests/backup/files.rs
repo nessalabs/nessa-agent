@@ -247,7 +247,9 @@ async fn a_secret_is_fingerprinted_and_left_out_of_the_bundle() {
     )));
     assert!(!text.contains("CONFIG-TOKEN"));
     assert!(text.contains("redacted environment-peer-pairings"));
-    assert!(text.contains("skipped lease-records line-2 unreadable"));
+    // A remote worker's lease ledger an older gateway left (ADR 1417) is not cut.
+    assert!(text.contains("watermark lease-records absent"));
+    assert!(!holds(&bundle_bytes, b"{\"lease\":\"live\"}"));
     assert!(text.contains("device-1"));
     let worker = manifest.manifest().store(StoreKind::WorkerCredentials);
     assert!(worker.records().is_empty());
@@ -1063,9 +1065,11 @@ async fn a_public_file_over_the_bound_is_named_and_not_read() {
     file.set_len(nessa_backup::infrastructure::snapshot::PUBLIC_FILE_LIMIT + 1)
         .unwrap();
     drop(file);
+    let creation = root.join("conversations/audit/creation");
+    fs::create_dir_all(&creation).unwrap();
     fs::write(
-        environment.join("leases.jsonl"),
-        b"{\"lease\":\"still-cut\"}\n",
+        creation.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"),
+        b"{\"note\":\"still-cut\"}",
     )
     .unwrap();
     let published = publish_cut(root).await;
@@ -1234,7 +1238,7 @@ async fn a_public_jsonl_holding_a_private_key_is_not_copied() {
     fs::create_dir_all(root.join("environment")).unwrap();
     let secret = b"-----BEGIN ENCRYPTED PRIVATE KEY-----";
     fs::write(
-        root.join("environment/leases.jsonl"),
+        root.join("environment/grants-audit.jsonl"),
         format!("{{\"note\":\"{}\"}}\n", String::from_utf8_lossy(secret)),
     )
     .unwrap();
@@ -1242,7 +1246,7 @@ async fn a_public_jsonl_holding_a_private_key_is_not_copied() {
     assert!(!holds(&published.bytes, secret));
     assert!(published
         .text
-        .contains("skipped lease-records leases.jsonl secret"));
+        .contains("skipped environment-audit grants-audit.jsonl secret"));
 }
 
 #[tokio::test]
@@ -1301,10 +1305,11 @@ async fn an_oversized_session_is_deferred_and_the_cut_continues() {
     let root = namespace.path();
     let sessions = root.join("conversations/sessions");
     fs::create_dir_all(&sessions).unwrap();
-    fs::create_dir_all(root.join("environment")).unwrap();
+    let creation = root.join("conversations/audit/creation");
+    fs::create_dir_all(&creation).unwrap();
     fs::write(
-        root.join("environment/leases.jsonl"),
-        b"{\"lease\":\"still-cut\"}\n",
+        creation.join("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.json"),
+        b"{\"note\":\"still-cut\"}",
     )
     .unwrap();
     let kept = b"SMALL-CONVERSATION-STAYS-NAMED";
@@ -1939,7 +1944,7 @@ fn reseal_journal(live: &Path) -> String {
             fingerprint: Fingerprint::of(&bytes),
         }
     });
-    let journal = encode_journal(Freshness::Cut, &[], &files).unwrap();
+    let journal = encode_journal(Freshness::Cut, &files).unwrap();
     let digest = Fingerprint::of(journal.as_bytes()).hex();
     fs::write(live.join("journal.txt"), journal).unwrap();
     digest

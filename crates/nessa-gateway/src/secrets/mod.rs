@@ -25,7 +25,5 @@ pub use macos::{read as read_macos, SecretReadFailure};
 #[cfg(target_os = "linux")]
 mod linux;
 
-mod moved;
-pub use moved::MovedSecret;
 mod vault;
 pub use vault::VaultSecret;

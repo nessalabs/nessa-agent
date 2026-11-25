@@ -25,12 +25,7 @@ import { PublishedFiles } from "./published-files"
 import { TranscriptNotes } from "./transcript-note"
 import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
 import { ReplyMarkdown } from "@nessa-ui/react/reply-markdown"
-import {
-  ChatgptSignInCard,
-  ProviderSignInCard,
-} from "../../provider-authentication/ui/provider-sign-in"
-import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
-import { signInAction } from "../../provider-authentication/model/sign-in-action"
+import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
 import { UsageLimitCard } from "./usage-limit-card"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
@@ -58,7 +53,6 @@ export function Transcript({
   onOpenPaste,
   onProviderSignIn,
   canSignInToProvider,
-  chatgptSignIn,
   onUsageLimitAutoContinue,
 }: {
   conversation: Conversation
@@ -71,8 +65,6 @@ export function Transcript({
   onOpenPaste: (text: string) => void
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
-  /** A ChatGPT account for Codex on another computer. */
-  chatgptSignIn?: CodexChatgptSignIn
   /** Turns this gateway's usage-limit continuation preference on or off. */
   onUsageLimitAutoContinue?: (enabled: boolean) => Promise<void>
 }) {
@@ -246,16 +238,11 @@ export function Transcript({
                     localInputs,
                   ) ? (
                     <React.Fragment key={`${row.key}:auth`}>
-                      {signInAction(provider, conversation.remote?.lease?.environment) ===
-                      "chatgpt" ? (
-                        <ChatgptSignInCard signIn={chatgptSignIn} />
-                      ) : (
-                        <ProviderSignInCard
-                          provider={provider}
-                          onSignIn={onProviderSignIn}
-                          canSignIn={canSignInToProvider}
-                        />
-                      )}
+                      <ProviderSignInCard
+                        provider={provider}
+                        onSignIn={onProviderSignIn}
+                        canSignIn={canSignInToProvider}
+                      />
                       {recovery?.requiredWorkFailed === true ? (
                         <TurnStatus status={row.status} />
                       ) : null}

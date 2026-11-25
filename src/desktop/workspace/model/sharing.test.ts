@@ -1,6 +1,6 @@
 /**
- * A Drive grant's room for hosts, and the request a draft becomes (row D9 of
- * `docs/design/read-grants.md` › "Dialog state and order").
+ * The request a draft becomes (row D9 of `docs/design/read-grants.md` ›
+ * "Dialog state and order").
  */
 import { describe, expect, it } from "vitest"
 import {
@@ -8,30 +8,19 @@ import {
   draftSettled,
   draftFromGrant,
   emptyDraft,
-  hostFits,
   patternCount,
   patternsFrom,
   requestFrom,
   type ShareGrant,
 } from "./sharing"
 
-const limits = { patterns: 16, hosts: 16, hostBytes: 96 }
+const limits = { patterns: 16 }
 const none: readonly ShareGrant[] = []
 
-describe("a Drive grant's hosts", () => {
-  it("fit by UTF-8 bytes, not characters", () => {
-    expect(hostFits(limits, "a".repeat(96))).toBe(true)
-    expect(hostFits(limits, "a".repeat(97))).toBe(false)
-    // 32 three-byte characters are 96 bytes; 33 are past it.
-    expect(hostFits(limits, "€".repeat(32))).toBe(true)
-    expect(hostFits(limits, "€".repeat(33))).toBe(false)
-  })
-
-  it("count only a custom policy's patterns", () => {
-    expect(patternCount({ kind: "preset", preset: "all", commandHosts: ["a"] })).toBe(0)
-    expect(
-      patternCount({ kind: "rules", allow: ["a", "b"], deny: ["c"], commandHosts: [] }),
-    ).toBe(3)
+describe("a Drive grant's patterns", () => {
+  it("count only a custom policy's", () => {
+    expect(patternCount({ kind: "preset", preset: "all" })).toBe(0)
+    expect(patternCount({ kind: "rules", allow: ["a", "b"], deny: ["c"] })).toBe(3)
   })
 })
 
@@ -65,7 +54,6 @@ const grant = (change: Partial<ShareGrant> = {}): ShareGrant => ({
     kind: "rules",
     allow: ["Read"],
     deny: ["Write", "Edit"],
-    commandHosts: ["devbox"],
   },
   policyRevision: 2,
   grantedAtMs: 1,
@@ -83,7 +71,7 @@ describe("a draft's request", () => {
   it("carries no policy for Read or Comment", () => {
     expect(
       requestFrom(
-        { ...emptyDraft("phone"), role: "comment", hosts: ["x"] },
+        { ...emptyDraft("phone"), role: "comment", preset: "all" },
         none,
         limits,
       ),
@@ -94,18 +82,14 @@ describe("a draft's request", () => {
     })
   })
 
-  it("carries a preset and every host checked, one not offered now included", () => {
-    const draft = drive({ preset: "no_shell", hosts: ["build", "gone", "devbox"] })
+  it("carries a preset", () => {
+    const draft = drive({ preset: "no_shell" })
     expect(requestFrom(draft, none, limits)).toEqual({
       ok: true,
       request: {
         credentialId: "phone",
         role: "drive",
-        policy: {
-          kind: "preset",
-          preset: "no_shell",
-          commandHosts: ["build", "gone", "devbox"],
-        },
+        policy: { kind: "preset", preset: "no_shell" },
         expectedPolicyRevision: 0,
       },
     })
@@ -117,7 +101,7 @@ describe("a draft's request", () => {
     expect(requestFrom({ ...draft, deny: "Write" }, none, limits)).toMatchObject({
       ok: true,
       request: {
-        policy: { kind: "rules", allow: [], deny: ["Write"], commandHosts: [] },
+        policy: { kind: "rules", allow: [], deny: ["Write"] },
       },
     })
     const many = (count: number) =>
@@ -126,22 +110,6 @@ describe("a draft's request", () => {
     expect(requestFrom({ ...draft, allow: many(17) }, none, limits)).toEqual({
       ok: false,
       reason: "too-many-patterns",
-    })
-  })
-
-  it("D9: holds the hosts to their own bound, however full the patterns are", () => {
-    const hosts = Array.from({ length: limits.hosts }, (_, at) => `h${at}`)
-    const draft = drive({ preset: "custom", hosts })
-    const patterns = (count: number) =>
-      Array.from({ length: count }, (_, at) => `p${at}`).join(",")
-    expect(
-      requestFrom({ ...draft, allow: patterns(16), deny: patterns(16) }, none, limits).ok,
-    ).toBe(true)
-    expect(
-      requestFrom({ ...draft, allow: "Read", hosts: [...hosts, "extra"] }, none, limits),
-    ).toEqual({
-      ok: false,
-      reason: "too-many-hosts",
     })
   })
 
@@ -173,7 +141,7 @@ describe("a draft's request", () => {
 describe("a draft from a grant", () => {
   it("starts where the grant stands, its patterns kept exactly", () => {
     const comma = grant({
-      policy: { kind: "rules", allow: ["mcp__a,b", "Read"], deny: [], commandHosts: [] },
+      policy: { kind: "rules", allow: ["mcp__a,b", "Read"], deny: [] },
     })
     const draft = draftFromGrant(comma)
     expect(draft).toMatchObject({ basis: 2, preset: "custom", allow: "mcp__a,b, Read" })
@@ -191,7 +159,7 @@ describe("a draft from a grant", () => {
   })
 
   it("D10: builds on the revision the gateway answered its own device's change with, keeping what was set", () => {
-    const draft = drive({ preset: "all", hosts: ["devbox"] })
+    const draft = drive({ preset: "all" })
     expect(draftSettled(draft, "tablet", 2)).toBe(draft)
     expect(draftSettled(draft, "phone", 2)).toEqual({ ...draft, basis: 2 })
     expect(draftSettled({ ...draft, basis: 2 }, "phone", null)).toEqual(draft)
