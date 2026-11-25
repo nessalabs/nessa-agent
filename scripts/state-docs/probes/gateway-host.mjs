@@ -2,6 +2,95 @@
 // The harness resolves each document through the catalog and never edits its model.
 export const probes = [
   {
+    document: "gateway-surface-call",
+    name: "Dispatch a call the catalog rejects",
+    expectedRules: ["CatalogBeforeSend"],
+    mutate: (spec) =>
+      spec.replace(
+        "/\\ call.inCatalog\n    /\\ socket \\notin retired",
+        "/\\ socket \\notin retired",
+      ),
+  },
+  {
+    document: "gateway-surface-call",
+    name: "Return a payload after gateway admission denies the call",
+    expectedRules: ["CedarBeforePayload"],
+    mutate: (spec) =>
+      spec.replace('IF call.cedarAllows THEN "Allowed" ELSE "Denied"', '"Allowed"'),
+  },
+  {
+    document: "gateway-surface-call",
+    name: "Settle a call with a mismatched reply ID",
+    expectedRules: ["ReplyMustMatch"],
+    mutate: (spec) => spec.replace("/\\ idMatches\n", ""),
+  },
+  {
+    document: "gateway-surface-call",
+    name: "Send the next call on a retired socket",
+    expectedRules: ["LossRetiresSocket"],
+    mutate: (spec) => spec.replace("/\\ socket \\notin retired\n", ""),
+  },
+  {
+    document: "gateway-surface-call",
+    name: "Report a lost passphrase change as an ordinary transport error",
+    expectedRules: ["LostVaultIsUnconfirmed"],
+    mutate: (spec) =>
+      spec.replace(
+        'IF call.vaultChange THEN "VaultUnconfirmed" ELSE "TransportError"',
+        '"TransportError"',
+      ),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Accept a true choice from an Integration principal",
+    expectedRules: ["HumanChoiceOnly"],
+    mutate: (spec) => spec.replace('/\\ ~choice \\/ principal = "Human"\n', ""),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Publish attribution without its audit",
+    expectedRules: ["LinkNeedsActivationAndAudit"],
+    mutate: (spec) => spec.replace("linkAudit' = TRUE", "linkAudit' = FALSE"),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Publish attribution before the credential is issued",
+    expectedRules: ["LinkNeedsActivationAndAudit"],
+    mutate: (spec) =>
+      spec.replace(
+        '/\\ phase = "LinkOwed"\n    /\\ SaveLink',
+        '/\\ (phase = "LinkOwed" \\/ (phase = "ChoiceSaved" /\\ samePerson))\n    /\\ SaveLink',
+      ),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Replace the original removal cause on retry",
+    expectedRules: ["RemovalKeepsCause"],
+    mutate: (spec) =>
+      spec.replace("removalReceipt' = endCause", 'removalReceipt\' = "Expired"'),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Replay a consumed choice after clock rollback",
+    expectedRules: ["RetiredChoiceStaysConsumed"],
+    mutate: (spec) =>
+      spec.replace('/\\ removalReceipt = "None"\n    /\\ SaveLink', "/\\ SaveLink"),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Let attribution admit an unshared read",
+    expectedRules: ["AttributionNeverGrantsRead"],
+    mutate: (spec) =>
+      spec.replace("allowed |-> granted", "allowed |-> granted \\/ linked"),
+  },
+  {
+    document: "gateway-same-person",
+    name: "Return attribution for a different grant binding",
+    expectedRules: ["AttributionMatchesBinding"],
+    mutate: (spec) =>
+      spec.replace("granted /\\ linked /\\ bindingMatches", "granted /\\ linked"),
+  },
+  {
     document: "gateway-pool-membership",
     name: "Retain a completed endpoint in the pool registry",
     expectedRules: ["RegistryFits"],
@@ -11,25 +100,31 @@ export const probes = [
     document: "gateway-pool-membership",
     name: "Skip registration on successful admission",
     expectedRules: ["EveryPermitCanBeWoken"],
-    mutate: (spec) => spec.replace("members' = (members \\cap retained) \\cup {c}", "UNCHANGED members"),
+    mutate: (spec) =>
+      spec.replace("members' = (members \\cap retained) \\cup {c}", "UNCHANGED members"),
   },
   {
     document: "gateway-cloud-box-sleep",
     name: "Report success when receipt persistence fails",
     expectedRules: ["SuccessRequiresReceipt"],
-    mutate: (spec) => spec.replace("THEN \"Auditing\" ELSE \"Unrecorded\"", "THEN \"Auditing\" ELSE \"Done\""),
+    mutate: (spec) =>
+      spec.replace('THEN "Auditing" ELSE "Unrecorded"', 'THEN "Auditing" ELSE "Done"'),
   },
   {
     document: "gateway-cloud-box-sleep",
     name: "Persist sleep after provider failure",
-    expectedRules: ["EffectBeforeReceipt"],
-    mutate: (spec) => spec.replace("THEN \"Recording\" ELSE \"Failed\"", "THEN \"Recording\" ELSE \"Recording\""),
+    expectedRules: ["AcknowledgementBeforeReceipt"],
+    mutate: (spec) =>
+      spec.replace(
+        'ProviderError == /\\ phase = "AwaitingReply" /\\ phase\' = "Failed"',
+        'ProviderError == /\\ phase = "AwaitingReply" /\\ phase\' = "Recording"',
+      ),
   },
   {
     document: "gateway-cloud-box-sleep",
     name: "Treat an unknown observation as idle",
     expectedRules: ["IdleEvidenceBeforeStop"],
-    mutate: (spec) => spec.replace("IF evidence' = \"Idle\"", "IF evidence' # \"Busy\""),
+    mutate: (spec) => spec.replace('IF evidence\' = "Idle"', 'IF evidence\' # "Busy"'),
   },
   {
     document: "host-startup-save-provider-credentials-and-download-a-runtime",
