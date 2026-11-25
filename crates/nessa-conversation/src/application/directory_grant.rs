@@ -60,6 +60,9 @@ pub enum DirectoryRefusal {
     CleanupPending,
     /// No grant exists for this subject.
     NotFound,
+    /// This subject held a directory grant and it was removed. A later use
+    /// stays refused. It is not the same as a subject that never held one.
+    Revoked { audit_recorded: bool },
     /// The audit sink did not accept the record. The operation is not done.
     Audit,
 }
@@ -133,6 +136,11 @@ impl std::fmt::Display for DirectoryRefusal {
                 write!(formatter, "the directory marker cleanup is still pending")
             }
             Self::NotFound => write!(formatter, "no directory grant"),
+            Self::Revoked { audit_recorded } => write!(
+                formatter,
+                "the directory grant was revoked{}",
+                audit_note(*audit_recorded)
+            ),
             Self::Audit => write!(formatter, "the directory audit was not recorded"),
         }
     }
@@ -346,6 +354,14 @@ pub trait DirectoryStore: Send + Sync {
         &self,
         subject: &str,
     ) -> Result<Vec<StoredDirectoryGrant>, DirectoryRefusal>;
+    /// A directory this subject held, once no live grant remains.
+    /// `None` when nothing on record says this subject held one.
+    /// The real store reads the directory grant-log tombstone, and the
+    /// grant-change journal for an owner grant that writes no log row.
+    fn revoked_directory(&self, subject: &str) -> Result<Option<String>, DirectoryRefusal> {
+        let _ = subject;
+        Ok(None)
+    }
     /// Grants for one resource.
     fn grants_for_resource(
         &self,
@@ -843,6 +859,16 @@ impl DirectoryAccess {
     fn decide_exec(&self, ask: ExecAsk<'_>) -> Result<(), DirectoryRefusal> {
         let grants = self.store.grants_for_subject(ask.subject)?;
         let Some(grant) = grants.first() else {
+            if let Some(refusal) = self.revoked_use(
+                ask.subject,
+                "exec",
+                &match ask.shell {
+                    Some(command) => command.to_owned(),
+                    None => attempted_command(ask.program, ask.argv),
+                },
+            )? {
+                return Err(refusal);
+            }
             return Err(DirectoryRefusal::NotFound);
         };
         if grant.rules.constrains_commands() && ask.hooks_answer_first {
@@ -925,7 +951,8 @@ impl DirectoryAccess {
     }
 
     /// Command rules, then exec admission, for a command this subject will run.
-    /// No directory grant is not an exec refusal.
+    /// A subject that never held a directory grant is not an exec refusal.
+    /// A subject whose grant was removed stays refused.
     pub fn admit_execution(
         &self,
         subject: &str,
@@ -935,6 +962,11 @@ impl DirectoryAccess {
         roots: &[String],
     ) -> Result<(), DirectoryRefusal> {
         if self.store.grants_for_subject(subject)?.is_empty() {
+            if let Some(refusal) =
+                self.revoked_use(subject, "exec", &attempted_command(program, argv))?
+            {
+                return Err(refusal);
+            }
             return self.reconcile();
         }
         self.exec(ExecAsk {
@@ -950,8 +982,8 @@ impl DirectoryAccess {
     }
 
     /// Exec admission for a shell string that is not one literal program.
-    /// A subject with no directory grant is unchanged. A subject with a grant
-    /// is admitted only when exec allows that sandbox.
+    /// A subject that never held a directory grant is unchanged. A subject
+    /// whose grant was removed stays refused.
     pub fn admit_shell(
         &self,
         subject: &str,
@@ -960,6 +992,9 @@ impl DirectoryAccess {
         roots: &[String],
     ) -> Result<(), DirectoryRefusal> {
         if self.store.grants_for_subject(subject)?.is_empty() {
+            if let Some(refusal) = self.revoked_use(subject, "exec", command)? {
+                return Err(refusal);
+            }
             return self.reconcile();
         }
         self.exec(ExecAsk {
@@ -1040,6 +1075,9 @@ impl DirectoryAccess {
         let owed = self.reconcile().err();
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.first() else {
+            if let Some(refusal) = self.revoked_use(subject, "unasked", tool)? {
+                return Err(refusal);
+            }
             return owed.map_or(Ok(()), Err);
         };
         let resource = self.resource_of(grant)?;
@@ -1288,16 +1326,61 @@ impl DirectoryAccess {
     > {
         let grants = self.store.grants_for_subject(subject)?;
         let Some(grant) = grants.into_iter().next() else {
+            if let Some(refusal) = self.revoked_use(subject, capability, relative)? {
+                return Err(refusal);
+            }
             return Err(DirectoryRefusal::NotFound);
         };
         let resource = self.resource_of(&grant)?;
         self.open_granted(subject, &grant, &resource, relative, capability)
     }
 
-    /// Whether `subject` holds a directory grant. A turn with one is
-    /// default-deny.
+    /// Whether this subject is directory-constrained. A live grant counts,
+    /// and so does a grant that was removed: revocation does not make the
+    /// subject look like one that never held a directory grant.
     pub fn subject_has_directory(&self, subject: &str) -> Result<bool, DirectoryRefusal> {
-        Ok(!self.store.grants_for_subject(subject)?.is_empty())
+        if !self.store.grants_for_subject(subject)?.is_empty() {
+            return Ok(true);
+        }
+        Ok(self.store.revoked_directory(subject)?.is_some())
+    }
+
+    /// The audited refusal for a use after this subject's directory grant was
+    /// removed. `Ok(None)` when a live grant remains, or when this subject
+    /// never held one.
+    pub(crate) fn revoked_use(
+        &self,
+        subject: &str,
+        action: &str,
+        detail: &str,
+    ) -> Result<Option<DirectoryRefusal>, DirectoryRefusal> {
+        if !self.store.grants_for_subject(subject)?.is_empty() {
+            return Ok(None);
+        }
+        let Some(resource_id) = self.store.revoked_directory(subject)? else {
+            return Ok(None);
+        };
+        let resource = self.store.resource(&resource_id)?;
+        let recorded = self.deliver_or_keep(&DirectoryAuditRecord {
+            cause: "directory-revoked".to_owned(),
+            resource_id: Some(resource_id),
+            environment: resource
+                .as_ref()
+                .map(|item| item.environment.clone())
+                .unwrap_or_default(),
+            canonical_path: resource
+                .as_ref()
+                .map(|item| item.canonical_path.clone())
+                .unwrap_or_default(),
+            initiator: subject.to_owned(),
+            before: Some(action.to_owned()),
+            after: Some(detail.to_owned()),
+            profile: None,
+            at_ms: now_ms(),
+        });
+        Ok(Some(DirectoryRefusal::Revoked {
+            audit_recorded: recorded,
+        }))
     }
 
     fn open_granted(
@@ -1514,10 +1597,16 @@ impl DirectoryAccess {
     }
 
     /// Whether `subject` has a directory grant whose command list is a constraint.
+    /// A removed grant is an error, not an unconstrained subject.
     pub fn command_constrained(&self, subject: &str) -> Result<bool, DirectoryRefusal> {
-        Ok(self
-            .store
-            .grants_for_subject(subject)?
+        let grants = self.store.grants_for_subject(subject)?;
+        if grants.is_empty() {
+            if let Some(refusal) = self.revoked_use(subject, "command", "")? {
+                return Err(refusal);
+            }
+            return Ok(false);
+        }
+        Ok(grants
             .iter()
             .any(|grant| grant.rules.constrains_commands() || grant.rules.is_unreadable()))
     }

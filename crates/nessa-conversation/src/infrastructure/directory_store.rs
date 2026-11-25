@@ -261,6 +261,40 @@ impl DirectoryStore for SqliteDirectoryStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(store)
     }
 
+    fn revoked_directory(&self, subject: &str) -> Result<Option<String>, DirectoryRefusal> {
+        let connection = self.connection.lock().expect("directory grants");
+        // The subscription log is the receiver's record. A tombstone is the
+        // latest directory row. Any directory row, once no live grant remains,
+        // means this subject was directory-constrained.
+        let logged: Option<String> = connection
+            .query_row(
+                "SELECT conversation_id FROM grant_log
+                 WHERE receiver_id = ?1 AND resource_kind = 'directory'
+                 ORDER BY position DESC LIMIT 1",
+                params![subject],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store)?;
+        if logged.is_some() {
+            return Ok(logged);
+        }
+        // An owner grant writes no log row. The change journal still records
+        // the grant and its removal.
+        let changed: Option<String> = connection
+            .query_row(
+                "SELECT resource_id FROM share_grant_changes
+                 WHERE resource_kind = 'directory'
+                   AND COALESCE(receiver_id, principal_id) = ?1
+                 ORDER BY changed_at_ms DESC, rowid DESC LIMIT 1",
+                params![subject],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store)?;
+        Ok(changed)
+    }
+
     fn grants_for_resource(
         &self,
         resource_id: &str,

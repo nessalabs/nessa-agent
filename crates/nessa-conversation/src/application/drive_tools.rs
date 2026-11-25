@@ -376,17 +376,33 @@ fn harness_opens_path(name: &str) -> bool {
 }
 
 fn deny_harness_path(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
-    match directory.subject_has_directory(subject) {
-        Ok(false) => None,
-        Ok(true) => Some("the tool opens its path outside the directory handle".to_owned()),
-        Err(error) => Some(error.to_string()),
-    }
+    closed_or(directory, subject, "tool", "path", || {
+        "the tool opens its path outside the directory handle".to_owned()
+    })
 }
 
 fn deny_unknown(directory: &super::DirectoryAccess, subject: &str) -> Option<String> {
-    match directory.subject_has_directory(subject) {
-        Ok(false) => None,
-        Ok(true) => Some("the tool is not admitted for this directory".to_owned()),
+    closed_or(directory, subject, "tool", "unknown", || {
+        "the tool is not admitted for this directory".to_owned()
+    })
+}
+
+/// A removed directory grant is an audited refusal. A live grant uses
+/// `live`. A subject that never held one is unchanged.
+fn closed_or(
+    directory: &super::DirectoryAccess,
+    subject: &str,
+    action: &str,
+    detail: &str,
+    live: impl FnOnce() -> String,
+) -> Option<String> {
+    match directory.revoked_use(subject, action, detail) {
+        Ok(Some(refusal)) => Some(refusal.to_string()),
+        Ok(None) => match directory.subject_has_directory(subject) {
+            Ok(false) => None,
+            Ok(true) => Some(live()),
+            Err(error) => Some(error.to_string()),
+        },
         Err(error) => Some(error.to_string()),
     }
 }

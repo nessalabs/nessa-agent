@@ -644,7 +644,7 @@ fn sharing_again_after_the_marker_is_gone_or_the_wrong_size_revokes_the_grant() 
     fs::write(missing.join(".nessa-binding"), [25; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 
     let sized_access = service(
@@ -1669,7 +1669,7 @@ fn a_share_after_revocation_is_revoked_again_on_the_next_mismatch() {
     fs::write(shared.join(".nessa-binding"), &marker).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 }
 
@@ -1769,7 +1769,7 @@ fn a_later_read_delivers_the_mismatch_audit_the_sink_refused() {
     *audit.fail.lock().unwrap() = false;
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
     let lines = audit.lines.lock().unwrap();
     let recorded = lines
@@ -2636,7 +2636,7 @@ fn a_socket_marker_revokes_the_grant_and_restoring_the_file_does_not() {
     fs::write(&marker, [21; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 }
 
@@ -2672,7 +2672,7 @@ fn a_fifo_marker_revokes_the_grant_and_restoring_the_file_does_not() {
     fs::write(&marker, [22; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 }
 
@@ -2709,7 +2709,7 @@ fn a_symlink_marker_revokes_the_grant_and_restoring_the_file_does_not() {
     fs::write(&marker, [23; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 }
 
@@ -2745,11 +2745,11 @@ fn a_file_where_the_directory_was_revokes_the_grant() {
     fs::write(shared.join(".nessa-binding"), [24; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
     assert!(matches!(
         access.write("peer", "note.txt", b"no").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 }
 
@@ -2795,7 +2795,7 @@ fn sharing_a_stored_path_whose_directory_is_gone_or_a_file_revokes_the_grant() {
     fs::write(missing.join(".nessa-binding"), [30; BINDING_LEN]).unwrap();
     assert!(matches!(
         access.read("peer", "note.txt").unwrap_err(),
-        DirectoryRefusal::NotFound
+        DirectoryRefusal::Revoked { .. }
     ));
 
     let filed = share_read(&replaced_access, replaced.to_str().unwrap(), "other");
@@ -3036,6 +3036,86 @@ fn a_directory_grant_still_checks_a_command() {
     let refused = review(&granted.access, "writer", "Bash", r#"{"command":"ls -l"}"#);
     assert_ne!(refused.as_deref(), Some(HARNESS_PATH));
     assert!(refused.is_some());
+}
+
+#[test]
+fn a_revoked_directory_grant_stays_closed_for_later_commands_and_tools() {
+    let root = private();
+    let shared = root.path().join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::write(shared.join("note.txt"), b"hello").unwrap();
+    let store_dir = private();
+    let audit = Arc::new(RecordingAudit::new());
+    let access = service(
+        Arc::new(LocalDirectoryFiles),
+        Arc::new(SqliteDirectoryStore::open(&store_dir.path().join("grants.sqlite3")).unwrap()),
+        audit.clone(),
+        [34; BINDING_LEN],
+    );
+    access
+        .share(ShareDirectory {
+            environment: "local".into(),
+            path: shared.to_str().unwrap().into(),
+            subject: DirectorySubject {
+                principal_id: None,
+                receiver_id: Some("dev-1".into()),
+            },
+            capabilities: crate::domain::DirectoryCapabilities::from_names([
+                "read", "write", "exec",
+            ])
+            .unwrap(),
+            rules: crate::domain::CommandRules::none(),
+            initiator: "owner".into(),
+        })
+        .unwrap();
+    fs::remove_file(shared.join(".nessa-binding")).unwrap();
+    let first = review(&access, "dev-1", "Bash", r#"{"command":"ls"}"#);
+    assert!(
+        first.as_deref().is_some_and(|text| text.contains("marker")),
+        "the command that finds the mismatch revokes: {first:?}"
+    );
+    let again = review(&access, "dev-1", "Bash", r#"{"command":"ls"}"#);
+    assert!(
+        again
+            .as_deref()
+            .is_some_and(|text| text.contains("revoked")),
+        "a later command stays refused: {again:?}"
+    );
+    let path = json_path("file_path", "note.txt");
+    for (name, json) in [
+        ("Read", path.clone()),
+        ("Write", path),
+        ("WebFetch", r#"{"url":"https://example.test"}"#.to_owned()),
+    ] {
+        let refused = review(&access, "dev-1", name, &json);
+        assert!(
+            refused
+                .as_deref()
+                .is_some_and(|text| text.contains("revoked")),
+            "{name} stays refused: {refused:?}"
+        );
+    }
+    assert!(review(
+        &access,
+        "stranger",
+        "WebFetch",
+        r#"{"url":"https://example.test"}"#
+    )
+    .is_none());
+    assert!(audit
+        .lines
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| { line.cause == "directory-revoked" && line.initiator == "dev-1" }));
+    assert!(matches!(
+        access.read("dev-1", "note.txt").unwrap_err(),
+        DirectoryRefusal::Revoked { .. }
+    ));
+    assert!(matches!(
+        access.write("dev-1", "note.txt", b"no").unwrap_err(),
+        DirectoryRefusal::Revoked { .. }
+    ));
 }
 
 #[test]
