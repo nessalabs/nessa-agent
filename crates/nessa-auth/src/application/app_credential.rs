@@ -77,6 +77,7 @@ pub struct ApprovedAppIssue {
 
 /// One app namespace and the exact capabilities bound by that approval.
 /// Obtained only by matching an authority-provided approval to its issuance.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppCredentialBinding {
     app: ExtensionAppId,
     capabilities: AppCapabilities,
