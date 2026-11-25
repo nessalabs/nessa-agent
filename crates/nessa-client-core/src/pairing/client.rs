@@ -4,7 +4,9 @@ use nessa_auth::{
         ClientAttempt, CryptoRng, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
         PairingCryptoError, RngCore,
     },
-    application::pairing::{ClientPendingStore, PairingWorkerFault, PrivateStateError},
+    application::pairing::{
+        ClientPendingStore, PairingWorkerFault, PendingEnrollment, PrivateStateError,
+    },
     domain::{
         pairing::{AttemptId, ConsentClass, DisclosedConsent, PublicIntent},
         CredentialId,
@@ -14,7 +16,7 @@ use nessa_protocol::clock::Clock;
 use nessa_protocol::pairing::{
     socket::{
         begin_enrollment_phase, check_deadline, worker_fault, DeadlineError, DeadlineStream,
-        NativeDeadline, NativeWakeReport, WakeEndpoint, WakeEndpoints,
+        NativeDeadline, NativeSocket, NativeWakeReport, WakeEndpoint, WakeEndpoints,
     },
     wire::{self, NativePairingReply, NativePairingRequest, NativePairingStatus, NativeWireError},
     EnrollmentChannel, NativeFrameError,
@@ -302,46 +304,49 @@ impl NativeEnrollmentClient {
                         .ok_or(NativeClientError::NoPending)?
                         .into_enrollment(),
                 };
-                let (key, pin, public) = saved.into_parts();
-                let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
-                stream.blocking().map_err(physical_error)?;
-                let channel =
-                    NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
-                        .map_err(NativeClientError::Handshake)?;
-                let mut channel = EnrollmentChannel::new(channel);
-                begin_enrollment_phase(&deadline).map_err(physical_error)?;
-                send(&mut channel, NativePairingRequest::Status(public))?;
-                let status = receive_status(&mut channel, public, received.as_ref())?;
-                check_deadline(&deadline).map_err(physical_error)?;
-                match &status {
-                    NativePairingStatus::Active {
-                        credential,
-                        receiver,
-                        tunnel_secret,
-                        ..
-                    } => {
-                        pending
-                            .save_credential(credential, receiver, public)
-                            .map_err(NativeClientError::Storage)?;
-                        pending
-                            .save_tunnel_secret(tunnel_secret.expose())
-                            .map_err(NativeClientError::Storage)?;
-                    }
-                    // Authenticated end of this enrollment: the record goes, and
-                    // the returned status is the trusted end signal (row A14).
-                    // This device's attempt is no longer pending (failed or
-                    // superseded): it can never claim, so the person enters a code
-                    // again and enroll reserves a new attempt (row A16).
-                    NativePairingStatus::Terminal { .. }
-                    | NativePairingStatus::Unclaimed { .. } => pending
-                        .end_enrollment(public)
-                        .map_err(NativeClientError::Storage)?,
-                    NativePairingStatus::Pending(_)
-                    | NativePairingStatus::Claimed(_)
-                    | NativePairingStatus::Approved(_)
-                    | NativePairingStatus::Staging(_) => {}
+                status_exchange(stream, &deadline, pending, saved, received.as_ref())
+            })();
+            Ok(complete(result))
+        })
+        .await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn status_joined_completed<T: Send + 'static>(
+        &self,
+        route: crate::retained::joined_status::JoinedStatusRoute,
+        stop: Arc<crate::retained::ReadStop>,
+        expires_ms: u64,
+        received: Option<DisclosedConsent>,
+        begin: impl FnOnce() + Send + 'static,
+        complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
+    ) -> Result<T, NativeClientError> {
+        let wake = WakeEndpoint::new(route.address());
+        let clock = self.clock.clone();
+        self.dispatch_owned(vec![wake.clone()], move |pending| {
+            begin();
+            let result = (|| {
+                if pending
+                    .load_pending()
+                    .map_err(NativeClientError::Storage)?
+                    .is_some()
+                {
+                    return Err(NativeClientError::PendingExists);
                 }
-                Ok(status)
+                let saved = pending
+                    .load_credential()
+                    .map_err(NativeClientError::Storage)?
+                    .ok_or(NativeClientError::NoPending)?
+                    .into_enrollment();
+                // This route is selected from the exact issued pin, not a
+                // suggestion from the relay or another saved connection.
+                if saved.gateway_pin() != route.pin() {
+                    return Err(NativeClientError::Phase);
+                }
+                let (stream, deadline) = route
+                    .join(clock, stop, wake, expires_ms)
+                    .map_err(|error| NativeClientError::Io(error.kind()))?;
+                status_exchange(stream, &deadline, pending, saved, received.as_ref())
             })();
             Ok(complete(result))
         })
@@ -483,6 +488,53 @@ struct Expected {
     class: ConsentClass,
     original: Option<PublicIntent>,
 }
+fn status_exchange<S: NativeSocket>(
+    stream: DeadlineStream<S>,
+    deadline: &NativeDeadline,
+    pending: &dyn ClientPendingStore,
+    saved: PendingEnrollment,
+    received: Option<&DisclosedConsent>,
+) -> Result<NativePairingStatus, NativeClientError> {
+    let (key, pin, public) = saved.into_parts();
+    let identity = NativeIdentity::restore(key).map_err(NativeClientError::Crypto)?;
+    stream.blocking().map_err(physical_error)?;
+    let channel = NativeTransport::connect(stream, &identity, GatewayTrust::Pinned(pin))
+        .map_err(NativeClientError::Handshake)?;
+    let mut channel = EnrollmentChannel::new(channel);
+    begin_enrollment_phase(deadline).map_err(physical_error)?;
+    send(&mut channel, NativePairingRequest::Status(public))?;
+    let status = receive_status(&mut channel, public, received)?;
+    check_deadline(deadline).map_err(physical_error)?;
+    match &status {
+        NativePairingStatus::Active {
+            credential,
+            receiver,
+            tunnel_secret,
+            ..
+        } => {
+            pending
+                .save_credential(credential, receiver, public)
+                .map_err(NativeClientError::Storage)?;
+            pending
+                .save_tunnel_secret(tunnel_secret.expose())
+                .map_err(NativeClientError::Storage)?;
+        }
+        // Authenticated end of this enrollment: the record goes, and
+        // the returned status is the trusted end signal (row A14).
+        // This device's attempt is no longer pending (failed or
+        // superseded): it can never claim, so the person enters a code
+        // again and enroll reserves a new attempt (row A16).
+        NativePairingStatus::Terminal { .. } | NativePairingStatus::Unclaimed { .. } => pending
+            .end_enrollment(public)
+            .map_err(NativeClientError::Storage)?,
+        NativePairingStatus::Pending(_)
+        | NativePairingStatus::Claimed(_)
+        | NativePairingStatus::Approved(_)
+        | NativePairingStatus::Staging(_) => {}
+    }
+    Ok(status)
+}
+
 fn complete_enrollment<R: RngCore + CryptoRng>(
     channel: &mut EnrollmentChannel<DeadlineStream>,
     deadline: &NativeDeadline,

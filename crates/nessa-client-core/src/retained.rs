@@ -92,6 +92,8 @@ mod active;
 mod artifact;
 mod device;
 mod follow;
+#[cfg(feature = "test-support")]
+pub(crate) mod joined_status;
 mod owner;
 pub use follow::{
     FollowRule, FollowRuleError, LiveChoice, LiveFollow, FOLLOW_CONVERSATIONS, FOLLOW_KEEP_MAX,

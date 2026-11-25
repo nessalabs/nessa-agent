@@ -185,3 +185,39 @@ fn woken_stream_refuses_io_without_touching_the_socket() {
     let calls = calls.lock().unwrap();
     assert_eq!((calls.reads, calls.writes), (0, 0));
 }
+
+#[test]
+fn joined_attempt_does_not_get_more_time_at_the_enrollment_transition() {
+    use super::{begin_enrollment_phase, check_deadline, DeadlineError};
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let clock = Arc::new(Elapsed(AtomicU64::new(900)));
+    let wake = WakeEndpoint::new("127.0.0.1:9".parse().unwrap());
+    let (mut stream, deadline) = DeadlineStream::new_absolute(
+        RecordingSocket {
+            calls: calls.clone(),
+            reads: vec![Ok(vec![5])].into(),
+            writes: VecDeque::new(),
+        },
+        clock.clone(),
+        wake,
+        1_000,
+    )
+    .unwrap();
+    clock.0.store(990, Ordering::SeqCst);
+    begin_enrollment_phase(&deadline).unwrap();
+    assert_eq!(stream.read(&mut [0]).unwrap(), 1);
+    assert_eq!(
+        calls.lock().unwrap().read_timeouts,
+        [Duration::from_millis(10)]
+    );
+    clock.0.store(1_000, Ordering::SeqCst);
+    assert_eq!(
+        check_deadline(&deadline),
+        Err(DeadlineError::Io(ErrorKind::TimedOut))
+    );
+    assert_eq!(
+        stream.read(&mut [0]).unwrap_err().kind(),
+        ErrorKind::TimedOut
+    );
+    assert_eq!(calls.lock().unwrap().reads, 1);
+}

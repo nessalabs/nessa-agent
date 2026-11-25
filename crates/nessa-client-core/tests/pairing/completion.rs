@@ -315,6 +315,7 @@ async fn last_handle_drop_keeps_private_state_owned_until_physical_completion() 
 
 struct DiscoverySaved {
     intent: PublicIntent,
+    pin: [u8; 44],
     credential: CredentialId,
 }
 impl ClientPendingStore for DiscoverySaved {
@@ -325,7 +326,7 @@ impl ClientPendingStore for DiscoverySaved {
         Ok(Some(DeviceCredential::new(
             PendingEnrollment::new(
                 PrivateKeyMaterial::new(zeroize::Zeroizing::new([7; 32])),
-                [8; 44],
+                self.pin,
                 self.intent,
             ),
             self.credential.clone(),
@@ -377,6 +378,7 @@ async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes(
             ConsentClass::PeerRead,
             Arc::new(DiscoverySaved {
                 intent,
+                pin: [8; 44],
                 credential: credential.clone(),
             }),
             Arc::new(Time),
@@ -402,4 +404,106 @@ async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes(
         );
         client.shutdown().await;
     }
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay() {
+    use crate::retained::{joined_status::JoinedStatusRoute, ReadStop};
+    use nessa_auth::adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy};
+    use nessa_protocol::{
+        pairing::{
+            wire::{decode_request, encode_refused, NativePairingRequest},
+            EnrollmentChannel,
+        },
+        relay::{read_frame, write_frame, RelayFrame},
+    };
+
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = gateway.public_spki();
+    let key = relay_key(&pin).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = NativeEnrollmentClient::new(
+        Arc::new(DiscoverySaved {
+            intent,
+            pin,
+            credential: CredentialId::new("issued").unwrap(),
+        }),
+        Arc::new(Time),
+    );
+
+    // The owner selected a different pin: refuse before any TCP connection.
+    let other = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let wrong = client
+        .status_joined_completed(
+            JoinedStatusRoute::new(address, other).unwrap(),
+            ReadStop::new(),
+            3_000,
+            None,
+            || {},
+            |r| r,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(wrong, Err(NativeClientError::Phase)));
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+
+    // Use the same accepted socket for relay framing, pinned TLS and canonical
+    // status. A received application refusal is authoritative for this attempt.
+    listener.set_nonblocking(false).unwrap();
+    let peer = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        assert!(
+            matches!(read_frame(&mut socket), Ok(RelayFrame::Connect { key: observed }) if observed==key)
+        );
+        write_frame(&mut socket, &RelayFrame::Joined).unwrap();
+        let mut tls = EnrollmentChannel::new(NativeTransport::accept(socket, &gateway).unwrap());
+        let request = decode_request(&tls.receive_envelope().unwrap()).unwrap();
+        assert!(matches!(request, NativePairingRequest::Status(observed) if observed==intent));
+        tls.send_envelope(&encode_refused().unwrap()).unwrap();
+        assert!(
+            tls.receive_envelope().is_err(),
+            "cannot replay status on the joined socket"
+        );
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock),
+            "cannot redial after the authenticated refusal"
+        );
+    });
+    let refusal = timeout(
+        Duration::from_secs(5),
+        client.status_joined_completed(
+            JoinedStatusRoute::new(address, pin).unwrap(),
+            ReadStop::new(),
+            3_000,
+            None,
+            || {},
+            |r| r,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(refusal, Err(NativeClientError::Refused)));
+    peer.join().unwrap();
 }
