@@ -92,6 +92,28 @@ impl BuiltInServer for GithubTools {
         vec!["github-read/1".into()]
     }
 
+    fn skills(&self) -> Option<&nessa_sdk::domain::mcp_skills::SkillCatalog> {
+        static SKILLS: std::sync::OnceLock<nessa_sdk::domain::mcp_skills::SkillCatalog> =
+            std::sync::OnceLock::new();
+        Some(SKILLS.get_or_init(|| {
+            use nessa_sdk::domain::mcp_skills::{SkillCatalog, SkillDefinition, SkillFile};
+            SkillCatalog::new(vec![SkillDefinition {
+                skill_path: "nessa-github".to_owned(),
+                files: vec![SkillFile::markdown(
+                    "SKILL.md",
+                    "---\n\
+name: nessa-github\n\
+description: Read GitHub repositories, issues, and pull requests using the signed-in Nessa GitHub connection.\n\
+---\n\n\
+# Reading GitHub through Nessa\n\n\
+- Use `read_repository` for repository metadata (`owner`, `repository`).\n\
+- Use `read_issue` and `read_pull_request` with `owner`, `repository`, and `number` to inspect discussions and review context without needing local git credentials.\n",
+                )],
+            }])
+            .expect("built-in nessa-github skill catalog is valid")
+        }))
+    }
+
     fn tools(&self) -> Vec<Value> {
         [
             (
