@@ -559,20 +559,59 @@ fn mode_bits(mode: impl Into<u32>) -> u32 {
 }
 
 /// Move `.nessa-binding` aside, then delete it only when that file is the one
-/// already validated. A different file is renamed back and not removed.
+/// already validated. A different entry, including one that cannot be opened
+/// (a symlink or a socket), is renamed back and not removed.
 fn remove_validated(dir: RawFd, validated: &File) -> Result<(), DirectoryRefusal> {
     let aside = match reserve_aside(dir)? {
         Some(name) => name,
         None => return Ok(()),
     };
-    let moved = open_named(dir, &aside)?;
-    if same_inode(validated.as_raw_fd(), moved.as_raw_fd()) {
+    let validated_stat = match file_stat(validated.as_raw_fd()) {
+        Ok(stat) => stat,
+        Err(error) => {
+            restore_aside(dir, &aside)?;
+            return Err(error);
+        }
+    };
+    // `open` fails for a symlink (`ELOOP`) and a socket (`ENXIO`) before an fd
+    // exists. The name's own identity, not a followed open, decides.
+    let moved = match name_stat(dir, &aside) {
+        Ok(stat) => stat,
+        Err(error) => {
+            restore_aside(dir, &aside)?;
+            return Err(error);
+        }
+    };
+    let same = moved.st_dev == validated_stat.st_dev && moved.st_ino == validated_stat.st_ino;
+    let regular = mode_bits(moved.st_mode) & mode_bits(libc::S_IFMT) == mode_bits(libc::S_IFREG);
+    if same && regular {
         return unlink_named(dir, &aside);
     }
-    match rename_at(dir, &aside, MARKER_NAME, true) {
+    restore_aside(dir, &aside)
+}
+
+fn restore_aside(dir: RawFd, aside: &str) -> Result<(), DirectoryRefusal> {
+    match rename_at(dir, aside, MARKER_NAME, true) {
         Ok(()) | Err(DirectoryRefusal::Io(std::io::ErrorKind::AlreadyExists)) => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn file_stat(fd: RawFd) -> Result<libc::stat, DirectoryRefusal> {
+    let mut info: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut info) } != 0 {
+        return Err(io(std::io::Error::last_os_error()));
+    }
+    Ok(info)
+}
+
+fn name_stat(dir: RawFd, name: &str) -> Result<libc::stat, DirectoryRefusal> {
+    let name = c_name(name)?;
+    let mut info: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatat(dir, name.as_ptr(), &mut info, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+        return Err(io(std::io::Error::last_os_error()));
+    }
+    Ok(info)
 }
 
 fn reserve_aside(dir: RawFd) -> Result<Option<String>, DirectoryRefusal> {
@@ -716,6 +755,8 @@ fn io(error: std::io::Error) -> DirectoryRefusal {
 
 #[cfg(test)]
 mod marker_identity {
+    use std::os::unix::fs::FileTypeExt;
+
     use super::*;
 
     #[test]
@@ -826,6 +867,40 @@ mod marker_identity {
             DirectoryRefusal::Io(std::io::ErrorKind::InvalidInput)
         ));
         assert!(pipe.exists());
+    }
+
+    fn aside_names(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".nessa-cleanup-"))
+            .collect()
+    }
+
+    #[test]
+    fn cleanup_puts_back_a_symlink_or_socket_it_moved_aside() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        let marker = shared.join(MARKER_NAME);
+        std::fs::write(&marker, [9; BINDING_LEN]).unwrap();
+        let directory = open_directory(shared.to_str().unwrap()).unwrap();
+        let validated = open_named(directory.as_raw_fd(), MARKER_NAME).unwrap();
+        std::fs::remove_file(&marker).unwrap();
+        std::os::unix::fs::symlink("elsewhere", &marker).unwrap();
+        remove_validated(directory.as_raw_fd(), &validated).unwrap();
+        assert_eq!(
+            std::fs::read_link(&marker).unwrap(),
+            std::path::Path::new("elsewhere")
+        );
+        assert!(aside_names(&shared).is_empty());
+
+        std::fs::remove_file(&marker).unwrap();
+        let _listener = std::os::unix::net::UnixListener::bind(&marker).unwrap();
+        remove_validated(directory.as_raw_fd(), &validated).unwrap();
+        assert!(std::fs::metadata(&marker).unwrap().file_type().is_socket());
+        assert!(aside_names(&shared).is_empty());
     }
 
     #[test]
