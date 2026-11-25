@@ -75,7 +75,8 @@ impl ConversationService {
     /// # Errors
     /// `NotFound` when the policy refuses or the conversation is not the
     /// caller's; `ChannelNotFound` when the channel is not; `Unavailable`
-    /// when there is no folder to start in.
+    /// when there is no folder to start in; `EnvironmentNotConfigured` for a
+    /// conversation an earlier build placed on another machine.
     pub async fn terminal_place(
         &self,
         caller: &ConversationCaller,
@@ -99,6 +100,12 @@ impl ConversationService {
                     .ok_or(ConversationError::NotFound)?;
                 // Cedar decides on the conversation's own facts.
                 self.admit_terminal(caller, AccessResource::of(&record))?;
+                // An earlier build placed it on another machine, whose files
+                // its commands were meant for: it runs nothing here, the
+                // same as a send to it (ADR 1417).
+                if self.inner.environment.elsewhere(id).await? {
+                    return Err(ConversationError::EnvironmentNotConfigured);
+                }
                 if let Some(place) = self.inner.workplaces.get(id) {
                     return Ok(place);
                 }

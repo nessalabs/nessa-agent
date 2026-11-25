@@ -59,7 +59,7 @@ pub use channels::{
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
-use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_auth::domain::{AppNamespace, OrganizationId, PrincipalId};
 use nessa_projection::{
     agent_question, agent_review, bound_view, clipped, earlier_turns, question_entry, review_entry,
     CommittedCursor, IntoView, McpToolUis, NoMcpToolUis, Projection, MAX_TEXT,
@@ -5056,6 +5056,7 @@ impl ConversationService {
             AccessResource::Catalogue {
                 organization,
                 owner,
+                app_namespace: &AppNamespace::DEFAULT,
             },
         )
     }
@@ -5075,6 +5076,7 @@ impl ConversationService {
             AccessResource::Conversation {
                 organization,
                 owner,
+                app_namespace: &AppNamespace::DEFAULT,
                 deleted: false,
                 // A replica is not a local thread, so who created it is not
                 // what this read asks.
@@ -5093,6 +5095,7 @@ impl ConversationService {
             subject: AccessSubject::Person {
                 organization: &caller.organization_id,
                 principal: &caller.principal_id,
+                app_namespace: &AppNamespace::DEFAULT,
             },
             action,
             resource,

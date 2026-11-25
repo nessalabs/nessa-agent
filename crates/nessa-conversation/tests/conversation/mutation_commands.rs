@@ -1551,6 +1551,18 @@ async fn a_conversation_placed_elsewhere_by_an_earlier_build_is_refused_never_ru
         format!("{forked:?}").contains("EnvironmentNotConfigured"),
         "{forked:?}"
     );
+    // Run on one of its replies' commands would run them against this
+    // machine's files: refused, the same as a send.
+    let terminal = service
+        .terminal_place(
+            &caller("terminal"),
+            &crate::application::TerminalOrigin::Conversation(source.clone()),
+        )
+        .await;
+    assert!(
+        matches!(terminal, Err(ConversationError::EnvironmentNotConfigured)),
+        "{terminal:?}"
+    );
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     retire(service, storage, metadata).await;
 }
