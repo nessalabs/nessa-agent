@@ -616,17 +616,25 @@ async fn joined_selected_owner_injects_one_dial_and_drains_on_stop() {
 async fn joined_record_selection_admits_one_dial_only_for_current_matching_authority() {
     use crate::retained::{
         joined_status::{
-            join_after_active_for_test, JoinedDialFuture, JoinedEpisode, JoinedStatusDial,
-            JoinedStatusRoute,
+            join_after_active_for_test, select_joined_record_for_test, JoinedDialFuture, JoinedEpisode,
+            JoinedStatusDial, JoinedStatusRoute,
         },
-        ReadStop,
+        ReadStop, TokioJoinedDial,
     };
     use nessa_auth::{
-        adapters::pairing::{NativeIdentity, OsEntropy},
+        adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy},
         domain::{pairing::DisclosedConsent, AudienceId, OrganizationId, Resource},
     };
     use nessa_protocol::{
-        pairing::{socket::WakeEndpoint, wire::NativePairingStatus},
+        pairing::{
+            socket::WakeEndpoint,
+            wire::{
+                decode_request, encode_record_carrier_accepted, NativePairingRequest,
+                NativePairingStatus, RecordCarrierMode,
+            },
+            EnrollmentChannel,
+        },
+        relay::{read_frame, write_frame, RelayFrame},
         tunnel::TunnelSecret,
     };
     use nessa_sync::replication::domain::{Id, Scope};
@@ -634,13 +642,12 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
 
     struct CountDial(AtomicUsize);
     impl JoinedStatusDial for CountDial {
-        fn dial(&self, _: SocketAddr) -> JoinedDialFuture {
+        fn dial(&self, address: SocketAddr) -> JoinedDialFuture {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Err(io::ErrorKind::ConnectionRefused.into()) })
+            TokioJoinedDial.dial(address)
         }
     }
-    let address = "127.0.0.1:9".parse().unwrap();
-    let pin = NativeIdentity::generate(&mut OsEntropy).unwrap().public_spki();
+
     let other_pin = NativeIdentity::generate(&mut OsEntropy).unwrap().public_spki();
     let intent = PublicIntent::new(
         InvitationId::new([1; 16]),
@@ -666,6 +673,10 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         "match", "refused", "pending", "pin", "scope", "receiver", "epoch",
         "credential", "stop", "expiry",
     ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let pin = gateway.public_spki();
         let credential = CredentialId::new("issued").unwrap();
         let state = DiscoverySaved {
             intent,
@@ -709,6 +720,42 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         } else {
             trusted.clone()
         };
+        let peer = if case == "match" {
+            let key = relay_key(&pin).unwrap();
+            let expected_scope = trusted.clone();
+            Some(std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let (mut socket, _) = loop {
+                    match listener.accept() {
+                        Ok(accepted) => break accepted,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < until =>
+                        {
+                            std::thread::park_timeout(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                socket.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+                assert!(matches!(read_frame(&mut socket), Ok(RelayFrame::Connect { key: actual }) if actual == key));
+                write_frame(&mut socket, &RelayFrame::Joined).unwrap();
+                let mut peer = EnrollmentChannel::new(NativeTransport::accept(socket, &gateway).unwrap());
+                let request = decode_request(&peer.receive_envelope().unwrap()).unwrap();
+                let NativePairingRequest::OpenRecordCarrierV1(open) = request else {
+                    panic!("expected selected record carrier");
+                };
+                assert_eq!(open.credential.as_str(), "issued");
+                assert_eq!(open.access_epoch, 13);
+                assert_eq!(open.scope, expected_scope);
+                assert!(matches!(open.mode, RecordCarrierMode::Page));
+                peer.send_envelope(&encode_record_carrier_accepted().unwrap()).unwrap();
+            }))
+        } else {
+            None
+        };
         let dial = Arc::new(CountDial(AtomicUsize::new(0)));
         let route = JoinedStatusRoute::new(
             address,
@@ -741,8 +788,14 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
         .await
         .unwrap();
         match (case, result) {
-            ("match", Err(NativeClientError::Io(io::ErrorKind::ConnectionRefused)))
-            | ("stop", Err(NativeClientError::Io(io::ErrorKind::ConnectionAborted)))
+            ("match", Ok(selection)) => {
+                tokio::task::spawn_blocking(move || select_joined_record_for_test(selection))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                peer.unwrap().join().unwrap();
+            }
+            ("stop", Err(NativeClientError::Io(io::ErrorKind::ConnectionAborted)))
             | ("expiry", Err(NativeClientError::Io(io::ErrorKind::TimedOut)))
             | ("credential", Err(NativeClientError::Storage(PrivateStateError::Conflict))) => {}
             (_, Err(NativeClientError::Refused)) if !matches!(case, "match" | "stop" | "expiry" | "credential") => {}

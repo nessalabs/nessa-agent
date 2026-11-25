@@ -266,7 +266,7 @@ impl RetainedCache {
     }
 }
 
-fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {
+pub(super) fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {
     let reply = frame.map_err(|error| match error {
         NativeFrameError::Wire(_) => ReadFailure::Protocol,
         NativeFrameError::Io(_) => ReadFailure::Unreachable,

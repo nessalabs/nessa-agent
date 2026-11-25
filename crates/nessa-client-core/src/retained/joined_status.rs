@@ -158,6 +158,14 @@ impl JoinedStatusRoute {
     }
 }
 
+#[cfg(test)]
+pub(crate) struct JoinedRecordSelection {
+    joined: JoinedStream,
+    reader: super::RetainedDeviceReader,
+    address: SocketAddr,
+    scope: super::Scope,
+}
+
 // Synthetic composition only until the retained cache-owning entry point
 // can consume this proof. Successful validation does not itself grant access.
 #[cfg(test)]
@@ -170,13 +178,14 @@ pub(crate) fn join_after_active_for_test(
     episode: JoinedEpisode,
     wake: Arc<WakeEndpoint>,
     reactor: &tokio::runtime::Handle,
-) -> std::result::Result<(JoinedStream, super::RetainedDeviceReader), NativeClientError> {
+) -> std::result::Result<JoinedRecordSelection, NativeClientError> {
     use nessa_protocol::conversation::read_scope::validate_passive_read_selector;
 
     let status = status?;
     let reader = super::RetainedDeviceReader::from_current(&status, state)?
         .ok_or(NativeClientError::Refused)?;
-    let access = reader.access(route.address(), "joined-record-fixture");
+    let address = route.address();
+    let access = reader.access(address, "joined-record-fixture");
     if &access.pin != route.pin() || trusted_scope != requested_scope {
         return Err(NativeClientError::Refused);
     }
@@ -185,7 +194,45 @@ pub(crate) fn join_after_active_for_test(
     let joined = route
         .join(&episode, wake, reactor)
         .map_err(|error| NativeClientError::Io(error.kind()))?;
-    Ok((joined, reader))
+    Ok(JoinedRecordSelection { joined, reader, address, scope: trusted_scope.clone() })
+}
+
+// Stop at the Accepted boundary until the cache owner can fence publication.
+#[cfg(test)]
+pub(crate) fn select_joined_record_for_test(
+    selection: JoinedRecordSelection,
+) -> std::result::Result<(), super::ReadFailure> {
+    use nessa_auth::{
+        adapters::pairing::{GatewayTrust, NativeTransport},
+        domain::CredentialId,
+    };
+    use nessa_protocol::pairing::{
+        wire::{encode_request, NativePairingRequest, RecordCarrierMode, RecordCarrierOpen},
+        EnrollmentChannel,
+    };
+    use super::ReadFailure;
+
+    let JoinedRecordSelection { joined, reader, address, scope } = selection;
+    let (stream, deadline, _interrupt) = joined;
+    let access = reader.access(address, "joined-record-fixture");
+    let transport =
+        NativeTransport::connect(stream, access.identity, GatewayTrust::Pinned(access.pin))
+            .map_err(|_| ReadFailure::Unreachable)?;
+    let mut channel = EnrollmentChannel::new(transport);
+    let request = NativePairingRequest::OpenRecordCarrierV1(RecordCarrierOpen {
+        credential: CredentialId::new(access.credential.to_owned())
+            .map_err(|_| ReadFailure::Protocol)?,
+        access_epoch: access.access_epoch,
+        scope,
+        mode: RecordCarrierMode::Page,
+    });
+    let envelope = encode_request(&request).map_err(|_| ReadFailure::Protocol)?;
+    channel.send_envelope(&envelope).map_err(|error| match error {
+        nessa_protocol::pairing::NativeFrameError::Wire(_) => ReadFailure::Protocol,
+        nessa_protocol::pairing::NativeFrameError::Io(_) => ReadFailure::Unreachable,
+    })?;
+    super::carrier::accept_selection(channel.receive_envelope())?;
+    check_deadline(&deadline).map_err(|_| ReadFailure::Unreachable)
 }
 
 // The enrollment worker owns this exact socket and registration from Connect
