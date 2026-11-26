@@ -305,9 +305,16 @@ impl RetainedEnrollmentClient {
         expires_ms: u64,
     ) -> Result<Result<Page, ReadFailure>, NativeClientError> {
         self.with_joined_record_fixture(
-            JoinedRecordCommitFixture { relay, pin, scope, stop, expires_ms },
+            JoinedRecordCommitFixture {
+                relay,
+                pin,
+                scope,
+                stop,
+                expires_ms,
+            },
             super::joined_status::read_joined_record_page_for_test,
-        ).await
+        )
+        .await
     }
 
     /// Drive one authorized joined fixture Page into the caller's disposable cache.
@@ -320,8 +327,13 @@ impl RetainedEnrollmentClient {
         before_commit: impl FnOnce(super::RecordCommitIntent<'_>) + Send + 'static,
     ) -> Result<Result<(u64, usize), ReadFailure>, NativeClientError> {
         self.with_joined_record_fixture(inputs, move |selection| {
-            super::joined_status::retain_joined_record_page_for_test(selection, open_cache, before_commit)
-        }).await
+            super::joined_status::retain_joined_record_page_for_test(
+                selection,
+                open_cache,
+                before_commit,
+            )
+        })
+        .await
     }
 
     #[cfg(feature = "test-support")]
@@ -330,7 +342,13 @@ impl RetainedEnrollmentClient {
         inputs: JoinedRecordCommitFixture,
         complete: impl FnOnce(JoinedRecordSelection) -> Result<T, ReadFailure> + Send + 'static,
     ) -> Result<Result<T, ReadFailure>, NativeClientError> {
-        let JoinedRecordCommitFixture { relay, pin, scope, stop, expires_ms } = inputs;
+        let JoinedRecordCommitFixture {
+            relay,
+            pin,
+            scope,
+            stop,
+            expires_ms,
+        } = inputs;
         let route = || {
             super::joined_status::JoinedStatusRoute::new(
                 relay,

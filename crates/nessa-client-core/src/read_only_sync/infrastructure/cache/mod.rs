@@ -25,9 +25,9 @@ mod raw_records;
 mod records;
 mod reset;
 mod rows;
-pub(crate) use records::{EarlierFold, ReadOnlyCache};
 #[cfg(feature = "test-support")]
 pub use records::RecordCommitIntent;
+pub(crate) use records::{EarlierFold, ReadOnlyCache};
 
 #[cfg(test)]
 #[path = "../../../../tests/read_only_sync/infrastructure/cache.rs"]

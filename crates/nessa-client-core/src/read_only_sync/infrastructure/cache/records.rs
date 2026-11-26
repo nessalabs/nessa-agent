@@ -426,7 +426,10 @@ impl ReadOnlyCache {
         &'a mut self,
         admit: impl FnOnce(RecordCommitIntent<'_>) -> Result<P, CacheError> + 'a,
     ) -> impl TranscriptCache + 'a {
-        AdmittedRecords { cache: self, admit: Some(admit) }
+        AdmittedRecords {
+            cache: self,
+            admit: Some(admit),
+        }
     }
 
     fn apply_plan(&mut self, plan: CommitPlan) -> Result<(), CacheError> {
@@ -635,9 +638,8 @@ where
             return self.cache.observe_head(scope, head);
         }
         let admit = self.admit.take().ok_or(CacheError::Unavailable)?;
-        self.cache.observe_head_admitted(scope, head, || {
-            admit(RecordCommitIntent::EmptyHead(scope))
-        })
+        self.cache
+            .observe_head_admitted(scope, head, || admit(RecordCommitIntent::EmptyHead(scope)))
     }
 
     fn mark_unknown(&mut self, scope: &Scope) -> Result<(), CacheError> {
@@ -894,17 +896,25 @@ mod tests {
         drop(cache);
 
         let mut reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
-        assert_eq!(rows::progress(&reopened.connection, &scope).unwrap(), Some(before.clone()));
+        assert_eq!(
+            rows::progress(&reopened.connection, &scope).unwrap(),
+            Some(before.clone())
+        );
         assert_eq!(count(&reopened, "transcript_records"), records);
         assert_eq!(checkpoint_payload(&reopened), checkpoint);
         ReplicaStore::apply(&mut reopened, plan(&scope, before.downloaded, second_page)).unwrap();
         drop(reopened);
 
         let reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
-        let after = rows::progress(&reopened.connection, &scope).unwrap().unwrap();
+        let after = rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .unwrap();
         assert_eq!(after.downloaded, next);
         assert_eq!(after.generation, before.generation + 1);
-        assert_eq!(count(&reopened, "transcript_records"), records + second_count);
+        assert_eq!(
+            count(&reopened, "transcript_records"),
+            records + second_count
+        );
     }
 
     #[cfg(feature = "test-support")]
@@ -926,13 +936,18 @@ mod tests {
                 witnessed = true;
                 Err(CacheError::Unavailable)
             });
-            assert_eq!(guarded.observe_head(&scope, 0), Err(CacheError::Unavailable));
+            assert_eq!(
+                guarded.observe_head(&scope, 0),
+                Err(CacheError::Unavailable)
+            );
         }
         assert!(witnessed);
         drop(cache);
 
         let mut reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
-        assert!(rows::progress(&reopened.connection, &scope).unwrap().is_none());
+        assert!(rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .is_none());
         assert_eq!(count(&reopened, "transcript_checkpoints"), 0);
         {
             let mut guarded = reopened.records_with_admission(|intent| {
@@ -944,8 +959,13 @@ mod tests {
         drop(reopened);
 
         let reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
-        let progress = rows::progress(&reopened.connection, &scope).unwrap().unwrap();
-        assert_eq!((progress.downloaded, progress.applied, progress.generation), (0, 0, 1));
+        let progress = rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (progress.downloaded, progress.applied, progress.generation),
+            (0, 0, 1)
+        );
         assert_eq!(count(&reopened, "transcript_checkpoints"), 1);
         assert_eq!(count(&reopened, "transcript_records"), 0);
     }

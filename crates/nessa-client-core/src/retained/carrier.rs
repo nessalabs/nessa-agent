@@ -1,8 +1,9 @@
 //! Private process-fixture adapter for one retained record page.
 use super::{
-    failure, run_records, CacheError, DeviceEvidence, GatewayConnector, GatewayStream, MonotonicClock, ReadFailure,
-    ReadStop, ReaderAccess, RecordCommitIntent, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
-    HANDSHAKE_MS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+    failure, run_records, CacheError, DeviceEvidence, GatewayConnector, GatewayStream,
+    MonotonicClock, ReadFailure, ReadStop, ReaderAccess, RecordCommitIntent, RelayRoute,
+    RetainedCache, Scope, StoppableConnector, Stopping, HANDSHAKE_MS,
+    PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
@@ -264,7 +265,14 @@ impl RetainedCache {
         scope: &Scope,
         claim: impl FnOnce(RecordCommitIntent<'_>) -> Result<P, ReadFailure>,
     ) -> Result<(u64, usize), ReadFailure> {
-        let session = bind_fixture(RecordIo { transport, interrupt, cut: None }, scope)?;
+        let session = bind_fixture(
+            RecordIo {
+                transport,
+                interrupt,
+                cut: None,
+            },
+            scope,
+        )?;
         let (mut authorizer, mut source) = session.parts();
         let policy = self.policy.suffix_page();
         let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
@@ -277,7 +285,15 @@ impl RetainedCache {
                     CacheError::Unavailable
                 })
             });
-            run_records(scope, &mut authorizer, &mut source, &mut records, limits, 1, self.wall.as_ref())
+            run_records(
+                scope,
+                &mut authorizer,
+                &mut source,
+                &mut records,
+                limits,
+                1,
+                self.wall.as_ref(),
+            )
         };
         // An already admitted durable outcome outlives the transport.
         let _ = session.close();

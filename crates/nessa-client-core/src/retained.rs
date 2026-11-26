@@ -44,6 +44,8 @@
 //! are granted, so a withdrawal always applies and frees what it held.
 use crate::read_only_sync::application::device::asks_status;
 pub use crate::read_only_sync::application::device::PinnedStatus;
+#[cfg(feature = "test-support")]
+use crate::read_only_sync::application::driver::RecordRun;
 use crate::read_only_sync::application::driver::{
     run_catalogue, run_records, RecordDriverCause, RecordDriverError,
 };
@@ -71,8 +73,6 @@ use nessa_protocol::product_contract::generated::{ConversationErrorCode, RecordR
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
-#[cfg(feature = "test-support")]
-use crate::read_only_sync::application::driver::RecordRun;
 #[cfg(feature = "test-support")]
 use nessa_sync::replication::application::{RecordSource, ScopeAuthorizer};
 use nessa_sync::replication::infrastructure::session::SessionInterrupt;
@@ -914,16 +914,17 @@ impl RetainedCache {
         &mut self,
         result: Result<RecordRun, RecordDriverError>,
     ) -> Result<(u64, usize), ReadFailure> {
-        result.map(|run| (run.downloaded, run.pages))
-        .map_err(|error| match error.cause {
-            RecordDriverCause::Cache(error) => cache_failure(&error),
-            RecordDriverCause::Core(SyncError::Store(_)) => self
-                .cache
-                .take_refusal()
-                .as_ref()
-                .map_or(ReadFailure::Cache, cache_failure),
-            RecordDriverCause::Core(_) => ReadFailure::Protocol,
-        })
+        result
+            .map(|run| (run.downloaded, run.pages))
+            .map_err(|error| match error.cause {
+                RecordDriverCause::Cache(error) => cache_failure(&error),
+                RecordDriverCause::Core(SyncError::Store(_)) => self
+                    .cache
+                    .take_refusal()
+                    .as_ref()
+                    .map_or(ReadFailure::Cache, cache_failure),
+                RecordDriverCause::Core(_) => ReadFailure::Protocol,
+            })
     }
 
     /// Open, or create, the cache at `path`, in a private directory that is

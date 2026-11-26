@@ -18,10 +18,7 @@ use nessa_protocol::{
     },
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
-use nessa_sync::replication::{
-    domain::Page,
-    infrastructure::session::SessionInterrupt,
-};
+use nessa_sync::replication::{domain::Page, infrastructure::session::SessionInterrupt};
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result, Write},
@@ -259,7 +256,10 @@ pub(super) fn read_joined_record_page_for_test(
         || {},
         |transport, interrupt, scope, episode, wake| {
             super::carrier::read_selected_page_for_test(transport, interrupt, scope, || {
-                episode.remaining(wake).map(|_| ()).map_err(|_| ReadFailure::Unreachable)
+                episode
+                    .remaining(wake)
+                    .map(|_| ())
+                    .map_err(|_| ReadFailure::Unreachable)
             })
         },
     )
@@ -326,7 +326,9 @@ fn with_selected_joined_record<T>(
     after_accepted();
     // TLS may have buffered the plaintext before stop/wake/expiry changed.
     // Recheck the same episode and exact wake, not just the socket deadline.
-    episode.remaining(&wake).map_err(|_| ReadFailure::Unreachable)?;
+    episode
+        .remaining(&wake)
+        .map_err(|_| ReadFailure::Unreachable)?;
     use_transport(channel.into_transport(), interrupt, &scope, &episode, &wake)
 }
 

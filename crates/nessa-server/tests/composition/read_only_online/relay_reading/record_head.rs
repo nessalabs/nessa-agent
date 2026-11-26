@@ -7,8 +7,7 @@ use nessa_auth::{
 };
 use nessa_client_core::retained::{
     dial_gateway, JoinedRecordCommitFixture, ReadFailure, ReadStop, ReaderAccess, ReaderRole,
-    RecordCommitIntent,
-    RetainedCache, RetainedEnrollmentClient, RetainedTranscript,
+    RecordCommitIntent, RetainedCache, RetainedEnrollmentClient, RetainedTranscript,
 };
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
@@ -581,43 +580,59 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                     let state = FilePairingState::open(
                         Path::new(profile["stateRoot"].as_str().unwrap()),
                         Path::new(profile["stateDirectory"].as_str().unwrap()),
-                    ).unwrap();
+                    )
+                    .unwrap();
                     let clock = Arc::new(CommitClock {
                         start: Instant::now(),
                         expired: AtomicBool::new(false),
                     });
                     let path = device.caches.join(name);
                     let client = RetainedEnrollmentClient::new(
-                        Arc::new(state), path.clone(), Arc::new(Wall), clock.clone(),
-                    ).unwrap();
+                        Arc::new(state),
+                        path.clone(),
+                        Arc::new(Wall),
+                        clock.clone(),
+                    )
+                    .unwrap();
                     let stop = ReadStop::new();
                     let hit = Arc::new(AtomicBool::new(false));
                     let hit_before = hit.clone();
                     let gate_stop = stop.clone();
-                    let result = runtime.block_on(client.retain_joined_record_page_for_test(
-                        JoinedRecordCommitFixture {
-                            relay, pin: device.pin, scope: scope.clone(), stop,
-                            expires_ms: WAIT.as_millis().try_into().unwrap(),
-                        },
-                        move || RetainedCache::open(&path, Arc::new(Wall), Arc::new(Time(Instant::now()))),
-                        move |intent| {
-                            let RecordCommitIntent::Page(plan) = intent else {
-                                panic!("seeded replay must reach the record Page commit");
-                            };
-                            assert_eq!(plan.expected().position(), expected_after);
-                            assert_eq!(plan.next().position(), payload.0);
-                            assert_eq!(plan.records().len(), 1);
-                            let record = &plan.records()[0];
-                            assert_eq!(record.id.as_str(), payload.1);
-                            assert_eq!(record.payload.as_slice(), payload.2.as_slice());
-                            assert!(!hit_before.swap(true, Ordering::SeqCst));
-                            match at_commit {
-                                AtCommit::None => {}
-                                AtCommit::Stop => gate_stop.stop(),
-                                AtCommit::Expire => clock.expired.store(true, Ordering::SeqCst),
-                            }
-                        },
-                    )).unwrap();
+                    let result = runtime
+                        .block_on(client.retain_joined_record_page_for_test(
+                            JoinedRecordCommitFixture {
+                                relay,
+                                pin: device.pin,
+                                scope: scope.clone(),
+                                stop,
+                                expires_ms: WAIT.as_millis().try_into().unwrap(),
+                            },
+                            move || {
+                                RetainedCache::open(
+                                    &path,
+                                    Arc::new(Wall),
+                                    Arc::new(Time(Instant::now())),
+                                )
+                            },
+                            move |intent| {
+                                let RecordCommitIntent::Page(plan) = intent else {
+                                    panic!("seeded replay must reach the record Page commit");
+                                };
+                                assert_eq!(plan.expected().position(), expected_after);
+                                assert_eq!(plan.next().position(), payload.0);
+                                assert_eq!(plan.records().len(), 1);
+                                let record = &plan.records()[0];
+                                assert_eq!(record.id.as_str(), payload.1);
+                                assert_eq!(record.payload.as_slice(), payload.2.as_slice());
+                                assert!(!hit_before.swap(true, Ordering::SeqCst));
+                                match at_commit {
+                                    AtCommit::None => {}
+                                    AtCommit::Stop => gate_stop.stop(),
+                                    AtCommit::Expire => clock.expired.store(true, Ordering::SeqCst),
+                                }
+                            },
+                        ))
+                        .unwrap();
                     runtime.block_on(client.shutdown());
                     assert!(hit.load(Ordering::SeqCst), "after stage, before COMMIT");
                     result
@@ -632,9 +647,15 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                 };
                 assert_eq!(run(1, refusal, expected[1].clone()), Err(expected_refusal));
                 let mut reopened = device.cache(name);
-                let RetainedTranscript::Retained(saved) = reopened.transcript_view(
-                    &device.receiver, scope.origin().as_str(), &conversation, Uuid::nil(),
-                ).unwrap() else {
+                let RetainedTranscript::Retained(saved) = reopened
+                    .transcript_view(
+                        &device.receiver,
+                        scope.origin().as_str(),
+                        &conversation,
+                        Uuid::nil(),
+                    )
+                    .unwrap()
+                else {
                     panic!("the refused COMMIT must leave the original checkpoint");
                 };
                 assert_eq!(saved.progress().scope(), scope);
