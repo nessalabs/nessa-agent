@@ -96,7 +96,7 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
         <div
           className="voice-notice"
           role="status"
-          data-voice-fix={snapshot.fix ?? "none"}
+          data-notice-fix={snapshot.fix ?? "none"}
         >
           <DesktopIcon name="voice" className="voice-notice-mark" />
           <span className="voice-notice-text">{snapshot.notice}</span>
