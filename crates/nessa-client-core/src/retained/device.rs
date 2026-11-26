@@ -325,7 +325,9 @@ impl RetainedEnrollmentClient {
                         },
                         reactor,
                     )?;
-                    Ok(super::joined_status::read_joined_record_page_for_test(selection))
+                    Ok(super::joined_status::read_joined_record_page_for_test(
+                        selection,
+                    ))
                 },
             )
             .await?

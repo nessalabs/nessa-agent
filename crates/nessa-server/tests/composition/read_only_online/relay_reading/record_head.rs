@@ -505,10 +505,9 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
         if use_relay {
             // Actual enrolled state and the exact scope just observed through
             // Product. Prove Bind/Page on that joined transport without a cache.
-            let profile: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(device.root.join("profile.json")).unwrap(),
-            )
-            .unwrap();
+            let profile: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(device.root.join("profile.json")).unwrap())
+                    .unwrap();
             let state = FilePairingState::open(
                 Path::new(profile["stateRoot"].as_str().unwrap()),
                 Path::new(profile["stateDirectory"].as_str().unwrap()),

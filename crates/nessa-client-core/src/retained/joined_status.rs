@@ -242,9 +242,13 @@ pub(crate) fn select_joined_record_for_test(
 pub(super) fn read_joined_record_page_for_test(
     selection: JoinedRecordSelection,
 ) -> std::result::Result<Page, ReadFailure> {
-    with_selected_joined_record(selection, || {}, |transport, interrupt, scope, fence| {
-        super::carrier::read_selected_page_for_test(transport, interrupt, scope, fence)
-    })
+    with_selected_joined_record(
+        selection,
+        || {},
+        |transport, interrupt, scope, fence| {
+            super::carrier::read_selected_page_for_test(transport, interrupt, scope, fence)
+        },
+    )
 }
 
 fn with_selected_joined_record<T>(
@@ -279,10 +283,12 @@ fn with_selected_joined_record<T>(
         mode: RecordCarrierMode::Page,
     });
     let envelope = encode_request(&request).map_err(|_| ReadFailure::Protocol)?;
-    channel.send_envelope(&envelope).map_err(|error| match error {
-        NativeFrameError::Wire(_) => ReadFailure::Protocol,
-        NativeFrameError::Io(_) => ReadFailure::Unreachable,
-    })?;
+    channel
+        .send_envelope(&envelope)
+        .map_err(|error| match error {
+            NativeFrameError::Wire(_) => ReadFailure::Protocol,
+            NativeFrameError::Io(_) => ReadFailure::Unreachable,
+        })?;
     super::carrier::accept_selection(channel.receive_envelope())?;
     after_accepted();
     // TLS may have buffered the plaintext before stop/wake/expiry changed.
@@ -410,7 +416,10 @@ mod tests {
         .unwrap();
         assert_eq!(stop.lock().len(), 1);
         interrupt.interrupt().unwrap();
-        assert!(!stop.is_stopped(), "socket interruption must not stop the episode");
+        assert!(
+            !stop.is_stopped(),
+            "socket interruption must not stop the episode"
+        );
         assert_eq!(stop.lock().len(), 1);
         stop.stop();
         assert_eq!(

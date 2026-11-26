@@ -315,8 +315,13 @@ pub(super) fn read_selected_page_for_test<S: Read + Write>(
         };
         let page = source.page(&request).map_err(map_source)?;
         fence()?;
-        validate_page(&Checkpoint::new(scope.clone(), 0), &request, page.clone(), limits)
-            .map_err(|_| ReadFailure::Protocol)?;
+        validate_page(
+            &Checkpoint::new(scope.clone(), 0),
+            &request,
+            page.clone(),
+            limits,
+        )
+        .map_err(|_| ReadFailure::Protocol)?;
         Ok(page)
     })();
     let closed = session.close();
@@ -326,7 +331,9 @@ pub(super) fn read_selected_page_for_test<S: Read + Write>(
     Ok(page)
 }
 
-pub(super) fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {
+pub(super) fn accept_selection(
+    frame: Result<Vec<u8>, NativeFrameError>,
+) -> Result<(), ReadFailure> {
     let reply = frame.map_err(|error| match error {
         NativeFrameError::Wire(_) => ReadFailure::Protocol,
         NativeFrameError::Io(_) => ReadFailure::Unreachable,

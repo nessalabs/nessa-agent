@@ -344,11 +344,13 @@ impl NativeEnrollmentClient {
         received: Option<DisclosedConsent>,
         begin: impl FnOnce() + Send + 'static,
         complete: impl FnOnce(
-            Result<NativePairingStatus, NativeClientError>,
-            &dyn ClientPendingStore,
-            JoinedEpisode,
-            &tokio::runtime::Handle,
-        ) -> T + Send + 'static,
+                Result<NativePairingStatus, NativeClientError>,
+                &dyn ClientPendingStore,
+                JoinedEpisode,
+                &tokio::runtime::Handle,
+            ) -> T
+            + Send
+            + 'static,
     ) -> Result<T, NativeClientError> {
         let JoinedStatusFixture {
             route,
