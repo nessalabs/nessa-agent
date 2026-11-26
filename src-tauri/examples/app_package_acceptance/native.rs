@@ -50,7 +50,7 @@ pub fn run(directory: &Path) -> Result<(), String> {
     let loop_phase = phase.clone();
     let app = Builder::<Wry>::default()
         .register_uri_scheme_protocol(SCHEME, move |context, request| {
-            respond(&assets, context.webview_label(), &request)
+            respond(&assets[..], context.webview_label(), &request)
         })
         .on_page_load(move |webview, payload| {
             if payload.event() == PageLoadEvent::Finished && payload.url().scheme() == SCHEME {

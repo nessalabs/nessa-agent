@@ -200,6 +200,7 @@ path = "examples/page_load_acceptance/main.rs"
 [[example]]
 name = "app_package_acceptance"
 path = "examples/app_package_acceptance/main.rs"
+test = true
 
 [lints]
 workspace = true
