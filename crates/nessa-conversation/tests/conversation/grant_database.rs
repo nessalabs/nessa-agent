@@ -374,7 +374,7 @@ async fn compatibility_open_preserves_activated_grants_without_a_directory_write
         .unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].position, next.head);
-    assert_eq!(remaining[0].conversation_id, second.as_str());
+    assert_eq!(remaining[0].conversation_id, second.to_string());
     drop(store);
 
     let reopened = LocalConversationStore::open(&opened.path).unwrap();
