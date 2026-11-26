@@ -109,8 +109,12 @@ export function VoiceProvider({
   const talk = useCallback(
     async (sessionId: string) => {
       if (!controller) return
-      // Asked again before it is acted on: a key saved elsewhere since counts.
-      if (keys?.known() === false) {
+      // Unless the gateway last said a key is saved, it is asked now: a key
+      // saved elsewhere since counts, and a window that could not ask before
+      // (Nessa was locked, just unlocked) asks before showing a call that the
+      // gateway would refuse. A read it refuses (still locked) lets the call
+      // try, and the refusal offers its own fix.
+      if (keys && keys.known() !== true) {
         const now = await keys.read()
         if (now.kind === "read" && !now.keySaved) {
           setKeyFor(sessionId)
