@@ -4182,6 +4182,10 @@ export interface TerminalSummary {
   endedAtMs?: number
   /** Most urgent active OSC 7501 program status record (or detected agent app) for this terminal. */
   programStatus?: TerminalProgramStatus
+  /** While the terminal's program has asked to come back after a restart (OSC 7577): the command it would come back as, escaped for display. Shown, never run, by a surface. */
+  resumeCommand?: string
+  /** When a gateway restart opened this terminal again and started its kept program. */
+  resumedAtMs?: number
 }
 /** Active program status for a terminal, from OSC 7501 (Program Status Protocol, rev 0.4). */
 export interface TerminalProgramStatus {
@@ -4263,6 +4267,53 @@ export interface TerminalRenameParams {
   /** The new name: 1 to 80 characters, no control characters, not only spaces. */
   title: string
 }
+/** One rule for which terminal programs come back after a restart. Never rules win over Allow rules; a program no Allow rule matches does not come back. */
+export interface TerminalResumeRule {
+  /** * for every program, a name (claude, nvim) for a program by the last part of its path, or an absolute path for exactly that file. */
+  program: string
+  /** Only where the program works in this absolute folder or one inside it. */
+  folder?: string
+  /** Only when every one of these is an argument of the command, exactly. */
+  args?: string[]
+  /** allow: matching programs come back. never: they never do. */
+  action: "allow" | "never"
+}
+/** Whether terminal programs come back after the gateway restarts (OSC 7577), and which. Off until the person turns it on. */
+export interface TerminalResumeSettings {
+  /** On: terminals opened from now on are given an OSC7577_TOKEN, and programs the rules allow come back after a restart. Off: no token, and every kept program is forgotten. */
+  enabled: boolean
+  /** The rules, at most 64. */
+  rules: TerminalResumeRule[]
+}
+/** One terminal program kept to come back after a restart. */
+export interface TerminalSavedProgram {
+  /** The terminal it comes back in, by the same id. */
+  terminalId: TerminalId
+  /** The terminal's name. */
+  title: string
+  /** The command, escaped for display. */
+  command: string
+  /** Where it runs, when known. */
+  folder?: string
+  /** When the program last reported it. */
+  savedAtMs: number
+  /** Whether the next restart starts it, under the settings as they are now. */
+  comesBack: boolean
+  /** Whether its terminal is running now. */
+  open: boolean
+}
+/** The person's terminal resume settings and the programs kept under them. */
+export interface TerminalResumeState {
+  /** The settings as kept. */
+  settings: TerminalResumeSettings
+  /** The kept programs, oldest first. */
+  saved: TerminalSavedProgram[]
+}
+/** Forget one kept terminal program (terminal.forgetSaved): it does not come back. The terminal keeps running. */
+export interface TerminalForgetSavedParams {
+  /** The terminal whose program to forget. */
+  terminalId: TerminalId
+}
 /** One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator. */
 export interface TerminalOutput {
   /** The terminal. */
@@ -4334,7 +4385,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 145,
+  maxReadyMethods: 148,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4699,6 +4750,9 @@ export const ProductMethod = {
   TerminalHistory: "terminal.history",
   TerminalClose: "terminal.close",
   TerminalRename: "terminal.rename",
+  TerminalResumeSettings: "terminal.resumeSettings",
+  TerminalSetResumeSettings: "terminal.setResumeSettings",
+  TerminalForgetSaved: "terminal.forgetSaved",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4862,6 +4916,9 @@ export const productReadyMethods = [
   "terminal.history",
   "terminal.close",
   "terminal.rename",
+  "terminal.resumeSettings",
+  "terminal.setResumeSettings",
+  "terminal.forgetSaved",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -5011,6 +5068,9 @@ export const productMethodGrants = {
   "terminal.history": "credential.manage",
   "terminal.close": "credential.manage",
   "terminal.rename": "credential.manage",
+  "terminal.resumeSettings": "credential.manage",
+  "terminal.setResumeSettings": "credential.manage",
+  "terminal.forgetSaved": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

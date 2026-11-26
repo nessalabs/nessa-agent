@@ -79,6 +79,18 @@
     {
       "method": "terminal.rename",
       "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.resumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.setResumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.forgetSaved",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
     }
   ],
   "methods": [

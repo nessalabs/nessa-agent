@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 145,
+          "maxItems": 148,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -10183,6 +10183,19 @@
         "programStatus": {
           "$ref": "#/$defs/TerminalProgramStatus",
           "description": "Most urgent active OSC 7501 program status record (or detected agent app) for this terminal."
+        },
+        "resumeCommand": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "x-utf8MaxBytes": 16384,
+          "description": "While the terminal's program has asked to come back after a restart (OSC 7577): the command it would come back as, escaped for display. Shown, never run, by a surface."
+        },
+        "resumedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When a gateway restart opened this terminal again and started its kept program."
         }
       },
       "required": [
@@ -10389,6 +10402,134 @@
         }
       },
       "required": ["terminalId", "title"]
+    },
+    "TerminalResumeRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One rule for which terminal programs come back after a restart. Never rules win over Allow rules; a program no Allow rule matches does not come back.",
+      "properties": {
+        "program": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "* for every program, a name (claude, nvim) for a program by the last part of its path, or an absolute path for exactly that file."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Only where the program works in this absolute folder or one inside it."
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "maxLength": 1024, "x-utf8MaxBytes": 1024 },
+          "description": "Only when every one of these is an argument of the command, exactly."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["allow", "never"],
+          "description": "allow: matching programs come back. never: they never do."
+        }
+      },
+      "required": ["program", "action"]
+    },
+    "TerminalResumeSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Whether terminal programs come back after the gateway restarts (OSC 7577), and which. Off until the person turns it on.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "On: terminals opened from now on are given an OSC7577_TOKEN, and programs the rules allow come back after a restart. Off: no token, and every kept program is forgotten."
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalResumeRule" },
+          "description": "The rules, at most 64."
+        }
+      },
+      "required": ["enabled", "rules"]
+    },
+    "TerminalSavedProgram": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One terminal program kept to come back after a restart.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/TerminalId",
+          "description": "The terminal it comes back in, by the same id."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The terminal's name."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "x-utf8MaxBytes": 16384,
+          "description": "The command, escaped for display."
+        },
+        "folder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-utf8MaxBytes": 4096,
+          "description": "Where it runs, when known."
+        },
+        "savedAtMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the program last reported it."
+        },
+        "comesBack": {
+          "type": "boolean",
+          "description": "Whether the next restart starts it, under the settings as they are now."
+        },
+        "open": {
+          "type": "boolean",
+          "description": "Whether its terminal is running now."
+        }
+      },
+      "required": ["terminalId", "title", "command", "savedAtMs", "comesBack", "open"]
+    },
+    "TerminalResumeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The person's terminal resume settings and the programs kept under them.",
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/TerminalResumeSettings",
+          "description": "The settings as kept."
+        },
+        "saved": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/TerminalSavedProgram" },
+          "description": "The kept programs, oldest first."
+        }
+      },
+      "required": ["settings", "saved"]
+    },
+    "TerminalForgetSavedParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Forget one kept terminal program (terminal.forgetSaved): it does not come back. The terminal keeps running.",
+      "properties": {
+        "terminalId": {
+          "$ref": "#/$defs/TerminalId",
+          "description": "The terminal whose program to forget."
+        }
+      },
+      "required": ["terminalId"]
     },
     "TerminalOutput": {
       "type": "object",

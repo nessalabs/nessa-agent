@@ -592,13 +592,26 @@ pub(super) async fn product_state(
     // none, every `terminal.*` answers terminal_unavailable, list included,
     // so no window offers a terminal it cannot open.
     if let Some(engine) = crate::terminal::prepared_engine() {
-        product = product.with_terminals(
-            crate::terminal::TerminalHub::new(
-                Some(engine),
-                Arc::new(crate::terminal::SystemTerminalClock),
-            ),
-            Arc::new(crate::terminal::SystemTerminalHost),
+        // Programs that asked to come back (OSC 7577) are kept in
+        // `<namespace>/terminals`, readable by the person only, and the ones
+        // the person's rules allow are started again now, in terminals of
+        // the same ids, before any window lists them.
+        let hub = crate::terminal::TerminalHub::with_resume(
+            Some(engine),
+            Arc::new(crate::terminal::SystemTerminalClock),
+            Some(crate::terminal::ResumeParts {
+                store: Arc::new(crate::terminal::FileResumeStore::new(
+                    namespace.join("terminals"),
+                )),
+                processes: Arc::new(crate::terminal::SystemProcesses),
+            }),
         );
+        let host = Arc::new(crate::terminal::SystemTerminalHost);
+        let resumed = hub.resume_saved(host.as_ref());
+        if resumed > 0 {
+            tracing::info!(target: "nessa::terminal", resumed, "terminal programs resumed after restart");
+        }
+        product = product.with_terminals(hub, host);
     } else if let Some(reason) = crate::terminal::unprepared_reason() {
         tracing::warn!(reason, "terminals unavailable: pty runtime not built");
     }

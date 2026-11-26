@@ -731,6 +731,21 @@
       "params": "TerminalRenameParams",
       "grant": "credential.manage",
       "lane": "requests"
+    },
+    "terminal.resumeSettings": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.setResumeSettings": {
+      "params": "TerminalResumeSettings",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.forgetSaved": {
+      "params": "TerminalForgetSavedParams",
+      "grant": "credential.manage",
+      "lane": "requests"
     }
   },
   "events": {

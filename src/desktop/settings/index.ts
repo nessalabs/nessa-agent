@@ -40,6 +40,11 @@
  *   (Chat settings › Decisions:      (`client.conversation`
  *    auto-pick and its wait)          decisionSettings and setDecisionSettings)
  *
+ *   ui/terminal-resume-rows.tsx ──▶ model/terminal-resume.ts
+ *   (Terminal › Resume: the         (a rule as typed and read)
+ *    switch, program rules and     adapters/terminal-resume-gateway.ts
+ *    kept programs)                (`client.terminals` resume methods)
+ *
  *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts
  *   (Access: remembered rules     (`client.conversation` list and
  *    and revoke)                   revokePermissionRule)
@@ -77,6 +82,12 @@ export {
   type DecisionSettingsGateway,
 } from "./adapters/decision-settings-gateway"
 export { PermissionRulesProvider } from "./ui/permission-rule-rows"
+export { TerminalResumeProvider } from "./ui/terminal-resume-rows"
+export {
+  terminalResumeGateway,
+  type TerminalResumeClient,
+  type TerminalResumeGateway,
+} from "./adapters/terminal-resume-gateway"
 export {
   mcpServersGateway,
   type McpServersClient,

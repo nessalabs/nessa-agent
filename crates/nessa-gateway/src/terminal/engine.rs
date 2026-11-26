@@ -85,6 +85,17 @@ impl TerminalEngine for GhosttyEngine {
                 return Err(TerminalError::Spawn(format!("{error:?}")));
             }
         };
+        // The terminal's first process, under which every program that may
+        // report runs. Without it no report can be checked, so none is taken.
+        let resume = match (&spec.resume_token, session.process_id()) {
+            (Some(token), Ok(root)) => Some(super::ResumeTracker::new(
+                token.clone(),
+                root,
+                spec.resume.is_some(),
+            )),
+            _ => None,
+        };
+        let processes = events.processes();
         let factory = pty_runtime_infrastructure::terminal::GhosttyTerminalFactory;
         let terminal = match factory.create(terminal_config(size)) {
             Ok(terminal) => terminal,
@@ -106,6 +117,8 @@ impl TerminalEngine for GhosttyEngine {
                     palette: blank_palette(),
                     exit: None,
                     program_status: super::ProgramStatusTracker::new(),
+                    resume,
+                    processes,
                 };
                 let mut transport = LocalPtyTransport {
                     runtime,
@@ -133,7 +146,23 @@ fn build_command_spec(spec: &StartSpec) -> Result<CommandSpec, TerminalError> {
     // A login shell reads the person's profile, so PATH and the rest are
     // theirs, not the gateway's. TERM says which sequences it may send.
     let mut arguments: Vec<OsString> = vec!["-l".into()];
-    if let TerminalKind::Run { command } = &spec.kind {
+    let mut removed: Vec<OsString> = vec!["NO_COLOR".into(), "FORCE_COLOR".into()];
+    // OSC 7577: the first process alone is given this terminal's own token,
+    // and with resume off nothing is inherited, not even the gateway's own.
+    match &spec.resume_token {
+        Some(token) => environment.push((super::TOKEN_VAR.into(), token.into())),
+        None => removed.push(super::TOKEN_VAR.into()),
+    }
+    let mut folder = spec.folder.clone();
+    if let Some(resume) = &spec.resume {
+        // A program a restart brings back: the shell's startup files run,
+        // then `env` starts it in its own folder.
+        let resumed = resume
+            .shell_arguments(&spec.shell)
+            .ok_or(TerminalError::Invalid)?;
+        arguments = resumed.into_iter().map(OsString::from).collect();
+        folder = resume.cwd.clone();
+    } else if let TerminalKind::Run { command } = &spec.kind {
         // Drawn as it would be typed: the person's own prompt, the
         // command, then what it prints. The text goes in the environment,
         // never into the script, so no quoting can change what runs; eval
@@ -141,13 +170,9 @@ fn build_command_spec(spec: &StartSpec) -> Result<CommandSpec, TerminalError> {
         arguments.extend(["-i".into(), "-c".into(), run_script(&spec.shell).into()]);
         environment.push(("NESSA_RUN_COMMAND".into(), command.into()));
     }
-    CommandSpec::new(spec.shell.clone(), spec.folder.clone(), arguments)
+    CommandSpec::new(spec.shell.clone(), folder, arguments)
         .and_then(|command| {
-            command.with_environment(
-                EnvironmentPolicy::Inherit,
-                vec!["NO_COLOR".into(), "FORCE_COLOR".into()],
-                environment,
-            )
+            command.with_environment(EnvironmentPolicy::Inherit, removed, environment)
         })
         .map_err(|error| TerminalError::Spawn(format!("{error:?}")))
 }
@@ -292,6 +317,9 @@ struct Run {
     /// Set once the program ended; `Some(None)` when a signal ended it.
     exit: Option<Option<i32>>,
     program_status: super::ProgramStatusTracker,
+    /// The terminal's OSC 7577 side, when it was given a token.
+    resume: Option<super::ResumeTracker>,
+    processes: Arc<dyn super::Processes>,
 }
 
 impl Run {
@@ -373,6 +401,7 @@ impl Run {
                                     pending_input.extend(scan.replies);
                                 }
                                 status_changed |= scan.changed;
+                                self.take_resume_reports(scan.resume_reports, events);
                                 match self.terminal.feed(chunk) {
                                     // A query such as DSR is answered by the
                                     // terminal; the answer is the program's input.
@@ -405,6 +434,9 @@ impl Run {
                 }
             }
             dirty |= fed;
+            if self.exit.is_none() {
+                self.poll_resume_owner(events);
+            }
 
             let redraw = self.views.values().any(|view| view.redraw);
             let now = clock::os::now();
@@ -525,6 +557,29 @@ impl Run {
         }
     }
 
+    /// Check the OSC 7577 reports one read held, in order.
+    fn take_resume_reports(&mut self, reports: Vec<String>, events: &dyn EngineEvents) {
+        let Some(tracker) = self.resume.as_mut() else {
+            return;
+        };
+        for body in reports {
+            if let Some(change) = tracker.report(&body, wall_ms(), &*self.processes) {
+                events.resume(&self.id, change);
+            }
+        }
+    }
+
+    /// Whether the record's owner is still there; its record goes once it
+    /// has been gone a while.
+    fn poll_resume_owner(&mut self, events: &dyn EngineEvents) {
+        let Some(tracker) = self.resume.as_mut() else {
+            return;
+        };
+        if let Some(change) = tracker.poll(wall_ms(), &*self.processes) {
+            events.resume(&self.id, change);
+        }
+    }
+
     /// Drop live (working/blocked) program status before exiting the thread on error.
     fn clear_live_status(&mut self, events: &dyn EngineEvents) {
         if self.program_status.on_exit() {
@@ -546,6 +601,14 @@ impl Run {
         }
         tracing::warn!(terminal = %self.id, reason = message, "terminal ended");
     }
+}
+
+/// Milliseconds since the epoch: OSC 7577 times are wall-clock seconds.
+fn wall_ms() -> u64 {
+    clock::wall_now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn encode(message: &ServerMessage) -> String {

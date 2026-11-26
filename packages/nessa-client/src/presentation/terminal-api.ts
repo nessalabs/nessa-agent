@@ -2,6 +2,8 @@ import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
   TerminalOpenParams,
+  TerminalResumeSettings,
+  TerminalResumeState,
   TerminalSummary,
   TerminalViewParams,
 } from "../generated/product.js"
@@ -39,6 +41,15 @@ export type TerminalApi = {
   close(terminalId: string): Promise<void>
   /** Give a terminal the person's own name (1 to 80 characters); every list shows it. */
   rename(terminalId: string, title: string): Promise<void>
+  /**
+   * Whether programs in terminals come back after the gateway restarts
+   * (OSC 7577), which ones, and the programs kept now.
+   */
+  resumeSettings(): Promise<TerminalResumeState>
+  /** Keep resume settings; answers what is kept. Turning it off forgets every kept program. */
+  setResumeSettings(settings: TerminalResumeSettings): Promise<TerminalResumeState>
+  /** Forget one kept program: it does not come back. Its terminal keeps running. */
+  forgetSaved(terminalId: string): Promise<TerminalResumeState>
 }
 
 /** The largest input the gateway takes in one call, before base64. */
@@ -85,7 +96,55 @@ export function createTerminalApi(session: RpcRequester): TerminalApi {
     close: (terminalId) => done(ProductMethod.TerminalClose, { terminalId }),
     rename: (terminalId, title) =>
       done(ProductMethod.TerminalRename, { terminalId, title }),
+    resumeSettings: async () =>
+      resumeState(await session.request(ProductMethod.TerminalResumeSettings, {})),
+    setResumeSettings: async (settings) =>
+      resumeState(
+        await session.request(ProductMethod.TerminalSetResumeSettings, settings),
+      ),
+    forgetSaved: async (terminalId) =>
+      resumeState(
+        await session.request(ProductMethod.TerminalForgetSaved, { terminalId }),
+      ),
   }
+}
+
+function resumeState(answer: unknown): TerminalResumeState {
+  if (
+    !isRecord(answer) ||
+    !isRecord(answer.settings) ||
+    typeof answer.settings.enabled !== "boolean" ||
+    !Array.isArray(answer.settings.rules) ||
+    !answer.settings.rules.every(isRule) ||
+    !Array.isArray(answer.saved) ||
+    !answer.saved.every(isSavedProgram)
+  )
+    throw new Error("Invalid terminal resume settings response")
+  return answer as unknown as TerminalResumeState
+}
+
+function isRule(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.program === "string" &&
+    (value.action === "allow" || value.action === "never") &&
+    (value.folder === undefined || typeof value.folder === "string") &&
+    (value.args === undefined ||
+      (Array.isArray(value.args) && value.args.every((arg) => typeof arg === "string")))
+  )
+}
+
+function isSavedProgram(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.terminalId === "string" &&
+    typeof value.title === "string" &&
+    typeof value.command === "string" &&
+    (value.folder === undefined || typeof value.folder === "string") &&
+    typeof value.savedAtMs === "number" &&
+    typeof value.comesBack === "boolean" &&
+    typeof value.open === "boolean"
+  )
 }
 
 function base64(bytes: Uint8Array): string {
@@ -171,6 +230,8 @@ export function isSummary(value: unknown): value is TerminalSummary {
     (value.conversationId === undefined || typeof value.conversationId === "string") &&
     (value.exitStatus === undefined || typeof value.exitStatus === "number") &&
     (value.endedAtMs === undefined || typeof value.endedAtMs === "number") &&
-    (value.programStatus === undefined || isProgramStatus(value.programStatus))
+    (value.programStatus === undefined || isProgramStatus(value.programStatus)) &&
+    (value.resumeCommand === undefined || typeof value.resumeCommand === "string") &&
+    (value.resumedAtMs === undefined || typeof value.resumedAtMs === "number")
   )
 }

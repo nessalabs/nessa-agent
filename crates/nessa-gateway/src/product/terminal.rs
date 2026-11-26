@@ -11,15 +11,17 @@ use super::{
 use crate::conversation::application::{ConversationError, TerminalOrigin, TerminalPlace};
 use crate::conversation::domain::ChannelId;
 use crate::terminal::{
-    GridSize, OpenRequest, TerminalEntry, TerminalError, TerminalKind, TerminalLink,
+    GridSize, OpenRequest, ResumeRule, ResumeSettings, ResumeSettingsError, RuleAction, RuleError,
+    TerminalEntry, TerminalError, TerminalKind, TerminalLink,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
-    TerminalCloseParams, TerminalDetachParams, TerminalHistoryParams, TerminalInputParams,
-    TerminalListResult, TerminalOpenParams, TerminalOpenResult, TerminalProgramStatus,
-    TerminalRenameParams, TerminalSummary, TerminalViewParams,
+    TerminalCloseParams, TerminalDetachParams, TerminalForgetSavedParams, TerminalHistoryParams,
+    TerminalInputParams, TerminalListResult, TerminalOpenParams, TerminalOpenResult,
+    TerminalProgramStatus, TerminalRenameParams, TerminalResumeRule, TerminalResumeSettings,
+    TerminalResumeState, TerminalSavedProgram, TerminalSummary, TerminalViewParams,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use serde::de::DeserializeOwned;
@@ -107,6 +109,39 @@ pub(super) async fn dispatch(
             };
             link.rename(&params.terminal_id, title)
         }
+        "terminal.resumeSettings" => return resume_state(&id, link),
+        "terminal.setResumeSettings" => {
+            let Some(params) = decode::<TerminalResumeSettings>(&frame) else {
+                return failure(&id, "invalid_request");
+            };
+            let Ok(hub) = link.hub() else {
+                return failure(&id, "terminal_unavailable");
+            };
+            return match hub.set_resume_settings(settings_from_wire(params)) {
+                Ok(_) => resume_state(&id, link),
+                Err(ResumeSettingsError::Unavailable) => failure(&id, "terminal_unavailable"),
+                Err(ResumeSettingsError::Invalid(RuleError::TooMany)) => {
+                    failure(&id, "terminal_resume_rules_limit")
+                }
+                Err(ResumeSettingsError::Invalid(_)) => failure(&id, "invalid_request"),
+                Err(ResumeSettingsError::Storage(error)) => {
+                    tracing::warn!(target: "nessa::terminal", %error, "terminal resume settings not kept");
+                    failure(&id, "terminal_resume_storage_unavailable")
+                }
+            };
+        }
+        "terminal.forgetSaved" => {
+            let Some(params) = decode::<TerminalForgetSavedParams>(&frame) else {
+                return failure(&id, "invalid_request");
+            };
+            let Ok(hub) = link.hub() else {
+                return failure(&id, "terminal_unavailable");
+            };
+            return match hub.forget_saved(link.owner(), &params.terminal_id) {
+                Ok(()) => resume_state(&id, link),
+                Err(error) => refused(&id, &error),
+            };
+        }
         _ => return failure(&id, "invalid_request"),
     };
     match result {
@@ -189,6 +224,7 @@ async fn open(
                 runs_on: "here".into(),
                 kind,
                 size,
+                reopen: None,
             };
             link.open(request, host.login_shell())
         }
@@ -212,6 +248,75 @@ async fn open(
             )
         }
         Err(error) => refused(&id, &error),
+    }
+}
+
+/// The caller's resume settings and kept programs.
+fn resume_state(id: &str, link: &TerminalLink) -> OutgoingMessage {
+    let Ok(hub) = link.hub() else {
+        return failure(id, "terminal_unavailable");
+    };
+    let Some(settings) = hub.resume_settings() else {
+        return failure(id, "terminal_unavailable");
+    };
+    success(
+        id,
+        &TerminalResumeState {
+            settings: settings_to_wire(&settings),
+            saved: hub
+                .saved_programs(link.owner())
+                .into_iter()
+                .take(64)
+                .map(|program| TerminalSavedProgram {
+                    terminal_id: program.terminal_id,
+                    title: program.title,
+                    command: program.command,
+                    folder: program.folder,
+                    saved_at_ms: program.saved_at_ms,
+                    comes_back: program.comes_back,
+                    open: program.open,
+                })
+                .collect(),
+        },
+    )
+}
+
+fn settings_from_wire(wire: TerminalResumeSettings) -> ResumeSettings {
+    ResumeSettings {
+        enabled: wire.enabled,
+        rules: wire
+            .rules
+            .into_iter()
+            .map(|rule| ResumeRule {
+                program: rule.program,
+                folder: rule.folder,
+                args: rule.args.unwrap_or_default(),
+                action: if rule.action == "never" {
+                    RuleAction::Never
+                } else {
+                    RuleAction::Allow
+                },
+            })
+            .collect(),
+    }
+}
+
+fn settings_to_wire(settings: &ResumeSettings) -> TerminalResumeSettings {
+    TerminalResumeSettings {
+        enabled: settings.enabled,
+        rules: settings
+            .rules
+            .iter()
+            .map(|rule| TerminalResumeRule {
+                program: rule.program.clone(),
+                folder: rule.folder.clone(),
+                args: (!rule.args.is_empty()).then(|| rule.args.clone()),
+                action: match rule.action {
+                    RuleAction::Allow => "allow".into(),
+                    RuleAction::Never => "never".into(),
+                },
+            })
+            .collect(),
     }
 }
 
@@ -255,6 +360,8 @@ pub(super) fn summary(entry: &TerminalEntry) -> TerminalSummary {
         },
         exit_status: entry.ended.and_then(|end| end.status).map(i64::from),
         ended_at_ms: entry.ended.map(|end| end.at_ms),
+        resume_command: entry.resume_command.clone(),
+        resumed_at_ms: entry.resumed_at_ms,
         program_status: entry
             .program_status
             .as_ref()

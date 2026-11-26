@@ -78,8 +78,10 @@ import {
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  terminalResumeGateway,
   type DecisionSettingsClient,
   type DecisionSettingsGateway,
+  type TerminalResumeGateway,
   type GithubClient,
   type GithubGateway,
   type LinkedDevicesClient,
@@ -170,6 +172,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly nativeHooks: NativeHooksGateway | undefined
   /** Auto-pick, for Settings › Chat settings › Decisions; absent without a gateway. Provided by `main.tsx`. */
   readonly decisionSettings: DecisionSettingsGateway | undefined
+  /** Terminal resume settings and kept programs, for Settings › Terminal; absent without a gateway. Provided by `main.tsx`. */
+  readonly terminalResume: TerminalResumeGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -380,6 +384,9 @@ export function createDesktopDependencies(
       : undefined,
     decisionSettings: source
       ? decisionSettingsGateway({ connected: () => source.connected() })
+      : undefined,
+    terminalResume: source
+      ? terminalResumeGateway({ connected: () => source.connected() })
       : undefined,
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })

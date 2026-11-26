@@ -92,6 +92,7 @@ fn request(owner: &TerminalOwner, id: &str) -> OpenRequest {
         runs_on: "here".into(),
         kind: TerminalKind::Shell,
         size: size(80, 24),
+        reopen: None,
     }
 }
 

@@ -54,6 +54,69 @@ pub struct StartSpec {
     pub shell: PathBuf,
     pub kind: TerminalKind,
     pub size: GridSize,
+    /// The OSC 7577 token the first process is given; `None` when resume
+    /// is off, and then the variable is taken out of what it inherits.
+    pub resume_token: Option<String>,
+    /// A program a restart brings back: the shell starts, then runs it.
+    pub resume: Option<ResumeStart>,
+}
+
+/// A saved command a restart runs again in its terminal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResumeStart {
+    /// The program, then its arguments, each passed as one argument.
+    pub argv: Vec<String>,
+    /// Where it runs.
+    pub cwd: PathBuf,
+}
+
+impl ResumeStart {
+    /// The arguments that start `shell` to run this command: the shell's
+    /// startup files run first, as for any terminal, then `env` runs the
+    /// program, so a function, alias or builtin of the same name never runs
+    /// in its place, and each element is one argument, never shell text.
+    /// When the program ends, a fresh login shell takes its place.
+    /// `None` for a shell this cannot be said to, or a program `env` would
+    /// read as a setting (`NAME=value`).
+    pub fn shell_arguments(&self, shell: &std::path::Path) -> Option<Vec<String>> {
+        let program = self.argv.first()?;
+        // pty-runtime takes at most 128 arguments; six are the script's.
+        if self.argv.len() > 122 {
+            return None;
+        }
+        if program.is_empty() || program.contains('=') || program.starts_with('-') {
+            return None;
+        }
+        let name = shell.file_name()?.to_str()?;
+        if !RESUMABLE_SHELLS.contains(&name) {
+            return None;
+        }
+        let script = r#"shell=$1; shift; printf '\033[2m%s\033[0m\n' 'Resumed after Nessa restarted'; /usr/bin/env -- "$@"; exec "$shell" -l"#;
+        let mut arguments = vec![
+            "-l".to_owned(),
+            "-i".to_owned(),
+            "-c".to_owned(),
+            script.to_owned(),
+            "nessa-resume".to_owned(),
+            shell.to_string_lossy().into_owned(),
+        ];
+        arguments.extend(self.argv.iter().cloned());
+        Some(arguments)
+    }
+}
+
+/// Shells whose `-c` takes the script's arguments as `$1…`: the ones a
+/// resumed program can be started from.
+const RESUMABLE_SHELLS: [&str; 10] = [
+    "sh", "bash", "zsh", "dash", "ksh", "ksh93", "mksh", "oksh", "yash", "ash",
+];
+
+/// A terminal a restart opens again, by its old id and name.
+#[derive(Clone, Debug)]
+pub struct Reopened {
+    pub id: String,
+    pub title: String,
+    pub start: ResumeStart,
 }
 
 /// One terminal as the list shows it.
@@ -71,6 +134,11 @@ pub struct TerminalEntry {
     pub started_at_ms: u64,
     pub ended: Option<TerminalEnd>,
     pub program_status: Option<StampedProgramStatus>,
+    /// The command the terminal's program asked to come back as, while
+    /// that record is held, shown escaped.
+    pub resume_command: Option<String>,
+    /// When a restart started this terminal again.
+    pub resumed_at_ms: Option<u64>,
 }
 
 /// Active OSC 7501 program status paired with when it last changed.

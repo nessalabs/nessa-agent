@@ -578,6 +578,11 @@ impl CompositionRoot {
                 })?;
         }
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
+            // Terminals end with the gateway; that is not the person ending
+            // their programs, so the ones kept to come back stay kept.
+            if let Some(terminals) = &shutdown_product.terminals.hub {
+                terminals.freeze();
+            }
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
             if let Some(native) = native.as_mut() {

@@ -15,6 +15,9 @@
 //! - `RIS` (`ESC c`) clears every record; `DECSTR` and alt-screen switches clear nothing.
 //! - Up to 256 records are retained per terminal with LRU eviction.
 //!
+//! The same scan hands OSC 7577 (program resume) bodies on, unchecked, in
+//! `ScanOutput::resume_reports`; `resume_tracker` decides what they mean.
+//!
 //! When no OSC 7501 records are active, OSC 0 / OSC 2 window titles are also
 //! inspected solely to recognize Claude Code or Codex while open.
 
@@ -129,7 +132,13 @@ pub struct ScanOutput {
     pub replies: Vec<u8>,
     /// `true` when the effective `ProgramStatus` changed.
     pub changed: bool,
+    /// The bodies of OSC 7577 (program resume) reports, in order, for the
+    /// terminal's resume tracker to check. At most [`MAX_RESUME_REPORTS`].
+    pub resume_reports: Vec<String>,
 }
+
+/// The most OSC 7577 reports kept from one feed; more are dropped.
+pub const MAX_RESUME_REPORTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParseState {
@@ -303,6 +312,14 @@ impl ProgramStatusTracker {
                     }
                 } else if let Ok(text) = std::str::from_utf8(body) {
                     self.apply_osc7501(text);
+                }
+            }
+            b"7577" => {
+                if total_len <= MAX_SEQUENCE_BYTES && out.resume_reports.len() < MAX_RESUME_REPORTS
+                {
+                    if let Ok(text) = std::str::from_utf8(body) {
+                        out.resume_reports.push(text.to_owned());
+                    }
                 }
             }
             b"133" => {
@@ -718,6 +735,27 @@ mod tests {
         // Multiple probes in a single chunk produce at most one reply.
         let out = tracker.feed(b"\x1b]7501;?\x07\x1b]7501;?\x07\x1b]7501;?\x07");
         assert_eq!(out.replies, FEATURE_DETECTION_REPLY);
+    }
+
+    #[test]
+    fn hands_on_resume_reports_split_across_chunks_with_either_terminator() {
+        let mut tracker = ProgramStatusTracker::new();
+        let stream = b"ls\x1b]7577;pid=1:time=2:clear=1:mac=ab\x1b\\x\x1b]7577;?\x07";
+        let mut reports = Vec::new();
+        for chunk in stream.chunks(3) {
+            reports.extend(tracker.feed(chunk).resume_reports);
+        }
+        assert_eq!(
+            reports,
+            vec!["pid=1:time=2:clear=1:mac=ab".to_owned(), "?".to_owned()]
+        );
+        let oversized = format!("\x1b]7577;pid=1:x={}\x07", "a".repeat(4096));
+        assert!(tracker.feed(oversized.as_bytes()).resume_reports.is_empty());
+        let many = "\x1b]7577;x\x07".repeat(MAX_RESUME_REPORTS + 4);
+        assert_eq!(
+            tracker.feed(many.as_bytes()).resume_reports.len(),
+            MAX_RESUME_REPORTS
+        );
     }
 
     #[test]
