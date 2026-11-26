@@ -1,0 +1,14 @@
+[package]
+name = "nessa-app-package"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Headless verification of static extension app package assets"
+
+[dependencies]
+nessa-types = { path = "../nessa-types" }
+sha2 = "0.10"
+
+[lints]
+workspace = true

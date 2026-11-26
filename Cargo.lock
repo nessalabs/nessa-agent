@@ -3703,6 +3703,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-app-package"
+version = "0.1.0"
+dependencies = [
+ "nessa-types",
+ "sha2",
+]
+
+[[package]]
 name = "nessa-attachments"
 version = "0.1.0"
 dependencies = [
