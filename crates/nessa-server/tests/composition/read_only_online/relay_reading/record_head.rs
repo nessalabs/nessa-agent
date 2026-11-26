@@ -1,12 +1,13 @@
 //! One enrolled binary Head behind the existing direct and joined relay.
-use super::{completion, Device, Gateway, REFUSED};
+use super::{completion, Device, Gateway, Time, Wall, REFUSED};
 use crate::composition::read_only_online_tests::fixtures::{Setup, WireClient};
 use nessa_auth::{
-    adapters::pairing::{GatewayTrust, NativeTransport},
+    adapters::pairing::{FilePairingState, GatewayTrust, NativeTransport},
     domain::{pairing::TerminalCause, CredentialId},
 };
 use nessa_client_core::retained::{
-    dial_gateway, ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedTranscript,
+    dial_gateway, ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedEnrollmentClient,
+    RetainedTranscript,
 };
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
@@ -35,8 +36,9 @@ use nessa_sync::replication::{
 use std::{
     io::{self, ErrorKind, Read, Write},
     net::TcpStream,
+    path::Path,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -499,6 +501,45 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
         let expected = scoped_raw_rows(&device, "page-baseline.sqlite3", scope);
         assert!(expected.len() >= 2);
         assert_eq!((expected[0].0, expected[1].0), (1, 2));
+
+        if use_relay {
+            // Actual enrolled state and the exact scope just observed through
+            // Product. Prove the joined selector, without opening a cache.
+            let profile: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(device.root.join("profile.json")).unwrap(),
+            )
+            .unwrap();
+            let state = FilePairingState::open(
+                Path::new(profile["stateRoot"].as_str().unwrap()),
+                Path::new(profile["stateDirectory"].as_str().unwrap()),
+            )
+            .unwrap();
+            let unused_cache = device.caches.join("joined-selector-unused.sqlite3");
+            let client = RetainedEnrollmentClient::new(
+                Arc::new(state),
+                unused_cache.clone(),
+                Arc::new(Wall),
+                Arc::new(Time(Instant::now())),
+            )
+            .unwrap();
+            let relay = device.relay().as_str().parse().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(client.selected_joined_record_for_test(
+                    relay,
+                    device.pin,
+                    scope.clone(),
+                    ReadStop::new(),
+                    WAIT.as_millis().try_into().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+            runtime.block_on(client.shutdown());
+            assert!(!unused_cache.exists());
+        }
 
         let name = "binary-staged.sqlite3";
         for after in [0_u64, 1] {

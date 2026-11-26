@@ -269,6 +269,60 @@ impl RetainedEnrollmentClient {
             .await
     }
 
+    /// Fixture-only: one enrolled Status and one relayed record selector
+    /// share the original physical admission and absolute time budget.
+    /// Does not Bind, read Page bytes, or write a record cache.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn selected_joined_record_for_test(
+        &self,
+        relay: std::net::SocketAddr,
+        pin: [u8; 44],
+        scope: super::Scope,
+        stop: Arc<super::ReadStop>,
+        expires_ms: u64,
+    ) -> Result<Result<(), ReadFailure>, NativeClientError> {
+        let route = || {
+            super::joined_status::JoinedStatusRoute::new(
+                relay,
+                pin,
+                Arc::new(super::TokioJoinedDial),
+            )
+            .map_err(|error| NativeClientError::Io(error.kind()))
+        };
+        let status_route = route()?;
+        let selected_route = route()?;
+        let wake = nessa_protocol::pairing::socket::WakeEndpoint::new(relay);
+        let begin = self.store.clone();
+        let finish = self.store.clone();
+        self.client
+            .status_joined_then(
+                status_route,
+                stop,
+                expires_ms,
+                None,
+                Some(wake.clone()),
+                move || begin.begin_status(),
+                move |status, state, episode, reactor| {
+                    if finish.finish_status().is_some_and(|result| result.is_err()) {
+                        return Err(NativeClientError::Phase);
+                    }
+                    let selection = super::joined_status::join_after_active_for_test(
+                        status,
+                        state,
+                        &scope,
+                        &scope,
+                        selected_route,
+                        episode,
+                        wake,
+                        reactor,
+                    )?;
+                    Ok(super::joined_status::select_joined_record_for_test(selection, || {}))
+                },
+            )
+            .await?
+    }
+
     /// Retry through the existing strict-pin owner. Its original Unclaimed
     /// receipt is returned only when the entire retry succeeds; later failures
     /// preserve private recovery state but do not return that earlier receipt.

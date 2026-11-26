@@ -1,14 +1,10 @@
 //! One selected relay socket from the Join preamble through pinned status.
-#[cfg(test)]
 use crate::pairing::NativeClientError;
-#[cfg(test)]
 use super::ReadFailure;
-#[cfg(test)]
 use nessa_auth::{
     adapters::pairing::{GatewayTrust, NativeTransport},
     domain::CredentialId,
 };
-#[cfg(test)]
 use nessa_protocol::{
     conversation::read_scope::validate_passive_read_selector,
     pairing::{
@@ -174,7 +170,6 @@ impl JoinedStatusRoute {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct JoinedRecordSelection {
     joined: JoinedStream,
     reader: super::RetainedDeviceReader,
@@ -186,7 +181,6 @@ pub(crate) struct JoinedRecordSelection {
 
 // Synthetic composition only until the retained cache-owning entry point
 // can consume this proof. Successful validation does not itself grant access.
-#[cfg(test)]
 pub(crate) fn join_after_active_for_test(
     status: std::result::Result<NativePairingStatus, NativeClientError>,
     state: &dyn nessa_auth::application::pairing::ClientPendingStore,
@@ -221,7 +215,6 @@ pub(crate) fn join_after_active_for_test(
 }
 
 // Stop at the Accepted boundary until the cache owner can fence publication.
-#[cfg(test)]
 pub(crate) fn select_joined_record_for_test(
     selection: JoinedRecordSelection,
     after_accepted: impl FnOnce(),

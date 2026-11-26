@@ -321,6 +321,34 @@ impl NativeEnrollmentClient {
         begin: impl FnOnce() + Send + 'static,
         complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
     ) -> Result<T, NativeClientError> {
+        self.status_joined_then(
+            route,
+            stop,
+            expires_ms,
+            received,
+            None,
+            begin,
+            move |result, _, _, _| complete(result),
+        )
+        .await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn status_joined_then<T: Send + 'static>(
+        &self,
+        route: crate::retained::joined_status::JoinedStatusRoute,
+        stop: Arc<crate::retained::ReadStop>,
+        expires_ms: u64,
+        received: Option<DisclosedConsent>,
+        continuation: Option<Arc<WakeEndpoint>>,
+        begin: impl FnOnce() + Send + 'static,
+        complete: impl FnOnce(
+            Result<NativePairingStatus, NativeClientError>,
+            &dyn ClientPendingStore,
+            crate::retained::joined_status::JoinedEpisode,
+            &tokio::runtime::Handle,
+        ) -> T + Send + 'static,
+    ) -> Result<T, NativeClientError> {
         let wake = WakeEndpoint::new(route.address());
         let episode = crate::retained::joined_status::JoinedEpisode::new(
             self.clock.clone(),
@@ -328,7 +356,9 @@ impl NativeEnrollmentClient {
             expires_ms,
         );
         let reactor = tokio::runtime::Handle::current();
-        self.dispatch_owned(vec![wake.clone()], move |pending| {
+        let mut endpoints = vec![wake.clone()];
+        endpoints.extend(continuation);
+        self.dispatch_owned(endpoints, move |pending| {
             begin();
             let result = (|| {
                 if pending
@@ -353,7 +383,7 @@ impl NativeEnrollmentClient {
                     .map_err(|error| NativeClientError::Io(error.kind()))?;
                 status_exchange(stream, &deadline, pending, saved, received.as_ref())
             })();
-            Ok(complete(result))
+            Ok(complete(result, pending, episode, &reactor))
         })
         .await
     }
