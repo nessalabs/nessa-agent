@@ -28,6 +28,28 @@ const OBSERVE_RENDER: &str = r#"(() => {
     return [heading.textContent, rect.width, rect.height > 0];
 })()"#;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ServedAssets {
+    document: bool,
+    stylesheet: bool,
+}
+
+#[derive(Debug, Default)]
+struct RouteReceipts {
+    calendar: ServedAssets,
+    notes: ServedAssets,
+}
+
+impl RouteReceipts {
+    fn for_window_mut(&mut self, label: &str) -> Option<&mut ServedAssets> {
+        match label {
+            CALENDAR => Some(&mut self.calendar),
+            NOTES => Some(&mut self.notes),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Observation {
     Loaded(String),
@@ -45,15 +67,32 @@ pub fn run(directory: &Path) -> Result<(), String> {
     let surfaces = installed.clone();
     let (events, observed) = mpsc::channel();
     let pages = events.clone();
+    let receipts = Arc::new(Mutex::new(RouteReceipts::default()));
+    let route_receipts = receipts.clone();
     let phase = Arc::new(Mutex::new(StopPhase::default()));
     let native_phase = phase.clone();
     let loop_phase = phase.clone();
     let app = Builder::<Wry>::default()
         .register_uri_scheme_protocol(SCHEME, move |context, request| {
-            respond(&assets[..], context.webview_label(), &request)
+            respond(
+                &assets[..],
+                context.webview_label(),
+                &request,
+                &route_receipts,
+            )
         })
         .on_page_load(move |webview, payload| {
-            if payload.event() == PageLoadEvent::Finished && payload.url().scheme() == SCHEME {
+            let url = payload.url();
+            if payload.event() == PageLoadEvent::Finished
+                && url.scheme() == SCHEME
+                && url.host_str() == Some("localhost")
+                && url.port().is_none()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path().strip_prefix('/') == Some(packages::ENTRYPOINT)
+                && url.query().is_none()
+                && url.fragment().is_none()
+            {
                 let _ = pages.send(Observation::Loaded(webview.label().to_owned()));
             }
         })
@@ -64,12 +103,20 @@ pub fn run(directory: &Path) -> Result<(), String> {
             for package in surfaces.iter() {
                 let manifest = package.manifest();
                 let label = manifest.app_id().as_str();
+                // The Tauri runtime deduplicates schemes by data directory,
+                // but GTK Wry creates a new ephemeral context for each
+                // incognito view. Distinct disposable keys register both.
+                let context_key = private.join(label);
+                nessa_local_storage::create_directory_exclusive(&context_key).map_err(|error| {
+                    format!("create fixture webview context for {label}: {error}")
+                })?;
                 let url = Url::parse(&format!("{SCHEME}://localhost/{}", manifest.entrypoint()))?;
                 let window =
                     WebviewWindowBuilder::new(app, label, WebviewUrl::CustomProtocol(url.clone()))
                         .on_navigation(move |next| *next == url)
                         .title(label)
                         .inner_size(480.0, 240.0)
+                        .data_directory(context_key)
                         .incognito(true)
                         .build()?;
                 if label == CALENDAR {
@@ -89,7 +136,7 @@ pub fn run(directory: &Path) -> Result<(), String> {
 
     let handle = app.handle().clone();
     let check = thread::spawn(move || {
-        let result = exercise(&handle, &observed, &database, &installed, phase);
+        let result = exercise(&handle, &observed, &database, &installed, &receipts, phase);
         handle.exit(i32::from(result.is_err()));
         result
     });
@@ -131,6 +178,7 @@ fn exercise(
     observed: &mpsc::Receiver<Observation>,
     database: &Path,
     installed: &[VerifiedPackage; 2],
+    receipts: &Mutex<RouteReceipts>,
     phase: Arc<Mutex<StopPhase>>,
 ) -> Result<(), String> {
     let mut loaded = [false; 2];
@@ -138,18 +186,50 @@ fn exercise(
         match observed.recv_timeout(EVENT_WAIT) {
             Ok(Observation::Loaded(label)) if label == CALENDAR && !loaded[0] => loaded[0] = true,
             Ok(Observation::Loaded(label)) if label == NOTES && !loaded[1] => loaded[1] = true,
-            other => return Err(format!("expected both package loads: {other:?}")),
+            other => {
+                let routes = receipts.lock().unwrap();
+                return Err(format!(
+                    "initial navigation: expected both package loads, got {other:?}; served={routes:?}"
+                ));
+            }
         }
     }
     let calendar = visible_window(handle, CALENDAR)?;
     let notes = visible_window(handle, NOTES)?;
-    assert_render(&calendar, ("Calendar from installed bytes", 137, true))?;
-    assert_render(&notes, ("Notes from installed bytes", 173, true))?;
-    stop(handle, observed, phase)?;
-    let [target, sibling] = installed;
-    packages::uninstall(database, target, sibling)?;
+    {
+        let routes = receipts.lock().unwrap();
+        for (label, served) in [(CALENDAR, routes.calendar), (NOTES, routes.notes)] {
+            if !served.document || !served.stylesheet {
+                return Err(format!(
+                    "initial route {label}: expected held HTML and CSS, got {served:?}"
+                ));
+            }
+            println!("app_package_acceptance: initial route {label}: held HTML and CSS served");
+        }
+    }
     assert_render(
-        &visible_window(handle, NOTES)?,
+        "initial render",
+        &calendar,
+        ("Calendar from installed bytes", 137, true),
+    )?;
+    assert_render(
+        "initial render",
+        &notes,
+        ("Notes from installed bytes", 173, true),
+    )?;
+    stop(handle, observed, phase)?;
+    println!("app_package_acceptance: Stop confirmed exact {CALENDAR} destruction");
+    let [target, sibling] = installed;
+    packages::uninstall(database, target, sibling)
+        .map_err(|error| format!("uninstall/reopen: {error}"))?;
+    println!(
+        "app_package_acceptance: uninstall/reopen confirmed {CALENDAR} absent and {NOTES} bytes unchanged"
+    );
+    let sibling =
+        visible_window(handle, NOTES).map_err(|error| format!("post-uninstall: {error}"))?;
+    assert_render(
+        "post-uninstall render",
+        &sibling,
         ("Notes from installed bytes", 173, true),
     )
 }
@@ -208,25 +288,30 @@ fn visible_window(handle: &AppHandle, label: &str) -> Result<WebviewWindow, Stri
     Ok(window)
 }
 
-fn assert_render(window: &WebviewWindow, expected: (&str, u32, bool)) -> Result<(), String> {
+fn assert_render(
+    phase: &str,
+    window: &WebviewWindow,
+    expected: (&str, u32, bool),
+) -> Result<(), String> {
+    let label = window.label();
     let (result, receiver) = mpsc::channel();
     window
         .eval_with_callback(OBSERVE_RENDER, move |value| {
             let _ = result.send(value);
         })
-        .map_err(|error| format!("probe {}: {error}", window.label()))?;
+        .map_err(|error| format!("{phase} {label}: schedule DOM probe: {error}"))?;
     let value = receiver
         .recv_timeout(EVENT_WAIT)
-        .map_err(|error| format!("await render of {}: {error}", window.label()))?;
+        .map_err(|error| format!("{phase} {label}: await DOM probe: {error}"))?;
     let expected = serde_json::json!(expected);
-    let value: serde_json::Value =
-        serde_json::from_str(&value).map_err(|error| format!("decode render evidence: {error}"))?;
+    let value: serde_json::Value = serde_json::from_str(&value)
+        .map_err(|error| format!("{phase} {label}: decode DOM probe: {error}"))?;
     if value != expected {
         return Err(format!(
-            "{} rendered {value}, expected {expected}",
-            window.label()
+            "{phase} {label}: rendered {value}, expected {expected}"
         ));
     }
+    println!("app_package_acceptance: {phase} {label}: exact DOM and stylesheet layout verified");
     Ok(())
 }
 
@@ -234,26 +319,33 @@ fn respond(
     packages: &[VerifiedPackage],
     label: &str,
     request: &Request<Vec<u8>>,
+    receipts: &Mutex<RouteReceipts>,
 ) -> Response<Vec<u8>> {
     let asset = (|| {
-        if request.method() != Method::GET || request.uri().query().is_some() {
+        let uri = request.uri();
+        if request.method() != Method::GET
+            || uri.scheme_str() != Some(SCHEME)
+            || uri.authority().map(|authority| authority.as_str()) != Some("localhost")
+            || uri.query().is_some()
+        {
             return None;
         }
-        let path = request.uri().path().strip_prefix('/')?;
+        let path = uri.path().strip_prefix('/')?;
         let package = packages
             .iter()
             .find(|package| package.manifest().app_id().as_str() == label)?;
-        let mime = if path == package.manifest().entrypoint() {
+        let document = path == package.manifest().entrypoint();
+        let mime = if document {
             "text/html; charset=utf-8"
-        } else if path.ends_with(".css") {
+        } else if path == packages::STYLESHEET {
             "text/css; charset=utf-8"
         } else {
             return None;
         };
-        Some((mime, package.asset(path)?))
+        Some((document, mime, package.asset(path)?))
     })();
-    if let Some((mime, bytes)) = asset {
-        Response::builder()
+    if let Some((document, mime, bytes)) = asset {
+        let response = Response::builder()
             .header(header::CONTENT_TYPE, mime)
             .header(header::CACHE_CONTROL, "no-store")
             .header(
@@ -261,7 +353,15 @@ fn respond(
                 format!("default-src 'none'; style-src {SCHEME}:"),
             )
             .body(bytes.to_vec())
-            .expect("fixed fixture response headers")
+            .expect("fixed fixture response headers");
+        if let Some(served) = receipts.lock().unwrap().for_window_mut(label) {
+            if document {
+                served.document = true;
+            } else {
+                served.stylesheet = true;
+            }
+        }
+        response
     } else {
         Response::builder()
             .status(StatusCode::NOT_FOUND)

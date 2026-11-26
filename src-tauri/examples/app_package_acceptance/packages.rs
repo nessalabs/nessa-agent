@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 pub const CALENDAR: &str = "fixture-calendar";
 pub const NOTES: &str = "fixture-notes";
-const ENTRYPOINT: &str = "index.html";
-const STYLESHEET: &str = "static/style.css";
+pub(super) const ENTRYPOINT: &str = "index.html";
+pub(super) const STYLESHEET: &str = "static/style.css";
 
 pub fn install(database: &Path) -> Result<[VerifiedPackage; 2], String> {
     let calendar = package(CALENDAR, "Calendar from installed bytes", 137)?;
