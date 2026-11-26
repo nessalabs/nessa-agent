@@ -30,17 +30,6 @@ fn legacy_schema() -> Result<Schema, OpenError> {
         }))
 }
 
-// This definition is recognition only. The live opener selects it only
-// after a typed version-3 refusal; it never registers a version-2 upgrade.
-fn activated_schema() -> Result<Schema, OpenError> {
-    Ok(Schema::new(concat!(
-        include_str!("grants.sql"),
-        "\n",
-        include_str!("grants_from_2.sql")
-    ))?
-    .with_validation(|connection| validate_shape(connection, "", GrantFormat::Directory)))
-}
-
 #[derive(Clone, Copy)]
 enum GrantFormat {
     ConversationOnly,
@@ -52,7 +41,9 @@ pub(super) fn open(path: &Path) -> Result<Connection, OpenError> {
         // Only the exact newer known format gets another look. No create,
         // migration, or generic fallback on corruption or I/O failure.
         Err(OpenError::Version { found: 3, .. }) => {
-            nessa_local_database::open_existing(path, &activated_schema()?)
+            nessa_local_database::open_initialized_version(path, 3, |connection| {
+                validate_shape(connection, "", GrantFormat::Directory)
+            })
         }
         result => result,
     }

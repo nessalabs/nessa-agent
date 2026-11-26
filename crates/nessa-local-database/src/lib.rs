@@ -65,7 +65,7 @@ type SchemaValidation = fn(&Connection) -> Result<(), OpenError>;
 #[derive(Clone, Copy, Debug)]
 pub struct Schema {
     version: u32,
-    definition: &'static str,
+    definition: Option<&'static str>,
     upgrades: &'static [Upgrade],
     validate: Option<SchemaValidation>,
 }
@@ -76,7 +76,7 @@ impl Schema {
     pub fn new(definition: &'static str) -> Result<Self, OpenError> {
         Ok(Self {
             version: stated_version(definition).ok_or(OpenError::UnversionedSchema)?,
-            definition,
+            definition: Some(definition),
             upgrades: &[],
             validate: None,
         })
@@ -253,7 +253,7 @@ fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenEr
     }
     let tables: u32 =
         connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
-    if found != 0 || tables != 0 {
+    if found != 0 || tables != 0 || schema.definition.is_none() {
         return Err(OpenError::Version {
             found,
             expected: schema.version,
@@ -280,6 +280,30 @@ pub fn open(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
 /// the same way [`open`] does.
 pub fn open_existing(path: &Path, schema: &Schema) -> Result<Connection, OpenError> {
     open_mode(path, schema, nessa_local_storage::OpenMode::ReadWrite, None)
+}
+
+/// Open only an initialized file at exactly `version`, without creation
+/// statements or upgrades. Even an existing zero-length file is refused.
+pub fn open_initialized_version(
+    path: &Path,
+    version: u32,
+    validate: fn(&Connection) -> Result<(), OpenError>,
+) -> Result<Connection, OpenError> {
+    if version == 0 {
+        return Err(OpenError::UnversionedSchema);
+    }
+    let schema = Schema {
+        version,
+        definition: None,
+        upgrades: &[],
+        validate: Some(validate),
+    };
+    open_mode(
+        path,
+        &schema,
+        nessa_local_storage::OpenMode::ReadWrite,
+        None,
+    )
 }
 
 fn open_mode(
@@ -379,7 +403,8 @@ fn open_mode(
     }
     // The definition sets its own version, inside the same transaction, and
     // what it set is what it said it would.
-    transaction.execute_batch(schema.definition)?;
+    let definition = schema.definition.ok_or(OpenError::UnversionedSchema)?;
+    transaction.execute_batch(definition)?;
     let applied: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if applied != i64::from(schema.version) {
         return Err(OpenError::Version {
@@ -400,4 +425,34 @@ fn open_mode(
             cause,
         })?;
     Ok(connection)
+}
+
+#[cfg(test)]
+mod initialized_open_tests {
+    use super::*;
+
+    #[test]
+    fn initialized_only_never_writes_a_missing_or_empty_file() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("private");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("stored.sqlite3");
+        let validate = |_| panic!("a missing or empty file has no shape to validate");
+        assert!(matches!(
+            open_initialized_version(&path, 3, validate),
+            Err(OpenError::File(cause)) if cause.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(!path.exists());
+        drop(
+            nessa_local_storage::open(&path, nessa_local_storage::OpenMode::OpenOrCreate).unwrap(),
+        );
+        assert!(matches!(
+            open_initialized_version(&path, 3, validate),
+            Err(OpenError::Version {
+                found: 0,
+                expected: 3
+            })
+        ));
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+    }
 }
