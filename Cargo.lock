@@ -3706,6 +3706,7 @@ dependencies = [
 name = "nessa-app-package"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "hex",
  "nessa-local-database",
  "nessa-local-storage",

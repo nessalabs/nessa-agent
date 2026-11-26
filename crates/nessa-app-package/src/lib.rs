@@ -8,7 +8,11 @@ pub use domain::static_package::{
     PackageError, PackageManifest, RequestedCapability, VerifiedPackage, MAX_FILES,
     MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
-pub use infrastructure::manifest::{parse_manifest, verify_package};
+pub use infrastructure::inline::{
+    scaffold_inline_package, validate_inline_package, InlineAsset, InlinePackage, InlineRefusal,
+    ValidationReceipt,
+};
+pub use infrastructure::manifest::{parse_manifest, scaffold_package, verify_package};
 
 #[cfg(feature = "disposable-store")]
 pub use infrastructure::installed_store::{InstalledApp, InstalledAppStore, StoreError};
