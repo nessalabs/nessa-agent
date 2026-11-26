@@ -53,6 +53,7 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   DecisionSettingsProvider,
+  TerminalResumeProvider,
   PermissionRulesProvider,
   VoiceKeyProvider,
 } from "./settings"
@@ -339,64 +340,68 @@ function DesktopRoot() {
                                         <DecisionSettingsProvider
                                           gateway={dependencies.decisionSettings}
                                         >
-                                          <PermissionRulesProvider
-                                            gateway={dependencies.permissionRules}
+                                          <TerminalResumeProvider
+                                            gateway={dependencies.terminalResume}
                                           >
-                                            <BoatProvider gateway={dependencies.boat}>
-                                              <ReplyStyleProvider
-                                                gateway={dependencies.replyStyle}
-                                              >
-                                                <Agent37Provider
-                                                  gateway={dependencies.agent37}
+                                            <PermissionRulesProvider
+                                              gateway={dependencies.permissionRules}
+                                            >
+                                              <BoatProvider gateway={dependencies.boat}>
+                                                <ReplyStyleProvider
+                                                  gateway={dependencies.replyStyle}
                                                 >
-                                                  <GithubProvider
-                                                    gateway={dependencies.github}
-                                                    avatar={githubAvatar}
+                                                  <Agent37Provider
+                                                    gateway={dependencies.agent37}
                                                   >
-                                                    <VoiceKeyProvider
-                                                      gateway={dependencies.voiceKey}
+                                                    <GithubProvider
+                                                      gateway={dependencies.github}
+                                                      avatar={githubAvatar}
                                                     >
-                                                      <VoiceProvider
-                                                        controller={voice}
-                                                        title={(sessionId) => {
-                                                          const sessions =
-                                                            store.getState().workspace
-                                                              .sessions
-                                                          return Object.hasOwn(
-                                                            sessions,
-                                                            sessionId,
-                                                          )
-                                                            ? sessions[sessionId].title
-                                                            : null
-                                                        }}
-                                                        showChat={(sessionId) =>
-                                                          void store.dispatch(
-                                                            openSession({ sessionId }),
-                                                          )
-                                                        }
+                                                      <VoiceKeyProvider
+                                                        gateway={dependencies.voiceKey}
                                                       >
-                                                        {/* The window is dark only (desktop.html's
+                                                        <VoiceProvider
+                                                          controller={voice}
+                                                          title={(sessionId) => {
+                                                            const sessions =
+                                                              store.getState().workspace
+                                                                .sessions
+                                                            return Object.hasOwn(
+                                                              sessions,
+                                                              sessionId,
+                                                            )
+                                                              ? sessions[sessionId].title
+                                                              : null
+                                                          }}
+                                                          showChat={(sessionId) =>
+                                                            void store.dispatch(
+                                                              openSession({ sessionId }),
+                                                            )
+                                                          }
+                                                        >
+                                                          {/* The window is dark only (desktop.html's
                                                 `dark` class, the native window's Dark
                                                 theme), so code and diagrams are too,
                                                 whatever the OS appearance is. */}
-                                                        <CodeBlockProvider mode="dark">
-                                                          <DesktopWindow
-                                                            hostKind={host.kind}
-                                                            browserSurface={
-                                                              host.kind === "browser"
-                                                            }
-                                                            inspectable={
-                                                              import.meta.env.DEV
-                                                            }
-                                                          />
-                                                        </CodeBlockProvider>
-                                                      </VoiceProvider>
-                                                    </VoiceKeyProvider>
-                                                  </GithubProvider>
-                                                </Agent37Provider>
-                                              </ReplyStyleProvider>
-                                            </BoatProvider>
-                                          </PermissionRulesProvider>
+                                                          <CodeBlockProvider mode="dark">
+                                                            <DesktopWindow
+                                                              hostKind={host.kind}
+                                                              browserSurface={
+                                                                host.kind === "browser"
+                                                              }
+                                                              inspectable={
+                                                                import.meta.env.DEV
+                                                              }
+                                                            />
+                                                          </CodeBlockProvider>
+                                                        </VoiceProvider>
+                                                      </VoiceKeyProvider>
+                                                    </GithubProvider>
+                                                  </Agent37Provider>
+                                                </ReplyStyleProvider>
+                                              </BoatProvider>
+                                            </PermissionRulesProvider>
+                                          </TerminalResumeProvider>
                                         </DecisionSettingsProvider>
                                       </NativeHooksProvider>
                                     </DecisionsProvider>

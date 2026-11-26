@@ -4758,6 +4758,10 @@ pub struct TerminalSummary {
     pub ended_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_status: Option<TerminalProgramStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_at_ms: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -4828,6 +4832,45 @@ pub struct TerminalCloseParams {
 pub struct TerminalRenameParams {
     pub terminal_id: TerminalId,
     pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalResumeRule {
+    pub program: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    pub action: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalResumeSettings {
+    pub enabled: bool,
+    pub rules: Vec<TerminalResumeRule>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalSavedProgram {
+    pub terminal_id: TerminalId,
+    pub title: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    pub saved_at_ms: u64,
+    pub comes_back: bool,
+    pub open: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalResumeState {
+    pub settings: TerminalResumeSettings,
+    pub saved: Vec<TerminalSavedProgram>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TerminalForgetSavedParams {
+    pub terminal_id: TerminalId,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -5059,6 +5102,9 @@ pub mod product_method {
     pub const TERMINAL_HISTORY: &str = "terminal.history";
     pub const TERMINAL_CLOSE: &str = "terminal.close";
     pub const TERMINAL_RENAME: &str = "terminal.rename";
+    pub const TERMINAL_RESUME_SETTINGS: &str = "terminal.resumeSettings";
+    pub const TERMINAL_SET_RESUME_SETTINGS: &str = "terminal.setResumeSettings";
+    pub const TERMINAL_FORGET_SAVED: &str = "terminal.forgetSaved";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -5254,7 +5300,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 145
+                items.len() <= 148
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5424,6 +5470,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "terminal.history",
     "terminal.close",
     "terminal.rename",
+    "terminal.resumeSettings",
+    "terminal.setResumeSettings",
+    "terminal.forgetSaved",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -5780,6 +5829,12 @@ pub enum ProductMethod {
     TerminalClose,
     /// `terminal.rename`
     TerminalRename,
+    /// `terminal.resumeSettings`
+    TerminalResumeSettings,
+    /// `terminal.setResumeSettings`
+    TerminalSetResumeSettings,
+    /// `terminal.forgetSaved`
+    TerminalForgetSaved,
 }
 
 impl ProductMethod {
@@ -5931,6 +5986,9 @@ impl ProductMethod {
         ProductMethod::TerminalHistory,
         ProductMethod::TerminalClose,
         ProductMethod::TerminalRename,
+        ProductMethod::TerminalResumeSettings,
+        ProductMethod::TerminalSetResumeSettings,
+        ProductMethod::TerminalForgetSaved,
     ];
 
     /// The method a frame names, or `None` when the manifest has none by
@@ -6089,6 +6147,9 @@ impl ProductMethod {
             "terminal.history" => Some(ProductMethod::TerminalHistory),
             "terminal.close" => Some(ProductMethod::TerminalClose),
             "terminal.rename" => Some(ProductMethod::TerminalRename),
+            "terminal.resumeSettings" => Some(ProductMethod::TerminalResumeSettings),
+            "terminal.setResumeSettings" => Some(ProductMethod::TerminalSetResumeSettings),
+            "terminal.forgetSaved" => Some(ProductMethod::TerminalForgetSaved),
             _ => None,
         }
     }
@@ -6244,6 +6305,9 @@ impl ProductMethod {
             ProductMethod::TerminalHistory => "terminal.history",
             ProductMethod::TerminalClose => "terminal.close",
             ProductMethod::TerminalRename => "terminal.rename",
+            ProductMethod::TerminalResumeSettings => "terminal.resumeSettings",
+            ProductMethod::TerminalSetResumeSettings => "terminal.setResumeSettings",
+            ProductMethod::TerminalForgetSaved => "terminal.forgetSaved",
         }
     }
 
@@ -6397,6 +6461,9 @@ impl ProductMethod {
             ProductMethod::TerminalHistory => Some("credential.manage"),
             ProductMethod::TerminalClose => Some("credential.manage"),
             ProductMethod::TerminalRename => Some("credential.manage"),
+            ProductMethod::TerminalResumeSettings => Some("credential.manage"),
+            ProductMethod::TerminalSetResumeSettings => Some("credential.manage"),
+            ProductMethod::TerminalForgetSaved => Some("credential.manage"),
         }
     }
 
@@ -6549,6 +6616,9 @@ impl ProductMethod {
             ProductMethod::TerminalHistory => ProductLane::Requests,
             ProductMethod::TerminalClose => ProductLane::Requests,
             ProductMethod::TerminalRename => ProductLane::Requests,
+            ProductMethod::TerminalResumeSettings => ProductLane::Requests,
+            ProductMethod::TerminalSetResumeSettings => ProductLane::Requests,
+            ProductMethod::TerminalForgetSaved => ProductLane::Requests,
         }
     }
 
@@ -7042,6 +7112,16 @@ impl ProductMethod {
             ProductMethod::TerminalRename => ProductParams::TerminalRename(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::TerminalResumeSettings => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::TerminalResumeSettings,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::TerminalSetResumeSettings => ProductParams::TerminalSetResumeSettings(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::TerminalForgetSaved => ProductParams::TerminalForgetSaved(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
         })
     }
 }
@@ -7198,6 +7278,9 @@ pub enum ProductParams {
     TerminalHistory(TerminalHistoryParams),
     TerminalClose(TerminalCloseParams),
     TerminalRename(TerminalRenameParams),
+    TerminalResumeSettings,
+    TerminalSetResumeSettings(TerminalResumeSettings),
+    TerminalForgetSaved(TerminalForgetSavedParams),
 }
 
 impl ProductParams {
@@ -7374,6 +7457,9 @@ impl ProductParams {
             ProductParams::TerminalHistory(_) => ProductMethod::TerminalHistory,
             ProductParams::TerminalClose(_) => ProductMethod::TerminalClose,
             ProductParams::TerminalRename(_) => ProductMethod::TerminalRename,
+            ProductParams::TerminalResumeSettings => ProductMethod::TerminalResumeSettings,
+            ProductParams::TerminalSetResumeSettings(_) => ProductMethod::TerminalSetResumeSettings,
+            ProductParams::TerminalForgetSaved(_) => ProductMethod::TerminalForgetSaved,
         }
     }
 }

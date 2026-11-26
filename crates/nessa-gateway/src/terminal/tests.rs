@@ -92,6 +92,7 @@ fn request(owner: &TerminalOwner, id: &str) -> OpenRequest {
         runs_on: "here".into(),
         kind: TerminalKind::Shell,
         size: size(80, 24),
+        reopen: None,
     }
 }
 
@@ -495,4 +496,135 @@ fn open_clears_reservation_on_spawn_failure() {
     let retry = hub.open(req, "/bin/sh".into()).unwrap();
     assert_eq!(retry.request_id, "spawn-fail");
     assert_eq!(hub.list(&owner("p")).len(), 1);
+}
+
+struct OneAccount;
+impl Processes for OneAccount {
+    fn facts(&self, _pid: u32) -> Option<ProcessFacts> {
+        None
+    }
+    fn own_uid(&self) -> u32 {
+        501
+    }
+}
+
+struct Here;
+impl TerminalHost for Here {
+    fn folder(&self, folder: &std::path::Path) -> Option<std::path::PathBuf> {
+        Some(folder.to_path_buf())
+    }
+    fn login_shell(&self) -> std::path::PathBuf {
+        "/bin/zsh".into()
+    }
+}
+
+/// A store whose files cannot be removed.
+#[derive(Default)]
+struct Unremovable(MemoryResumeStore);
+impl ResumeStore for Unremovable {
+    fn settings(&self) -> ResumeSettings {
+        self.0.settings()
+    }
+    fn save_settings(&self, settings: &ResumeSettings) -> Result<(), String> {
+        self.0.save_settings(settings)
+    }
+    fn saved(&self) -> Vec<SavedTerminal> {
+        self.0.saved()
+    }
+    fn save(&self, saved: &SavedTerminal) -> Result<(), String> {
+        self.0.save(saved)
+    }
+    fn remove(&self, _id: &str) -> Result<(), String> {
+        Err("read-only".into())
+    }
+}
+
+fn kept_nvim() -> SavedTerminal {
+    SavedTerminal {
+        id: "t_kept".into(),
+        request_id: "r_kept".into(),
+        title: "edit".into(),
+        organization: "org".into(),
+        principal: "ana".into(),
+        channel_id: None,
+        conversation_id: None,
+        folder: "/tmp".into(),
+        cols: 80,
+        rows: 24,
+        record: SavedRecord {
+            pid: 10,
+            started: None,
+            uid: 501,
+            argv: vec!["nvim".into()],
+            cwd: None,
+            owner_cwd: None,
+            time: 1,
+            saved_at_ms: 1,
+            resumed: false,
+        },
+    }
+}
+
+fn resuming(store: Arc<dyn ResumeStore>) -> (Arc<TerminalHub>, Arc<FakeEngine>) {
+    store
+        .save_settings(&ResumeSettings {
+            enabled: true,
+            rules: vec![ResumeRule {
+                program: "nvim".into(),
+                folder: None,
+                args: Vec::new(),
+                action: RuleAction::Allow,
+            }],
+        })
+        .unwrap();
+    store.save(&kept_nvim()).unwrap();
+    let engine = Arc::new(FakeEngine::default());
+    let hub = TerminalHub::with_resume(
+        Some(engine.clone()),
+        Arc::new(Fixed),
+        Some(ResumeParts {
+            store,
+            processes: Arc::new(OneAccount),
+        }),
+    );
+    (hub, engine)
+}
+
+#[test]
+fn a_report_made_as_a_resumed_program_starts_is_kept_over_the_old_record() {
+    let store = Arc::new(MemoryResumeStore::default());
+    let (hub, engine) = resuming(store.clone());
+    *engine.during_start.lock().unwrap() = Some(Box::new(|id, events| {
+        events.resume(
+            id,
+            ResumeChange::Saved(AcceptedRecord {
+                pid: 20,
+                started: None,
+                uid: 501,
+                argv: vec!["nvim".into(), "-S".into(), "s.vim".into()],
+                cwd: None,
+                owner_cwd: None,
+                time: 2,
+            }),
+        );
+    }));
+    assert_eq!(hub.resume_saved(&Here), 1);
+    // A rename saves what the terminal holds; that is the fresh report.
+    hub.rename(&owner("ana"), "t_kept", "renamed".into())
+        .unwrap();
+    let saved = store.saved();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].title, "renamed");
+    assert_eq!(saved[0].record.pid, 20);
+    assert!(!saved[0].record.resumed);
+}
+
+#[test]
+fn forgetting_a_kept_program_whose_file_stays_is_refused() {
+    let (hub, _engine) = resuming(Arc::new(Unremovable::default()));
+    assert!(matches!(
+        hub.forget_saved(&owner("ana"), "t_kept"),
+        Err(TerminalError::Storage(_))
+    ));
+    assert_eq!(hub.saved_programs(&owner("ana")).len(), 1);
 }

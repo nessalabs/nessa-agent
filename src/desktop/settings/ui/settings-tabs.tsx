@@ -56,6 +56,7 @@ import { IntegrationsTab } from "./integrations-tab"
 import { LinkedDevicesTab } from "./linked-devices-tab"
 import { GatewaysTab } from "./gateways-tab"
 import { DecisionSettingsRows } from "./decision-settings-rows"
+import { TerminalResumeRows } from "./terminal-resume-rows"
 import { NativeHooksRows } from "./native-hooks-rows"
 import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
@@ -81,6 +82,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   sessions: SessionsTab,
   keyboard: KeyboardTab,
   decisions: DecisionSettingsRows,
+  "terminal-resume": TerminalResumeRows,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,

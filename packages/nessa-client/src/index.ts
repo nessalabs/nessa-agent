@@ -523,6 +523,10 @@ export type {
   TerminalOpenParams,
   TerminalOutput,
   TerminalProgramStatus,
+  TerminalResumeRule,
+  TerminalResumeSettings,
+  TerminalResumeState,
+  TerminalSavedProgram,
   TerminalSummary,
   TerminalViewParams,
 } from "./generated/product.js"

@@ -522,6 +522,44 @@ async fn review_notice_continuous_change_has_bounded_selection_attempts() {
     );
 }
 
+#[tokio::test]
+async fn review_notice_exhaustion_names_the_check_behind_each_pass() {
+    let mut fixture = ReviewFixture::new(
+        Arc::new(RecordingReviewNoticeAudit::default()),
+        Arc::new(MonotonicReviewNoticeClock::new()),
+    );
+    let audit = Arc::new(ChangingAudit {
+        authority: fixture.authority.clone(),
+        records: Mutex::new(Vec::new()),
+    });
+    fixture.state = fixture
+        .state
+        .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            audit,
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
+    let session = authenticate(&fixture.state).await;
+    let (_authority, updates) = watch::channel(session.auth_revision());
+    let (send, mut receive) = mpsc::channel(1);
+    let result = forward_review_notices(
+        fixture.board.clone(),
+        send,
+        Arc::new(Semaphore::new(1)),
+        fixture.state,
+        session,
+        updates,
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err(ReviewNoticePublicationFailure::Unstable(SpentSelectionPasses(
+            [Some(SelectionDiscard::AuthorityMoved); MAX_SELECTION_PASSES]
+        ))),
+        "each thrown-away pass must name the check that threw it away"
+    );
+    assert!(receive.recv().await.is_none());
+}
+
 /// Adds a review of another conversation to the board while each of the first
 /// `churns` audits is written, as other busy agents do.
 struct BoardChurnAudit {

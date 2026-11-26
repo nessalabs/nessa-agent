@@ -65,7 +65,8 @@ machine, started as a login shell, with `TERM=xterm-256color`.
 [pty-runtime](https://github.com/nessalabs/pty-runtime) owns the PTY and the
 terminal model on the machine that runs the shell. Sessions are started in
 **projected** mode: pty-runtime feeds the program's output through Ghostty's
-terminal model and sends laid-out rows ([client/PROTOCOL.md]: `ready`,
+terminal model and sends laid-out rows ([program resume]: https://www.superlogical.com/rex/docs/build/program-resume
+[client/PROTOCOL.md]: `ready`,
 `frame` with `seq`, cursor and styled rows, `styles`, `modes`, `history`,
 `exit`). The desktop and the phone paint those rows. Neither runs a terminal
 emulator of its own, so both always show the same screen.
@@ -164,7 +165,7 @@ The state page with the TLA+ model is
 - The pane kind on the wire is `"terminal"` with no id: an agent reading the
   window sees that a pane shows a terminal, never which one or what it holds.
 - Terminals live in the gateway's memory only. A gateway restart ends them
-  and they leave the list; keeping them across restarts is a follow-up.
+  and they leave the list, except a program kept by OSC 7577 (below).
 - Audit is the `nessa::terminal` tracing target (open, exit, close, refusals);
   input and output are never logged.
 
@@ -184,6 +185,54 @@ shell exiting ends it. A gateway restart ends every local session (a PTY
 cannot outlive its process); their rows show Exited with "Ended when Nessa
 restarted". Keeping processes alive across restarts through shepherd is a
 follow-up.
+
+## Programs that come back (OSC 7577)
+
+A program in a terminal can ask to be started again after Nessa restarts, by
+the [program resume] protocol (OSC 7577, revision 0.5). It is off until the
+person turns it on in Settings › Terminal › Resume, and then only programs a
+rule allows come back.
+
+- **Token.** While resume is on, each new terminal's shell gets
+  `OSC7577_TOKEN` (64 hex, one per terminal). Only that first process gets it;
+  a report is signed `sha256(body ":" token)`. Root never gets one.
+- **Report.** The VT scanner that reads OSC 7501 hands each `7577` body to a
+  `ResumeTracker`. A report is used only when its mac, time (±60 s, newer per
+  pid) and fields check out, and its pid is the same account's and descends
+  from the terminal's shell. A descendant's report is ignored while an
+  ancestor's record is alive. A bad report forgets the terminal's record.
+- **Kept.** The gateway writes the accepted record to
+  `<namespace>/terminals/saved/<id>.json` (0600) with the terminal's place and
+  size. The owner exiting forgets it after a 2 s grace; closing the terminal
+  forgets it; the gateway shutting down freezes the hub first so dying
+  terminals keep theirs.
+- **Rules.** `<namespace>/terminals/settings.json` holds `{enabled, rules}`.
+  A rule names a program (`*`, a file name, or an absolute path), optionally a
+  folder prefix and arguments the command must hold, and Allow or Never.
+  A program comes back only when an Allow rule matches and no Never rule does.
+- **Start.** At the next start the gateway reopens each allowed terminal with
+  its id and title, through the person's login shell:
+  `$SHELL -l -i -c '… /usr/bin/env -- "$@"; exec "$shell" -l'`, so the program
+  runs after the startup files, each argument stays one argument, and the
+  shell is there when it ends. A record is marked resumed before the start,
+  so a program that fails is not started again unless it reports again. Only
+  sh-family shells are used (fish is a follow-up).
+
+```mermaid
+sequenceDiagram
+  participant P as Program
+  participant E as Terminal engine
+  participant H as TerminalHub
+  participant S as Resume store
+  P->>E: OSC 7577 report (signed with OSC7577_TOKEN)
+  E->>E: ResumeTracker checks mac, time, pid
+  E->>H: ResumeChange::Saved
+  H->>S: write saved/<id>.json
+  Note over H: gateway stops: freeze(), records kept
+  H->>S: next start: read settings + saved
+  H->>H: rules allow? mark resumed
+  H->>E: reopen same id, $SHELL -c program
+```
 
 ## Policy and audit
 
@@ -209,4 +258,5 @@ follow-up.
 | T4 | Run blocks with inline output, terminal and stop icons; stress step `run` |
 | T5 | ~~Cloud VMs and SSH hosts through workspace-sdk `Terminals`~~ (retired in #1421 / ADR 1417; remote hosts run their own `nessa-server`) |
 
+[program resume]: https://www.superlogical.com/rex/docs/build/program-resume
 [client/PROTOCOL.md]: https://github.com/nessalabs/pty-runtime/blob/main/client/PROTOCOL.md

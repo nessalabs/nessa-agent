@@ -965,6 +965,10 @@ async fn run_authenticated<S>(
     // A registry revision is global, but each refresh wakes only this socket's
     // publisher. Share changes keep their shared visibility notification.
     let (review_authority, authority_updates) = watch::channel(session.auth_revision());
+    // An opaque name for this socket in its notice failure logs, so two
+    // failures can be told apart as one socket or two. It is random and named
+    // nowhere else, so it says nothing about who is connected.
+    let connection = Uuid::new_v4();
     // A waiting review is a snapshot on the ordinary lane. Abort this before
     // the lane's sender is dropped: the task holds one, and the writer
     // finishes only when every sender is gone.
@@ -1107,11 +1111,15 @@ async fn run_authenticated<S>(
                 notice_task = None;
                 let reason = match outcome {
                     Ok(Err(failure)) => {
-                        tracing::error!(?failure, "review snapshot publication failed");
+                        tracing::error!(
+                            %connection,
+                            ?failure,
+                            "review snapshot publication failed"
+                        );
                         failure.close_reason()
                     }
                     Ok(Ok(())) | Err(_) => {
-                        tracing::error!("review snapshot publisher ended unexpectedly");
+                        tracing::error!(%connection, "review snapshot publisher ended unexpectedly");
                         SessionCloseReason::TemporaryUnavailable
                     }
                 };
@@ -1577,14 +1585,56 @@ async fn forward_terminal_signals(
 enum ReviewNoticePublicationFailure {
     Audit(ReviewNoticeAuditFailure),
     Authority(AccessError),
-    Unstable,
+    /// Every selection pass was thrown away; each entry says which check
+    /// threw that pass away, in order.
+    Unstable(SpentSelectionPasses),
+}
+
+/// Most selection passes one publication may throw away before it closes the
+/// socket. Each pass writes audit records, so the bound keeps a socket whose
+/// access never settles from writing them without end.
+const MAX_SELECTION_PASSES: usize = 3;
+
+/// The check that threw a selection pass away. It names the check only, never
+/// a conversation, review, principal or revision, so it can be logged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionDiscard {
+    /// Two audited reviews were selected under different authority revisions.
+    MixedAuthorityRevisions,
+    /// The session's authority revision moved after the reviews were selected.
+    AuthorityMoved,
+    /// Two reviews of one conversation were selected with different claims.
+    ClaimsDisagreed,
+    /// A selected review's claim no longer names the current conversation row.
+    ClaimChanged,
+    /// The board's visibility moved, or a counter was spent, during selection.
+    VisibilityMoved,
+}
+
+/// The checks that threw away each pass of one publication, in order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SpentSelectionPasses([Option<SelectionDiscard>; MAX_SELECTION_PASSES]);
+
+impl SpentSelectionPasses {
+    fn spent(&self) -> usize {
+        self.0.iter().filter(|pass| pass.is_some()).count()
+    }
+
+    fn exhausted(&self) -> bool {
+        self.spent() == MAX_SELECTION_PASSES
+    }
+
+    fn discard(&mut self, reason: SelectionDiscard) {
+        let spent = self.spent();
+        self.0[spent] = Some(reason);
+    }
 }
 
 impl ReviewNoticePublicationFailure {
     fn close_reason(self) -> SessionCloseReason {
         match self {
             Self::Authority(error) => close_reason(error),
-            Self::Audit(_) | Self::Unstable => SessionCloseReason::TemporaryUnavailable,
+            Self::Audit(_) | Self::Unstable(_) => SessionCloseReason::TemporaryUnavailable,
         }
     }
 }
@@ -1604,11 +1654,10 @@ async fn forward_review_notices(
     // board can change during every audit, and closing every socket for it
     // dropped clients mid-command. A pass the board alone outdated is
     // published, less what settled meanwhile.
-    const MAX_SELECTION_PASSES: usize = 3;
-    let mut selection_passes = 0;
+    let mut passes = SpentSelectionPasses::default();
     'snapshots: loop {
-        if selection_passes == MAX_SELECTION_PASSES {
-            return Err(ReviewNoticePublicationFailure::Unstable);
+        if passes.exhausted() {
+            return Err(ReviewNoticePublicationFailure::Unstable(passes));
         }
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
@@ -1628,7 +1677,7 @@ async fn forward_review_notices(
                 ReviewNoticeVisibility::Audited(selection) => {
                     let revision = selection.authority_revision();
                     if selected_revision.is_some_and(|earlier| earlier != revision) {
-                        selection_passes += 1;
+                        passes.discard(SelectionDiscard::MixedAuthorityRevisions);
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
@@ -1648,7 +1697,7 @@ async fn forward_review_notices(
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
             if current.revision != revision {
-                selection_passes += 1;
+                passes.discard(SelectionDiscard::AuthorityMoved);
                 continue 'snapshots;
             }
             // The claim was read with the row Cedar saw. It still has to name
@@ -1666,7 +1715,7 @@ async fn forward_review_notices(
                     .insert(claim.conversation_id().clone(), claim)
                     .is_some_and(|earlier| earlier != claim)
                 {
-                    selection_passes += 1;
+                    passes.discard(SelectionDiscard::ClaimsDisagreed);
                     continue 'snapshots;
                 }
             }
@@ -1675,7 +1724,7 @@ async fn forward_review_notices(
                     ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
                 })?;
                 if !current_claim {
-                    selection_passes += 1;
+                    passes.discard(SelectionDiscard::ClaimChanged);
                     continue 'snapshots;
                 }
             }
@@ -1686,7 +1735,7 @@ async fn forward_review_notices(
                     && generation != u64::MAX
                     && visibility != u64::MAX;
                 if !board_moved {
-                    selection_passes += 1;
+                    passes.discard(SelectionDiscard::VisibilityMoved);
                     continue 'snapshots;
                 }
                 // Only the board moved, with the same access: this selection
@@ -1740,7 +1789,7 @@ async fn forward_review_notices(
         if send.send(queued).await.is_err() {
             break;
         }
-        selection_passes = 0;
+        passes = SpentSelectionPasses::default();
         tokio::select! {
             () = board.wait_after(generation) => {}
             () = board.wait_for_visibility(visibility) => {}
@@ -2151,7 +2200,10 @@ async fn dispatch_authorized(
         | ProductMethod::TerminalInput
         | ProductMethod::TerminalHistory
         | ProductMethod::TerminalClose
-        | ProductMethod::TerminalRename => {
+        | ProductMethod::TerminalRename
+        | ProductMethod::TerminalResumeSettings
+        | ProductMethod::TerminalSetResumeSettings
+        | ProductMethod::TerminalForgetSaved => {
             super::terminal::dispatch(state, session, frame, places.terminals).await
         }
         ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),
