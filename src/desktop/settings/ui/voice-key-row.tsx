@@ -13,6 +13,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+import { Button } from "@nessa-ui/react/button"
 import { Dialog } from "@nessa-ui/react/dialog"
 import type { VoiceKeyGateway, VoiceKeyOutcome } from "../../voice/adapters/voice-gateway"
 import { useVaultSettled, useVaultUnlock } from "../../../vault"
@@ -117,7 +118,7 @@ export function VoiceKeyDialog({ onClose }: { onClose: (saved: boolean) => void 
 export function VoiceKeyButton({
   children,
   onSaved,
-  className = "settings-button",
+  className,
 }: {
   children: ReactNode
   onSaved?: () => void
@@ -126,14 +127,16 @@ export function VoiceKeyButton({
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="tinted"
+        shape="pill"
+        size="26"
         className={className}
         data-voice-key="add"
         onClick={() => setOpen(true)}
       >
         {children}
-      </button>
+      </Button>
       {open ? (
         <VoiceKeyDialog
           onClose={(saved) => {

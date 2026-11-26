@@ -228,13 +228,13 @@ describe("VoiceController", () => {
   it("V2: a refused start says why and leaves nothing to end", async () => {
     const { controller, connect } = setup({
       start: async () => {
-        throw new VoiceStartRefused("Add an OpenAI key to talk to your agents.", "key")
+        throw new VoiceStartRefused("Voice calls need an OpenAI API key.", "key")
       },
     })
     await controller.start("s-1")
     expect(controller.snapshot()).toMatchObject({
       phase: "failed",
-      notice: "Add an OpenAI key to talk to your agents.",
+      notice: "Voice calls need an OpenAI API key.",
       // The notice offers to add the key in place.
       fix: "key",
     })
