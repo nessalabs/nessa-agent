@@ -373,3 +373,6 @@ pub use input_files::{InputFileAudit, InputFileStage};
 #[cfg(any(unix, test, feature = "test-support"))]
 pub use input_files::{LocalInputFile, LocalInputFilePlacement};
 pub mod background_tasks;
+
+mod directory_grants;
+pub use directory_grants::{DirectoryOperation, DirectoryPolicyAnswer, DirectoryPolicyError};

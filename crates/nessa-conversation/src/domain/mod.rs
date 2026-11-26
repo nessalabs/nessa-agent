@@ -48,3 +48,6 @@ pub use value_objects::{
 #[cfg(test)]
 #[path = "../../tests/conversation/domain.rs"]
 mod tests;
+
+mod directory_grants;
+pub use directory_grants::*;

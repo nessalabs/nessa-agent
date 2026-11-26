@@ -1,0 +1,13 @@
+entity DirectorySubject;
+entity DirectoryResource;
+action "directory" appliesTo {
+    principal: DirectorySubject,
+    resource: DirectoryResource,
+    context: {
+        live: Bool, within: Bool, enforced_exec_boundary: Bool,
+        read: Bool, write: Bool, exec: Bool,
+        operation: String, program: String, argc: Long,
+        arg0: String, arg1: String, arg2: String, arg3: String,
+        arg4: String, arg5: String, arg6: String, arg7: String
+    }
+};
