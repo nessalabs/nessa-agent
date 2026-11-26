@@ -152,6 +152,9 @@ tauri-utils = "2"
 
 # The injected systemd adapter tests also run on Unix hosts without systemd.
 # Native acceptance tests remain Linux-only; production dependencies stay target-specific.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nessa-app-package = { path = "../crates/nessa-app-package", features = ["disposable-store"] }
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # The standalone nil-URL regression must link WebKit itself; no Tauri/Wry
 # webview is constructed in that test process to load the framework for it.
@@ -193,6 +196,11 @@ harness = false
 [[example]]
 name = "page_load_acceptance"
 path = "examples/page_load_acceptance/main.rs"
+
+[[example]]
+name = "app_package_acceptance"
+path = "examples/app_package_acceptance/main.rs"
+test = true
 
 [lints]
 workspace = true

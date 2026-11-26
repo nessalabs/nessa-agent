@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
+import { once } from "node:events"
 import { existsSync, readFileSync } from "node:fs"
 import { setTimeout as delay } from "node:timers/promises"
 
@@ -157,3 +158,71 @@ const systemProcesses = createProcessControl()
 export const alive = (pid) => systemProcesses.alive(pid)
 export const stopOwnedGroup = (groupId) => systemProcesses.stopOwnedGroup(groupId)
 export const stopRecordedProcess = (pid) => systemProcesses.stopRecordedProcess(pid)
+
+export class OwnedCommandCleanupError extends Error {}
+
+/** Run one detached command and settle its entire owned group on every outcome. */
+export async function runOwnedCommand(
+  command,
+  args,
+  { cwd, env, signal, timeout, captureLimit },
+  { start = spawn, stop = stopOwnedGroup, timeoutSignal = AbortSignal.timeout } = {},
+) {
+  signal.throwIfAborted()
+  const limit = new AbortController()
+  const deadline = timeoutSignal(timeout)
+  const wait = AbortSignal.any([signal, deadline, limit.signal])
+  const child = start(command, args, {
+    cwd,
+    env,
+    detached: true,
+    stdio: ["ignore", captureLimit ? "pipe" : "inherit", "inherit"],
+  })
+  // Keep the child's error listener alive during cleanup even if the wait aborts.
+  const closed = once(child, "close")
+  let abort
+  const interrupted = new Promise((_, reject) => {
+    abort = () => reject(wait.reason)
+    if (wait.aborted) abort()
+    else wait.addEventListener("abort", abort, { once: true })
+  })
+  let failure
+  let output
+  try {
+    const chunks = []
+    let size = 0
+    child.stdout?.on("data", (chunk) => {
+      size += chunk.length
+      if (size > captureLimit) {
+        limit.abort(new Error(`${command} output exceeded ${captureLimit} bytes`))
+      } else {
+        chunks.push(chunk)
+      }
+    })
+    const [code, exitSignal] = await Promise.race([closed, interrupted])
+    if (code !== 0) throw new Error(`${command} exited with ${exitSignal ?? code}`)
+    output = Buffer.concat(chunks).toString("utf8")
+  } catch (error) {
+    failure =
+      deadline.aborted && wait.reason === deadline.reason
+        ? new Error(`${command} exceeded its ${timeout}ms deadline`, { cause: error })
+        : (wait.reason ?? error)
+  } finally {
+    wait.removeEventListener("abort", abort)
+    try {
+      if (!(await stop(child.pid)))
+        throw new Error("owned group still present or unobservable")
+    } catch (error) {
+      const cause = failure ? new AggregateError([failure, error]) : error
+      // Release this Node process's handles while preserving the uncertain outcome.
+      child.stdout?.destroy()
+      child.unref()
+      failure = new OwnedCommandCleanupError(`${command} group cleanup unconfirmed`, {
+        cause,
+      })
+    }
+  }
+  if (failure) throw failure
+  signal.throwIfAborted()
+  return output
+}

@@ -47,6 +47,14 @@ import {
 import { nativeSmokeFixture } from "./native-smoke-fixture.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..")
+const args = process.argv.slice(2)
+if (args.length > 0) {
+  assert.deepEqual(args, ["--app-package"], "expected --app-package or no arguments")
+  const { runAppPackageSmoke } = await import("./native-smoke-app-package.mjs")
+  await runAppPackageSmoke(root)
+  process.exit(0)
+}
+
 const elementKey = "element-6066-11e4-a52e-4f735466cecf"
 const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
