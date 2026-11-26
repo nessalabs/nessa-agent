@@ -316,11 +316,11 @@ impl RetainedEnrollmentClient {
     pub async fn retain_joined_record_page_for_test(
         &self,
         inputs: JoinedRecordCommitFixture,
-        cache: RetainedCache,
+        open_cache: impl FnOnce() -> Result<RetainedCache, ReadFailure> + Send + 'static,
         before_commit: impl FnOnce(&CommitPlan) + Send + 'static,
     ) -> Result<Result<(u64, usize), ReadFailure>, NativeClientError> {
         self.with_joined_record_fixture(inputs, move |selection| {
-            super::joined_status::retain_joined_record_page_for_test(selection, cache, before_commit)
+            super::joined_status::retain_joined_record_page_for_test(selection, open_cache, before_commit)
         }).await
     }
 

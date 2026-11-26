@@ -267,13 +267,14 @@ pub(super) fn read_joined_record_page_for_test(
 
 pub(super) fn retain_joined_record_page_for_test(
     selection: JoinedRecordSelection,
-    mut cache: RetainedCache,
+    open_cache: impl FnOnce() -> std::result::Result<RetainedCache, ReadFailure>,
     before_commit: impl FnOnce(&CommitPlan),
 ) -> std::result::Result<(u64, usize), ReadFailure> {
     with_selected_joined_record(
         selection,
         || {},
         |transport, interrupt, scope, episode, wake| {
+            let mut cache = open_cache()?;
             cache.retain_selected_page_for_test(transport, interrupt, scope, |plan| {
                 before_commit(plan);
                 episode.claim_publication(wake)

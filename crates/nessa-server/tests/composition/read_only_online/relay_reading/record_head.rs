@@ -7,7 +7,7 @@ use nessa_auth::{
 };
 use nessa_client_core::retained::{
     dial_gateway, JoinedRecordCommitFixture, ReadFailure, ReadStop, ReaderAccess, ReaderRole,
-    RetainedEnrollmentClient, RetainedTranscript,
+    RetainedCache, RetainedEnrollmentClient, RetainedTranscript,
 };
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
@@ -585,8 +585,9 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                         start: Instant::now(),
                         expired: AtomicBool::new(false),
                     });
+                    let path = device.caches.join(name);
                     let client = RetainedEnrollmentClient::new(
-                        Arc::new(state), device.caches.join(name), Arc::new(Wall), clock.clone(),
+                        Arc::new(state), path.clone(), Arc::new(Wall), clock.clone(),
                     ).unwrap();
                     let stop = ReadStop::new();
                     let hit = Arc::new(AtomicBool::new(false));
@@ -597,7 +598,7 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                             relay, pin: device.pin, scope: scope.clone(), stop,
                             expires_ms: WAIT.as_millis().try_into().unwrap(),
                         },
-                        device.cache(name),
+                        move || RetainedCache::open(&path, Arc::new(Wall), Arc::new(Time(Instant::now()))),
                         move |plan: &CommitPlan| {
                             assert_eq!(plan.expected().position(), expected_after);
                             assert_eq!(plan.next().position(), payload.0);
