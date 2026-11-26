@@ -3703,6 +3703,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-app-package"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "nessa-local-database",
+ "nessa-local-storage",
+ "nessa-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "nessa-attachments"
 version = "0.1.0"
 dependencies = [

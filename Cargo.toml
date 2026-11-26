@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "crates/nessa-vault","crates/nessa-mcp", "crates/nessa-server", "crates/nessa-protocol", "crates/nessa-client-core", "crates/nessa-device-client", "crates/nessa-auth", "crates/nessa-agent-credentials", "crates/nessa-local-storage", "crates/nessa-local-database", "crates/nessa-gateway-endpoint", "crates/nessa-sdk", "crates/nessa-images", "crates/nessa-timer", "crates/nessa-types", "crates/nessa-projection", "crates/nessa-agent-install", "crates/nessa-attachments", "crates/nessa-peer-gateways", "crates/nessa-mcp-authorization", "crates/nessa-webhooks", "crates/nessa-device-pairing",
-    "crates/nessa-backup", "crates/nessa-conversation", "crates/nessa-gateway", "src-tauri"]
+    "crates/nessa-backup", "crates/nessa-app-package", "crates/nessa-conversation", "crates/nessa-gateway", "src-tauri"]
 
 [workspace.dependencies]
 nessa-sync = { git = "https://github.com/nessalabs/sync-engine", rev = "341c9b844257403bb297f27d7ed9aecbe93e4406", default-features = false, features = ["transport"] }
