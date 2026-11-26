@@ -354,6 +354,23 @@ unlimited stream of future operations.
 
 Settings do not change platform private-file checks.
 
+## App authoring rollback floor
+
+The compatibility reader can validate a previously recorded `app.author` grant
+for an integration, including a revoked credential. This does not let any
+issuance path create that grant and does not authorize an app-authoring
+operation. The compatibility rule does not turn on an app feature.
+
+If authoring issuance is enabled in a later release, confirm first that all
+binaries that might open that live registry, including the rollback build,
+carry this reader support. Older readers reject the stored grant even after
+its credential is revoked. Roll back authoring by disabling its entry point
+and revoking the exact authoring credential through the current compatible
+registry owner, while keeping the current registry and its receipts. Do not
+replace it with a pre-provision snapshot: that can discard ordinary credential
+revocations and receipts recorded later. Replacing the surface token file does
+not itself revoke the credential.
+
 ## Windows storage
 
 Windows uses `%USERPROFILE%\.nessa` by default; `NESSA_DATA_DIR` still overrides the

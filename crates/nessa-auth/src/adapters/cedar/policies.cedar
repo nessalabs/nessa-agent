@@ -91,6 +91,20 @@ when {
     ["server.read", "credential.manage", "conversation.read", "conversation.write"].contains(context.action)
 };
 
+// Keep the recorded grant readable, including on revoked credentials. This
+// rule is only for registry validation; it does not permit issuing or using it.
+@id("hold.stored_app_author")
+permit (
+    principal is Nessa::Holder,
+    action == Nessa::Action::"credential.hold",
+    resource is Nessa::Resource
+)
+when {
+    principal.kind == "integration" &&
+    context.path == "stored" &&
+    context.action == "app.author"
+};
+
 // An app marker records identity, not a callable request or a grant to a
 // Product handler. Generic issuance cannot mint it; app issuance holds only it.
 @id("hold.app_identity")
