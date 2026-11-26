@@ -113,6 +113,11 @@ impl PackageManifest {
     }
 
     #[cfg(feature = "disposable-store")]
+    pub(crate) fn asset_count(&self) -> usize {
+        self.assets.len()
+    }
+
+    #[cfg(feature = "disposable-store")]
     pub(crate) fn check_held_asset_size(
         &self,
         path: &str,

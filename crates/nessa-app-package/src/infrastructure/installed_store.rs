@@ -4,7 +4,7 @@ use nessa_local_database::{
     rusqlite::{
         self, params,
         types::{FromSqlError, ValueRef},
-        Connection, OptionalExtension,
+        Connection, OptionalExtension, Transaction,
     },
     OpenError, Schema,
 };
@@ -193,33 +193,14 @@ impl InstalledAppStore {
         let Some(manifest) = manifest.transpose()? else {
             return Ok(None);
         };
+        // Validate metadata first, then fetch only from that same snapshot.
+        validate_asset_metadata(&transaction, &manifest)?;
         let assets = {
             let mut query = transaction.prepare(
                 "SELECT path, bytes FROM installed_app_assets WHERE app_id = ?1 ORDER BY path",
             )?;
-            let mut rows = query.query([app_id])?;
-            let mut assets = BTreeMap::new();
-            while let Some(row) = rows.next()? {
-                if assets.len() == MAX_FILES {
-                    return Err(StoreError::InvalidPackage(PackageError::TooManyFiles));
-                }
-                let path = row
-                    .get_ref(0)?
-                    .as_str()
-                    .map_err(|error| conversion(0, rusqlite::types::Type::Text, error))?;
-                let bytes = row
-                    .get_ref(1)?
-                    .as_blob()
-                    .map_err(|error| conversion(1, rusqlite::types::Type::Blob, error))?;
-                if path.len() > MAX_PATH_BYTES {
-                    return Err(StoreError::InvalidPackage(PackageError::InvalidPath));
-                }
-                manifest
-                    .check_held_asset_size(path, bytes.len())
-                    .map_err(StoreError::InvalidPackage)?;
-                assets.insert(path.to_owned(), bytes.to_vec());
-            }
-            assets
+            let rows = query.query_map([app_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<BTreeMap<_, _>>>()?
         };
         transaction.commit()?;
         let package = manifest
@@ -227,6 +208,44 @@ impl InstalledAppStore {
             .map_err(StoreError::InvalidPackage)?;
         Ok(Some(package))
     }
+}
+
+fn validate_asset_metadata(
+    transaction: &Transaction<'_>,
+    manifest: &PackageManifest,
+) -> Result<(), StoreError> {
+    // For stored BLOB columns SQLite obtains length from the record header.
+    // The query has no asset payload in its result columns.
+    let mut query = transaction.prepare(
+        "SELECT CASE WHEN octet_length(path) <= ?2 THEN path END, length(bytes)
+         FROM installed_app_assets WHERE app_id = ?1 ORDER BY path",
+    )?;
+    let mut rows = query.query(params![manifest.app_id().as_str(), MAX_PATH_BYTES as i64])?;
+    let mut count = 0;
+    while let Some(row) = rows.next()? {
+        if count == MAX_FILES {
+            return Err(StoreError::InvalidPackage(PackageError::TooManyFiles));
+        }
+        let value = row.get_ref(0)?;
+        if value == ValueRef::Null {
+            return Err(StoreError::InvalidPackage(PackageError::InvalidPath));
+        }
+        let path = value
+            .as_str()
+            .map_err(|error| conversion(0, rusqlite::types::Type::Text, error))?;
+        let length: i64 = row.get(1)?;
+        let length = usize::try_from(length)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, length))?;
+        manifest
+            .check_held_asset_size(path, length)
+            .map_err(StoreError::InvalidPackage)?;
+        count += 1;
+    }
+    // The composite primary key keeps paths unique for this app.
+    if count != manifest.asset_count() {
+        return Err(StoreError::InvalidPackage(PackageError::MissingAsset));
+    }
+    Ok(())
 }
 
 fn validate_shape(connection: &Connection) -> Result<(), OpenError> {

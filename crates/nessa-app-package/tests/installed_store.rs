@@ -65,6 +65,86 @@ fn installs_two_applications_and_reopens_the_same_verified_bytes() {
 }
 
 #[test]
+fn loads_expected_and_empty_asset_lengths() {
+    let (_fixture, path) = private_database();
+    let mut store = InstalledAppStore::open(&path).unwrap();
+    for (id, bytes) in [("with-content", b"abc".as_slice()), ("empty", b"")] {
+        let verified = package(id, bytes.to_vec());
+        store.install(&verified).unwrap();
+        let loaded = store.load(verified.manifest().app_id()).unwrap().unwrap();
+        assert_eq!(loaded.asset("index.html"), Some(bytes));
+    }
+}
+
+#[test]
+fn rejects_length_metadata_that_differs_from_the_manifest() {
+    let (_fixture, path) = private_database();
+    let expected = package("calendar", b"abc".to_vec());
+    let app = expected.manifest().app_id();
+    let mut store = InstalledAppStore::open(&path).unwrap();
+    store.install(&expected).unwrap();
+    let fixture_writer = Connection::open(&path).unwrap();
+
+    for bytes in [b"".as_slice(), b"ab", b"abcd"] {
+        fixture_writer
+            .execute(
+                "UPDATE installed_app_assets SET bytes = ?1
+                 WHERE app_id = ?2 AND path = 'index.html'",
+                params![bytes, app.as_str()],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.load(app),
+            Err(StoreError::InvalidPackage(PackageError::AssetIntegrity(
+                AssetIntegrityError::LengthMismatch
+            )))
+        ));
+    }
+}
+
+#[test]
+fn rejects_missing_or_undeclared_asset_metadata() {
+    let (_fixture, path) = private_database();
+    let expected = package("calendar", b"abc".to_vec());
+    let app = expected.manifest().app_id();
+    let mut store = InstalledAppStore::open(&path).unwrap();
+    store.install(&expected).unwrap();
+    let fixture_writer = Connection::open(&path).unwrap();
+    fixture_writer
+        .execute(
+            "DELETE FROM installed_app_assets WHERE app_id = ?1 AND path = 'index.html'",
+            [app.as_str()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(app),
+        Err(StoreError::InvalidPackage(PackageError::MissingAsset))
+    ));
+    fixture_writer
+        .execute(
+            "INSERT INTO installed_app_assets (app_id, path, bytes) VALUES (?1, ?2, ?3)",
+            params![app.as_str(), "other.html", b"abc"],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(app),
+        Err(StoreError::InvalidPackage(PackageError::UndeclaredAsset))
+    ));
+    let long_path = "a".repeat(nessa_app_package::MAX_PATH_BYTES + 1);
+    fixture_writer
+        .execute(
+            "UPDATE installed_app_assets SET path = ?1
+             WHERE app_id = ?2 AND path = 'other.html'",
+            params![long_path, app.as_str()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.load(app),
+        Err(StoreError::InvalidPackage(PackageError::InvalidPath))
+    ));
+}
+
+#[test]
 fn rejects_tampering_on_reopen_and_preserves_the_other_application() {
     let (_fixture, path) = private_database();
     let calendar = package("calendar", b"abc".to_vec());
