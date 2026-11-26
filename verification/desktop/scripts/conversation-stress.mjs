@@ -10986,17 +10986,23 @@ const steps = {
           return failures.length === before
         })
       } finally {
-        // 5. Resume off again, in Settings, as the person leaves it.
+        // 5. Resume off again, in Settings, as the person leaves it. After
+        // the restart the page reads the settings anew: until they arrive
+        // (the row's `data-terminal-resume`) or while a save is under way,
+        // the switch reads off or is disabled, so a click then is lost.
+        // Press it only once it shows the gateway's "on", until that is off.
         await openTerminalSettings(page).catch(() => {})
-        const toggle = page.locator(
-          `${selectorFor.settingRow("terminal-resume")} [role='switch']`,
-        )
-        if ((await toggle.getAttribute("aria-checked").catch(() => null)) === "true")
-          await toggle.click().catch(() => {})
-        const off = await waitFor(
-          async () => !(await run.client.terminals.resumeSettings()).settings.enabled,
-          10_000,
-        )
+        const row = page.locator(selectorFor.settingRow("terminal-resume"))
+        const toggle = row.locator("[role='switch']")
+        const off = await waitFor(async () => {
+          if (!(await run.client.terminals.resumeSettings()).settings.enabled) return true
+          const shown = await row.getAttribute("data-terminal-resume").catch(() => null)
+          const pressable =
+            (await toggle.getAttribute("aria-checked").catch(() => null)) === "true" &&
+            (await toggle.isEnabled().catch(() => false))
+          if (shown === "true" && pressable) await toggle.click().catch(() => {})
+          return false
+        }, 15_000)
         if (!off) failures.push("Settings › Terminal did not turn resume off")
         await leaveTerminalSettings(page).catch(() => {})
         for (const each of await run.client.terminals.list().catch(() => []))
@@ -11031,7 +11037,14 @@ const steps = {
         20_000,
       )
       if (!finished) {
-        failures.push("the first Run never ended")
+        failures.push(
+          `the first Run never ended: it reads ${await prints.getAttribute("data-run-state")}, its bar says ${JSON.stringify(
+            await prints
+              .locator(".workspace-run-bar")
+              .innerText()
+              .catch(() => null),
+          )}`,
+        )
         return
       }
       const grid = prints.locator('[data-slot="terminal-grid"]')
