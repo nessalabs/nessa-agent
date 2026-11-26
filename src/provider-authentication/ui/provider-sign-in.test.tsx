@@ -2,7 +2,7 @@
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
-import { ChatgptSignInCard, ProviderSignInCard } from "./provider-sign-in"
+import { ProviderSignInCard } from "./provider-sign-in"
 
 it("keeps unsupported and superseded capability checks from enabling login", async () => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -70,126 +70,26 @@ it("keeps unsupported and superseded capability checks from enabling login", asy
   }
 })
 
-it("authenticates Boat once, says it is waiting, and says when it is kept", async () => {
+it("says when sign-in could not open, and offers it again", async () => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   const container = document.createElement("div")
   const root = createRoot(container)
-  let finish: () => void = () => {}
-  const onSignIn = vi.fn(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve
-      }),
-  )
   const button = () => container.querySelector("button")
   try {
     await React.act(async () =>
       root.render(
         <ProviderSignInCard
           provider="claude"
-          action="boat"
-          onSignIn={onSignIn}
+          onSignIn={async () => {
+            throw new Error("no browser")
+          }}
           canSignIn={async () => true}
         />,
       ),
     )
-    expect(button()?.textContent).toBe("Authenticate")
     await React.act(async () => button()?.click())
-    await React.act(async () => button()?.click())
-    expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(button()?.disabled).toBe(true)
-    expect(container.textContent).toContain("Finish signing in in your browser.")
-    await React.act(async () => finish())
-    expect(button()).toBeNull()
-    expect(container.textContent).toContain(
-      "Signed in for cloud workspaces. Send your message again.",
-    )
-  } finally {
-    await React.act(async () => root.unmount())
-  }
-})
-
-it("says which Boat stage failed and offers Authenticate again", async () => {
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  const { BoatSignInFailure } = await import("../model/boat-sign-in")
-  const container = document.createElement("div")
-  const root = createRoot(container)
-  const button = () => container.querySelector("button")
-  try {
-    for (const [stage, text] of [
-      ["minted", "Could not sign in. Try again."],
-      ["saved", "Could not save the sign-in. Unlock Nessa and try again."],
-    ] as const) {
-      await React.act(async () =>
-        root.render(
-          <ProviderSignInCard
-            key={stage}
-            provider="claude"
-            action="boat"
-            onSignIn={async () => {
-              throw new BoatSignInFailure(stage)
-            }}
-            canSignIn={async () => true}
-          />,
-        ),
-      )
-      await React.act(async () => button()?.click())
-      expect(container.textContent).toContain(text)
-      expect(button()?.disabled).toBe(false)
-    }
-  } finally {
-    await React.act(async () => root.unmount())
-  }
-})
-
-it("signs Codex in with ChatGPT, linking to the browser while it waits", async () => {
-  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  const container = document.createElement("div")
-  const root = createRoot(container)
-  let finish: (end: "signed_in" | "timed_out") => void = () => {}
-  const signIn = {
-    available: async () => true,
-    signIn: vi.fn(
-      (opened: (url: string) => void) =>
-        new Promise<"signed_in" | "timed_out">((resolve) => {
-          opened("https://auth.example/a")
-          finish = resolve
-        }),
-    ),
-  }
-  const button = () => {
-    const found = container.querySelector<HTMLButtonElement>(
-      "[data-chatgpt-card-continue]",
-    )
-    if (!found) throw new Error("Missing ChatGPT button")
-    return found
-  }
-  try {
-    await React.act(async () => root.render(<ChatgptSignInCard signIn={signIn} />))
-    expect(button().disabled).toBe(false)
-    await React.act(async () => button().click())
-    expect(button().disabled).toBe(true)
-    expect(
-      container.querySelector("[data-chatgpt-card-open]")?.getAttribute("href"),
-    ).toBe("https://auth.example/a")
-    await React.act(async () => finish("timed_out"))
-    expect(container.textContent).toContain("The sign-in took too long. Try again.")
-    await React.act(async () => button().click())
-    await React.act(async () => finish("signed_in"))
-    expect(container.textContent).toContain(
-      "Signed in with ChatGPT. Send your message again.",
-    )
-    expect(container.querySelector("[data-chatgpt-card-continue]")).toBeNull()
-
-    await React.act(async () =>
-      root.render(
-        <ChatgptSignInCard
-          key="unavailable"
-          signIn={{ ...signIn, available: async () => false }}
-        />,
-      ),
-    )
-    expect(button().disabled).toBe(true)
+    expect(container.textContent).toContain("Could not open sign-in. Try again.")
+    expect(button()?.disabled).toBe(false)
   } finally {
     await React.act(async () => root.unmount())
   }

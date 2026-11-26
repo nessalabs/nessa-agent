@@ -12,14 +12,6 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
-  vmBackgroundTasks: {
-    default: 1,
-    what: "VM background commands through the composer, real helper and fake provider, holding past idle and resting afterward; then a failed wake shown under its message (Container didn’t start, Send again) and a slow wake named step by step, its reply saying how long the container took",
-  },
-  cloudChoices: {
-    default: 1,
-    what: "the cloud for new thread VMs picked in Settings: Agent37 then Boat, each thread staying on the cloud its VM was made on",
-  },
   backgroundTasks: {
     default: 1,
     what: "background commands outliving their calling turn and settling the original tool row",
@@ -189,25 +181,9 @@ export const KNOBS = {
     default: 1,
     what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
   },
-  pools: {
-    default: 1,
-    what: "times a conversation placed on any worker goes where Devices › Thread order lets it (one worker left out there, then let back in), is read from an older build's placement and binding files, and moves to another when its worker drains",
-  },
-  places: {
-    default: 1,
-    what: "times a channel's new threads are put on one paired worker from its settings (a computer not connected is refused) and a thread made in it runs there",
-  },
-  devices: {
-    default: 1,
-    what: "times a paired worker is shown in the side rail's Devices with its machine in one list beside the cloud, opened, Boat's page opened, offered by Add device's computer commands, and kept as offline with when it was last seen once it stops",
-  },
-  sshHosts: {
-    default: 1,
-    what: "times machines in the hub's ~/.ssh/config are suggested in Devices (git servers left out), one connected from its pill (Nessa installed over a stand-in ssh, the gateway restarted in place) and starred as the default device, where a chat started with no place then runs",
-  },
   tunnels: {
     default: 1,
-    what: "times the web tunnel is turned on in Settings, kept across a gateway restart, dialed through by a paired worker, and turned off",
+    what: "times the web tunnel is turned on in Settings, kept across a gateway restart with the same cloudflared, and turned off",
   },
   drifts: {
     default: 1,
@@ -220,6 +196,10 @@ export const KNOBS = {
   terminals: {
     default: 1,
     what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
+  },
+  resumes: {
+    default: 1,
+    what: "programs in terminals kept across a gateway restart (OSC 7577): resume is turned on in Settings › Terminal with a rule allowing one program, two terminals report a program each, and after the restart only the allowed one is back in its terminal, by the same id, running again; closing it and turning resume off forget it",
   },
   runs: {
     default: 1,
@@ -253,14 +233,6 @@ export const KNOBS = {
     default: 1,
     what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, and away from the window the floating pill: its mute and speaker switches, gone when the window is back in front, and End on it",
   },
-  logins: {
-    default: 1,
-    what: "times an agent's login is saved in Settings › Accounts and a paired worker that takes logins starts the agent without it until its switch in Devices is on, then with it; removed again after",
-  },
-  chatgpts: {
-    default: 1,
-    what: "times two ChatGPT accounts are signed in for Codex in Settings › Accounts through a fake OpenAI, a paired worker's Codex is handed the one in use as a token file (never a variable) that the gateway renews while it runs, the other account is chosen and used, and both are removed again",
-  },
   launches: {
     default: 1,
     what: "window reloads while the host is still starting the gateway: no startup screen, and the conversation listed as soon as it is up",
@@ -291,7 +263,7 @@ export const KNOBS = {
   },
   swipes: {
     default: 1,
-    what: "times two-finger sideways swipes over the chat, the sidebar and the session list are checked to move no side column and not the right panel (all open, or the sidebars folded), while a wide table, a wide code block and a session row still take their own swipes",
+    what: "times two-finger sideways swipes over the chat, the sidebar and the session list are checked to move no side column and not the right panel (all open, or the sidebars folded), while a wide table and a wide code block still take their own swipes and a session row takes none",
   },
   styles: {
     default: 1,
@@ -377,8 +349,6 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.signIns, () => ({ kind: "signIn" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.backgroundTasks, () => ({ kind: "background" }))
-  add(knobs.vmBackgroundTasks, () => ({ kind: "vmBackground" }))
-  add(knobs.cloudChoices, () => ({ kind: "cloud" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
@@ -409,10 +379,6 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.traces, () => ({ kind: "trace" }))
   add(knobs.transcriptViews, () => ({ kind: "transcriptView" }))
   add(knobs.notices, () => ({ kind: "notice" }))
-  add(knobs.pools, () => ({ kind: "pool" }))
-  add(knobs.places, () => ({ kind: "place" }))
-  add(knobs.devices, () => ({ kind: "devices" }))
-  add(knobs.sshHosts, () => ({ kind: "ssh" }))
   add(knobs.tunnels, () => ({ kind: "tunnel" }))
   add(knobs.drifts, () => ({ kind: "drift" }))
   add(knobs.upgrades, () => ({ kind: "upgrade" }))
@@ -424,8 +390,6 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.voices, () => ({ kind: "voice" }))
-  add(knobs.logins, () => ({ kind: "login" }))
-  add(knobs.chatgpts, () => ({ kind: "chatgpt" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
   add(knobs.huddles, () => ({ kind: "huddle" }))
@@ -456,6 +420,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.accessRequests, () => ({ kind: "accessRequest" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.raises, () => ({ kind: "raise" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.resumes, () => ({ kind: "resume" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

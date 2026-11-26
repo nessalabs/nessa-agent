@@ -1,7 +1,6 @@
 //! Evidence of a person's change to a gateway-wide setting made from
-//! Settings: no longer always allowing an app, moving where a channel's
-//! agents run, turning a channel's coordinator on or off, and how agents
-//! talk.
+//! Settings: no longer always allowing an app, turning a channel's
+//! coordinator on or off, and how agents talk.
 //!
 //! Each change is recorded twice under one operation id: `Requested`,
 //! before anything changes (a failure refuses the change), and then what came
@@ -9,7 +8,7 @@
 //! so no success goes unrecorded. A change that failed answers its own cause;
 //! the outcome record's failure is only logged then, so neither cause is lost.
 use super::{ConversationCaller, ConversationFuture};
-use crate::domain::{ChannelExecution, ChannelId, ReplyStyle, StyleRole};
+use crate::domain::{ChannelId, ReplyStyle, StyleRole};
 use nessa_protocol::conversation::domain::ConversationId;
 
 /// What the person asked to change, with what it was before.
@@ -17,14 +16,6 @@ use nessa_protocol::conversation::domain::ConversationId;
 pub enum SettingsChange {
     /// Stop always allowing `server`'s app ("Always allow this app").
     AppUntrust { server: String },
-    /// Where `channel`'s agents run, from `before` to `after`, while
-    /// `coordinator` was its main conversation.
-    ChannelPlacement {
-        channel: ChannelId,
-        before: Box<ChannelExecution>,
-        after: Box<ChannelExecution>,
-        coordinator: ConversationId,
-    },
     /// `channel`'s coordinator turned on or off, from `before` to `after`;
     /// `coordinator` is its main conversation, kept either way.
     ChannelCoordinator {
@@ -50,7 +41,7 @@ pub enum SettingsOutcome {
     Requested,
     /// Applied. `changed` is false when there was nothing to change (an app
     /// not always allowed). `coordinator` is a channel's main conversation
-    /// afterwards: a fresh one when the move retired the old.
+    /// afterwards.
     Applied {
         changed: bool,
         coordinator: Option<ConversationId>,

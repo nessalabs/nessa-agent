@@ -5,12 +5,16 @@ use super::http::{HttpSession, SessionClaims};
 use super::http_exchange::HttpExchange;
 use super::process::{Launched, Launcher, ProcessLauncher, ServerProcess};
 use super::remote::RemoteMcpServer;
+use super::skills::{self, VerifiedSkillFile, MAX_SKILLS, MAX_SKILL_PAGES};
 use super::stand_in::{self, Visibility};
 use super::{wire, McpError};
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::tools::McpTool;
 use crate::domain::mcp_apps::{ListedTool, ToolUi, UiResource, UiResourceUri, UiVisibility};
+use crate::domain::mcp_skills::{
+    DirectoryChild, SkillEntry, SkillFileUri, SkillResources, SkillUri, SkillsCapability,
+};
 use crate::infrastructure::acp::sessions::{
     ForwardedResults, McpServerProblem, OpenCredentials, StandInGrant, StdioMcpServer,
     MAX_MCP_SERVERS,
@@ -1338,6 +1342,234 @@ impl McpSession {
             .request("resources/read", Some(params), REQUEST_TIMEOUT)
             .await?;
         wire::ui_resource(uri, &result)
+    }
+
+    /// Server's declared `io.modelcontextprotocol/skills` capability, if it
+    /// declared both `capabilities.resources` and the Skills extension during
+    /// `initialize`.
+    pub fn skills_capability(&self) -> Option<SkillsCapability> {
+        skills::server_skills_capability(&self.owner.0.initialized)
+    }
+
+    /// List skills published by this session's server via `skills/list`.
+    ///
+    /// Refuses before sending any request when the server did not declare the
+    /// Skills extension (`NoRetainedEntryWithoutCapability`). Follows
+    /// `nextCursor` up to bounded page and entry limits.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Malformed`] when the server does not support Skills or
+    /// returns an invalid skill entry, [`McpError::TooLarge`] past the page or
+    /// skill count bound, [`McpError::Remote`] for a JSON-RPC error,
+    /// [`McpError::Timeout`] past [`REQUEST_TIMEOUT`], or the session's end
+    /// cause.
+    pub async fn list_skills(&self) -> Result<Vec<SkillEntry>, McpError> {
+        contain_caller_wake(
+            format!("MCP skills list of {}", self.server()),
+            self.list_skills_now(),
+        )
+        .await
+    }
+
+    async fn list_skills_now(&self) -> Result<Vec<SkillEntry>, McpError> {
+        if self.skills_capability().is_none() {
+            return Err(McpError::Malformed(
+                "server does not declare io.modelcontextprotocol/skills".into(),
+            ));
+        }
+        let mut cursor: Option<String> = None;
+        let mut all = Vec::new();
+        for _ in 0..MAX_SKILL_PAGES {
+            let params = match &cursor {
+                Some(token) => json!({ "cursor": token }),
+                None => json!({}),
+            };
+            let result = self
+                .owner
+                .0
+                .connection
+                .request("skills/list", Some(params), REQUEST_TIMEOUT)
+                .await?;
+            let (page, next) = skills::decode_skills_list_page(&result)?;
+            if all.len() + page.len() > MAX_SKILLS {
+                return Err(McpError::TooLarge("skills/list exceeded skill count bound"));
+            }
+            all.extend(page);
+            match next {
+                Some(token) => cursor = Some(token),
+                None => return Ok(all),
+            }
+        }
+        Err(McpError::TooLarge("skills/list exceeded page bound"))
+    }
+
+    /// Retrieve a single skill entry by its `SKILL.md` URI via `skills/get`.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Malformed`] when the server does not support Skills or
+    /// returns an invalid entry, [`McpError::Remote`] (for example `-32602`
+    /// for an unknown skill URI), [`McpError::Timeout`], or the session's end
+    /// cause.
+    pub async fn get_skill(&self, uri: &SkillUri) -> Result<SkillEntry, McpError> {
+        contain_caller_wake(
+            format!("MCP skill get of {}", self.server()),
+            self.get_skill_now(uri),
+        )
+        .await
+    }
+
+    async fn get_skill_now(&self, uri: &SkillUri) -> Result<SkillEntry, McpError> {
+        if self.skills_capability().is_none() {
+            return Err(McpError::Malformed(
+                "server does not declare io.modelcontextprotocol/skills".into(),
+            ));
+        }
+        let params = json!({ "uri": uri.as_str() });
+        let result = self
+            .owner
+            .0
+            .connection
+            .request("skills/get", Some(params), REQUEST_TIMEOUT)
+            .await?;
+        skills::decode_skills_get(&result)
+    }
+
+    /// Read a file belonging to a retained [`SkillEntry`] via `resources/read`
+    /// and verify it against the entry's manifest (exact URI membership, byte
+    /// size, SHA-256 digest, and field-by-field frontmatter equality for
+    /// `SKILL.md`) before returning.
+    ///
+    /// Unlisted URIs are rejected before sending any request; unverified bytes
+    /// are never returned (`NeverDeliveredUnverified`).
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Malformed`] when the server does not support Skills, the URI
+    /// is not in the retained manifest, or size/digest/frontmatter verification
+    /// fails; [`McpError::Remote`], [`McpError::Timeout`], or the session's end
+    /// cause.
+    pub async fn read_verified_skill_file(
+        &self,
+        entry: &SkillEntry,
+        uri: &SkillFileUri,
+    ) -> Result<VerifiedSkillFile, McpError> {
+        contain_caller_wake(
+            format!("MCP skill file read of {}", self.server()),
+            self.read_verified_skill_file_now(entry, uri),
+        )
+        .await
+    }
+
+    async fn read_verified_skill_file_now(
+        &self,
+        entry: &SkillEntry,
+        uri: &SkillFileUri,
+    ) -> Result<VerifiedSkillFile, McpError> {
+        if self.skills_capability().is_none() {
+            return Err(McpError::Malformed(
+                "server does not declare io.modelcontextprotocol/skills".into(),
+            ));
+        }
+        match entry.resources() {
+            SkillResources::Manifest(entries) => {
+                if !entries.iter().any(|item| item.uri() == uri) {
+                    return Err(McpError::Malformed(format!(
+                        "resource URI is not in the retained skill manifest: {}",
+                        uri.as_str()
+                    )));
+                }
+            }
+            SkillResources::Dynamic => {
+                if uri.relative_to(entry.uri().root_dir()).is_none() {
+                    return Err(McpError::Malformed(format!(
+                        "resource URI is outside dynamic skill root: {}",
+                        uri.as_str()
+                    )));
+                }
+            }
+        }
+        let params = json!({ "uri": uri.as_str() });
+        let result = self
+            .owner
+            .0
+            .connection
+            .request("resources/read", Some(params), REQUEST_TIMEOUT)
+            .await?;
+        let (mime_type, bytes) = skills::decode_skill_resource(uri, &result)?;
+        entry
+            .verify_file(uri, &bytes)
+            .map_err(|err| McpError::Malformed(err.to_string()))?;
+        Ok(VerifiedSkillFile {
+            uri: uri.clone(),
+            mime_type,
+            bytes,
+        })
+    }
+
+    /// List direct children of a skill directory via `resources/directory/read`.
+    ///
+    /// Refuses before sending any request when the server did not declare
+    /// `directoryRead: true` (`NoDirReadWithoutCapability`) or when `dir_uri`
+    /// ends with a trailing slash.
+    ///
+    /// # Errors
+    ///
+    /// [`McpError::Malformed`] when `directoryRead` is not declared or the
+    /// response is malformed, [`McpError::TooLarge`] past the page bound,
+    /// [`McpError::Remote`], [`McpError::Timeout`], or the session's end cause.
+    pub async fn read_skill_directory(
+        &self,
+        dir_uri: &str,
+    ) -> Result<Vec<DirectoryChild>, McpError> {
+        contain_caller_wake(
+            format!("MCP skill directory read of {}", self.server()),
+            self.read_skill_directory_now(dir_uri),
+        )
+        .await
+    }
+
+    async fn read_skill_directory_now(
+        &self,
+        dir_uri: &str,
+    ) -> Result<Vec<DirectoryChild>, McpError> {
+        if !self
+            .skills_capability()
+            .is_some_and(|cap| cap.directory_read)
+        {
+            return Err(McpError::Malformed(
+                "server does not declare io.modelcontextprotocol/skills directoryRead: true".into(),
+            ));
+        }
+        if dir_uri.is_empty() || dir_uri.ends_with('/') {
+            return Err(McpError::Malformed(format!(
+                "invalid directory URI: {dir_uri}"
+            )));
+        }
+        let mut cursor: Option<String> = None;
+        let mut all = Vec::new();
+        for _ in 0..MAX_SKILL_PAGES {
+            let params = match &cursor {
+                Some(token) => json!({ "uri": dir_uri, "cursor": token }),
+                None => json!({ "uri": dir_uri }),
+            };
+            let result = self
+                .owner
+                .0
+                .connection
+                .request("resources/directory/read", Some(params), REQUEST_TIMEOUT)
+                .await?;
+            let (page, next) = skills::decode_directory_read_page(&result)?;
+            all.extend(page);
+            match next {
+                Some(token) => cursor = Some(token),
+                None => return Ok(all),
+            }
+        }
+        Err(McpError::TooLarge(
+            "resources/directory/read exceeded page bound",
+        ))
     }
 
     /// Serve a harness over `input` and `output` until it closes, its input

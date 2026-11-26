@@ -101,10 +101,6 @@ export {
   deny,
   pinSession,
   providerLoginAvailable,
-  signInForBoat,
-  boatSignInAvailable,
-  signInWithChatgpt,
-  chatgptSignInAvailable,
   removeComposerImage,
   renameSession,
   forkSession,
@@ -143,6 +139,5 @@ export {
   openChannelCreation,
   removeChannelResource,
   setChannelCoordinator,
-  setChannelPlacement,
   watchChannelDrops,
 } from "./channel-commands"

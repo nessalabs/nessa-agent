@@ -20,7 +20,7 @@ export interface VoiceClient {
 
 const refusals: Record<VoiceRefusal, string> = {
   [VoiceRefusalCode.VoiceNotConfigured]: "Voice isn’t available on this gateway.",
-  [VoiceRefusalCode.VoiceKeyMissing]: "Add an OpenAI key to talk to your agents.",
+  [VoiceRefusalCode.VoiceKeyMissing]: "Voice calls need an OpenAI API key.",
   [VoiceRefusalCode.VoiceKeyRejected]: "OpenAI refused the saved key.",
   [VoiceRefusalCode.VoiceUnreachable]:
     "Couldn’t reach OpenAI. Check the connection and try again.",

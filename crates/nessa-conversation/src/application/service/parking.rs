@@ -1,20 +1,14 @@
 //! Agents that sit idle with nobody watching are stopped, and their
 //! conversations stay open (issue #998, `docs/design/agent-parking.md`).
-//! One in a cloud workspace of its own is stopped once idle for
-//! `workspace_idle`, watched or not, unless a background command of it still
-//! runs; its VM then stops too, keeping its disk, and the next message
-//! resumes both.
 //!
 //! ```text
 //! every few seconds, for each live conversation:
 //!   busy, or an app call waiting ──▶ touched now
-//!   in a cloud workspace: a background command running ──▶ touched now
-//!   elsewhere: followed ──▶ touched now
-//!   untouched for its limit (workspace_idle, or park_after) ──▶ take the submission lock
+//!   followed ──▶ touched now
+//!   untouched for park_after ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
-//!     ──▶ in a cloud workspace: its connection let go, its VM stopped
-//!   a handed login past its renewal (a ChatGPT token) ──▶ parked once idle, watched or not
-//! the next message ──▶ opens the conversation (resuming its VM) ──▶ session/resume
+//!   its agent closed its thread ──▶ parked once idle, watched or not
+//! the next message ──▶ opens the conversation ──▶ session/resume
 //! an opening past the bound on live agents ──▶ the parkable one touched
 //!   longest ago is parked now (`make_room`)
 //! ```
@@ -142,13 +136,12 @@ impl ConversationService {
     }
 
     /// Park idle agents until the gateway retires: those nobody watches
-    /// after `park_after`, when it is set, and those in a cloud workspace
-    /// after `workspace_idle`, and those whose agent closed its thread at
-    /// once. Started once by composition.
+    /// after `park_after`, when it is set, and those whose agent closed its
+    /// thread at once. Started once by composition.
     pub async fn run_parking(&self) {
         let park_after = self.inner.limits.park_after;
-        let shortest = park_after.map_or(self.inner.limits.workspace_idle, |park_after| {
-            park_after.min(self.inner.limits.workspace_idle)
+        let shortest = park_after.map_or(MOST_BETWEEN_SWEEPS, |park_after| {
+            park_after.min(MOST_BETWEEN_SWEEPS)
         });
         let between = (shortest / 4).clamp(Duration::from_millis(100), MOST_BETWEEN_SWEEPS);
         loop {
@@ -164,8 +157,7 @@ impl ConversationService {
     }
 
     /// One look at every live conversation, parking those nobody watches
-    /// that sat untouched for `park_after`, and those in a cloud workspace
-    /// for `workspace_idle`. Returns how many it parked.
+    /// that sat untouched for `park_after`. Returns how many it parked.
     #[cfg(test)]
     pub(super) async fn park_idle(&self, park_after: Duration) -> usize {
         self.sweep(Some(park_after)).await
@@ -212,11 +204,9 @@ impl ConversationService {
     /// session, idle and with no app call waiting on a review may be parked;
     /// one that cannot resume would lose its session's context, and a
     /// permission review or a question belongs to a running turn. One whose
-    /// handed login is past renewal waits for nothing, watched or not
-    /// (`docs/design/chatgpt-sign-in.md`). In a cloud
-    /// workspace of its own it waits `workspace_idle`, watched or not, while
-    /// no background command of it runs; elsewhere it waits `park_after`
-    /// while nobody follows it.
+    /// agent closed its thread waits for nothing, watched or not, while no
+    /// background command of it runs. Otherwise
+    /// it waits `park_after` while nobody follows it.
     async fn idle_limit(
         &self,
         id: &ConversationId,
@@ -234,29 +224,12 @@ impl ConversationService {
             .background_tasks
             .get()
             .is_some_and(|tasks| tasks.running_for(id));
-        // A login handed to its lease that must be renewed by now (a
-        // ChatGPT access token): parked now that it is idle, watched or not,
-        // so the next message starts it with a fresh one.
-        let renew = live
-            .lease
-            .renew_by()
-            .is_some_and(|by| by <= self.inner.clock.unix_milliseconds());
-        if renew {
+        if slot.closing.load(Ordering::SeqCst) {
+            // Its agent closed its thread: parked now that it is idle.
             return if running {
                 Idle::InUse
             } else {
                 Idle::After(Duration::ZERO)
-            };
-        }
-        let closing = slot.closing.load(Ordering::SeqCst);
-        if closing || self.inner.environment.in_workspace(id).await {
-            return if running {
-                Idle::InUse
-            } else if closing {
-                // Its agent closed its thread: parked now that it is idle.
-                Idle::After(Duration::ZERO)
-            } else {
-                Idle::After(self.inner.limits.workspace_idle)
             };
         }
         if self.inner.live_changes.followed(id) {

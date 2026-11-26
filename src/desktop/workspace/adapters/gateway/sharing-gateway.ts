@@ -2,8 +2,7 @@
  * The `SharingSource` over the window's gateway client (nessa_ui#128, #129):
  * `client.conversation.shares`, `.share` and `.unshare`, the linked devices
  * in `client.credentials.list()` (the one rule, `../../../adapters/linked-device.ts`,
- * which Settings reads too), and `client.agents.list()`'s `commandHosts`,
- * read into the model's words (`model/sharing.ts`). The bounds a Drive
+ * which Settings reads too), read into the model's words (`model/sharing.ts`). The bounds a Drive
  * grant is held to are the ones the schema publishes (`toolPolicyBounds`).
  * Grants are read a page at a time (`sharePage`) on one connection until a
  * page names no cursor. Each page names the catalogue revision it was read
@@ -19,7 +18,7 @@
  * not know, an answer the client's own validation refused, or a connection
  * that could not be made is `unanswered`, and is logged.
  *
- * The grants are read apart from the devices and hosts, so a failure in
+ * The grants are read apart from the devices, so a failure in
  * those leaves the grant list and its Revoke (D4).
  *
  * A session's id is its conversation's (`gateway-source.ts`).
@@ -32,7 +31,6 @@ import {
   NessaRpcError,
   sharePage,
   toolPolicyBounds,
-  type AgentsApi,
   type AuthApi,
   type ConversationApi,
   type ConversationCapability,
@@ -63,7 +61,6 @@ export interface SharingClient {
   readonly conversation: Pick<ConversationApi, "share" | "unshare" | "shares">
   readonly credentials: Pick<CredentialApi, "list">
   readonly auth: Pick<AuthApi, "session">
-  readonly agents: Pick<AgentsApi, "list">
 }
 
 /** Every conversation code, as what it means to sharing. */
@@ -92,10 +89,6 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.SandboxUnavailable]: "other",
   [ConversationErrorCode.EnvironmentNotConfigured]: "other",
   [ConversationErrorCode.EnvironmentUnavailable]: "other",
-  [ConversationErrorCode.EnvironmentVersionMismatch]: "other",
-  [ConversationErrorCode.EnvironmentPlatformUnsupported]: "other",
-  [ConversationErrorCode.EnvironmentInstallFailed]: "other",
-  [ConversationErrorCode.LinkedFileUnreachable]: "other",
   [ConversationErrorCode.ModelUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeNotApplied]: "other",
@@ -187,27 +180,22 @@ export function failureOf(error: unknown): SharingFailure {
   return "unanswered"
 }
 
-/** A listed policy in the model's words; hosts absent are none. */
+/** A listed policy in the model's words. */
 function policyOf(policy: ConversationToolPolicy): ToolPolicy {
-  const commandHosts = policy.commandHosts ?? []
   return policy.preset !== undefined
-    ? { kind: "preset", preset: policy.preset, commandHosts }
+    ? { kind: "preset", preset: policy.preset }
     : {
         kind: "rules",
         allow: policy.allow ?? [],
         deny: policy.deny ?? [],
-        commandHosts,
       }
 }
 
-/** A policy as the wire takes it: hosts only when it names one. */
+/** A policy as the wire takes it. */
 export function wirePolicy(policy: ToolPolicy): ConversationToolPolicy {
-  const hosts = policy.commandHosts.length
-    ? { commandHosts: [...policy.commandHosts] }
-    : {}
   return policy.kind === "preset"
-    ? { preset: policy.preset, ...hosts }
-    : { allow: [...policy.allow], deny: [...policy.deny], ...hosts }
+    ? { preset: policy.preset }
+    : { allow: [...policy.allow], deny: [...policy.deny] }
 }
 
 /** The wire set for one of the three choices the dialog offers. */
@@ -247,17 +235,13 @@ function grantOf(share: ConversationShare): ShareGrant {
   }
 }
 
-/** The three answers what the form offers is made of, asked together. */
+/** The two answers what the form offers is made of, asked together. */
 function choicesFor(client: SharingClient) {
-  return Promise.all([
-    client.auth.session(),
-    client.credentials.list(),
-    client.agents.list(),
-  ])
+  return Promise.all([client.auth.session(), client.credentials.list()])
 }
 
 /** What the form offers, from the gateway's answers. A fault here is this build's, not the gateway's refusal. */
-function choicesOf([session, credentials, catalog]: Awaited<
+function choicesOf([session, credentials]: Awaited<
   ReturnType<typeof choicesFor>
 >): SharingChoices {
   return {
@@ -266,7 +250,6 @@ function choicesOf([session, credentials, catalog]: Awaited<
       const device = linkedDeviceOf(credential, session.credentialId)
       return device && !device.fullAccess ? [device] : []
     }),
-    commandHosts: catalog.commandHosts,
     limits: toolPolicyBounds,
   }
 }

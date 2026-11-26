@@ -19,7 +19,6 @@ const committedQuestions = "[data-committed-questions]"
 
 /** CSS selectors, grouped by the part of the window they belong to. */
 export const css = {
-  boatRuntimeSettings: "[data-boat-runtime-settings]",
   channelSettingsOpen: "[data-channel-settings-open]",
   channelSettingsDialog: "[data-channel-settings]",
   localLifetimes: "[data-local-lifetimes]",
@@ -38,7 +37,6 @@ export const css = {
 
   // The details sheet's lease fixture: one published lease per page
   leaseFixture: "[data-lease-fixture]",
-  runOnFixture: "[data-run-on-fixture]",
 
   // The window
   ambientGrain: ".desktop-grain", // class: the tiled, baked noise over the ambient light
@@ -355,8 +353,7 @@ export const css = {
   shareTargets: "[data-share-targets]", // the device cards
   shareRole: "[data-share-role]", // the role's segmented control
   sharePresets: "[data-share-presets]", // the Drive tool policy's cards
-  shareHosts: "[data-share-hosts]", // the Drive grant's host list
-  shareHostCount: '[data-share-hosts] [data-slot="checkbox-list-count"]',
+  shareHosts: "[data-share-hosts]", // a Drive grant's host list, which no dialog draws any more (ADR 1417)
   shareNotes: "[data-share-notes]", // what a tool policy does not stop
   shareEmpty: '[data-share-targets="none"]', // the one line drawn when no device is linked
   shareLinkDevice: '[data-share-action="link-device"]', // that line's link to Settings › Linked devices

@@ -147,7 +147,6 @@ pub(super) enum WireRequest<'a> {
         scope: RecordScope,
         mode: RecordCarrierMode,
     },
-    OpenEnvironment {},
     /// Identify existing discovery enrollment; the credential ID is not a bearer secret.
     /// This grants nothing; pairing still requires the one-use code.
     OpenDiscovery {
@@ -177,7 +176,6 @@ pub(super) enum WireReply<'a> {
     Refused {},
     #[serde(rename = "recordCarrierV1Accepted")]
     RecordCarrierV1Accepted {},
-    Serving {},
 }
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "camelCase", deny_unknown_fields)]

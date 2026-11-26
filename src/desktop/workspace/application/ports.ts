@@ -1,6 +1,4 @@
 import type { TerminalEntry } from "../model/terminal"
-import type { BoatClaudeSignIn } from "../../../provider-authentication/model/boat-sign-in"
-import type { CodexChatgptSignIn } from "../../../provider-authentication/model/chatgpt-sign-in"
 import type { ModelReceipt } from "../model/model-choice"
 import type { ShownWindow } from "../model/shown-window"
 import type { WindowChange, WindowChangeOutcome } from "../model/window-change"
@@ -57,7 +55,6 @@ import type {
 } from "../model/sharing"
 import type { QuestionFlights } from "./question-flights"
 import type { AccessMode } from "../model/access"
-import type { ChannelPlace } from "../model/channel-place"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -436,28 +433,11 @@ export function sharingFailure(error: unknown): SharingFailure {
 export interface ChannelSource {
   create(draft: ChannelDraft, requestId: string): Promise<Channel>
   /**
-   * Change where a made channel's agents run. Threads already made keep
-   * running where they started; a moved main agent answers a fresh main
-   * conversation id. Absent where channels cannot be changed.
-   */
-  setPlacement?(
-    channelId: string,
-    placement: ChannelPlacement,
-    requestId: string,
-  ): Promise<Channel>
-  /**
    * Turn a made channel's coordinator on or off. Off keeps its chat and
    * threads; on again answers the same main conversation id. Absent where
    * channels cannot be changed.
    */
   setCoordinator?(channelId: string, on: boolean, requestId: string): Promise<Channel>
-}
-
-/** Where a channel's main agent and its new threads run. */
-export interface ChannelPlacement {
-  readonly coordinatorPlacement: ChannelPlace
-  /** `pool`: each new thread on a paired computer, by Devices' order. */
-  readonly threadPlacement: ChannelPlace
 }
 
 /** Why a channel was not made, by kind (`model/channel-draft.ts`), never a sentence. */
@@ -528,10 +508,6 @@ export interface WorkspaceDependencies {
   /** Opens the provider login flow; resolution confirms launch, not sign-in. */
   readonly providerLoginAvailable?: () => Promise<boolean>
   readonly signInToProvider?: (provider: "claude" | "codex") => Promise<void>
-  /** Mints and keeps a Claude sign-in for Boat VMs, where the host can. */
-  readonly boatClaudeSignIn?: BoatClaudeSignIn
-  /** Signs a ChatGPT account in for Codex on other computers, kept by the gateway. */
-  readonly codexChatgptSignIn?: CodexChatgptSignIn
   readonly workspace: WorkspaceSource
   readonly now: () => number
   readonly newId: () => string

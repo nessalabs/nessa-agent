@@ -479,7 +479,8 @@ async fn a_version_11_file_keeps_the_waiting_ask_as_its_first_decision() {
 /// a new one is made in.
 #[tokio::test]
 async fn a_version_12_file_backfills_its_conversations_into_the_nessa_namespace() {
-    use nessa_auth::domain::{AppNamespace, DEFAULT_APP_NAMESPACE};
+    use nessa_auth::domain::AppNamespace;
+    use nessa_types::app_identity::DEFAULT_APP_NAMESPACE;
     let (_directory, path) = private_path();
     older_file(&path, true);
     drop(LocalConversationStore::open(&path).unwrap());

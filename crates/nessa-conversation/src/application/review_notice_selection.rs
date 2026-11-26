@@ -4,9 +4,9 @@
 //! whole-candidate source/revision coherence and admission to its UI lifetime.
 use super::{
     AccessAction, AccessAsk, AccessDecision, AccessResource, AccessSubject,
-    ConversationAccessPolicyEvaluator, ConversationAdmissionToken, ConversationMetadataReader,
-    RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord,
-    ReviewNoticeAuditor,
+    ConversationAccessPolicyEvaluator, ConversationMetadataReader, RequestShape,
+    ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord, ReviewNoticeAuditor,
+    ReviewNoticeClaim,
 };
 use nessa_auth::application::{
     ports::{AccessReader, Clock},
@@ -22,7 +22,7 @@ use std::sync::Arc;
 #[must_use]
 pub struct AuditedReviewSelection {
     record: Arc<ReviewNoticeAuditRecord>,
-    metadata: ConversationAdmissionToken,
+    metadata: ReviewNoticeClaim,
 }
 
 impl AuditedReviewSelection {
@@ -32,7 +32,7 @@ impl AuditedReviewSelection {
     pub fn authority_revision(&self) -> u64 {
         self.record.authority_revision()
     }
-    pub fn metadata_token(&self) -> &ConversationAdmissionToken {
+    pub fn metadata_claim(&self) -> &ReviewNoticeClaim {
         &self.metadata
     }
 }
@@ -86,7 +86,9 @@ impl<'a> SelectReviewNotice<'a> {
             return Ok(None);
         };
         let conversation = snapshot.conversation();
-        let metadata = snapshot.token().clone();
+        let metadata = snapshot
+            .review_claim()
+            .ok_or(ReviewNoticeAuditFailure::Unavailable)?;
         let current = (ReadCurrentSession {
             access: self.access,
             clock: self.clock,

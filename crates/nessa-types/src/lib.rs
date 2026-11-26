@@ -6,9 +6,12 @@
 //! [`MAX_PUBLISHED_FILE_BYTES`], the protocol tells an environment the same
 //! number, and both read it from here.
 //!
-//! Admission rule: no IO, no runtime, no dependencies. A type with behavior
-//! beyond naming a value stays with the crate whose rule it is.
+//! Admission rule: no IO, no runtime, no dependencies. Shared values may
+//! enforce their shape at construction; policy stays in its owning crate.
 #![deny(missing_docs)]
+
+/// Validated app identity shared by package and gateway contracts.
+pub mod app_identity;
 
 /// The provider name each agent binding records in a session's history, as
 /// its provider identity.

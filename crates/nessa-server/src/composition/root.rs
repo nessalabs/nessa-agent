@@ -68,14 +68,6 @@ impl CompositionRoot {
     /// re-derived from the environment wherever it is needed.
     pub async fn run(command: Command, launch: &Launch) -> Result<(), RunError> {
         match command {
-            #[cfg(unix)]
-            Command::BackgroundRun { cwd, command } => {
-                super::background_command::execute(cwd, command).await
-            }
-            #[cfg(not(unix))]
-            Command::BackgroundRun { .. } => {
-                Err(RunError::Agent("background-run requires Unix".into()))
-            }
             Command::Help => {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())
@@ -129,94 +121,6 @@ impl CompositionRoot {
                 repository,
                 passphrase_stdin,
             } => super::github_relay::disconnect(repository, passphrase_stdin).await,
-            Command::EnvProtocol => {
-                writeln!(std::io::stdout(), "{}", crate::env::LEASE_PROTOCOL)?;
-                Ok(())
-            }
-            #[cfg(unix)]
-            Command::EnvServe => {
-                let served = super::env_serve_command::execute().await;
-                // Exits here rather than returning, as the relay below does:
-                // standard input is read on a blocking thread the runtime
-                // would otherwise wait for on the way out.
-                std::process::exit(match served {
-                    Ok(()) => 0,
-                    Err(failure) => {
-                        tracing::error!(%failure, "nessa env serve ended without serving");
-                        1
-                    }
-                })
-            }
-            #[cfg(not(unix))]
-            Command::EnvServe => Err(RunError::Agent(
-                "nessa env serve requires Unix process supervision".into(),
-            )),
-            #[cfg(unix)]
-            Command::EnvEnroll { address, code } => {
-                super::env_dial_command::enroll(&address, &code).await
-            }
-            #[cfg(unix)]
-            Command::EnvDial {
-                address,
-                relay,
-                tunnel,
-                drain_deadline_ms,
-                enroll_code_file,
-            } => {
-                super::env_dial_command::dial_in(
-                    &address,
-                    relay.as_ref(),
-                    tunnel.as_ref(),
-                    drain_deadline_ms.map(std::time::Duration::from_millis),
-                    enroll_code_file.as_deref(),
-                )
-                .await
-            }
-            #[cfg(not(unix))]
-            Command::EnvEnroll { .. } | Command::EnvDial { .. } => Err(RunError::Agent(
-                "a paired environment requires Unix process supervision".into(),
-            )),
-            #[cfg(unix)]
-            Command::EnvGrant {
-                peer,
-                agents,
-                max_timeout_ms,
-                max_lease_ms,
-                logins,
-            } => {
-                super::env_grant_command::grant(
-                    peer.as_deref(),
-                    agents,
-                    max_timeout_ms,
-                    max_lease_ms,
-                    logins,
-                )
-                .await
-            }
-            #[cfg(unix)]
-            Command::EnvUngrant { peer, what } => {
-                super::env_grant_command::ungrant(peer.as_deref(), what).await
-            }
-            #[cfg(unix)]
-            Command::EnvGrants => super::env_grant_command::grants(),
-            #[cfg(not(unix))]
-            Command::EnvGrant { .. } | Command::EnvUngrant { .. } | Command::EnvGrants => {
-                Err(RunError::Agent(
-                    "granting gateways leases requires Unix process supervision".into(),
-                ))
-            }
-            #[cfg(unix)]
-            Command::ArtifactPublish { path, media_type } => {
-                let published = super::artifact_command::execute(&path, media_type).await?;
-                if !published {
-                    std::process::exit(1);
-                }
-                Ok(())
-            }
-            #[cfg(not(unix))]
-            Command::ArtifactPublish { .. } => Err(RunError::Agent(
-                "nessa artifact publish runs only on a host serving nessa env serve".into(),
-            )),
             #[cfg(unix)]
             Command::McpRelay {
                 socket,
@@ -390,6 +294,10 @@ impl CompositionRoot {
         } else {
             None
         };
+        // On Unix the stop subscriptions must exist before any listener
+        // address is visible to a caller. The existing cleanup owner below
+        // still waits for and handles the stop request.
+        let shutdown = shutdown_signal().map_err(RunError::Serve)?;
         let listen_addr = config.listen_addr();
         let listener = tokio::net::TcpListener::bind(&listen_addr)
             .await
@@ -641,9 +549,9 @@ impl CompositionRoot {
         // A signal stops it for good, before the restart or during its drain
         // (`SelfRestart` owns that order).
         #[cfg(unix)]
-        let asked = crate::core::self_restart::stop_or_restart(shutdown_signal(), restart.clone());
+        let asked = crate::core::self_restart::stop_or_restart(shutdown, restart.clone());
         #[cfg(not(unix))]
-        let asked = shutdown_signal();
+        let asked = shutdown;
         let stop = stop_signal(asked, native_watch);
         // The native listener ending stops the run too: a restart not yet
         // asked for does not happen.
@@ -670,6 +578,11 @@ impl CompositionRoot {
                 })?;
         }
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
+            // Terminals end with the gateway; that is not the person ending
+            // their programs, so the ones kept to come back stay kept.
+            if let Some(terminals) = &shutdown_product.terminals.hub {
+                terminals.freeze();
+            }
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
             if let Some(native) = native.as_mut() {
@@ -1059,22 +972,20 @@ fn runtime_dependencies(config: &Environment) -> RuntimeDependencies {
     }
 }
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        match signal(SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
+#[cfg(unix)]
+fn shutdown_signal() -> std::io::Result<impl Future<Output = ()> + Send + 'static> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    Ok(async move {
+        tokio::select! { _ = interrupt.recv() => {}, _ = terminate.recv() => {} }
+    })
+}
+
+#[cfg(not(unix))]
+fn shutdown_signal() -> std::io::Result<impl Future<Output = ()> + Send + 'static> {
+    Ok(async {
         let _ = tokio::signal::ctrl_c().await;
-    }
+    })
 }
 
 /// The startup warm-ups, as the work outside conversations a refused

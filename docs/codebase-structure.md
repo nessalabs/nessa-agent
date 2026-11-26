@@ -609,20 +609,11 @@ wait, and the record of that cause, in the crate's `tests/poller.rs`.
 Design: [peer gateways](design/auth/peer-gateways.md#the-dialing-side),
 [reading a peer](design/auth/peer-gateways.md#reading-a-peer).
 
-The environment role of the one binary, `nessa env serve`, is its own crate,
-`crates/nessa-env-serve/` (Unix only, apart from `machine.rs`).
-`application/serve.rs` is the frame loop a gateway's leases run over;
-`domain/` says what a leasing peer is granted; `infrastructure/` holds the
-harness launcher, the lease ledger, the host lock, the grants file and its
-Cedar policy (`infrastructure/cedar/`), the outbox and inbox, and the dial and
-pairing of a host that calls its gateway; `install.rs` names where a build
-lives on a host and the commands that put it there. `machine.rs` reads what a
-machine has (`MachineProbe`), for `env serve` and for `devices.list` alike.
-The server keeps the command line (`composition/env_serve_command.rs`,
-`env_dial_command.rs`, `env_grant_command.rs`) and the lease protocol's
-fingerprint (`env/config.rs`), which names every source of the contract in
-this crate. Its unit tests are in the crate's `tests/`; the real binary is
-driven by the server's `tests/env_serve_binary.rs`.
+What a machine has (`MachineProbe`, its CPU, memory, disks and GPU) is read by
+`nessa-gateway/src/devices/infrastructure/machine.rs` for `devices.list`. The
+environment role this binary once had (`nessa env serve`, `env dial`, `env
+grant`, its lease protocol and host installer) is retired: every gateway runs
+only its own agents ([ADR 1417](adr/todo/1417-gateways-everywhere.md)).
 
 `crates/nessa-auth` is a workspace library with pure domain models and
 application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
@@ -991,7 +982,7 @@ command store and deterministic SDK execution. See [external events](design/exte
 
 The `nessa-gateway` crate (`crates/nessa-gateway/src/`) is the gateway's request
 path: the product socket and its routes (`product`), admission, the HTTP server
-(`server`), the gateway's features (agents, devices, logins, webhooks, voice and
+(`server`), the gateway's features (agents, devices, webhooks, voice and
 the rest), and process infrastructure (`core`: logging, launch, shutdown).
 nessa-server is composition only: `composition/` reads configuration, wires the
 gateway to its stores and features and starts it, `bootstrap.rs` runs the
@@ -1318,12 +1309,16 @@ All additional Nessa tools use this MCP boundary. See the
 Nessa is also an MCP client, holding the connection to each configured server
 for each harness session (ADR 344, [design](design/mcp-connections.md)). The
 SDK owns the client: `domain/mcp_apps/` (tool UI and UI resource values, their
-bounds) and `infrastructure/mcp/` (`connection` for ids, answers and
+bounds), `domain/mcp_skills/` (SEP-2640 Agent Skills value objects, YAML
+frontmatter parser, manifest/digest verification, and static `SkillCatalog`),
+and `infrastructure/mcp/` (`connection` for ids, answers and
 cancellation, `stand_in` for what a harness sees, and for keeping a
 forwarded `tools/call` result's `structuredContent` for the ACP worker to
 attach, `servers` for the live configured set (replaced whole, read at each
 opening), the open sessions and their tool lists, and a session opened once
-for no conversation (`open_once`, a host's look at a server), `process` for a
+for no conversation (`open_once`, a host's look at a server), `skills` for
+SEP-2640 wire codecs and the shared server-side JSON-RPC dispatcher used by
+`BuiltInServer` and `nessa mcp`, `process` for a
 server's process group, `wire` for MCP's JSON, and `http` for remote identity,
 bounded JSON/SSE body and recovery ownership over injected `http_exchange`.
 HTTP replacement handoff and immutable peer-reply binding use `connection`'s
@@ -2827,19 +2822,10 @@ continuation. Its runner, store and argument-decoder ports live in
 `conversation/application/background_tasks`; immutable lifecycle transitions live
 in `conversation/domain/background_task`. `infrastructure/background_tasks`
 implements transactional current-state/audit persistence, the local Shepherd
-adapter, and the bounded SSH task transport. `ssh_environment/background_command.rs`
-spells the exact-build helper invocation; `ThreadWorkspaces` opens the existing
-VM without provisioning and the workspace runtime retains `InUse` for its stream.
-`composition/background_command.rs` wires the VM helper's account environment and
-Shepherd to stdin/stdout; agent credentials do not enter that command environment.
-The service decorates existing tool rows; frontend transcript code retains their
-background identity while the turn ends. The desktop stress `vmBackground` step
-uses `stress-vm-background.mjs` to launch the ignored, test-only
-`tests/composition/vm_background_gateway.rs` gateway: production admission and VM
-background dispatch, a fake workspace provider, and the real helper subprocess.
-The fixture retains the real runtime-settings store. Its conversation and Devices
-installers send the CLI build rather than the gateway's test executable.
-Released binaries contain no fixture selector. See [the lifecycle](state/services/gateway/background-tasks.md).
+adapter. The service decorates existing tool rows; frontend transcript code
+retains their background identity while the turn ends. Every task runs on this
+gateway's own machine ([ADR 1417](adr/todo/1417-gateways-everywhere.md)).
+See [the lifecycle](state/services/gateway/background-tasks.md).
 
 ## GitHub webhook ingress and relay
 

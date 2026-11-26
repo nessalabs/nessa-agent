@@ -1,5 +1,6 @@
 //! Stable identity selectors established by application session verification.
 use super::{AppNamespace, AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId};
+use nessa_types::app_identity::ExtensionAppId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Verified identity selectors, not a snapshot of roles or permission decisions.
@@ -32,6 +33,12 @@ impl AuthContext {
             audience_id,
             app_namespace: AppNamespace::DEFAULT,
         }
+    }
+
+    /// Stamp a namespace established by the app proof use case, not by a client.
+    pub(crate) fn with_verified_app(mut self, app: ExtensionAppId) -> Self {
+        self.app_namespace = AppNamespace::Extension(app);
+        self
     }
 
     /// Principal to which this record is bound.

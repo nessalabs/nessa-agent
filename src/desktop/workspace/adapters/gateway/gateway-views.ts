@@ -134,8 +134,6 @@ export function channelFrom(wire: WireChannel): Channel {
       ? { coordinatorConversationId: wire.coordinatorConversationId }
       : {}),
     coordinatorOn: wire.coordinatorOn,
-    coordinatorPlacement: wire.coordinatorPlacement,
-    threadPlacement: wire.threadPlacement,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
   }
 }

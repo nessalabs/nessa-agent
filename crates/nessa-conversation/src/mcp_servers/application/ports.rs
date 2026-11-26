@@ -564,6 +564,10 @@ pub trait BuiltInServer: Send + Sync {
     fn configuration(&self) -> Vec<String>;
     /// Its tools, as `tools/list` lists them.
     fn tools(&self) -> Vec<serde_json::Value>;
+    /// Optional SEP-2640 Agent Skills served alongside this server's tools.
+    fn skills(&self) -> Option<&nessa_sdk::domain::mcp_skills::SkillCatalog> {
+        None
+    }
     /// Call `tool` with `arguments` for the open of SDK session `session`,
     /// as tool call `call`. `stop` turns true once its caller is gone.
     fn call(

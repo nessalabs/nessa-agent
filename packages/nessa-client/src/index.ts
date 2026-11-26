@@ -260,22 +260,6 @@ export {
   type VoiceCall,
   type VoiceStatus,
 } from "./generated/product.js"
-export { type LoginsApi } from "./presentation/logins-api.js"
-export {
-  NessaLoginsError,
-  LoginsRefusalCode,
-  type LoginsMethod,
-} from "./application/logins-error.js"
-export {
-  ChatgptSignInEnd,
-  LoginAgent,
-  LoginsErrorCode,
-  type ChatgptAccount,
-  type ChatgptLogins,
-  type ChatgptSignIn,
-  type LoginsStatus,
-  type SavedLogin,
-} from "./generated/product.js"
 export { type PairingApi } from "./presentation/pairing-api.js"
 export {
   NessaPairingError,
@@ -510,7 +494,6 @@ export type {
 export type {
   Channel,
   ChannelCreateParams,
-  ChannelSetPlacementParams,
   ChannelListResult,
 } from "./generated/product.js"
 export { ChannelErrorCode } from "./generated/product.js"
@@ -540,6 +523,10 @@ export type {
   TerminalOpenParams,
   TerminalOutput,
   TerminalProgramStatus,
+  TerminalResumeRule,
+  TerminalResumeSettings,
+  TerminalResumeState,
+  TerminalSavedProgram,
   TerminalSummary,
   TerminalViewParams,
 } from "./generated/product.js"
@@ -556,17 +543,7 @@ export {
 
 export type { DevicesApi } from "./presentation/devices-api.js"
 export type { ReplyStyleApi } from "./presentation/reply-style-api.js"
-export type {
-  DeviceDisk,
-  DeviceMachine,
-  DeviceSshConnect,
-  DeviceSshHost,
-  DeviceWorker,
-  DevicesListResult,
-  DevicesSshHostsResult,
-  DevicesPool,
-  PoolPreference,
-} from "./generated/product.js"
+export type { DeviceDisk, DeviceMachine, DevicesListResult } from "./generated/product.js"
 export type {
   ReplyStyleChoice,
   ReplyStyleMode,
@@ -594,16 +571,11 @@ export {
   type CloudBoxCreateResult,
   type CloudBoxWakeResult,
   type CloudBoxDeleteResult,
-  type BoatRuntimeReadParams,
-  type BoatRuntimeSetParams,
-  type BoatRuntimeSettings,
-  type BoatVmLifetime,
   type VmLifetimeSeconds,
   VmLifetimeMode,
   BoatRuntimeSelection,
   vmLifetimeSeconds,
   type BoatSaveParams,
-  type BoatClaudeSignInParams,
 } from "./generated/product.js"
 
 export { NessaBoatError } from "./presentation/boat-api.js"

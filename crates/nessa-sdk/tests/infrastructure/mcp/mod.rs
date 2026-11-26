@@ -26,6 +26,7 @@ mod post_streams;
 mod process;
 mod protocol;
 mod sessions;
+mod skills;
 mod stand_in;
 
 use super::{McpOwner, McpServers, McpSession};

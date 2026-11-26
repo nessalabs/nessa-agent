@@ -8,7 +8,7 @@ use crate::application::{
     ConversationError, ConversationFuture, SettingsAudit, SettingsAuditRecord, SettingsChange,
     SettingsOutcome,
 };
-use crate::domain::{ChannelExecution, ReplyStyle};
+use crate::domain::ReplyStyle;
 use nessa_auth::application::ports::Clock;
 use nessa_local_storage::create_directory;
 use serde_json::{json, Value};
@@ -24,13 +24,6 @@ impl DurableSettingsAudit {
         create_directory(&directory).map_err(|_| ConversationError::Audit)?;
         Ok(Self { directory, clock })
     }
-}
-
-fn placement(execution: &ChannelExecution) -> Value {
-    json!({
-        "coordinator": execution.coordinator_word(),
-        "threads": execution.threads_word(),
-    })
 }
 
 /// A style choice as kept: `null` inherits. A person's own text is kept
@@ -51,19 +44,6 @@ pub fn stored(record: &SettingsAuditRecord) -> Value {
             "app_untrust",
             json!({ "server": server }),
             json!({ "before": "always_allowed", "requested": "ask" }),
-        ),
-        SettingsChange::ChannelPlacement {
-            channel,
-            before,
-            after,
-            coordinator,
-        } => (
-            "channel_placement",
-            json!({
-                "channelId": channel.as_str(),
-                "coordinatorConversationId": coordinator.to_string(),
-            }),
-            json!({ "before": placement(before), "requested": placement(after) }),
         ),
         SettingsChange::ChannelCoordinator {
             channel,

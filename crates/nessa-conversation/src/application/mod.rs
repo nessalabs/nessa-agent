@@ -162,10 +162,7 @@ pub use agent_tools::{
     MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS,
 };
 mod app_call_policy;
-mod artifacts;
 mod catalogue_read;
-mod command_environment;
-mod command_policy;
 mod drive_tools;
 mod environment;
 mod error;
@@ -179,27 +176,11 @@ mod agent_switches;
 mod model_changes;
 mod owner_phone_policy;
 pub use metadata_target::ConversationMetadataReader;
-pub use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken};
+pub use ports::{ConversationAdmissionSnapshot, ConversationAdmissionToken, ReviewNoticeClaim};
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;
-// Built everywhere, as the configuration that sizes it is; only the Unix
-// gateway's paired environments take places in it.
-#[cfg_attr(
-    not(unix),
-    allow(
-        dead_code,
-        reason = "the Unix gateway's paired environments count against it"
-    )
-)]
-mod organization_budget;
-mod place_decision;
 mod placement;
-mod pool_settings;
-mod tool_config;
-#[cfg(any(unix, test, feature = "test-support"))]
-pub use pool_settings::PoolSettingsError;
-pub use pool_settings::{PoolCaller, PoolSettingsStore};
 mod ports;
 mod provider_sessions;
 mod record_read;
@@ -242,6 +223,7 @@ pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
 };
+pub use environment::{Environment, EnvironmentFuture, HeldSource, HeldSourceFailure};
 pub use owner_phone_policy::{
     AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
     OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
@@ -249,27 +231,6 @@ pub use owner_phone_policy::{
 pub use workspace_windows::{
     CommandRefusal, PublishedWindow, WindowAnswer, WindowCommand, WindowPublished, WindowSlot,
     WorkspaceWindows, MAX_WINDOW_COMMANDS,
-};
-// The port itself, which placement and the service use on every host.
-pub use command_environment::CommandEnvironment;
-pub use command_environment::{CommandPublication, CommandResult, PublicationOutcome};
-// Held by the SSH adapter, which is Unix only, and by tests.
-#[cfg_attr(not(any(unix, test)), allow(unused_imports))]
-pub use command_environment::CommandHold;
-#[cfg(any(unix, test, feature = "test-support"))]
-pub use command_environment::GrantedCommand;
-pub use environment::{
-    Environment, EnvironmentFuture, FetchAsk, FetchFailure, FetchPlaced, HeldSource,
-    HeldSourceFailure, PublishAsk, PublishFailure,
-};
-// For the adapters, which only the Unix gateway composes (`infrastructure`).
-pub use artifacts::PublishedOutcome;
-pub use artifacts::{
-    ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
-    ArtifactReadFailure, ARTIFACT_READ_RESUMES,
-};
-pub use artifacts::{
-    ArtifactBudget, ArtifactCollector, FetchRequests, FetchTaken, PublishRequests,
 };
 // Input resolution holds a lease on every host, independently of composition.
 pub use environment::LeaseHold;
@@ -293,13 +254,10 @@ pub use app_call_policy::{
     admit_app_question, message_skips_review, AppCallPolicyEvaluator, AppQuestion,
     UnreviewedMessage,
 };
-pub use command_policy::{
-    admit_command, CommandInitiator, CommandPolicyEvaluator, CommandQuestion,
-};
 #[cfg(any(unix, test, feature = "test-support"))]
 pub use placement::Environments;
 #[cfg(any(unix, test, feature = "test-support"))]
-pub use placement::{ConversationPlaces, PlaceRecord, PlacementError, WorkerBinding};
+pub use placement::{ConversationPlaces, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 pub use agent_switches::{ConversationAgentSwitch, ConversationAgentSwitchState};
 pub use drive_tools::MAX_ADMITTED_POLICIES;
@@ -308,29 +266,23 @@ pub use model_changes::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationModelSelection,
 };
-#[cfg(unix)]
-pub use organization_budget::BudgetPlace;
-pub use organization_budget::OrganizationBudgets;
 pub use permission_rules::{
     rule_principal, ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
     PermissionRuleUnavailable, RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement,
     StoredPermissionRule,
 };
-#[cfg(unix)]
-pub use placement::{MachineUse, PairedEnvironments, WorkerLoad};
 pub use ports::{
-    ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAttachments, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationCreationCause, ConversationCreationDisposition,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
-    ConversationFileLinkState, ConversationFuture, ConversationListing,
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
+    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
+    ConversationCreationDisposition, ConversationDeletionAudit, ConversationDeletionAuditRecord,
+    ConversationDeletionCause, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture, ConversationListing,
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
-    ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
-    RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload,
-    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns, WaitingAutoPick,
+    ListedConversations, ObservationCursor, ObservedConversations, RuntimeReadiness, SubmittedFile,
+    SubmittedImage, SubmittedMessage, SubmittedUpload, UnfinishedDeletions, UnfinishedMark,
+    UnfinishedTurns, WaitingAutoPick,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -363,14 +315,7 @@ pub use service::{
     ThreadReportStore, ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS,
     MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
-pub use service::{
-    CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, EnvironmentLoad, HERE,
-};
 pub use service::{ExportAdmission, ExportHoldFailure, OpenPreparation, FENCE_LEASE_MS};
-pub use service::{
-    FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
-    FETCH_BUSY_BACKOFF, FETCH_READS,
-};
 pub use service::{
     PaneConversation, WindowControlError, WindowControlled, WindowReading, WindowTarget,
     WINDOW_ANSWER_TIMEOUT,
@@ -384,12 +329,6 @@ pub use share_grants::{
     ShareGrants, EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-#[cfg_attr(
-    not(unix),
-    allow(unused_imports, reason = "the Unix gateway composes it; tests name it")
-)]
-pub use tool_config::EnvironmentToolConfig;
-pub use tool_config::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
 pub use tool_policy::{ToolDecision, ToolInitiator, ToolPolicyEvaluator, ToolPolicyUnavailable};
 pub use usage_limit_policy::{
     UsageLimitPreferenceDecision, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
@@ -427,16 +366,6 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../tests/conversation/leases.rs"]
 mod lease_tests;
-
-pub(crate) use placement::rest_cause;
-#[cfg(unix)]
-pub use placement::ThreadEnvironments;
-pub use placement::MAX_RETAINED_ENVIRONMENTS;
-
-#[cfg(unix)]
-mod artifact_channels;
-#[cfg(unix)]
-pub use artifact_channels::{ArtifactChannel, ArtifactChannels};
 
 mod input_files;
 pub use input_files::{ConversationInputFiles, InputFileDelivery};

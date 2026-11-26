@@ -37,11 +37,9 @@
 //! This module is the application's. The in-process adapter, the only one
 //! today, is `conversation::infrastructure::environment`; nothing in
 //! `product/` names either.
-use super::placement::WorkerContext;
 use crate::timer::clock;
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
-use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
@@ -51,8 +49,7 @@ use nessa_sdk::application::agent_execution::{
         ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, ResourceCleanup,
     },
     sessions::{
-        CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,
-        SessionManager,
+        CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, SessionManager,
     },
     traces::LocalTraceStore,
 };
@@ -110,12 +107,6 @@ pub trait Environment: Send + Sync {
     /// could not be reached — and the lease is then recorded Interrupted, as
     /// row L11 says. An adapter answers within a bound of its own.
     fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>>;
-    /// What runs commands here under command leases; `None` where nothing
-    /// does, as on this gateway's own machine, whose commands are the agent's
-    /// own shell tool's.
-    fn commands(&self) -> Option<&dyn super::CommandEnvironment> {
-        None
-    }
 }
 
 /// What an environment says it granted a lease, as it answered: checked
@@ -166,79 +157,13 @@ pub trait LeaseHold: Send + Sync {
     /// lease ends. `None` when that cannot happen apart from the gateway
     /// itself, as in process.
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>>;
-    /// When the lease's agent should be started again because the login it
-    /// was handed is about to expire, in Unix milliseconds: the parking
-    /// sweep stops it once idle past this (row P1 in
-    /// `docs/design/chatgpt-sign-in.md`). `None` when its login does not
-    /// expire, or it was handed none.
-    fn renew_by(&self) -> Option<u64> {
-        None
-    }
     /// End the lease for `cause`: the environment stops anything still
     /// running under it and answers what releasing it took. The caller bounds
     /// the wait.
     fn end(&self, cause: LeaseEndCause) -> EnvironmentFuture<'_, LeaseRelease>;
-    /// The files the environment publishes under the lease, each offered to
-    /// be kept (issue #701), handed out once: `None` for an environment that
-    /// publishes nothing, as in process, and for every ask after the first.
-    /// It ends once the lease is no longer held there.
-    fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
-        None
-    }
-    /// Ask the environment to publish a file under the lease for the agent's
-    /// own tool call (issue #701, slice D3a). What it answers is whether the
-    /// file was offered: once it is, it arrives on [`Self::artifacts`] like
-    /// any other, naming `ask.request`, and is kept or refused there. `None`
-    /// for an environment that publishes nothing, as in process. It
-    /// resolves once the environment answers, or as
-    /// [`PublishFailure::Unanswered`] once the lease is no longer held there,
-    /// so it never outlives the lease: an ask is let go only by its answer.
-    fn publish(
-        &self,
-        _ask: PublishAsk,
-    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
-        None
-    }
-    /// Ask the environment to place a file the conversation holds in its
-    /// workspace under the lease, for the agent's own tool call (issue
-    /// #701, slice D3b). `None` for an environment that takes no files, as
-    /// in process; nothing is asked or read until the future is polled.
-    /// Its bytes are read from `ask.source` only once the environment takes
-    /// the fetch. It resolves once the environment says what became of it,
-    /// or as [`FetchFailure::Unanswered`] once the lease is no longer held
-    /// there, so it never outlives the lease; dropped before then, the
-    /// environment is told nothing more will be written.
-    fn fetch(
-        &self,
-        _ask: FetchAsk,
-    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
-        None
-    }
 }
 
-/// A file the conversation holds, asked into the environment's workspace.
-#[derive(Clone)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "read by the Unix gateway's SSH adapter")
-)]
-pub struct FetchAsk {
-    /// The tool call it is for.
-    pub request: String,
-    /// Where it goes: absolute, or relative to the environment's workspace,
-    /// which the environment resolves and holds it to.
-    pub destination: String,
-    /// Exactly which file: its digest, media type and size.
-    pub file: PublishedFile,
-    /// Where its bytes are read from.
-    pub source: Arc<dyn HeldSource>,
-    /// Set by the environment's adapter before it says every byte is
-    /// delivered. Until then nothing can be placed: an answer never had, or
-    /// a call that stopped waiting, with this unset placed nothing.
-    pub delivered: Arc<std::sync::atomic::AtomicBool>,
-}
-
-/// A fetched file's bytes, read from the conversation's hold of exactly
+/// An uploaded file's bytes, read from the conversation's hold of exactly
 /// that file, one range at a time.
 pub trait HeldSource: Send + Sync {
     /// The file's bytes from `offset`, before its end: at least one, at most
@@ -252,78 +177,13 @@ pub trait HeldSource: Send + Sync {
     ) -> EnvironmentFuture<'_, Result<Vec<u8>, HeldSourceFailure>>;
 }
 
-/// Why a fetched file's bytes could not be read.
+/// Why an uploaded file's bytes could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeldSourceFailure {
     /// The conversation no longer holds exactly that file.
     NotHeld,
     /// The store could not read it now.
     Unavailable,
-}
-
-/// Where a fetched file is, once the environment placed it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
-)]
-pub enum FetchPlaced {
-    /// Verified and linked at `path`, where nothing was before.
-    Placed { path: String },
-    /// `path` already was exactly this file.
-    AlreadyPlaced { path: String },
-}
-
-/// Why a fetched file was not placed, or is not known to be.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
-)]
-pub enum FetchFailure {
-    /// The environment did not place it, with its reason; nothing is at the
-    /// destination that was not there before.
-    Refused(FetchRefusal),
-    /// The conversation let go of the file while it was being written.
-    NotHeld,
-    /// The file's bytes could not be read here.
-    SourceUnavailable,
-    /// The bytes could not be written to the environment, past every resume.
-    ChannelUnavailable,
-    /// No answer could be had once every byte was delivered: the connection
-    /// was lost, or the lease is no longer held there. Whether the file was
-    /// placed is not known here.
-    Unanswered,
-}
-
-/// A file the agent asked to publish, as the environment is asked for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PublishAsk {
-    /// The tool call it is for; its offer names it.
-    pub request: String,
-    /// The file: absolute, or relative to the environment's workspace,
-    /// which the environment resolves and holds it to.
-    pub path: String,
-    /// Its media type, when the agent named one.
-    pub media_type: Option<String>,
-}
-
-/// Why a file asked for was not offered to be kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "answered by the Unix gateway's SSH adapter")
-)]
-pub enum PublishFailure {
-    /// The environment did not publish it: nothing of it was offered.
-    NotPublished(PublishRefusal),
-    /// The environment offered it and it was refused before the
-    /// conversation could take it, as no more could be taken just then.
-    Refused(CollectionRefusal),
-    /// No answer could be had: the connection to the environment was lost,
-    /// or the lease is no longer held there. Whether it staged the file is
-    /// not known here.
-    Unanswered,
 }
 
 /// What an environment answered when its lease was ended.
@@ -373,25 +233,11 @@ pub struct LeaseOpening {
 /// recorded as the deadline it gives from `clock` read before the lease is
 /// asked for: the earliest the environment's own deadline can be, so the
 /// environment's expiry, which is the authority, never comes before it.
-#[cfg(test)]
 pub async fn open_lease(
     environment: &dyn Environment,
     request: LeaseRequest,
     binding: Arc<dyn AgentProvider>,
     clock: &dyn Clock,
-) -> LeaseOpening {
-    open_lease_on(environment, request, binding, clock, None).await
-}
-
-/// [`open_lease`], on a worker of the pool whose provider contexts `context`
-/// knows: the fence restores a saved context only where that worker opened
-/// it, and tells `context` of each one a session opens there.
-pub async fn open_lease_on(
-    environment: &dyn Environment,
-    request: LeaseRequest,
-    binding: Arc<dyn AgentProvider>,
-    clock: &dyn Clock,
-    context: Option<Arc<WorkerContext>>,
 ) -> LeaseOpening {
     let declaration = environment.declaration();
     let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
@@ -454,7 +300,7 @@ pub async fn open_lease_on(
     };
     match admitted {
         Ok((terms, opened)) => LeaseOpening {
-            fence: LeaseFence::new(lease.clone(), opened.provider, FencePhase::Live, context),
+            fence: LeaseFence::new(lease.clone(), opened.provider, FencePhase::Live),
             lease,
             terms,
             refusal: None,
@@ -462,7 +308,7 @@ pub async fn open_lease_on(
             workspace: opened.workspace,
         },
         Err(refusal) => LeaseOpening {
-            fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed, None),
+            fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed),
             lease,
             terms: terms(request.sandbox, LeaseDeadline::UntilEnded),
             refusal: Some(refusal),
@@ -528,21 +374,12 @@ pub struct LeaseFence {
     state: Arc<Mutex<FenceState>>,
     /// True once the lease is no longer Live, for what waits on that.
     not_live: tokio::sync::watch::Sender<bool>,
-    /// On a worker of the pool, the provider contexts that worker opened;
-    /// `None` wherever else the lease runs.
-    context: Option<Arc<WorkerContext>>,
 }
 impl LeaseFence {
-    fn new(
-        lease: LeaseId,
-        inner: Arc<dyn AgentProvider>,
-        phase: FencePhase,
-        context: Option<Arc<WorkerContext>>,
-    ) -> Arc<Self> {
+    fn new(lease: LeaseId, inner: Arc<dyn AgentProvider>, phase: FencePhase) -> Arc<Self> {
         Arc::new(Self {
             lease,
             inner,
-            context,
             input_files: Arc::default(),
             not_live: tokio::sync::watch::Sender::new(phase != FencePhase::Live),
             state: Arc::new(Mutex::new(FenceState {
@@ -563,7 +400,6 @@ impl LeaseFence {
             state: self.state.clone(),
             not_live: self.not_live.clone(),
             input_files: self.input_files.clone(),
-            context: self.context.clone(),
         })
     }
     pub fn set_input_files(
@@ -600,11 +436,6 @@ impl LeaseFence {
         self.state().phase = FencePhase::Closed;
         self.not_live.send_replace(true);
     }
-    /// Resolves once the lease is no longer Live.
-    async fn left_live(&self) {
-        let mut not_live = self.not_live.subscribe();
-        let _ = not_live.wait_for(|not_live| *not_live).await;
-    }
     /// The events dropped since the last call, as records to commit. The
     /// close calls it once, after closing the fence. In process nothing can
     /// be dropped after that — the stream's one reader is the Agent's
@@ -639,13 +470,8 @@ impl AgentProvider for LeaseFence {
     fn native_hooks_allowed(&self) -> bool {
         self.inner.native_hooks_allowed()
     }
-    /// A worker of the pool restores only a context it opened itself: one
-    /// saved on another worker is not there.
     fn restores_saved_context(&self, saved: &ExecutionSessionId, has_invocations: bool) -> bool {
-        self.context
-            .as_ref()
-            .is_none_or(|context| context.holds(saved))
-            && self.inner.restores_saved_context(saved, has_invocations)
+        self.inner.restores_saved_context(saved, has_invocations)
     }
     fn model_change_context(&self) -> Option<String> {
         self.inner
@@ -699,15 +525,10 @@ impl AgentProvider for LeaseFence {
             }
         }
         let state = self.state.clone();
-        let context = self.context.clone();
         let input_files = self.input_files.get().cloned();
         let opening = self.inner.open(request);
         async move {
-            let opened = opening.await;
-            if let (Ok(opened), Some(context)) = (&opened, &context) {
-                context.opened(opened.session.id()).await;
-            }
-            opened.map(|opened| OpenedProviderSession {
+            opening.await.map(|opened| OpenedProviderSession {
                 session: match input_files {
                     Some(source) => opened.session.with_input_files(source),
                     None => opened.session,
@@ -1072,36 +893,6 @@ impl LiveLease {
         self.hold.as_ref().and_then(|hold| hold.ends())
     }
 
-    /// When this lease's agent should be started again for a fresh login
-    /// ([`LeaseHold::renew_by`]).
-    pub fn renew_by(&self) -> Option<u64> {
-        self.hold.as_ref().and_then(|hold| hold.renew_by())
-    }
-
-    /// Ask the environment to publish a file under this lease; see
-    /// [`LeaseHold::publish`].
-    pub fn publish(
-        &self,
-        ask: PublishAsk,
-    ) -> Option<EnvironmentFuture<'static, Result<(), PublishFailure>>> {
-        self.hold.as_ref().and_then(|hold| hold.publish(ask))
-    }
-
-    /// Ask the environment to place a held file under this lease; see
-    /// [`LeaseHold::fetch`].
-    pub fn fetch(
-        &self,
-        ask: FetchAsk,
-    ) -> Option<EnvironmentFuture<'static, Result<FetchPlaced, FetchFailure>>> {
-        self.hold.as_ref().and_then(|hold| hold.fetch(ask))
-    }
-
-    /// The files published under this lease, handed out once; see
-    /// [`LeaseHold::artifacts`].
-    pub fn artifacts(&self) -> Option<tokio::sync::mpsc::Receiver<super::ArtifactOffer>> {
-        self.hold.as_ref().and_then(|hold| hold.artifacts())
-    }
-
     pub fn id(&self) -> &LeaseId {
         &self.lease
     }
@@ -1110,51 +901,6 @@ impl LiveLease {
     /// is kept under it.
     pub fn is_live(&self) -> bool {
         self.fence.is_live()
-    }
-
-    /// `bytes`, read only while this lease is Live: once its end is asked
-    /// they fail as the lease ended, their last chunk and a read still
-    /// waiting included, so a file still being read when the lease ends is
-    /// never kept.
-    pub fn while_live(
-        &self,
-        bytes: Box<dyn super::ArtifactBytes>,
-    ) -> Box<dyn super::ArtifactBytes> {
-        Box::new(WhileLive {
-            fence: self.fence.clone(),
-            bytes,
-        })
-    }
-}
-
-/// A published file's bytes, cut off once their lease stops being Live.
-struct WhileLive {
-    fence: Arc<LeaseFence>,
-    bytes: Box<dyn super::ArtifactBytes>,
-}
-
-impl super::ArtifactBytes for WhileLive {
-    fn next(&mut self) -> super::ArtifactChunk<'_> {
-        Box::pin(async move {
-            if !self.fence.is_live() {
-                return Err(super::ArtifactReadFailure::LeaseEnded);
-            }
-            // A read the host never answers still ends with its lease: the
-            // offer holds the lease's End back until it is answered.
-            let read = tokio::select! {
-                read = self.bytes.next() => read,
-                () = self.fence.left_live() => {
-                    return Err(super::ArtifactReadFailure::LeaseEnded);
-                }
-            };
-            // The lease's end wins over what the read saw, a failure
-            // included: a channel the host closes as it ends the lease is
-            // the lease ending.
-            match self.fence.is_live() {
-                true => read,
-                false => Err(super::ArtifactReadFailure::LeaseEnded),
-            }
-        })
     }
 }
 

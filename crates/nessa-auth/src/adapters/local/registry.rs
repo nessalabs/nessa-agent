@@ -1342,14 +1342,7 @@ impl CredentialVerifier for LocalCredentialStore {
                 let StoredProof::Bearer(verifier) = &stored.verifier else {
                     return Err(AccessError::InvalidCredential);
                 };
-                let expected = URL_SAFE_NO_PAD
-                    .decode(verifier)
-                    .map_err(|_| AccessError::Unavailable)?;
-                let actual = Sha256::digest(&secret);
-                if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual.as_slice()))
-                {
-                    return Err(AccessError::InvalidCredential);
-                }
+                check_secret(verifier, &secret)?;
                 Ok(VerifiedCredential {
                     credential_id: CredentialId::new(credential_id)
                         .map_err(|_| AccessError::Unavailable)?,
@@ -1531,6 +1524,17 @@ fn issue_secret(credential_id: &str) -> Result<(CredentialEvidence, String), Loc
     let evidence =
         CredentialEvidence::new(token.into_bytes()).map_err(|_| LocalStoreError::Corrupt)?;
     Ok((evidence, verifier))
+}
+
+fn check_secret(verifier: &str, secret: &[u8]) -> Result<(), AccessError> {
+    let expected = URL_SAFE_NO_PAD
+        .decode(verifier)
+        .map_err(|_| AccessError::Unavailable)?;
+    let actual = Sha256::digest(secret);
+    if expected.len() != actual.len() || !bool::from(expected.ct_eq(actual.as_slice())) {
+        return Err(AccessError::InvalidCredential);
+    }
+    Ok(())
 }
 
 fn parse_token(bytes: &[u8]) -> Result<(String, Vec<u8>), AccessError> {

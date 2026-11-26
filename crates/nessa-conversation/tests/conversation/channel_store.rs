@@ -4,8 +4,7 @@
 use super::*;
 use crate::application::PinnedStart;
 use crate::conversation_test_support::absolute;
-use crate::domain::{ChannelExecution, Place, ReplyStyle, RoleStyles, StyleRole};
-use nessa_sdk::domain::agent_execution::leases::SshDestination;
+use crate::domain::{ReplyStyle, RoleStyles, StyleRole};
 
 fn store(directory: &Path) -> LocalChannelStore {
     let private = directory.join("conversations");
@@ -30,7 +29,6 @@ fn made(request_id: &str, name: &str, at: u64) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("owner").unwrap(),
         ChannelParts {
-            execution: ChannelExecution::default(),
             name: ChannelName::new(name).unwrap(),
             folder: ChannelFolder {
                 path: path(&absolute("/work/repo")),
@@ -448,7 +446,6 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         drop(connection);
         let store = LocalChannelStore::open(&path).unwrap();
         let restored = store.get(kept.id()).await.unwrap().unwrap();
-        assert_eq!(*restored.execution(), ChannelExecution::default());
         // A channel from before kept its main agent, so its coordinator is on.
         assert!(restored.coordinator_on(), "version {version}");
         assert_eq!(restored.coordinator_id(), main);
@@ -456,8 +453,9 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             store.channel_of(&main).await.unwrap(),
             Some(kept.id().clone())
         );
-        // Every older file takes threads on the pool, and a main agent on one
-        // named computer, once upgraded.
+        // A placement an older build wrote (the pool, one named computer) is
+        // kept in the file and ignored: the channel still reads, and its
+        // agents run here (ADR 1417).
         let pooled = LocalChannelStore::open(&path).unwrap();
         drop(pooled);
         let check = Connection::open(&path).unwrap();
@@ -476,11 +474,7 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
         drop(check);
         let store = LocalChannelStore::open(&path).unwrap();
         let upgraded = store.get(kept.id()).await.unwrap().unwrap();
-        assert_eq!(*upgraded.execution().threads(), Place::Pool);
-        assert_eq!(
-            *upgraded.execution().coordinator(),
-            Place::Host(SshDestination::new("devbox").unwrap())
-        );
+        assert_eq!(upgraded.coordinator_id(), main);
         // An upgraded file keeps no style: every level inherits, and a
         // conversation from before was started with none.
         assert_eq!(
@@ -545,93 +539,6 @@ async fn a_coordinator_switched_off_keeps_its_chat_and_reads_back_after_a_reopen
     let missing = made("absent", "none", 1);
     assert!(reopened
         .set_coordinator_on(missing.id(), false)
-        .await
-        .unwrap()
-        .is_none());
-}
-
-#[tokio::test]
-async fn moving_the_main_agent_names_a_fresh_main_chat_and_keeps_the_old_one_in_the_channel() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = store(directory.path());
-    let original = made("moves", "design", 1);
-    let first = original.coordinator_id();
-    store.create(original.clone()).await.unwrap();
-    store.place(&first, original.id()).await.unwrap();
-    // Only new threads move: the main chat stays the same one.
-    let threads = ChannelExecution::new(Place::Here, Place::CloudVm);
-    let changed = store
-        .set_execution(original.id(), threads.clone())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(*changed.execution(), threads);
-    assert_eq!(changed.coordinator_id(), first);
-    // The main agent moves: a fresh main chat, the old one still in the channel.
-    let both = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
-    let moved = store
-        .set_execution(original.id(), both.clone())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(moved.coordinator_id(), first);
-    assert_eq!(
-        store.channel_of(&first).await.unwrap(),
-        Some(original.id().clone())
-    );
-    // Forgetting the old main chat, now a thread, retires nothing more.
-    store.forget(&first).await.unwrap();
-    drop(store);
-    let reopened =
-        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
-    let kept = reopened.get(original.id()).await.unwrap().unwrap();
-    assert_eq!(*kept.execution(), both);
-    assert_eq!(kept.coordinator_id(), moved.coordinator_id());
-    // Once the Boat main chat was made, moving back names yet another one.
-    reopened
-        .place(&moved.coordinator_id(), original.id())
-        .await
-        .unwrap();
-    let back = reopened
-        .set_execution(original.id(), ChannelExecution::default())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(back.coordinator_id(), moved.coordinator_id());
-    assert_ne!(back.coordinator_id(), first);
-    // A main chat made on one cloud moves when the channel names another:
-    // its VM stays on the cloud it was made on, so the move needs a fresh one.
-    let on_boat = ChannelExecution::parse("boat", "local").unwrap();
-    let boat_main = reopened
-        .set_execution(original.id(), on_boat)
-        .await
-        .unwrap()
-        .unwrap();
-    reopened
-        .place(&boat_main.coordinator_id(), original.id())
-        .await
-        .unwrap();
-    let on_agent37 = ChannelExecution::parse("agent37", "local").unwrap();
-    let agent37_main = reopened
-        .set_execution(original.id(), on_agent37.clone())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_ne!(agent37_main.coordinator_id(), boat_main.coordinator_id());
-    assert_eq!(*agent37_main.execution(), on_agent37);
-    // A main chat never made keeps its id when the main agent moves.
-    let fresh = made("unused", "quiet", 1);
-    reopened.create(fresh.clone()).await.unwrap();
-    let kept_id = reopened
-        .set_execution(fresh.id(), both.clone())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(kept_id.coordinator_id(), fresh.coordinator_id());
-    assert_eq!(*kept_id.execution(), both);
-    let missing = made("absent", "none", 1);
-    assert!(reopened
-        .set_execution(missing.id(), both)
         .await
         .unwrap()
         .is_none());

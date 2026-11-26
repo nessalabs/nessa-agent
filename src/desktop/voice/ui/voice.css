@@ -67,13 +67,39 @@
   color: var(--foreground);
 }
 
-.voice-notice-dismiss {
-  border: 0;
-  border-radius: var(--desktop-radius-pill);
-  padding: 4px 12px;
-  background: var(--desktop-hover);
-  color: var(--foreground);
-  font-size: var(--desktop-text-footnote);
+/*
+ * A call that could not start or dropped: one row where its words would
+ * be. The mark says it is about voice, the sentence says what stopped it,
+ * then the one fix and a close. No panel or border: it is a line, like the
+ * call's own, and wraps under itself only when the pane is too narrow.
+ */
+.voice-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 10px;
+  max-width: min(36rem, 100%);
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-body);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.voice-notice-mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--desktop-muted);
+}
+
+.voice-notice-text {
+  min-width: 0;
+}
+
+/* The close sits a little closer to the fix it follows. */
+.voice-notice-fix + .voice-notice-close {
+  margin-inline-start: -4px;
 }
 
 /*

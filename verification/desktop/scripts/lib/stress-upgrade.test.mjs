@@ -16,6 +16,7 @@ import { test } from "node:test"
 import {
   asEarlierPlaces,
   asOlderBuild,
+  asOlderHere,
   metadataFile,
   placeOf,
   schemaVersion,
@@ -305,3 +306,21 @@ test("place records turn back into an older build's placement and binding files"
 function readdirOf(directory) {
   return existsSync(directory) ? readdirSync(directory).sort() : []
 }
+
+test("an older build's record of here is the place record it kept", () => {
+  const conversations = mkdtempSync(join(tmpdir(), "stress-older-here-"))
+  try {
+    asOlderHere(conversations, "main")
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(conversations, "places", "main.json"), "utf8")),
+      { schemaVersion: 1, placed: "here" },
+    )
+    assert.deepEqual(placeOf(conversations, "main"), {
+      placed: "here",
+      worker: undefined,
+      context: undefined,
+    })
+  } finally {
+    rmSync(conversations, { recursive: true, force: true })
+  }
+})

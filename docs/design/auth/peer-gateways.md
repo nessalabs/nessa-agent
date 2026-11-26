@@ -1,5 +1,11 @@
 # Peer gateways — issue 705, slice H
 
+> **Environment role retired (ADR 1417, #1421).** Every gateway runs only its
+> own agents, so no machine dials in to serve this gateway's leases: `nessa env
+> serve`, `env dial`, `env grant`, `openEnvironment` and the worker container
+> are gone. What this page says about them is the record of that design;
+> gateway-to-gateway reads (peer discovery, record reads, follows) stay.
+
 Status: on main. The granting side, reads behind share grants, enrollment
 and the poller are merged
 ([#725](https://github.com/nessalabs/nessa-agent/pull/725),
@@ -752,7 +758,7 @@ sequenceDiagram
 - **Starting cannot reach the gateway** to enroll: `env dial` exits with the
   reason, and the container's restart policy tries again. Nothing was sent,
   so the next start enrolls with the same code.
-- **The example** in `docs/guides/env-worker/` builds an image holding
+- **The example** (once in `docs/guides/env-worker/`, removed with the environment role) built an image holding
   `nessa` alone, with the volume at `NESSA_DATA_DIR`, the code as a secret,
   the deadline below `stop_grace_period`, and a compose service per
   organization.

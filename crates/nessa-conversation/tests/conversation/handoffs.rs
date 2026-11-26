@@ -159,7 +159,6 @@ impl Fixture {
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
                 environment: crate::infrastructure::in_process_environment().into(),
-                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             None,
@@ -626,12 +625,6 @@ async fn a_fork_starts_a_new_conversation_from_the_sources_turns() {
     let record = fixture.record(&fork).await;
     assert_eq!(record.agent(), Some(AgentId::Claude));
     assert_eq!(record.model().as_str(), "test");
-    // It runs where its source runs.
-    let environment = &fixture.service.inner.environment;
-    assert_eq!(
-        environment.placement(&fork).await.unwrap(),
-        environment.placement(&source).await.unwrap()
-    );
     let view = fixture
         .service
         .read(fork.clone(), caller("read"))

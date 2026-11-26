@@ -113,7 +113,7 @@ impl Preparation {
                 .map(ChannelId::new)
                 .transpose()
                 .map_err(|_| ConversationError::InvalidInput)?,
-            fork: None,
+            fork: false,
         })
     }
 }
@@ -519,7 +519,7 @@ impl ConversationService {
                 ..
             } => Some(cleanup),
             _ => {
-                let Ok(environment) = self.inner.environment.of(id).await else {
+                let Ok(environment) = self.inner.environment.for_lease(id).await else {
                     return unknown;
                 };
                 if environment.declaration().environment != lease.terms().environment {

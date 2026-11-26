@@ -9,4 +9,5 @@ mod agent_execution;
 mod common;
 mod effective_capabilities;
 mod mcp_apps;
+mod mcp_skills;
 mod model_metadata;

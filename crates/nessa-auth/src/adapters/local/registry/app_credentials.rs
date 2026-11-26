@@ -2,14 +2,14 @@
 //! Ordinary Product proof and session entry do not admit this issuance.
 
 use super::{
-    access_snapshot, issue_fingerprint, LocalCredentialStore, LocalStoreError, Registry,
-    StoredCredential, StoredProof,
+    access_snapshot, check_secret, issue_fingerprint, parse_token, LocalCredentialStore,
+    LocalStoreError, Registry, StoredCredential, StoredProof,
 };
 use crate::{
     application::{
         app_credential::{
-            AppCapabilities, AppCapability, AppCredentialBinding, ApprovedAppIssue,
-            IssueAppCredential,
+            AppCapabilities, AppCapability, AppCredentialBinding, AppCredentialSnapshot,
+            AppCredentials, ApprovedAppIssue, IssueAppCredential,
         },
         credential_admin::{
             CredentialIssuePurpose, IssueCredentialOutcome, IssueCredentialRequest,
@@ -18,15 +18,19 @@ use crate::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             PrincipalInputDto, PrincipalKindDto, ResourceDto,
         },
-        ports::{AccessError, AccessSnapshot, Clock, Decision, IssuePath, PolicyEvaluator},
+        ports::{
+            AccessError, AccessSnapshot, Clock, CredentialEvidence, Decision, IssuePath,
+            PolicyEvaluator, PortFuture,
+        },
         session::{AuthenticatedSession, ReadCurrentSession},
     },
     domain::{
-        Action, AudienceId, CredentialId, DomainError, ExtensionAppId, MembershipId,
-        OrganizationId, PrincipalId, Resource, ResourceId,
+        Action, AudienceId, CredentialId, DomainError, MembershipId, OrganizationId, PrincipalId,
+        Resource, ResourceId,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use nessa_types::app_identity::ExtensionAppId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -188,6 +192,58 @@ impl LocalCredentialStore {
     }
 }
 
+impl AppCredentials for LocalCredentialStore {
+    fn verify_app<'a>(
+        &'a self,
+        evidence: &'a CredentialEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, AppCredentialSnapshot> {
+        Box::pin(async move {
+            let (credential_id, secret) = parse_token(evidence.expose_bytes())?;
+            self.with_published_registry(|registry| {
+                let stored = registry
+                    .credentials
+                    .iter()
+                    .find(|entry| entry.metadata.id == credential_id)
+                    .ok_or(AccessError::InvalidCredential)?;
+                if stored.metadata.audience_id != audience.as_str()
+                    || stored.metadata.revoked_at.is_some()
+                {
+                    return Err(AccessError::InvalidCredential);
+                }
+                let StoredProof::App(AppProof::AppBearer { verifier, .. }) = &stored.verifier
+                else {
+                    return Err(AccessError::InvalidCredential);
+                };
+                check_secret(verifier, &secret)?;
+                scoped_snapshot(registry, stored)
+            })
+        })
+    }
+
+    fn read_app<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AppCredentialSnapshot> {
+        Box::pin(async move {
+            self.with_published_registry(|registry| {
+                let stored = registry
+                    .credentials
+                    .iter()
+                    .find(|entry| entry.metadata.id == id.as_str())
+                    .ok_or(AccessError::InvalidCredential)?;
+                scoped_snapshot(registry, stored)
+            })
+        })
+    }
+}
+
+fn scoped_snapshot(
+    registry: &Registry,
+    stored: &StoredCredential,
+) -> Result<AppCredentialSnapshot, AccessError> {
+    let access = access_snapshot(registry, stored)?;
+    let binding = approved_app_binding(registry, stored, &access)?;
+    Ok(AppCredentialSnapshot { access, binding })
+}
+
 /// Registration is stable across credentials and scoped to this owner and
 /// deployment. A length-prefixed tuple keeps the derived ID bounded and
 /// separates its fields without imposing syntax on the opaque IDs.
@@ -344,7 +400,9 @@ mod tests {
     use super::*;
     use crate::application::{
         ports::{PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential},
-        session::{AuthenticateSession, ResumeSession},
+        session::{
+            AuthenticateAppSession, AuthenticateSession, ReadCurrentAppSession, ResumeSession,
+        },
     };
     use crate::{
         adapters::cedar::CedarPolicyEvaluator,
@@ -546,6 +604,104 @@ mod tests {
         assert!(matches!(
             reopened.app_binding(&app_a, 130),
             Err(AccessError::CredentialRevoked)
+        ));
+    }
+
+    #[test]
+    fn app_session_uses_only_app_proof_and_current_registry_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(path).unwrap();
+        let bootstrap = store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let another_gateway = AudienceId::new("other-gateway").unwrap();
+        let clock = Time(110);
+        let ordinary = AuthenticateSession {
+            policy: &policy,
+            verifier: &store,
+            access: &store,
+            clock: &clock,
+        };
+        let app_auth = AuthenticateAppSession {
+            credentials: &store,
+            clock: &clock,
+            policy: &policy,
+        };
+        let owner = ready(ordinary.execute(&bootstrap.evidence, &audience)).unwrap();
+        assert!(owner.context().app_namespace().is_default());
+        assert!(matches!(
+            ready(app_auth.execute(&bootstrap.evidence, &audience)),
+            Err(AccessError::InvalidCredential)
+        ));
+
+        let mut apps = Vec::new();
+        for (id, name, op) in [
+            ("app-a", "calendar", AppCapability::List),
+            ("app-b", "notes", AppCapability::Read),
+        ] {
+            let IssueCredentialOutcome::Issued { evidence, .. } =
+                ready(store.issue_app(&owner, request(id, name, op), &clock, &policy)).unwrap()
+            else {
+                panic!("one new app credential")
+            };
+            assert!(matches!(
+                ready(ordinary.execute(&evidence, &audience)),
+                Err(AccessError::InvalidCredential)
+            ));
+            assert!(matches!(
+                ready(app_auth.execute(&evidence, &another_gateway)),
+                Err(AccessError::InvalidCredential)
+            ));
+            let raw_id = CredentialEvidence::new(id.as_bytes().to_vec()).unwrap();
+            assert!(matches!(
+                ready(app_auth.execute(&raw_id, &audience)),
+                Err(AccessError::InvalidCredential)
+            ));
+            let session = ready(app_auth.execute(&evidence, &audience)).unwrap();
+            assert_eq!(session.context().app_namespace().as_str(), name);
+            assert_eq!(session.context().credential_id().as_str(), id);
+            assert_eq!(session.expires_at(), Some(180));
+            apps.push(session);
+        }
+        assert_ne!(
+            apps[0].context().principal_id(),
+            apps[1].context().principal_id()
+        );
+        let current = ReadCurrentAppSession {
+            credentials: &store,
+            clock: &Time(120),
+        };
+        for (session, expected) in apps.iter().zip([AppCapability::List, AppCapability::Read]) {
+            assert_eq!(
+                ready(current.execute(session))
+                    .unwrap()
+                    .capabilities()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                [expected]
+            );
+        }
+        store
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-calendar".into(),
+                issuer_principal_id: owner.context().principal_id().as_str().into(),
+                credential_id: apps[0].context().credential_id().as_str().into(),
+                revoked_at: 120,
+            })
+            .unwrap();
+        assert!(matches!(
+            ready(current.execute(&apps[0])),
+            Err(AccessError::CredentialRevoked)
+        ));
+        assert!(ready(current.execute(&apps[1])).is_ok());
+        let expired = ReadCurrentAppSession {
+            credentials: &store,
+            clock: &Time(180),
+        };
+        assert!(matches!(
+            ready(expired.execute(&apps[1])),
+            Err(AccessError::CredentialExpired)
         ));
     }
 

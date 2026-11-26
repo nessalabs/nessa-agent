@@ -19,7 +19,6 @@ import { useRememberedSession } from "../../adapters/store/remembered-session"
 import { ChatContextButton } from "./chat-context-button"
 import { tooltip } from "../../../ui/tooltip"
 import { useChooseHeaderPicture } from "../../../adapters/header-image"
-import { channelPlaceWords } from "../channel-place-words"
 import {
   headerImageRefusalMs,
   headerImageRefusalText,
@@ -69,14 +68,12 @@ export const PaneHeader = memo(function PaneHeader({
     return () => window.clearTimeout(timer)
   }, [refusal])
   const session = useRememberedSession(sessionId)
-  const mainLocation = useWorkspaceSelector((state) => {
+  const main = useWorkspaceSelector((state) => {
     const channelId =
       selectSession(state, sessionId)?.channelId ??
       selectDraft(state, sessionId)?.channelId
     const channel = channelId ? selectChannel(state, channelId) : undefined
     return channel?.coordinatorConversationId === sessionId
-      ? channelPlaceWords(channel.coordinatorPlacement ?? "local")
-      : undefined
   })
   const title = session?.title ?? "New session"
   // A conversation names itself once its heading scrolls away. A new
@@ -107,10 +104,8 @@ export const PaneHeader = memo(function PaneHeader({
           }
           accessories={
             <>
-              {mainLocation ? (
-                <span className="workspace-pane-main-agent">
-                  Main agent · {mainLocation}
-                </span>
+              {main ? (
+                <span className="workspace-pane-main-agent">Main agent</span>
               ) : null}
               {refusal ? (
                 <span className="workspace-pane-refusal" role="status">

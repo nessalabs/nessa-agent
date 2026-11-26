@@ -1,5 +1,3 @@
-import type { CodexChatgptSignIn } from "../../provider-authentication/model/chatgpt-sign-in"
-import type { BoatClaudeSignIn } from "../../provider-authentication/model/boat-sign-in"
 import type { AgentInstallations } from "../../onboarding"
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { FollowConversationChoices } from "../adapters/agent-choices"
@@ -37,9 +35,6 @@ import {
   useOwnerAsks,
   textContent,
   toEditor,
-  linksFilesHere,
-  chosenEnvironment,
-  HERE,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { PanelOwnerAsk } from "./owner-ask"
@@ -122,8 +117,6 @@ export function App({
   agentInstallations,
   onProviderSignIn,
   canSignInToProvider,
-  boatSignIn,
-  chatgptSignIn,
 }: {
   attachmentResources: AttachmentResources
   /**
@@ -145,10 +138,6 @@ export function App({
   followConversationChoices: FollowConversationChoices
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
-  /** A Claude sign-in minted for Boat VMs, for a refusal from one (ADR 501). */
-  boatSignIn?: BoatClaudeSignIn
-  /** A ChatGPT account for Codex on another computer. */
-  chatgptSignIn?: CodexChatgptSignIn
   agentInstallations?: AgentInstallations
 }) {
   const scheme = useColorScheme()
@@ -183,7 +172,6 @@ export function App({
     serverConversationId: chat.active.serverConversationId,
     agent: selectedAgent?.agent,
     model: selectedModel?.modelId,
-    environments: choices?.catalog.environments,
     setSelection: chat.setSelection,
   })
   const selection = chat.active.selection
@@ -222,11 +210,7 @@ export function App({
       ? choices?.catalog.nativeHooks[nativeHooksAgent]
       : undefined
   const readNativeHooks = React.useCallback(async () => nativeHooksNow, [nativeHooksNow])
-  const attachments = useFileAttachments(
-    chat,
-    attachmentResources,
-    choices?.catalog.defaultEnvironment,
-  )
+  const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   const folderDrop = useFolderDrop(
     attachments.captureDestination,
@@ -616,8 +600,6 @@ export function App({
                   onOpenPaste={openPaste}
                   onProviderSignIn={onProviderSignIn}
                   canSignInToProvider={canSignInToProvider}
-                  boatSignIn={boatSignIn}
-                  chatgptSignIn={chatgptSignIn}
                   onUsageLimitAutoContinue={(enabled) =>
                     chat.setUsageLimitAutoContinue(enabled)
                   }
@@ -865,41 +847,8 @@ export function App({
                 <ComposerTray
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
-                  linksFiles={linksFilesHere(
-                    chat.active,
-                    choices?.catalog.defaultEnvironment,
-                  )}
                   onSignOut={onSignOut}
                   agentInstallations={agentInstallations}
-                  // Where a new conversation runs: offered only when the
-                  // gateway names an SSH host or a connected paired machine,
-                  // and only before it exists.
-                  environment={
-                    !chat.active.serverConversationId &&
-                    selectedAgent &&
-                    selectedModel &&
-                    choices?.catalog.environments.length
-                      ? {
-                          // Unchosen, it runs on the gateway's default device.
-                          host: chosenEnvironment(
-                            selection,
-                            choices.catalog.defaultEnvironment,
-                          ),
-                          hosts: choices.catalog.environments,
-                          onChange: (environment) =>
-                            chat.setSelection(chat.active.id, {
-                              agent: selectedAgent.agent,
-                              model: selectedModel.modelId,
-                              approvalMode: selectedApprovalMode,
-                              // This computer, chosen while another device is
-                              // the default, is named outright.
-                              environment:
-                                environment ??
-                                (choices.catalog.defaultEnvironment ? HERE : undefined),
-                            }),
-                        }
-                      : undefined
-                  }
                   approval={
                     !chat.active.serverConversationId && selectedAgent && selectedModel
                       ? {
@@ -910,7 +859,6 @@ export function App({
                               agent: selectedAgent.agent,
                               model: selectedModel.modelId,
                               approvalMode,
-                              environment: selection?.environment,
                             }),
                         }
                       : chat.active.serverConversationId &&

@@ -388,23 +388,8 @@
       "lane": "requests"
     },
     "devices.list": {
-      "params": "DevicesListParams",
-      "grant": "server.read",
-      "lane": "requests"
-    },
-    "devices.sshHosts": {
       "params": null,
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "devices.connectSsh": {
-      "params": "DevicesConnectSshParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "devices.setDefault": {
-      "params": "DevicesSetDefaultParams",
-      "grant": "credential.manage",
+      "grant": "server.read",
       "lane": "requests"
     },
     "github.cancel": {
@@ -527,11 +512,6 @@
       "grant": "conversation.write",
       "lane": "requests"
     },
-    "channel.setPlacement": {
-      "params": "ChannelSetPlacementParams",
-      "grant": "conversation.write",
-      "lane": "requests"
-    },
     "channel.setCoordinator": {
       "params": "ChannelSetCoordinatorParams",
       "grant": "conversation.write",
@@ -612,11 +592,6 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
-    "boat.saveClaudeSignIn": {
-      "params": "BoatClaudeSignInParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
     "boat.disconnect": {
       "params": null,
       "grant": "credential.manage",
@@ -677,26 +652,6 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
-    "devices.pool": {
-      "params": "DevicesPoolParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "devices.setPool": {
-      "params": "DevicesSetPoolParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "boat.runtimeSettings": {
-      "params": "BoatRuntimeReadParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "boat.setRuntimeSettings": {
-      "params": "BoatRuntimeSetParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
     "conversation.webhook.cursor": {
       "params": "ConversationWebhookCursorParams",
       "grant": "credential.manage",
@@ -704,46 +659,6 @@
     },
     "conversation.webhook.reset": {
       "params": "ConversationWebhookResetParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.status": {
-      "params": null,
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.save": {
-      "params": "LoginsSaveParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.remove": {
-      "params": "LoginsRemoveParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.setDevice": {
-      "params": "LoginsSetDeviceParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptSignIn": {
-      "params": "LoginsChatgptSignInParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptCancel": {
-      "params": null,
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptUse": {
-      "params": "LoginsChatgptUseParams",
-      "grant": "credential.manage",
-      "lane": "requests"
-    },
-    "logins.chatgptRemove": {
-      "params": "LoginsChatgptRemoveParams",
       "grant": "credential.manage",
       "lane": "requests"
     },
@@ -814,6 +729,21 @@
     },
     "terminal.rename": {
       "params": "TerminalRenameParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.resumeSettings": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.setResumeSettings": {
+      "params": "TerminalResumeSettings",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "terminal.forgetSaved": {
+      "params": "TerminalForgetSavedParams",
       "grant": "credential.manage",
       "lane": "requests"
     }

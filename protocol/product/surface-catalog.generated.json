@@ -79,6 +79,18 @@
     {
       "method": "terminal.rename",
       "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.resumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.setResumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.forgetSaved",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
     }
   ],
   "methods": [
@@ -602,30 +614,9 @@
     },
     {
       "name": "devices.list",
-      "params": "DevicesListParams",
+      "params": null,
       "grant": "server.read",
       "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.sshHosts",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.connectSsh",
-      "params": "DevicesConnectSshParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "devices.setDefault",
-      "params": "DevicesSetDefaultParams",
-      "grant": "credential.manage",
-      "readOnly": false,
       "destructive": false
     },
     {
@@ -755,13 +746,6 @@
       "destructive": false
     },
     {
-      "name": "channel.setPlacement",
-      "params": "ChannelSetPlacementParams",
-      "grant": "conversation.write",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "channel.setCoordinator",
       "params": "ChannelSetCoordinatorParams",
       "grant": "conversation.write",
@@ -867,13 +851,6 @@
       "destructive": false
     },
     {
-      "name": "boat.saveClaudeSignIn",
-      "params": "BoatClaudeSignInParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "boat.disconnect",
       "params": null,
       "grant": "credential.manage",
@@ -958,34 +935,6 @@
       "destructive": true
     },
     {
-      "name": "devices.pool",
-      "params": "DevicesPoolParams",
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "devices.setPool",
-      "params": "DevicesSetPoolParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "boat.runtimeSettings",
-      "params": "BoatRuntimeReadParams",
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "boat.setRuntimeSettings",
-      "params": "BoatRuntimeSetParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
       "name": "conversation.webhook.cursor",
       "params": "ConversationWebhookCursorParams",
       "grant": "credential.manage",
@@ -995,62 +944,6 @@
     {
       "name": "conversation.webhook.reset",
       "params": "ConversationWebhookResetParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
-      "name": "logins.status",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "logins.save",
-      "params": "LoginsSaveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.remove",
-      "params": "LoginsRemoveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
-      "name": "logins.setDevice",
-      "params": "LoginsSetDeviceParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptSignIn",
-      "params": "LoginsChatgptSignInParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptCancel",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptUse",
-      "params": "LoginsChatgptUseParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptRemove",
-      "params": "LoginsChatgptRemoveParams",
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": true

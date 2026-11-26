@@ -49,19 +49,6 @@ pub type PassiveReadAuthorities = (
     Arc<dyn ShareGrants>,
 );
 
-/// The paired environments connected now, as `PeerEnvironments` answers
-/// for them: their names, read when asked, and a wake-up each time which of
-/// them are connected may have changed.
-#[derive(Clone)]
-pub struct ConnectedEnvironments {
-    /// The names of those connected now.
-    pub names: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
-    /// Moves when one connects, when one's connection ends, and when one is
-    /// revoked; the agent catalogue's subscriptions read the catalogue again
-    /// when it does.
-    pub changes: watch::Receiver<u64>,
-}
-
 /// The process's one wall timeline, the one every agent's `dueAtMs` is
 /// promised on (`nessa_sdk::infrastructure::clock::process_unix_ms`).
 struct ProcessTimeline;
@@ -196,9 +183,6 @@ pub struct AgentRoutes {
     /// The registry's principal kinds, for the native-hooks audit. None in a
     /// route that has no registry; a change then records `unknown`.
     pub caller_kinds: Option<Arc<dyn crate::agents::application::CallerKindSource>>,
-    /// The paired environments connected now, by name: added to the
-    /// catalog's places each time it is read, since they come and go.
-    pub connected_environments: Option<ConnectedEnvironments>,
 }
 
 /// Attachments: uploads in pieces, and held files read back.
@@ -264,22 +248,14 @@ pub struct MachineRoutes {
     /// The hub's devices (`devices.list`). `None` answers
     /// `devices_unavailable`.
     pub devices: Option<Arc<crate::devices::application::Devices>>,
-    /// Suggesting and connecting SSH hosts and choosing the default device
-    /// (`devices.sshHosts`, `devices.connectSsh`, `devices.setDefault`), and
-    /// the default the catalog names. `None` — not Unix — answers
-    /// `devices_unavailable`.
-    pub device_setup: Option<Arc<crate::devices::application::DeviceSetup>>,
-    /// Moves each time the default device is saved: the catalog's
-    /// subscribers read it again.
-    pub default_device: Option<watch::Receiver<Option<String>>>,
     #[cfg(unix)]
     pub workspaces: Option<Arc<crate::workspaces::application::Workspaces>>,
     #[cfg(unix)]
     pub cloud_boxes: Option<Arc<crate::workspaces::application::CloudBoxes>>,
 }
 
-/// Credentials and accounts: credential admin, webhooks, GitHub, saved
-/// logins, voice and the vault.
+/// Credentials and accounts: credential admin, webhooks, GitHub, voice and
+/// the vault.
 #[derive(Clone, Default)]
 pub struct AccountRoutes {
     pub admin: Option<Arc<dyn CredentialAdmin>>,
@@ -287,9 +263,6 @@ pub struct AccountRoutes {
     /// The GitHub sign-in (`github.*`). `None` — no agents run here —
     /// answers `github_not_configured`.
     pub github: Option<Arc<super::GithubRoutes>>,
-    /// The saved logins (`logins.*`). `None` answers
-    /// `logins_not_configured`.
-    pub logins: Option<Arc<crate::logins::application::SavedLoginsService>>,
     /// The voice key and calls (`voice.*`). `None` answers
     /// `voice_not_configured`.
     pub voice: Option<Arc<crate::voice::application::VoiceCalls>>,
@@ -555,19 +528,6 @@ impl ProductRouteState {
         self
     }
 
-    /// Set the hub's machines up from Devices, and offer the default device
-    /// `default` holds in the catalog.
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub fn with_device_setup(
-        mut self,
-        setup: Arc<crate::devices::application::DeviceSetup>,
-        default: watch::Receiver<Option<String>>,
-    ) -> Self {
-        self.machines.device_setup = Some(setup);
-        self.machines.default_device = Some(default);
-        self
-    }
-
     pub fn with_devices(mut self, devices: Arc<crate::devices::application::Devices>) -> Self {
         self.machines.devices = Some(devices);
         self
@@ -576,15 +536,6 @@ impl ProductRouteState {
     /// Register the GitHub sign-in the github methods answer for.
     pub fn with_github(mut self, github: Arc<super::GithubRoutes>) -> Self {
         self.accounts.github = Some(github);
-        self
-    }
-
-    /// Register the saved logins the logins methods answer for.
-    pub fn with_logins(
-        mut self,
-        logins: Arc<crate::logins::application::SavedLoginsService>,
-    ) -> Self {
-        self.accounts.logins = Some(logins);
         self
     }
 
@@ -715,18 +666,8 @@ impl ProductRouteState {
         self
     }
 
-    /// Offer the paired environments connected when the catalog is read as
-    /// places a new conversation may run, after its SSH hosts, and read it
-    /// again for its subscribers when they change.
-    #[cfg_attr(not(any(unix, test)), allow(dead_code))]
-    pub fn with_connected_environments(mut self, connected: ConnectedEnvironments) -> Self {
-        self.agents.connected_environments = Some(connected);
-        self
-    }
-
-    /// The agent catalog as it is now: the agents and SSH hosts composed at
-    /// startup, then the paired environments connected at this moment, and
-    /// which of those take the owner's commands.
+    /// The agent catalog as it is now: the agents composed at startup and
+    /// the native hooks choice stored now.
     /// `None` where conversations are not configured. `agents.list` answers
     /// it and every `agents.listed` frame carries it, so the two are read
     /// the same way.
@@ -734,35 +675,6 @@ impl ProductRouteState {
         let composed = self.agents.catalog.as_ref()?;
         let mut catalog =
             serde_json::to_value(composed.as_ref()).expect("generated catalog serializes");
-        if let Some(connected) = &self.agents.connected_environments {
-            if let Some(places) = catalog["environments"].as_array_mut() {
-                places.extend((connected.names)().into_iter().map(Value::String));
-            }
-        }
-        // Of those places, the ones the owner's turns may run commands on,
-        // read with them: the conversation service asks the command policy.
-        // The composed catalog's own copy is never shown.
-        let places: Vec<&str> = catalog["environments"]
-            .as_array()
-            .map(|places| places.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        // The default device, while it is one of those places.
-        let default = self
-            .machines
-            .default_device
-            .as_ref()
-            .and_then(|default| default.borrow().clone())
-            .filter(|default| places.contains(&default.as_str()));
-        let command_hosts = self
-            .conversation
-            .service
-            .as_ref()
-            .map(|service| service.owner_command_hosts(places))
-            .unwrap_or_default();
-        catalog["commandHosts"] = Value::from(command_hosts);
-        if let Some(default) = default {
-            catalog["defaultEnvironment"] = Value::from(default);
-        }
         // The stored hooks choice, read now. The composed catalog's own copy
         // is never shown.
         let selection = self
@@ -773,22 +685,6 @@ impl ProductRouteState {
             .unwrap_or_else(crate::agents::application::NativeHooksSelection::off);
         catalog["nativeHooks"] = native_hooks_value(selection);
         Some(catalog)
-    }
-
-    /// A wake-up each time a paired environment may have come or gone,
-    /// seen as of now; `None` on a gateway that pairs no environments.
-    pub fn agents_catalog_changes(&self) -> Option<watch::Receiver<u64>> {
-        let mut changes = self.agents.connected_environments.as_ref()?.changes.clone();
-        changes.mark_unchanged();
-        Some(changes)
-    }
-
-    /// A wake-up each time the default device is saved, seen as of now;
-    /// `None` where Devices cannot set one.
-    pub fn default_device_changes(&self) -> Option<watch::Receiver<Option<String>>> {
-        let mut changes = self.machines.default_device.clone()?;
-        changes.mark_unchanged();
-        Some(changes)
     }
 
     /// A wake-up after each native hooks command, seen as of now; `None`

@@ -56,10 +56,9 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
 
 #[test]
 fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name() {
-    let tools: Arc<dyn BuiltInServer> = super::super::environment_tools::EnvironmentTools::new(
-        &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
-    );
-    let name = super::super::environment_tools::SERVER_NAME;
+    let tools: Arc<dyn BuiltInServer> =
+        crate::mcp_servers::conversation_tools::ConversationTools::new();
+    let name = "nessa-agents";
     let configured = launches(&[server("mcptest", &["/s.mjs"]), server(name, &["/own.mjs"])]);
     let key = ConfigurationKey::new([7; 32]);
     let handed = stand_ins(
@@ -1844,28 +1843,6 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
         "{:?}",
         drop.initiator
     );
-}
-
-#[test]
-fn agent_and_environment_built_ins_are_distinct_without_requiring_ssh_commands() {
-    let agent_tools = crate::mcp_servers::conversation_tools::ConversationTools::new();
-    let environment_tools = super::super::environment_tools::EnvironmentTools::new(
-        &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
-    );
-    let key = ConfigurationKey::new([7; 32]);
-    let servers = live_of(&[]);
-    let built_ins: Vec<Arc<dyn BuiltInServer>> = vec![agent_tools.clone(), environment_tools];
-    let both = stand_ins(&servers, "/nessa", "/relay.sock", &key, &built_ins);
-    assert_eq!(
-        both.iter()
-            .map(|server| server.name.as_str())
-            .collect::<Vec<_>>(),
-        ["nessa-agents", "nessa-environments"]
-    );
-    let just_agents = stand_ins(&servers, "/nessa", "/relay.sock", &key, &[agent_tools]);
-    assert_eq!(just_agents.len(), 1);
-    assert_eq!(just_agents[0].name, "nessa-agents");
-    assert_eq!(both[0].args, just_agents[0].args);
 }
 
 #[tokio::test]

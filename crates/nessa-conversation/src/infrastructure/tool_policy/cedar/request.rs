@@ -6,7 +6,7 @@ use cedar_policy::{
     Authorizer, Context, Decision, Entities, Entity, EntityId, EntityTypeName, EntityUid,
     PolicySet, Request, RestrictedExpression,
 };
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::application::{ToolDecision, ToolPolicyUnavailable};
@@ -15,7 +15,6 @@ use crate::domain::{ToolChoice, ToolPolicy, ToolPreset};
 use super::bundle::Bundle;
 
 pub(super) const OWNER: &str = "Nessa::Owner";
-pub(super) const AGENT: &str = "Nessa::Agent";
 pub(super) const GRANT: &str = "Nessa::Grant";
 pub(super) const ACTION: &str = "Nessa::Action";
 /// A grant whose policy is its own rules names this as its preset, so no
@@ -97,47 +96,27 @@ pub(super) fn entity(
     .map_err(|_| ToolPolicyUnavailable)
 }
 
-/// A set of strings, as an attribute's value.
-pub(super) fn strings<'a>(values: impl IntoIterator<Item = &'a String>) -> RestrictedExpression {
-    RestrictedExpression::new_set(
-        values
-            .into_iter()
-            .map(|value| RestrictedExpression::new_string(value.clone())),
-    )
-}
-
 /// The conversation's owner.
 pub(super) fn owner() -> Result<Entity, ToolPolicyUnavailable> {
     entity(OWNER, "owner", [])
 }
 
-/// An agent-authored turn; its source identity is retained in the initiation.
-pub(super) fn agent() -> Result<Entity, ToolPolicyUnavailable> {
-    entity(AGENT, "agent", [])
-}
-
-/// A Drive grant, with every fact of it the caller asks about: its tool
-/// policy's preset (`rules` for its own rules), and, for the command policy
-/// alone, the hosts its policy names for its commands (an empty set when it
-/// names none). One builder for every evaluator, so the entity is the same
-/// wherever it is read.
-pub(super) fn grant(
-    grant: &str,
-    policy: &ToolPolicy,
-    command_hosts: Option<&BTreeSet<String>>,
-) -> Result<Entity, ToolPolicyUnavailable> {
+/// A Drive grant, with its tool policy's preset (`rules` for its own rules).
+/// One builder for every evaluator, so the entity is the same wherever it is
+/// read.
+pub(super) fn grant(grant: &str, policy: &ToolPolicy) -> Result<Entity, ToolPolicyUnavailable> {
     let preset = match policy.tools() {
         ToolChoice::Preset(preset) => preset_name(*preset),
         ToolChoice::Rules(_) => RULES,
     };
-    let mut attributes = vec![(
-        "toolPreset",
-        RestrictedExpression::new_string(preset.to_owned()),
-    )];
-    if let Some(hosts) = command_hosts {
-        attributes.push(("commandHosts", strings(hosts)));
-    }
-    entity(GRANT, grant, attributes)
+    entity(
+        GRANT,
+        grant,
+        [(
+            "toolPreset",
+            RestrictedExpression::new_string(preset.to_owned()),
+        )],
+    )
 }
 
 /// A preset's name, as `tools.cedar` compares it.

@@ -343,7 +343,6 @@ fn conversation_service_with_summaries(
             ),
             clock: Arc::new(TestClock),
             environment: crate::conversation::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -392,8 +391,6 @@ fn grants(authority: &Authority, actions: &[&str]) {
 /// one host.
 fn composed_catalog() -> AgentsListResult {
     serde_json::from_value(json!({
-        "environments": ["build.example"],
-        "commandHosts": [],
         "agents": [{
             "agent": "claude",
             "defaultModel": "test",
@@ -4528,125 +4525,45 @@ async fn a_share_whose_role_and_policy_do_not_fit_is_refused_and_writes_nothing(
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
 }
 
-/// ADR 803 step 4: a Drive grant's `commandHosts` goes through
-/// `conversation.share` into the store and back out of `conversation.shares`
-/// as named; an empty list is a policy naming none, accepted and listed
-/// without the key. A full allow and deny list may still name a host at the
-/// longest destination `config.json` accepts. `here`, a host named twice,
-/// more than `CommandHosts::MAX_HOSTS`, and a host one byte past that
-/// destination are refused `invalid_request` and change nothing.
+/// A Drive grant's policy names its tools and nothing else: `commandHosts`,
+/// the machines an older build let its turns run commands on, is no field
+/// since every gateway runs only its own agents (ADR 1417), so a share
+/// naming it, even empty, is refused `invalid_request` and changes nothing.
 #[tokio::test]
-async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() {
-    use crate::conversation::application::ShareGrants;
-    use crate::conversation::domain::{CommandHosts, ToolRules};
+async fn a_drive_policy_naming_command_hosts_is_refused() {
     let fixture = sharing_fixture().await;
-    // Phone and tablet are one principal, so one drive grant. The policy
-    // updates below replace that grant; the bounds are refused first, while
-    // the named hosts are what it holds.
-    let share = |request: &str, credential: &str, policy: Value| {
+    let share = |request: &str, policy: Value| {
         json!({
             "conversationId": fixture.id.to_string(),
             "requestId": request,
-            "credentialId": credential,
+            "credentialId": "phone",
             "capabilities": ["read", "comment", "drive"],
             "policy": policy,
         })
     };
-    let policy_of = |credential: &'static str| {
-        let fixture = &fixture;
-        async move {
-            let shares = fixture
-                .call(
-                    "conversation.shares",
-                    json!({"conversationId": fixture.id.to_string(), "pageSize": MAX_SHARE_PAGE}),
-                )
-                .await;
-            shares["payload"]["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|item| item["credentialId"] == credential)
-                .unwrap()["policy"]
-                .clone()
-        }
-    };
-    let peer = format!("peer:{}", "ab".repeat(32));
-    let named = json!({"preset": "all", "commandHosts": ["devbox", peer]});
-    let answer = fixture
-        .call("conversation.share", share("named", "phone", named.clone()))
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await, named);
-    let held = fixture.metadata.grants(&fixture.id).await.unwrap().grants;
-    assert_eq!(
-        held[0]
-            .access
-            .policy()
-            .unwrap()
-            .command_hosts()
-            .names()
-            .iter()
-            .collect::<Vec<_>>(),
-        ["devbox", &peer]
-    );
-
-    let too_long = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES));
-    let refused = [
-        json!({"preset": "all", "commandHosts": ["here"]}),
-        json!({"preset": "all", "commandHosts": ["devbox", "devbox"]}),
-        json!({
-            "preset": "all",
-            "commandHosts": (0..=CommandHosts::MAX_HOSTS)
-                .map(|n| format!("host{n}"))
-                .collect::<Vec<_>>(),
-        }),
-        json!({"preset": "all", "commandHosts": [too_long]}),
-    ];
-    for (n, policy) in refused.into_iter().enumerate() {
+    for (n, policy) in [
+        json!({"preset": "all", "commandHosts": ["devbox"]}),
+        json!({"preset": "no_shell", "commandHosts": []}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let answer = fixture
-            .call(
-                "conversation.share",
-                share(&format!("refused-{n}"), "phone", policy.clone()),
-            )
+            .call("conversation.share", share(&format!("hosts-{n}"), policy.clone()))
             .await;
         assert_eq!(
             answer["error"]["code"], "invalid_request",
             "{policy}: {answer}"
         );
     }
-    assert_eq!(policy_of("phone").await, named);
-
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share(
-                "empty",
-                "phone",
-                json!({"preset": "no_shell", "commandHosts": []}),
-            ),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await, json!({"preset": "no_shell"}));
-
-    fn pattern(n: usize) -> String {
-        format!("t{n}")
-    }
-    let full = ToolRules::MAX_RULES;
-    let longest_host = format!("h{}", "a".repeat(CommandHosts::MAX_HOST_BYTES - 1));
-    let full_policy = json!({
-        "allow": (0..full).map(pattern).collect::<Vec<_>>(),
-        "deny": (0..full).map(pattern).collect::<Vec<_>>(),
-        "commandHosts": [longest_host],
-    });
-    let answer = fixture
-        .call(
-            "conversation.share",
-            share("full-hosts", "phone", full_policy.clone()),
-        )
-        .await;
-    assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(policy_of("phone").await["commandHosts"][0], longest_host);
+    assert!(fixture
+        .metadata
+        .grants(&fixture.id)
+        .await
+        .unwrap()
+        .grants
+        .iter()
+        .all(|grant| grant.access.policy().is_none()));
 }
 
 /// `conversation.shares` returns one page and resumes after the cursor it
@@ -4975,60 +4892,47 @@ async fn retained_stopping_publication_refuses_wire_and_subscription_until_clean
     }
 }
 
-/// A gateway whose paired environments the test connects and disconnects,
-/// standing in for `PeerEnvironments`: the names it says are connected, and
-/// its count of changes, moved after each change as a connection admitted,
-/// ended or revoked moves it. Composed beside a conversation service, so
-/// the conversation catalogue's head and list can be watched not to move.
+/// A gateway with a native hooks choice the test switches, the agent
+/// catalog's one change source (each command moves its count, whatever it
+/// changed). Composed beside a conversation service, so the conversation
+/// catalogue's head and list can be watched not to move.
 struct CatalogFixture {
     inner: SubscriptionFixture,
-    connected: Arc<Mutex<Vec<String>>>,
-    changes: tokio::sync::watch::Sender<u64>,
-    read: Arc<Notify>,
+    hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
+    _hooks_directory: TempDir,
 }
 
 impl CatalogFixture {
     async fn new() -> Self {
         let mut inner = SubscriptionFixture::new().await;
-        let connected = Arc::new(Mutex::new(Vec::new()));
-        let changes = tokio::sync::watch::Sender::new(0);
-        let names = connected.clone();
-        let read = Arc::new(Notify::new());
-        let observed = read.clone();
-        inner.state =
-            inner
-                .state
-                .with_connected_environments(crate::product::ConnectedEnvironments {
-                    names: Arc::new(move || {
-                        let names = names.lock().unwrap().clone();
-                        observed.notify_one();
-                        names
-                    }),
-                    changes: changes.subscribe(),
-                });
+        let hooks_directory = tempfile::tempdir().unwrap();
+        let hooks = crate::agents::infrastructure::NativeHooksPreferences::open(
+            hooks_directory.path().join("hooks"),
+            Arc::new(TestClock),
+        )
+        .unwrap();
+        inner.state = inner.state.clone().with_native_hooks(hooks.clone());
         Self {
             inner,
-            connected,
-            changes,
-            read,
+            hooks,
+            _hooks_directory: hooks_directory,
         }
     }
 
-    /// `peer` connects: the list says so, then the count moves.
-    fn connects(&self, peer: &str) {
-        self.connected.lock().unwrap().push(peer.to_owned());
-        self.moved();
-    }
-
-    /// `peer`'s connection ends, or is revoked: the list no longer names
-    /// it, then the count moves.
-    fn goes(&self, peer: &str) {
-        self.connected.lock().unwrap().retain(|name| name != peer);
-        self.moved();
-    }
-
-    fn moved(&self) {
-        self.changes.send_modify(|count| *count += 1);
+    /// Claude's native hooks switched on or off, by one command.
+    async fn switch(&self, on: bool) {
+        self.hooks
+            .set(crate::agents::application::NativeHooksChange {
+                agent: crate::agents::application::NativeHooksAgent::Claude,
+                enabled: on,
+                request_id: format!("request-{on}"),
+                organization_id: "organization".into(),
+                principal_id: "principal".into(),
+                surface_id: "surface".into(),
+                caller_kind: "user".into(),
+            })
+            .await
+            .unwrap();
     }
 
     fn connect(&self) -> Client {
@@ -5055,51 +4959,36 @@ impl CatalogFixture {
     }
 }
 
-/// The places a catalog frame names.
-fn places(frame: &Value) -> Vec<String> {
+/// Claude's native hooks choice as a catalog frame names it.
+fn claude_hooks(frame: &Value) -> String {
     assert_eq!(frame["event"], "agents.listed", "{frame}");
-    serde_json::from_value(frame["payload"]["catalog"]["environments"].clone()).unwrap()
+    frame["payload"]["catalog"]["nativeHooks"]["claude"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
-fn peer(byte: &str) -> String {
-    format!("peer:{}", byte.repeat(32))
-}
-
-/// Rows AC1 and AC2 (`docs/design/record-subscriptions.md`), I10
-/// (`docs/design/auth/peer-gateways.md`): the catalog is sent after the
-/// reply, then again each time a paired environment connects, disconnects
-/// or is revoked, the same catalog `agents.list` answers then; a change that
+/// Rows AC1 and AC2 (`docs/design/record-subscriptions.md`): the catalog is
+/// sent after the reply, then again each time the native hooks choice
+/// changes, the same catalog `agents.list` answers then; a command that
 /// leaves it as it was sends nothing.
 #[tokio::test]
-async fn the_agent_catalog_is_sent_again_as_paired_environments_come_and_go() {
+async fn the_agent_catalog_is_sent_again_only_when_it_changes() {
     let fixture = CatalogFixture::new().await;
     let mut client = fixture.connect();
     let (id, first) = fixture.subscribe(&mut client, "agents").await;
-    assert_eq!(places(&first), ["build.example"]);
+    assert_eq!(claude_hooks(&first), "off");
+    fixture.switch(true).await;
+    let on = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(claude_hooks(&on), "on");
     let read = fixture.inner.call("agents.list", json!({})).await;
-    assert_eq!(read["payload"], first["payload"]["catalog"]);
-
-    let (e, f) = (peer("ab"), peer("cd"));
-    fixture.connects(&e);
-    let connected = client.until(&id, |_| true).await.remove(0);
-    assert_eq!(places(&connected), ["build.example", e.as_str()]);
-    fixture.connects(&f);
-    let both = client.until(&id, |_| true).await.remove(0);
-    assert_eq!(places(&both), ["build.example", e.as_str(), f.as_str()]);
-    let read = fixture.inner.call("agents.list", json!({})).await;
-    assert_eq!(read["payload"], both["payload"]["catalog"]);
-
-    // A connection that takes the place of another moves the count with
-    // the list as it was.
-    fixture.moved();
+    assert_eq!(read["payload"], on["payload"]["catalog"]);
+    // The same choice again moves the count and changes nothing.
+    fixture.switch(true).await;
     client.quiet(&id).await;
-
-    fixture.goes(&e);
-    let disconnected = client.until(&id, |_| true).await.remove(0);
-    assert_eq!(places(&disconnected), ["build.example", f.as_str()]);
-    fixture.goes(&f);
-    let revoked = client.until(&id, |_| true).await.remove(0);
-    assert_eq!(places(&revoked), ["build.example"]);
+    fixture.switch(false).await;
+    let off = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(claude_hooks(&off), "off");
     client.close().await;
 }
 
@@ -5149,11 +5038,11 @@ async fn review_snapshots_and_subscription_frames_continue_one_socket_numbering(
     client.close().await;
 }
 
-/// Row AC1 on a gateway that pairs no environments: nothing changes its
+/// Row AC1 on a gateway with no native hooks choice: nothing changes its
 /// catalog after startup, so the first frame is the only one, and the
 /// subscription stays open until stopped.
 #[tokio::test]
-async fn a_gateway_pairing_no_environments_sends_its_catalog_once() {
+async fn a_gateway_with_no_hooks_choice_sends_its_catalog_once() {
     let fixture = SubscriptionFixture::new().await;
     let mut client = fixture.connect();
     client.send("agents", "agents.subscribe", json!({}));
@@ -5162,10 +5051,8 @@ async fn a_gateway_pairing_no_environments_sends_its_catalog_once() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(
-        places(&client.until(&id, |_| true).await[0]),
-        ["build.example"]
-    );
+    let first = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(first["event"], "agents.listed", "{first}");
     client.quiet(&id).await;
     client.send("stop", "agents.unsubscribe", json!({"subscriptionId": id}));
     assert_eq!(client.reply("stop").await.0["ok"], true);
@@ -5180,42 +5067,33 @@ async fn changes_while_a_catalog_frame_waits_collapse_into_one_frame() {
     let fixture = CatalogFixture::new().await;
     let mut client = fixture.connect();
     let (id, _) = fixture.subscribe(&mut client, "agents").await;
-    timeout(EXPECTED, fixture.read.notified())
-        .await
-        .expect("initial catalog read");
     // All real fixture/authentication/storage setup is complete. The held
-    // phase uses synchronous catalog changes and the actual in-memory socket.
+    // phase holds the actual in-memory socket's writer.
     tokio::time::pause();
     fixture.inner.stall(&mut client).await;
-    let names: Vec<String> = ["01", "02", "03", "04", "05", "06"]
-        .into_iter()
-        .map(peer)
-        .collect();
-    fixture.connects(&names[0]);
-    // On this current-thread runtime the synchronous read returns to the
-    // shared loop, which offers its first frame before yielding here. The
-    // writer is still held, so later updates overlap an actual pending offer.
-    timeout(EXPECTED, fixture.read.notified())
-        .await
-        .expect("changed catalog read");
-    for name in &names[1..] {
-        fixture.connects(name);
+    fixture.switch(true).await;
+    // With the clock paused, a sleep ends only once every task is idle: the
+    // shared loop has read the changed catalog and offers its frame to the
+    // held writer, so the commands after it overlap an actual pending offer.
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    for on in [false, true, false, true, false] {
+        fixture.switch(on).await;
     }
     client.gate.open();
-    let mut expected = vec!["build.example".to_owned()];
-    expected.extend(names.iter().cloned());
-    let frames = client.until(&id, |frame| places(frame) == expected).await;
+    let frames = client
+        .until(&id, |frame| claude_hooks(frame) == "off")
+        .await;
     assert_eq!(frames.len(), 2, "the held frame and one latest frame: {frames:?}");
-    assert_eq!(places(&frames[0]), ["build.example", names[0].as_str()]);
+    assert_eq!(claude_hooks(&frames[0]), "on");
     tokio::time::resume();
     client.quiet(&id).await;
     client.close().await;
 }
 
-/// Row AC4 (row H9's fact kept apart): an environment connecting and going
-/// moves neither the conversation catalogue's head nor its list.
+/// Row AC4 (row H9's fact kept apart): a catalog change moves neither the
+/// conversation catalogue's head nor its list.
 #[tokio::test]
-async fn paired_environments_coming_and_going_never_move_the_conversation_catalogue() {
+async fn an_agent_catalog_change_never_moves_the_conversation_catalogue() {
     let fixture = CatalogFixture::new().await;
     let owner = caller(&fixture.inner.session, String::new());
     let head = || async {
@@ -5242,14 +5120,13 @@ async fn paired_environments_coming_and_going_never_move_the_conversation_catalo
         .to_owned();
     client.until(&list, |_| true).await;
     let (agents, _) = fixture.subscribe(&mut client, "agents").await;
-    let e = peer("ab");
-    fixture.connects(&e);
+    fixture.switch(true).await;
     client
-        .until(&agents, |frame| places(frame).contains(&e))
+        .until(&agents, |frame| claude_hooks(frame) == "on")
         .await;
-    fixture.goes(&e);
+    fixture.switch(false).await;
     client
-        .until(&agents, |frame| !places(frame).contains(&e))
+        .until(&agents, |frame| claude_hooks(frame) == "off")
         .await;
     client.quiet(&list).await;
     assert_eq!(head().await, before);
@@ -5263,7 +5140,7 @@ async fn a_second_agent_catalog_subscription_is_a_duplicate() {
     let fixture = CatalogFixture::new().await;
     // What the gateway's own state holds; the socket's copies of that state
     // and the subscription's wake source are counted on top while it is open.
-    let held = fixture.changes.receiver_count();
+    let held = fixture.hooks.readers();
     let mut client = fixture.connect();
     fixture.subscribe(&mut client, "agents").await;
     client.send("again", "agents.subscribe", json!({}));
@@ -5271,7 +5148,7 @@ async fn a_second_agent_catalog_subscription_is_a_duplicate() {
     assert_eq!(reply["error"]["code"], "subscription_duplicate", "{reply}");
     client.close().await;
     timeout(EXPECTED, async {
-        while fixture.changes.receiver_count() != held {
+        while fixture.hooks.readers() != held {
             tokio::task::yield_now().await;
         }
     })
@@ -5308,7 +5185,7 @@ async fn following_the_agent_catalog_is_admitted_as_reading_it_is() {
     let mut client = fixture.connect();
     let (id, _) = fixture.subscribe(&mut client, "agents").await;
     grants(&fixture.inner.authority, &["conversation.write"]);
-    fixture.connects(&peer("ab"));
+    fixture.switch(true).await;
     let ended = client.until(&id, |_| true).await.remove(0);
     assert_eq!(ended["event"], "conversation.subscriptionEnded", "{ended}");
     assert_eq!(ended["payload"]["reason"], "refused");
@@ -5351,25 +5228,9 @@ async fn each_unsubscribe_stops_only_its_own_kind() {
         agents.as_str(),
         "{reply}"
     );
-    fixture.connects(&peer("ab"));
+    fixture.switch(true).await;
     client.quiet(&agents).await;
     client.close().await;
-}
-
-/// Row AC8: the paired environments' change source closing ends the
-/// subscription `source_closed`.
-#[tokio::test]
-async fn the_environments_source_closing_ends_the_catalog_subscription() {
-    let fixture = CatalogFixture::new().await;
-    let mut client = fixture.connect();
-    let (id, _) = fixture.subscribe(&mut client, "agents").await;
-    let CatalogFixture { inner, changes, .. } = fixture;
-    drop(changes);
-    let ended = client.until(&id, |_| true).await.remove(0);
-    assert_eq!(ended["event"], "conversation.subscriptionEnded", "{ended}");
-    assert_eq!(ended["payload"]["reason"], "source_closed");
-    client.close().await;
-    drop(inner);
 }
 
 /// Row AC1: a catalog frame is the generated `AgentsListed`.
@@ -5380,7 +5241,10 @@ async fn an_agent_catalog_frame_is_the_generated_shape() {
     let (id, first) = fixture.subscribe(&mut client, "agents").await;
     let frame: AgentsListed = serde_json::from_value(first["payload"].clone()).unwrap();
     assert_eq!(frame.subscription_id, id);
-    assert_eq!(frame.catalog.environments, ["build.example"]);
+    assert_eq!(
+        serde_json::to_value(&frame.catalog).unwrap(),
+        first["payload"]["catalog"]
+    );
     client.close().await;
 }
 
@@ -5388,29 +5252,11 @@ async fn an_agent_catalog_frame_is_the_generated_shape() {
 /// `agents.list` answers then.
 #[tokio::test]
 async fn the_agent_catalog_is_sent_again_when_the_hooks_choice_changes() {
-    let mut fixture = CatalogFixture::new().await;
-    let hooks_directory = tempfile::tempdir().unwrap();
-    let hooks = crate::agents::infrastructure::NativeHooksPreferences::open(
-        hooks_directory.path().join("hooks"),
-        Arc::new(TestClock),
-    )
-    .unwrap();
-    fixture.inner.state = fixture.inner.state.clone().with_native_hooks(hooks.clone());
+    let fixture = CatalogFixture::new().await;
     let mut client = fixture.connect();
     let (id, first) = fixture.subscribe(&mut client, "agents").await;
     assert_eq!(first["payload"]["catalog"]["nativeHooks"]["claude"], "off");
-    hooks
-        .set(crate::agents::application::NativeHooksChange {
-            agent: crate::agents::application::NativeHooksAgent::Claude,
-            enabled: true,
-            request_id: "request-on".into(),
-            organization_id: "organization".into(),
-            principal_id: "principal".into(),
-            surface_id: "surface".into(),
-            caller_kind: "user".into(),
-        })
-        .await
-        .unwrap();
+    fixture.switch(true).await;
     let changed = client.until(&id, |_| true).await.remove(0);
     assert_eq!(changed["payload"]["catalog"]["nativeHooks"]["claude"], "on");
     let read = fixture.inner.call("agents.list", json!({})).await;

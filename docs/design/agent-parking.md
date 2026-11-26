@@ -48,7 +48,7 @@ different rule, because its VM is billed while it runs:
   A cloud background command runs in that thread's VM under Shepherd and holds
   the workspace runtime's `InUse` token. Commands a provider starts outside
   `background.start`, including its own built-in shell, are not counted.
-- Once its slot is released, its SSH link is let go (`SshEnvironment::let_go`,
+- (Retired with SSH hosts, ADR 1417.) Once its slot was released, its SSH link was let go (`SshEnvironment::let_go`,
   only while nothing holds it: no lease, and no opening between taking the
   link and recording its grant; asked again for half a minute while the
   stopped agent's holders wind down) and its VM is stopped through

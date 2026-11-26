@@ -31,8 +31,6 @@ import {
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
-  mintClaudeSignIn,
-  claudeSignInMintAvailable,
   saveFile,
   writeClipboardText,
 } from "../host"
@@ -55,8 +53,8 @@ import {
   McpServersProvider,
   NativeHooksProvider,
   DecisionSettingsProvider,
+  TerminalResumeProvider,
   PermissionRulesProvider,
-  SavedLoginsProvider,
   VoiceKeyProvider,
 } from "./settings"
 import { makeDesktopStore } from "./store"
@@ -190,10 +188,8 @@ const dependencies = createDesktopDependencies({
   signInToProvider,
   paths: channelPaths,
   providerLoginAvailable,
-  mintClaudeSignIn: { available: claudeSignInMintAvailable, mint: mintClaudeSignIn },
   // The window's navigation policy hands an http(s) address to the person's
   // browser and keeps the window where it is (src-tauri/src/links.rs).
-  openInBrowser: hasNativeHost() ? (url) => window.location.assign(url) : undefined,
   gateway,
   reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
@@ -344,25 +340,25 @@ function DesktopRoot() {
                                         <DecisionSettingsProvider
                                           gateway={dependencies.decisionSettings}
                                         >
-                                          <PermissionRulesProvider
-                                            gateway={dependencies.permissionRules}
+                                          <TerminalResumeProvider
+                                            gateway={dependencies.terminalResume}
                                           >
-                                            <BoatProvider gateway={dependencies.boat}>
-                                              <ReplyStyleProvider
-                                                gateway={dependencies.replyStyle}
-                                              >
-                                                <Agent37Provider
-                                                  gateway={dependencies.agent37}
+                                            <PermissionRulesProvider
+                                              gateway={dependencies.permissionRules}
+                                            >
+                                              <BoatProvider gateway={dependencies.boat}>
+                                                <ReplyStyleProvider
+                                                  gateway={dependencies.replyStyle}
                                                 >
-                                                  <GithubProvider
-                                                    gateway={dependencies.github}
-                                                    avatar={githubAvatar}
+                                                  <Agent37Provider
+                                                    gateway={dependencies.agent37}
                                                   >
-                                                    <VoiceKeyProvider
-                                                      gateway={dependencies.voiceKey}
+                                                    <GithubProvider
+                                                      gateway={dependencies.github}
+                                                      avatar={githubAvatar}
                                                     >
-                                                      <SavedLoginsProvider
-                                                        gateway={dependencies.savedLogins}
+                                                      <VoiceKeyProvider
+                                                        gateway={dependencies.voiceKey}
                                                       >
                                                         <VoiceProvider
                                                           controller={voice}
@@ -399,13 +395,13 @@ function DesktopRoot() {
                                                             />
                                                           </CodeBlockProvider>
                                                         </VoiceProvider>
-                                                      </SavedLoginsProvider>
-                                                    </VoiceKeyProvider>
-                                                  </GithubProvider>
-                                                </Agent37Provider>
-                                              </ReplyStyleProvider>
-                                            </BoatProvider>
-                                          </PermissionRulesProvider>
+                                                      </VoiceKeyProvider>
+                                                    </GithubProvider>
+                                                  </Agent37Provider>
+                                                </ReplyStyleProvider>
+                                              </BoatProvider>
+                                            </PermissionRulesProvider>
+                                          </TerminalResumeProvider>
                                         </DecisionSettingsProvider>
                                       </NativeHooksProvider>
                                     </DecisionsProvider>

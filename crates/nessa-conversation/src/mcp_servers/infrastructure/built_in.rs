@@ -19,8 +19,11 @@
 //! end, whether or not anyone is left to read its answer.
 use super::grants::ConversationGrants;
 use crate::mcp_servers::application::{BuiltInAnswer, BuiltInServer};
-use nessa_sdk::domain::agent_execution::sessions::SessionId;
-use serde_json::{json, Value};
+use nessa_sdk::{
+    domain::agent_execution::sessions::SessionId,
+    infrastructure::mcp::{handle_skill_method, insert_server_skills_capabilities},
+};
+use serde_json::{json, Map, Value};
 use std::{collections::HashMap, io, sync::Arc};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt},
@@ -33,7 +36,7 @@ pub const MAX_BUILT_IN_LINE_BYTES: usize = 64 * 1024;
 pub const MAX_BUILT_IN_CALLS: usize = 8;
 /// The MCP versions served, newest first: an `initialize` asking another is
 /// answered with the newest.
-const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+const PROTOCOL_VERSIONS: [&str; 4] = ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Serve `server` to the stand-in of SDK session `session`'s open, whose
 /// grant `token` names, until the stand-in goes or the grant is revoked.
@@ -132,9 +135,14 @@ fn handle(
                 .into_iter()
                 .find(|version| Some(*version) == asked)
                 .unwrap_or(PROTOCOL_VERSIONS[0]);
+            let mut capabilities = Map::new();
+            capabilities.insert("tools".to_owned(), json!({"listChanged": false}));
+            if server.skills().is_some_and(|catalog| !catalog.is_empty()) {
+                insert_server_skills_capabilities(&mut capabilities);
+            }
             json!({
                 "protocolVersion": version,
-                "capabilities": {"tools": {"listChanged": false}},
+                "capabilities": Value::Object(capabilities),
                 "serverInfo": {"name": server.name(), "version": env!("CARGO_PKG_VERSION")},
             })
         }
@@ -172,7 +180,17 @@ fn handle(
             });
             return None;
         }
-        Some(_) => return Some(error(id, -32601, "no such method")),
+        Some(other) => {
+            if let Some(catalog) = server.skills().filter(|catalog| !catalog.is_empty()) {
+                if let Some(handled) = handle_skill_method(catalog, other, &params) {
+                    return Some(match handled {
+                        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                        Err((code, message)) => error(id, code, &message),
+                    });
+                }
+            }
+            return Some(error(id, -32601, "no such method"));
+        }
     };
     Some(json!({"jsonrpc": "2.0", "id": id, "result": result}))
 }

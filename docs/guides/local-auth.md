@@ -314,223 +314,13 @@ On first start the gateway creates a private `native-pairing/` directory beside
 `auth/` and publishes its pairing key there before binding anything. A missing key
 with enrollment history refuses startup rather than generating a new one.
 
-To run conversations on another machine you can already `ssh` into, name it in
-`sshHosts`: an OpenSSH destination (a `~/.ssh/config` alias or `user@host`; put a
-port or jump host in `~/.ssh/config`), at most 16. The composer then offers
-"Run on" for a new conversation, and the conversation stays on that host for its
-whole life. The host needs this same build of `nessa` on its `PATH` and its own
-`config.json` with an `agents` section; the gateway runs
-`ssh -T -o BatchMode=yes <host> nessa env serve` with your own keys and config,
-and refuses a host whose build speaks another lease protocol:
-
-```json
-{
-  "sshHosts": ["devbox", "me@build.example.com"]
-}
-```
-
-A machine the gateway cannot reach, such as one behind NAT, can dial in
-instead. Create an environment invitation on the gateway
-(`pairing.create` with `{"enrollee":"environment"}`), then on that machine,
-which needs this same build and its own `config.json` with an `agents`
-section:
-
-```sh
-nessa env enroll gateway.example:47650 CODE  # native.listenAddress on the gateway
-nessa env dial gateway.example:47650         # waits for your approval, then serves
-```
-
-Approve its key on the gateway. While `env dial` runs, the machine is offered
-as "Paired machine" plus the first eight characters of its key, and is named
-`peer:` followed by its key elsewhere. It dials again whenever its
-connection ends, waiting up to a minute between tries, and stops on Ctrl-C
-or SIGTERM. Revoking its credential stops the next lease it is given.
-
-If the gateway serves through a relay (`native.relay` in its `config.json`), add
-`--relay relay.example:7444` to `env dial`: whenever the gateway's own
-address does not answer within a moment, the machine asks the relay for it
-instead, both while it waits for your approval and for every connection
-after. Enrolling still needs the gateway's own address.
-
-A machine that dials in runs nothing for the gateway until you grant it, on
-that machine. Grants are kept in `environment/grants.json` beside its
-pairing and read again for every lease, so a change applies from the next
-one:
-
-```sh
-nessa env grant --agent claude                          # the gateway this machine paired with
-nessa env grant --commands --max-timeout 10m            # commands, each cut to at most 10 minutes
-nessa env grant --max-lease 8h                          # each agent lease ended after 8 hours
-nessa env grant --logins                                # take the gateway's saved logins
-nessa env ungrant --commands
-nessa env grants                                        # every entry, as JSON
-```
-
-A second `--max-timeout` replaces the first, shorter or longer, and a second
-`--max-lease` likewise. Past its `--max-lease`, this machine stops the
-agent's harness itself and the gateway records the lease as expired; with
-none, a lease lasts until it is ended. `ungrant --all` takes the limit back.
-
-With `--logins`, the gateway may hand an agent it starts here the login
-saved for that agent in its vault (Settings › Connections › Accounts ›
-Saved logins), once its owner also turns on "Use my saved logins here" for
-this machine in Devices. It goes in the agent's login variable
-(`CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY` for an Anthropic API key;
-`CODEX_API_KEY`; `OPENCODE_API_KEY`) only when
-this machine has no sign-in of its own for that agent: none of its login
-variables, and no sign-in file the harness will read
-(`~/.claude/.credentials.json`, `~/.codex/auth.json`). A saved Codex key
-also selects the adapter's api-key method and one `CODEX_HOME` for this
-host, whose credential store is ephemeral, because the variable alone does
-not sign the pinned Codex in. The key is not written into that directory.
-Codex keeps its threads there, so a later harness on this host can resume
-them. OpenCode is started
-in a private data directory, so `~/.local/share/opencode/auth.json` is not
-that sign-in; `OPENCODE_API_KEY` in the harness environment is. A Claude
-sign-in kept only in a Mac's keychain is not seen. The login is not written
-into the user's own sign-in files. `ungrant --logins` takes it back.
-
-`--peer ssh` changes what a gateway reaching this machine over SSH gets
-instead. SSH takes saved logins without an entry. Without an entry, SSH keeps everything the machine's `config.json`
-runs, so to narrow it run `nessa env ungrant --peer ssh --all` and then grant
-what it keeps. A grant only narrows: `config.json` still decides what the
-machine runs at all, and `envServe.commands` must be on for any command. A
-lease the machine did not grant is shown as the environment being
-unavailable, and the `run` tool answers `environment_not_granted`.
-Each change is kept, with who made it and the grant before and after, in
-`environment/grants-audit.jsonl`; a change that cannot be recorded there is
-not made.
-
-When the gateway is updated to a build that speaks another lease protocol,
-it refuses this machine's connection and says which protocol it speaks. If
-this machine lets that gateway run commands (`nessa env grant --commands`),
-it then asks the gateway for its build, checks its size, its SHA-256 and the
-protocol the copy itself says, keeps it in `environment/builds/` beside its
-pairing, and runs it in its own place with the same arguments. Every later
-start of the same `nessa` runs the kept build first, so a container started
-again from its old image still serves; a newer image runs itself. Without
-that grant, nothing is fetched: the machine logs that its build is out of
-date and keeps dialing until it runs the gateway's build. A gateway allowed
-only agents never gets to run a build here, since an agent's harness may be
-sandboxed and a build is not. Another protocol is followed whichever way it
-moved, so a gateway rolled back takes its machines back too. A fetch that
-fails is tried again after ten minutes, and the gateway sends one machine its
-build at most once in ten minutes; the builds kept are only the current one.
-
-To serve one gateway from a container, run one container per gateway, and so
-per organization: a gateway is one organization, and a machine is paired with
-one gateway. [docs/guides/env-worker/](env-worker/) has an example image and a
-compose file. The container runs the same command on every start:
-
-```sh
-nessa env dial gateway.example:47650 --enroll-code-file /run/secrets/nessa_enroll_code --drain-deadline 20s
-```
-
-`--enroll-code-file` reads the code of an environment invitation from a file,
-such as a mounted secret, only while nothing is paired on the machine's data
-volume. Before it sends the code, it records the gateway's address there. A
-restart, approved or not yet, finds the machine paired with that same address,
-written the same way, sends nothing and goes on to wait for approval or dial.
-A volume paired with another gateway, or with one it did not record (paired
-by `env enroll` before this flag existed), is refused rather than dialed: run
-`env dial` without `--enroll-code-file` to serve it, or remove its
-`environment/pairing` directory to pair it again. A start that cannot reach
-the gateway to enroll exits, and the container's restart policy tries again.
-
-The container runs as its own account (uid 10001 in the example), which must
-be able to read the code file, and must own `config.json`, readable by no one
-else (`chmod 600`): `nessa` refuses a configuration another account could have
-written.
-
-`--drain-deadline` turns the container runtime's SIGTERM into a drain. The
-machine refuses new leases, ends each one it holds with its cleanup recorded on
-both sides, waits until the gateway has answered every end, and exits. The
-gateway records each drained lease as stopped by the system. Set the deadline
-below the container's stop grace (`stop_grace_period`), so the drain finishes
-before the runtime kills the process; past the deadline, the connection is
-closed and what is still held is lost. A second signal closes it at once.
-
-Grant the gateway what it may run there with `nessa env grant` against the same
-volume, for example `docker compose run --rm --entrypoint nessa worker-acme env
-grant --agent claude`. Grants and pairing live on the volume, so they survive
-a replace.
-
-Replace a worker by stopping the old container before starting the new one on
-the same volume, which is what `docker compose up -d --force-recreate` does for
-a single service. Two containers never serve one volume at once: the second
-waits up to 15 seconds for the first to let go of the volume, then exits, and
-its restart policy starts it again.
-
-Run several workers for one gateway, each on a volume of its own and paired
-with an invitation of its own, and create conversations on `peer:any`: the
-gateway puts each on the first worker in Devices › Thread order (config.json
-`pool`) that is online and not busy, the one with the fewest agents running
-among equals, and keeps it there while that worker serves. A channel can keep
-an order of its own; see [Worker pool preferences](../design/worker-pool-preferences.md). To replace a worker with no gap, start the new
-one on a new volume first, then stop the old one: draining, it tells the
-gateway at once, its leases end, and the next message to each of its
-conversations starts that conversation's agent on another worker, with new
-context (its earlier provider session stays on the old worker's volume).
-
-To bound what one organization runs at once across its workers, set
-`limits.organizationLeases` and `limits.organizationCommands` on the gateway
-(0, the default, bounds nothing). Past either, the lease or command is refused
-as the environment being busy.
-
-To let the agent run single commands on a host with its `run` tool (beside
-`environments_list`), name the host in `environmentTools.commandHosts` on the
-gateway, and on the host itself set `envServe.commands` in its `config.json`.
-A host is an SSH destination from `sshHosts`, or a paired machine by its
-`peer:` name. Both are off until set. A command runs as the host's account, in its workspace,
-with nothing enclosing it, so the person's approval card is the check. The
-gateway's tool policy matches each program by its file name; `denyPrograms`
-wins over `allowPrograms`, and omitting `allowPrograms` allows every other
-program. With `allowPrograms`, a program must be named bare (`cargo`), never
-by a path. The host looks a bare name up only in the absolute directories of
-its `PATH` that are outside its workspace, so a file the agent wrote in the
-workspace is never run under an allowed name. The allow-list is a tool
-policy, not a sandbox: an approved command that writes a program into another
-directory on the host's `PATH`, such as `~/.local/bin`, can plant one there, and
-any allowed program that runs code it is given (`cargo`, `make`) runs whatever
-that code says. Limits are in [docs/limits.md](../limits.md) (`command.*`).
-
-```json
-{
-  "sshHosts": ["devbox"],
-  "environmentTools": {
-    "commandHosts": ["devbox"],
-    "allowPrograms": ["cargo", "make", "ls"],
-    "denyPrograms": ["rm"]
-  }
-}
-```
-
-On the host:
-
-```json
-{
-  "envServe": { "commands": true }
-}
-```
-
-To let the agent place a file the conversation holds in the host's workspace
-with its `artifacts_fetch` tool, set `envServe.artifactsIn` in the host's
-`config.json`. It is off until set, and every fetch is refused until it is. A
-fetched file is written as the host's account into a private part beside the
-host's outbox, checked against its size and SHA-256 there, and then linked at
-its destination inside the workspace, in a directory that already exists and
-only where nothing is: an existing file is never replaced. It gets the mode the
-account's other new files get (0666 less its umask). The agent fetches
-only under its own lease, on the host where it runs, and only files its
-conversation holds for the person whose turn asked. Limits are in
-[docs/limits.md](../limits.md) (`artifact.fetch_bytes`,
-`artifact.fetch_call_wait`, `artifact.host_fetches_in_flight`).
-
-```json
-{
-  "envServe": { "commands": true, "artifactsIn": true }
-}
-```
+Every gateway runs only its own agents ([ADR 1417](../adr/todo/1417-gateways-everywhere.md)).
+To work on another machine, run a gateway there and link the desktop or phone
+to it directly. The keys an older build read for remote machines (`sshHosts`,
+`defaultEnvironment`, `envServe`, `environmentTools` and `pool`) are still
+accepted in `config.json` so an upgraded gateway starts, and are ignored. A
+conversation an older build placed on another machine keeps its history, and
+a new message to it is refused `environment_not_configured`.
 
 Omitted fields use defaults. Restart the gateway after editing; offline auth
 commands read the same settings on each invocation. Positive integers are required;
@@ -563,6 +353,23 @@ meaningful actions/batches at checkpoints; a single admission must not grant an
 unlimited stream of future operations.
 
 Settings do not change platform private-file checks.
+
+## App authoring rollback floor
+
+The compatibility reader can validate a previously recorded `app.author` grant
+for an integration, including a revoked credential. This does not let any
+issuance path create that grant and does not authorize an app-authoring
+operation. The compatibility rule does not turn on an app feature.
+
+If authoring issuance is enabled in a later release, confirm first that all
+binaries that might open that live registry, including the rollback build,
+carry this reader support. Older readers reject the stored grant even after
+its credential is revoked. Roll back authoring by disabling its entry point
+and revoking the exact authoring credential through the current compatible
+registry owner, while keeping the current registry and its receipts. Do not
+replace it with a pre-provision snapshot: that can discard ordinary credential
+revocations and receipts recorded later. Replacing the surface token file does
+not itself revoke the credential.
 
 ## Windows storage
 

@@ -15,7 +15,6 @@ test("every required step appears as often as its number says", () => {
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
   assert.equal(count("background"), knobs.backgroundTasks)
-  assert.equal(count("vmBackground"), knobs.vmBackgroundTasks)
   assert.equal(count("inputFiles"), knobs.inputFiles)
   assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("pairedCatalogue"), 1)
@@ -53,10 +52,6 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("trace"), knobs.traces)
   assert.equal(count("transcriptView"), knobs.transcriptViews)
   assert.equal(count("notice"), knobs.notices)
-  assert.equal(count("pool"), knobs.pools)
-  assert.equal(count("place"), knobs.places)
-  assert.equal(count("devices"), knobs.devices)
-  assert.equal(count("ssh"), knobs.sshHosts)
   assert.equal(count("tunnel"), knobs.tunnels)
   assert.equal(count("drift"), knobs.drifts)
   assert.equal(count("upgrade"), knobs.upgrades)
@@ -183,8 +178,6 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         failedControls: "0",
         inputFiles: "0",
         backgroundTasks: "0",
-        vmBackgroundTasks: "0",
-        cloudChoices: "0",
         windows: "0",
         controls: "0",
         linkings: "0",
@@ -198,10 +191,6 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         traces: "0",
         transcriptViews: "0",
         notices: "0",
-        pools: "0",
-        places: "0",
-        devices: "0",
-        sshHosts: "0",
         tunnels: "0",
         drifts: "0",
         upgrades: "0",
@@ -209,14 +198,13 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         terminals: "0",
+        resumes: "0",
         runs: "0",
         composers: "0",
         pickers: "0",
         raises: "0",
         githubs: "0",
         voices: "0",
-        logins: "0",
-        chatgpts: "0",
         passphrases: "0",
         channels: "0",
         huddles: "0",

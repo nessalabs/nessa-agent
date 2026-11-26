@@ -3737,6 +3737,7 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
  "nessa-local-storage",
+ "nessa-types",
  "opaque-ke",
  "ring",
  "rustls",
@@ -3760,7 +3761,6 @@ dependencies = [
  "hmac",
  "libc",
  "nessa-auth",
- "nessa-env-serve",
  "nessa-local-database",
  "nessa-local-storage",
  "nessa-protocol",
@@ -3822,7 +3822,6 @@ dependencies = [
  "nessa-attachments",
  "nessa-auth",
  "nessa-device-pairing",
- "nessa-env-serve",
  "nessa-local-database",
  "nessa-local-storage",
  "nessa-mcp-authorization",
@@ -3831,6 +3830,7 @@ dependencies = [
  "nessa-sdk",
  "nessa-sync",
  "nessa-timer",
+ "nessa-types",
  "nessa-vault",
  "regex",
  "reqwest 0.13.4",
@@ -3899,32 +3899,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nessa-env-serve"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "cedar-policy",
- "libc",
- "nessa-auth",
- "nessa-client-core",
- "nessa-device-pairing",
- "nessa-local-storage",
- "nessa-protocol",
- "nessa-sdk",
- "nessa-timer",
- "serde",
- "serde_json",
- "sha2",
- "shepherd",
- "tempfile",
- "tokio",
- "toml_edit 0.25.13+spec-1.1.0",
- "tracing",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "nessa-gateway"
 version = "0.1.0"
 dependencies = [
@@ -3956,7 +3930,6 @@ dependencies = [
  "nessa-conversation",
  "nessa-device-client",
  "nessa-device-pairing",
- "nessa-env-serve",
  "nessa-gateway-endpoint",
  "nessa-images",
  "nessa-local-database",
@@ -3978,7 +3951,6 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest 0.13.4",
- "ring",
  "rustls",
  "security-framework",
  "security-framework-sys",
@@ -4201,7 +4173,6 @@ dependencies = [
  "nessa-conversation",
  "nessa-device-client",
  "nessa-device-pairing",
- "nessa-env-serve",
  "nessa-gateway",
  "nessa-gateway-endpoint",
  "nessa-images",

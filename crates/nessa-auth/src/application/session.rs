@@ -1,6 +1,9 @@
 //! Session entry verifies identity and asks the injected policy whether the
 //! original issuance permits entry. Callers still authorize each operation against
 //! fresh state and own invalidation/expiry handling for open connections.
+mod app;
+pub use app::{AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession};
+
 use super::ports::{
     AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
     Decision, PolicyEvaluator, SessionEvidence, SessionVerifier,
@@ -51,43 +54,53 @@ impl ReadCurrentSession<'_> {
         &self,
         session: &AuthenticatedSession,
     ) -> Result<AccessSnapshot, AccessError> {
-        let context = session.context();
-        let snapshot = self.access.read(context.credential_id()).await?;
-        if snapshot.revision < session.auth_revision() {
-            return Err(AccessError::StaleRevision);
-        }
-        let credential = &snapshot.credential;
-        let membership = &snapshot.membership;
-        if !snapshot.origin.matches(credential, snapshot.revision) {
-            return Err(AccessError::IdentityMismatch);
-        }
-        let now = self.clock.unix_seconds();
-        if credential.revoked_at().is_some() {
-            return Err(AccessError::CredentialRevoked);
-        }
-        if session.expires_at().is_some_and(|expiry| now >= expiry)
-            || credential.expires_at().is_some_and(|expiry| now >= expiry)
-        {
-            return Err(AccessError::CredentialExpired);
-        }
-        if !credential.is_valid_at(now) {
-            return Err(AccessError::InvalidCredential);
-        }
-        if credential.id() != context.credential_id()
-            || credential.principal_id() != context.principal_id()
-            || credential.organization_id() != context.organization_id()
-            || credential.audience_id() != context.audience_id()
-            || membership.id() != context.membership_id()
-            || membership.principal_id() != context.principal_id()
-            || membership.organization_id() != context.organization_id()
-        {
-            return Err(AccessError::IdentityMismatch);
-        }
-        if !membership.is_active() {
-            return Err(AccessError::InactiveMembership);
-        }
+        let snapshot = self.access.read(session.context().credential_id()).await?;
+        validate_current(session, &snapshot, self.clock)?;
         Ok(snapshot)
     }
+}
+
+/// Shared expiry, lifecycle and identity checks for verified sessions.
+fn validate_current(
+    session: &AuthenticatedSession,
+    snapshot: &AccessSnapshot,
+    clock: &dyn Clock,
+) -> Result<(), AccessError> {
+    let context = session.context();
+    if snapshot.revision < session.auth_revision() {
+        return Err(AccessError::StaleRevision);
+    }
+    let credential = &snapshot.credential;
+    let membership = &snapshot.membership;
+    if !snapshot.origin.matches(credential, snapshot.revision) {
+        return Err(AccessError::IdentityMismatch);
+    }
+    let now = clock.unix_seconds();
+    if credential.revoked_at().is_some() {
+        return Err(AccessError::CredentialRevoked);
+    }
+    if session.expires_at().is_some_and(|expiry| now >= expiry)
+        || credential.expires_at().is_some_and(|expiry| now >= expiry)
+    {
+        return Err(AccessError::CredentialExpired);
+    }
+    if !credential.is_valid_at(now) {
+        return Err(AccessError::InvalidCredential);
+    }
+    if credential.id() != context.credential_id()
+        || credential.principal_id() != context.principal_id()
+        || credential.organization_id() != context.organization_id()
+        || credential.audience_id() != context.audience_id()
+        || membership.id() != context.membership_id()
+        || membership.principal_id() != context.principal_id()
+        || membership.organization_id() != context.organization_id()
+    {
+        return Err(AccessError::IdentityMismatch);
+    }
+    if !membership.is_active() {
+        return Err(AccessError::InactiveMembership);
+    }
+    Ok(())
 }
 
 /// Reconstruct current identity only after a trusted adapter verifies an opaque

@@ -26,7 +26,6 @@ diagramLinks:
   Tooling: "tooling"
   Journeys: "user-flow-coverage"
   GitHubRelay: "github-webhooks"
-  Environment: "gateway-environment-leases"
   Peers: "gateway-peer-gateways"
   Sync: "sync"
 ---
@@ -61,7 +60,6 @@ flowchart TB
     Extensions[Extensions and UI integration]
     Tooling[Developer and release tooling]
     GitHubRelay[Optional hosted GitHub relay]
-    Environment[Remote environment lease worker]
     Peers[Paired peer gateways]
     Sync[Sync engine and followers]
     Host -->|mounts surfaces| Desktop
@@ -78,7 +76,6 @@ flowchart TB
     Gateway -->|configured secrets| Credentials
     Extensions -->|host integration| Desktop
     Tooling -->|build artifacts| Host
-    Gateway -->|bounded remote work leases| Environment
     Gateway -->|authorized peer record reads| Peers
     Gateway -->|record and catalogue pages| Sync
     GitHubRelay -->|opt-in retained events| Gateway

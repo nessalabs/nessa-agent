@@ -345,9 +345,7 @@ fn bind_failure(error: RecordSessionError) -> ReadFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nessa_protocol::pairing::wire::{
-        encode_record_carrier_accepted, encode_refused, encode_serving,
-    };
+    use nessa_protocol::pairing::wire::{encode_record_carrier_accepted, encode_refused};
 
     #[test]
     fn only_an_explicit_selector_acceptance_admits_bind() {
@@ -358,10 +356,6 @@ mod tests {
         assert_eq!(
             accept_selection(Ok(encode_refused().unwrap())),
             Err(ReadFailure::Refused)
-        );
-        assert_eq!(
-            accept_selection(Ok(encode_serving().unwrap())),
-            Err(ReadFailure::Protocol)
         );
         assert_eq!(accept_selection(Ok(Vec::new())), Err(ReadFailure::Protocol));
         for kind in [

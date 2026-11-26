@@ -2137,8 +2137,8 @@ it("accepts a view's bounded notes and refuses an incoherent one", async () => {
 
 const credentialId = "device-credential"
 const drivePolicy: ConversationToolPolicy = {
-  preset: "read_only_tools",
-  commandHosts: ["devbox"],
+  allow: ["Read"],
+  deny: [],
 }
 
 it("grants, changes and revokes a share under a stable request id", async () => {
@@ -2148,7 +2148,7 @@ it("grants, changes and revokes a share under a stable request id", async () => 
     ...(method === "conversation.share" ? { policyRevision: 7 } : {}),
   }))
   const api = createConversationApi({ request }, () => "action")
-  const policy = { preset: "read_only_tools" as const, commandHosts: ["devbox"] }
+  const policy = { allow: ["Read"], deny: [] as string[] }
   expect(
     await api.share(conversationId, credentialId, ["read", "comment", "drive"], policy),
   ).toEqual({
@@ -2157,7 +2157,7 @@ it("grants, changes and revokes a share under a stable request id", async () => 
     policyRevision: 7,
   })
   // Changing the caller's own object after the call changes nothing sent.
-  policy.commandHosts.push("other")
+  policy.allow.push("Write")
   await api.share(conversationId, credentialId, ["read"], undefined, {
     expectedPolicyRevision: 7,
   })
@@ -2303,7 +2303,7 @@ it("rejects an unshare answer for another request", async () => {
 const grant = {
   credentialId,
   capabilities: ["read", "comment", "drive"] as const,
-  policy: { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
+  policy: { allow: ["Read"], deny: [] },
   policyRevision: 2,
   grantedAtMs: 1_700_000_000_000,
 }
@@ -2329,8 +2329,7 @@ it("lists one page of a conversation's grants within the published bounds", asyn
     conversationId,
     pageSize: bounds.maxSharePage,
   })
-  // A full allow list, a full deny list, and every host, including one at the
-  // longest destination config.json accepts.
+  // A full allow list and a full deny list.
   request.mockResolvedValue({
     changeRevision: 1,
     items: [
@@ -2339,10 +2338,6 @@ it("lists one page of a conversation's grants within the published bounds", asyn
         policy: {
           allow: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `a${n}`),
           deny: Array.from({ length: bounds.maxToolPolicyPatterns }, (_, n) => `d${n}`),
-          commandHosts: [
-            ...Array.from({ length: bounds.maxCommandHosts - 1 }, (_, n) => `h${n}`),
-            "h".repeat(bounds.maxCommandHostBytes),
-          ],
         },
       },
     ],
@@ -2406,26 +2401,8 @@ it.each([
   ["an unknown preset", { items: [{ ...grant, policy: { preset: "anything" } }] }],
   ["an empty policy", { items: [{ ...grant, policy: { allow: [], deny: [] } }] }],
   [
-    "an empty host list",
-    { items: [{ ...grant, policy: { preset: "all", commandHosts: [] } }] },
-  ],
-  [
-    "a host named twice",
-    { items: [{ ...grant, policy: { preset: "all", commandHosts: ["a", "a"] } }] },
-  ],
-  [
-    "a host past its bytes",
-    {
-      items: [
-        {
-          ...grant,
-          policy: {
-            preset: "all",
-            commandHosts: ["h".repeat(bounds.maxCommandHostBytes + 1)],
-          },
-        },
-      ],
-    },
+    "command hosts, which no policy names any more",
+    { items: [{ ...grant, policy: { preset: "all", commandHosts: ["devbox"] } }] },
   ],
   ["an unknown field", { items: [{ ...grant, extra: true }] }],
   ["a negative revision", { items: [{ ...grant, policyRevision: -1 }] }],

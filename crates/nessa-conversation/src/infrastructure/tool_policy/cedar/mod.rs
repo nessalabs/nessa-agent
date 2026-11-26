@@ -1,21 +1,19 @@
 //! The turn policies answered by Cedar (slice J4 of #707, ADR 803 step 4,
-//! gate 18): which tools a turn may call, where it may run commands and
-//! which programs, and what an MCP App may ask.
+//! gate 18): which tools a turn may call, and what an MCP App may ask.
 //!
 //! Composition builds each evaluator once and injects it behind its
 //! application port. Callers pass typed facts and get a typed decision that
-//! names the policies behind it; Cedar stays in this directory. The three
+//! names the policies behind it; Cedar stays in this directory. The two
 //! share one bundle, one schema, and one way of asking (`request.rs`).
 //!
 //! ```text
 //! composition ──▶ Cedar…PolicyEvaluator::new()
 //!                     │ bundle.rs loads and strictly validates
 //!                     ▼
-//!               schema.json + tools.cedar + commands.cedar + apps.cedar
+//!               schema.json + tools.cedar + apps.cedar
 //!               (every policy has a unique @id)
 //!
-//! ToolPolicyEvaluator    ──▶ evaluator.rs          ──┐
-//! CommandPolicyEvaluator ──▶ command_evaluator.rs  ──┼─▶ request.rs: entities + request
+//! ToolPolicyEvaluator    ──▶ evaluator.rs          ──┬─▶ request.rs: entities + request
 //! AppCallPolicyEvaluator ──▶ app_evaluator.rs      ──┘        │
 //!                                                              ▼
 //!                               Cedar Authorizer ──▶ Allow / Refuse with the deciding @ids
@@ -39,16 +37,6 @@
 //! `tool.rules.unlisted`, where `<i>` is the pattern's place in its list.
 //! An id under `tool.rules.` is never checked in.
 //!
-//! **Commands** (`commands.cedar`): the gateway as configured (its command
-//! hosts, whether it has an allow-list, the programs allowed and denied,
-//! built once from `CommandPolicy`), the host asked about, the initiator
-//! with the hosts a grant names for itself, and the program as named with
-//! its file name. The owner uses every configured host
-//! (`command.owner_host`); a grant only a configured host it names itself,
-//! and none when it names none (`command.grant_host`). With an allow-list
-//! only a bare name on it runs (`command.unlisted_program`), and a denied
-//! file name never does (`command.denied_program`).
-//!
 //! **MCP Apps** (`apps.cedar`): the app with the server whose tool call drew
 //! it, the server it names, and the tool as that server listed it, with
 //! whether its visibility includes apps. An app reaches its own server
@@ -64,10 +52,7 @@
 //! reserved list, and its own port and evaluator beside `evaluator.rs`. Entity
 //! types are shared: a set that needs another fact of a grant adds it to
 //! `Nessa::Grant`, and `request.rs`'s `grant` builds the entity for every
-//! evaluator with every fact its caller holds. `commandHosts` is optional and
-//! present only when the command evaluator asks: a tool policy must never
-//! read it, since a forbid over a missing attribute is skipped, not applied.
-//! Every policy is validated with every other when the bundle loads.
+//! evaluator with every fact its caller holds. Every policy is validated with every other when the bundle loads.
 //!
 //! A bundle that does not validate, a grant's rules that do not, and any
 //! evaluation error are `ToolPolicyUnavailable`, which every caller refuses:
@@ -76,13 +61,11 @@
 
 mod app_evaluator;
 mod bundle;
-mod command_evaluator;
 mod evaluator;
 mod grant_rules;
 mod request;
 
 pub use app_evaluator::CedarAppCallPolicyEvaluator;
-pub use command_evaluator::CedarCommandPolicyEvaluator;
 pub use evaluator::CedarToolPolicyEvaluator;
 
 #[cfg(test)]

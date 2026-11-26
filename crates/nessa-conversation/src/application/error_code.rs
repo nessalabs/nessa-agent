@@ -56,34 +56,21 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         ConversationError::LeaseRefused(LeaseRefusal::SandboxUnavailable) => {
             ConversationErrorCode::SandboxUnavailable
         }
-        // The host could not be reached, another gateway holds it, it has
-        // no runtime for this conversation's agent, or its owner has not
-        // granted this gateway that agent: all the host's matter, worth
-        // asking again once the host is set right. Not
+        // Every other refusal was a remote host's answer (ADR 1417): the
+        // workspace could not be had, worth asking again. Not
         // `agent_not_configured`, which names this gateway's own config.json.
         ConversationError::LeaseRefused(
             LeaseRefusal::EnvironmentUnreachable
             | LeaseRefusal::EnvironmentBusy
             | LeaseRefusal::AgentUnavailable
-            | LeaseRefusal::EnvironmentNotGranted,
+            | LeaseRefusal::EnvironmentNotGranted
+            | LeaseRefusal::EnvironmentVersionMismatch
+            | LeaseRefusal::EnvironmentPlatformUnsupported
+            | LeaseRefusal::EnvironmentInstallFailed,
         ) => ConversationErrorCode::EnvironmentUnavailable,
-        // The host's copy of this build, where the gateway installs it,
-        // speaks another lease protocol: not one this gateway put there.
-        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentVersionMismatch) => {
-            ConversationErrorCode::EnvironmentVersionMismatch
-        }
-        // No copy of this build there, and none installed: the host runs on
-        // something this build does not, or the install failed.
-        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentPlatformUnsupported) => {
-            ConversationErrorCode::EnvironmentPlatformUnsupported
-        }
-        ConversationError::LeaseRefused(LeaseRefusal::EnvironmentInstallFailed) => {
-            ConversationErrorCode::EnvironmentInstallFailed
-        }
         ConversationError::EnvironmentNotConfigured => {
             ConversationErrorCode::EnvironmentNotConfigured
         }
-        ConversationError::LinkedFileUnreachable => ConversationErrorCode::LinkedFileUnreachable,
         // Saved state this build cannot read and never will: the same answer
         // as an unreadable history, which no retry changes.
         ConversationError::LeaseUnreadable | ConversationError::PlacementUnreadable => {

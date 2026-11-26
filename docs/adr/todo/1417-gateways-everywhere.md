@@ -201,6 +201,23 @@ flowchart LR
 - Update `docs/ARCHITECTURE.md`, `docs/codebase-structure.md`, and
   `docs/design/terminals.md`.
 
+Outcome: done. The crate, the lease protocol and its fingerprint, the SSH
+environment and installer, release host builds, paired-worker pools and
+placement, the native `openEnvironment` phase, the agent's environment tools,
+SFTP artifact channels, remote terminals and Boat's Claude sign-in are gone;
+`Place` holds only here. Kept on purpose: the old `config.json` keys
+(`sshHosts`, `defaultEnvironment`, `envServe`, `environmentTools`, `pool`)
+are read and ignored so an upgraded gateway starts; a conversation an older
+build placed elsewhere is refused `environment_not_configured` with its
+history readable; a lease's refusals and its `ssh` / `peer` environment are
+read only in history; the backup manifest still names the lease records store,
+cut empty, so every build reads every cut. The follow-up cleanup removed
+saved logins and ChatGPT accounts and the gateway's per-device login
+switches, a share grant's `commandHosts` (an older stored policy reads
+without them), the `environment_version_mismatch`,
+`environment_platform_unsupported` and `environment_install_failed` command
+codes, and the restore of a cut's lease records with its `--receipt`.
+
 ## Tradeoffs and Follow-ups
 
 - **Client state complexity moves from Rust SSH/lease plumbing to TypeScript

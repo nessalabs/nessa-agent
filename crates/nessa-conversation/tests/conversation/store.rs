@@ -30,6 +30,7 @@ use nessa_sync::replication::{
     catalogue::{CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES},
     domain::{Id, Scope},
 };
+use nessa_types::app_identity::MAX_EXTENSION_APP_ID_BYTES;
 use std::path::{Path, PathBuf};
 use std::{
     future::Future,
@@ -1296,7 +1297,7 @@ async fn extension_namespace_conversations_round_trip_and_stay_out_of_default_li
         ConversationRepository::load(&store, &ext_id).await,
         Err(ConversationError::Metadata)
     ));
-    let overlong = "a".repeat(nessa_auth::domain::MAX_EXTENSION_APP_ID_BYTES + 1);
+    let overlong = "a".repeat(MAX_EXTENSION_APP_ID_BYTES + 1);
     connection
         .execute(
             "UPDATE conversations SET app_namespace = ?2 WHERE id = ?1",
@@ -3976,9 +3977,70 @@ async fn an_admission_read_keeps_the_row_and_revision_from_one_snapshot() {
     let during = pending.await.unwrap().unwrap().unwrap();
     assert!(during.conversation().deletion().is_none());
     assert_eq!(during.token(), before.token());
+    assert_eq!(during.review_claim(), before.review_claim());
     let after = store.load_admission_snapshot(&id).await.unwrap().unwrap();
     assert!(after.conversation().deletion().is_some());
     assert_ne!(after.token(), before.token());
+}
+
+#[tokio::test]
+async fn review_claim_ignores_summary_changes_but_not_resource_identity_or_deletion() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let before = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    let claim = before.review_claim().unwrap();
+    for at in 1..=3 {
+        store
+            .record(&id, said("ordinary summary", at))
+            .await
+            .unwrap();
+        let now = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+        assert_ne!(now.token(), before.token());
+        assert_eq!(now.review_claim(), Some(claim.clone()));
+    }
+
+    // Change only the stored creation identity in this disposable fixture.
+    // No public mutator changes it and normal deletion retains its tombstone.
+    let connection = raw(&opened.path);
+    let creation: i64 = connection
+        .query_row(
+            "SELECT creation_revision FROM conversations WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE conversations SET creation_revision = ?2 WHERE id = ?1",
+            params![id.to_string(), creation + 1],
+        )
+        .unwrap();
+    let replaced = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    assert_ne!(replaced.review_claim().unwrap(), claim);
+    connection
+        .execute(
+            "UPDATE conversations SET creation_revision = ?2 WHERE id = ?1",
+            params![id.to_string(), creation],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE catalogue_identity SET incarnation = 'replacement' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    let other_catalogue = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    assert_ne!(other_catalogue.review_claim().unwrap(), claim);
+    drop(connection);
+
+    store
+        .record_deletion(&id, deletion("review-claim"))
+        .await
+        .unwrap();
+    let deleted = store.load_admission_snapshot(&id).await.unwrap().unwrap();
+    assert_ne!(deleted.review_claim(), other_catalogue.review_claim());
 }
 
 /// Once a receiver loses a grant, subsequent replacements for that principal
@@ -4803,46 +4865,53 @@ async fn a_share_change_is_admitted_by_the_access_policy_in_its_transaction() {
     assert!(revoke(&opened.store, &id, "phone").await);
 }
 
-/// ADR 803 step 4: the command hosts a Drive grant's policy names are kept
-/// with it and read back at its revision; changing only the hosts is a new
-/// revision, and the earlier one still names the hosts it held.
+/// A Drive grant an older build stored with command hosts (the machines its
+/// turns could run commands on before every gateway ran only its own agents,
+/// ADR 1417) is still read: its live row and its journal entry give the same
+/// tools on no host, and the journal keeps the text as the owner granted it.
 #[tokio::test]
-async fn a_revisions_command_hosts_are_read_from_its_journal_entry() {
+async fn a_grant_stored_with_command_hosts_reads_without_them() {
     use crate::application::ShareGrants;
-    use crate::domain::CommandHosts;
-    let on = |hosts: &[&str]| {
-        drive_with(ToolPolicy::preset(ToolPreset::All).with_command_hosts(
-            CommandHosts::new(hosts.iter().map(|host| (*host).to_owned()).collect()).unwrap(),
-        ))
-    };
-    let peer = format!("peer:{}", "ab".repeat(32));
     let opened = opened();
     let store = &opened.store;
     let id = new_id();
     store.create(owned(&id)).await.unwrap();
-    let both = on(&["devbox", &peer]);
-    assert!(share_as(store, &id, "phone", both.clone(), "both")
+    let all = drive_with(ToolPolicy::preset(ToolPreset::All));
+    assert!(share_as(store, &id, "phone", all.clone(), "first")
         .await
         .unwrap());
-    let first = only_grant(store, &id).await;
-    assert_eq!(first.access, both);
-    let one = on(&["devbox"]);
-    assert!(share_as(store, &id, "phone", one.clone(), "one")
-        .await
-        .unwrap());
-    let second = only_grant(store, &id).await.policy_revision;
-    assert_ne!(second, first.policy_revision);
-    let at = |revision: u64| {
-        let id = &id;
-        async move { store.policy_at(id, "phone", revision).await.unwrap() }
-    };
-    let held = at(first.policy_revision).await.unwrap();
+    let granted = only_grant(store, &id).await;
+    let older = r#"{"commandHosts":["devbox"],"preset":"all"}"#;
+    let raw = raw(&opened.path);
+    raw.execute(
+        "UPDATE grants.share_grants SET policy = ?1 WHERE resource_id = ?2",
+        [older, &id.to_string()],
+    )
+    .unwrap();
+    raw.execute(
+        "UPDATE grants.share_grant_changes SET policy_after = ?1 WHERE sequence = ?2",
+        params![older, granted.policy_revision as i64],
+    )
+    .unwrap();
+    let read = only_grant(store, &id).await;
+    assert_eq!(read.access, all);
+    assert_eq!(read.policy_revision, granted.policy_revision);
     assert_eq!(
-        held.command_hosts().names().iter().collect::<Vec<_>>(),
-        ["devbox", &peer]
+        store
+            .policy_at(&id, "phone", granted.policy_revision)
+            .await
+            .unwrap()
+            .as_ref(),
+        all.policy()
     );
-    assert_eq!(Some(&held), both.policy());
-    assert_eq!(at(second).await.as_ref(), one.policy());
+    let kept: String = raw
+        .query_row(
+            "SELECT policy_after FROM grants.share_grant_changes WHERE sequence = ?1",
+            [granted.policy_revision as i64],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, older);
 }
 
 /// Row J26: the policy a Drive grant held at a revision is read from that

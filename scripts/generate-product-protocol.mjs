@@ -206,42 +206,6 @@ const mcpServerRules = {}
   }
 }
 
-// A saved login's bounds, each owned by Rust: how many paired machines may be
-// switched on to receive saved logins (the gateway's logins domain), how many
-// ChatGPT accounts it keeps (its ChatGPT domain) and the
-// most bytes of a login (the lease protocol's Login, which logins.save and a
-// lease handoff both decode). The schema's bound must equal each, or
-// generation fails, so the service and a client admit the same values.
-for (const [file, constant, published, name] of [
-  [
-    "crates/nessa-gateway/src/logins/domain.rs",
-    "MAX_SWITCHED_ON",
-    schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
-    "LoginsStatus.devicesOn.maxItems",
-  ],
-  [
-    "crates/nessa-gateway/src/logins/chatgpt/domain.rs",
-    "MAX_ACCOUNTS",
-    schema.$defs.ChatgptLogins.properties.accounts.maxItems,
-    "ChatgptLogins.accounts.maxItems",
-  ],
-  [
-    "crates/nessa-protocol/src/lease.rs",
-    "MAX_LOGIN_BYTES",
-    schema.$defs.LoginsSaveParams.properties.login.maxLength,
-    "LoginsSaveParams.login.maxLength",
-  ],
-]) {
-  const source = readFileSync(resolve(root, file), "utf8")
-  const owned = Number(
-    source
-      .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
-      ?.replaceAll("_", ""),
-  )
-  if (!Number.isSafeInteger(owned) || published !== owned)
-    throw new Error(`${name} drifted from the Rust owner's ${constant}`)
-}
-
 // A channel's bounds, owned by the gateway's channel value objects and
 // published as schema data so its prose and a client name the same numbers:
 // each value must equal the constant it names, or generation fails.
@@ -668,14 +632,8 @@ const bounds = {
     schema.$defs.AgentsSetNativeHooksResult.properties.requestId["x-utf8MaxBytes"],
   ]),
   maxConfiguredAgents: schema.$defs.AgentsListResult.properties.agents.maxItems,
-  maxLoginDevicesOn: schema.$defs.LoginsStatus.properties.devicesOn.maxItems,
-  loginDevicePattern: schema.$defs.LoginsStatus.properties.devicesOn.items.pattern,
-  maxChatgptAccounts: schema.$defs.ChatgptLogins.properties.accounts.maxItems,
-  maxChatgptEmailBytes: schema.$defs.ChatgptAccount.properties.email.maxLength,
-  maxChatgptAuthorizeUrlBytes:
-    schema.$defs.ChatgptSignIn.properties.authorizeUrl.maxLength,
   // A drive grant's tool policy, as the share dialog budgets it: each list of
-  // patterns, and the hosts on their own.
+  // patterns.
   maxToolPolicyPatterns: agreeing("tool policy allow and deny lengths", [
     toolPolicy.allow.maxItems,
     toolPolicy.deny.maxItems,
@@ -684,8 +642,6 @@ const bounds = {
     toolPolicy.allow.items["x-utf8MaxBytes"],
     toolPolicy.deny.items["x-utf8MaxBytes"],
   ]),
-  maxCommandHosts: toolPolicy.commandHosts.maxItems,
-  maxCommandHostBytes: toolPolicy.commandHosts.items["x-utf8MaxBytes"],
   maxShareGrants: schema.$defs.ConversationSharesResult["x-maxGrants"],
   maxSharePage: sharePage,
   maxAgentInstallVersionBytes: agreeing("native installation version bytes", [
@@ -952,15 +908,8 @@ function nonNullOptionalFields(definition) {
   })
 }
 const nonNullEventOptions = nonNullOptionalFields(eventOptions)
-const nonNullBoatRuntimeOptions = [
-  ...new Set([
-    ...nonNullOptionalFields(schema.$defs.BoatRuntimeReadParams),
-    ...nonNullOptionalFields(schema.$defs.BoatRuntimeSetParams),
-  ]),
-]
 rs += `/// Event filter bounds published by the product schema.\npub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.minItems};\npub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.maxItems};\npub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = ${eventKinds.uniqueItems};\n`
 rs += `/// Optional event subscription fields whose published schema forbids explicit null.\npub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &${JSON.stringify(nonNullEventOptions)};\n`
-rs += `/// Runtime settings options whose published schema forbids explicit null.\npub const NON_NULL_BOAT_RUNTIME_OPTIONS: &[&str] = &${JSON.stringify(nonNullBoatRuntimeOptions)};\n`
 ts += `/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */\nexport const conversationEventMetadataRules = ${JSON.stringify(eventMetadataRules(schema))} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],

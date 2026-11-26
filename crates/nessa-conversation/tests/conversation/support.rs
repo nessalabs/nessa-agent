@@ -1,6 +1,6 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::application::{
-    AccessAsk, AccessDecision, AccessDenial, ArtifactKept, AttachmentRelease, CatalogueEntryAccess,
+    AccessAsk, AccessDecision, AccessDenial, AttachmentRelease, CatalogueEntryAccess,
     ConversationAccessPolicyEvaluator, ConversationAgent, ConversationAgentFuture,
     ConversationAgentSource, ConversationAgents, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationDisposition,
@@ -11,7 +11,7 @@ use crate::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, Reader, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ProviderSessionErasers, Reader, ReviewNoticeAudit, ReviewNoticeAuditFailure,
     ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
@@ -26,8 +26,8 @@ use nessa_sdk::application::agent_execution::executions::{
     PermissionAuthoritySource,
 };
 use nessa_sdk::application::agent_execution::permissions::{
-    ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-    PermissionResolution, PermissionSelectionState, QuestionAnswer,
+    PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState, QuestionAnswer,
 };
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
@@ -61,6 +61,7 @@ use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
 pub use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{future::Future, pin::Pin};
@@ -886,6 +887,7 @@ impl ConversationRepository for MemoryRepository {
                 ConversationAdmissionSnapshot::new(
                     conversation,
                     ConversationAdmissionToken::new(incarnation, id, change_revision),
+                    Some(NonZeroU64::MIN),
                 )
             })),
         };
@@ -1557,14 +1559,6 @@ pub struct MemoryAttachments {
     /// this before it records the release. A test looks at the slot there.
     pub hold_release: Mutex<Option<oneshot::Receiver<()>>>,
     pub release_entered: Notify,
-    /// Every published file kept: its lease, name and bytes.
-    pub published: Mutex<Vec<(String, String, Vec<u8>)>>,
-    /// Who each published file kept was asked for by, in the same order.
-    pub requested_by: Mutex<Vec<ActionContext>>,
-    /// When set, `keep_published` notifies [`Self::record_entered`] once
-    /// the bytes are read and waits for this before it asks for the record.
-    pub hold_record: Mutex<Option<oneshot::Receiver<()>>>,
-    pub record_entered: Notify,
     /// The files a fetch reads back, by their SHA-256 in lowercase hex, and
     /// whose conversation each is.
     pub files: Mutex<Vec<(ConversationId, String, Vec<u8>)>>,
@@ -1698,46 +1692,6 @@ impl ConversationAttachments for MemoryAttachments {
             Ok(())
         })
     }
-    fn keep_published(
-        &self,
-        mut published: PublishedArtifact,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<ArtifactKept, nessa_protocol::lease::CollectionRefusal>,
-                > + Send
-                + '_,
-        >,
-    > {
-        Box::pin(async move {
-            let mut bytes = Vec::new();
-            while let Some(chunk) = published
-                .bytes
-                .next()
-                .await
-                .map_err(|failure| failure.refusal())?
-            {
-                bytes.extend(chunk);
-            }
-            let wait = self.hold_record.lock().unwrap().take();
-            if let Some(wait) = wait {
-                self.record_entered.notify_one();
-                let _ = wait.await;
-            }
-            if !(published.record)().await {
-                return Err(nessa_protocol::lease::CollectionRefusal::NotKept);
-            }
-            self.requested_by
-                .lock()
-                .unwrap()
-                .push(published.requested_by.clone());
-            self.published
-                .lock()
-                .unwrap()
-                .push((published.lease, published.file.name, bytes));
-            Ok(ArtifactKept::Held)
-        })
-    }
 }
 
 /// The in-process environment a service fixture runs commands in.
@@ -1830,7 +1784,6 @@ pub fn image_fixture_with_model(
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -1985,7 +1938,6 @@ pub fn mode_fixture_with_summaries(
             ),
             clock: Arc::new(TestClock),
             environment: crate::infrastructure::in_process_environment().into(),
-            tool_config: Default::default(),
         },
         ConversationLimits::default(),
         None,
@@ -2004,16 +1956,13 @@ pub fn fixture(
     fixture_in(
         limits,
         crate::infrastructure::in_process_environment().into(),
-        Default::default(),
     )
 }
 
-/// [`fixture`], running its conversations in `environment` with
-/// `tool_config`.
+/// [`fixture`], running its conversations in `environment`.
 pub fn fixture_in(
     limits: ConversationLimits,
     environment: crate::application::Environments,
-    tool_config: crate::application::EnvironmentToolConfig,
 ) -> (
     ConversationService,
     Arc<ProviderFactory>,
@@ -2025,7 +1974,6 @@ pub fn fixture_in(
     assemble(
         limits,
         environment,
-        tool_config,
         Arc::new(MemoryListing {
             repository: repository.clone(),
             summaries: summaries.clone(),
@@ -2044,7 +1992,6 @@ pub fn fixture_with_listing(
     assemble(
         limits,
         crate::infrastructure::in_process_environment().into(),
-        Default::default(),
         listing,
         Arc::new(MemoryRepository::default()),
         Arc::new(InMemoryStorage::new()),
@@ -2056,7 +2003,6 @@ pub fn fixture_with_listing(
 fn assemble(
     limits: ConversationLimits,
     environment: crate::application::Environments,
-    tool_config: crate::application::EnvironmentToolConfig,
     listing: Arc<dyn crate::application::ConversationListing>,
     repository: Arc<MemoryRepository>,
     storage: Arc<InMemoryStorage>,
@@ -2090,7 +2036,6 @@ fn assemble(
             ),
             clock: Arc::new(TestClock),
             environment,
-            tool_config,
         },
         limits,
         None,
@@ -3076,101 +3021,4 @@ impl crate::application::SettingsAudit for RecordingSettingsAudit {
             }
         })
     }
-}
-
-/// A host that takes commands and refuses each one it is asked to run:
-/// enough for what reads only whether a host takes commands.
-pub struct RefusingCommandHost;
-impl crate::application::Environment for RefusingCommandHost {
-    fn declaration(&self) -> crate::application::EnvironmentDeclaration {
-        crate::application::EnvironmentDeclaration {
-            environment: nessa_sdk::domain::agent_execution::leases::EnvironmentRef::Ssh(
-                nessa_sdk::domain::agent_execution::leases::SshDestination::new("devbox").unwrap(),
-            ),
-            sandbox: nessa_sdk::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT,
-        }
-    }
-    fn open<'a>(
-        &'a self,
-        _: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-        _: &'a nessa_sdk::domain::agent_execution::leases::LeaseTerms,
-        _: Arc<dyn AgentProvider>,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Result<
-            crate::application::EnvironmentLease,
-            nessa_sdk::domain::agent_execution::leases::LeaseRefusal,
-        >,
-    > {
-        Box::pin(async {
-            Err(nessa_sdk::domain::agent_execution::leases::LeaseRefusal::AgentUnavailable)
-        })
-    }
-    fn account<'a>(
-        &'a self,
-        _: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Option<nessa_sdk::domain::agent_execution::leases::LeaseCleanup>,
-    > {
-        Box::pin(async { Some(nessa_sdk::domain::agent_execution::leases::LeaseCleanup::NotHeld) })
-    }
-    fn commands(&self) -> Option<&dyn crate::application::CommandEnvironment> {
-        Some(self)
-    }
-}
-impl crate::application::CommandEnvironment for RefusingCommandHost {
-    fn reachable(&self) -> Option<bool> {
-        Some(true)
-    }
-    fn grant<'a>(
-        &'a self,
-        _: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-        _: &'a nessa_sdk::domain::agent_execution::leases::CommandWork,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Result<
-            crate::application::GrantedCommand,
-            nessa_sdk::domain::agent_execution::leases::CommandRefusal,
-        >,
-    > {
-        Box::pin(async {
-            Err(nessa_sdk::domain::agent_execution::leases::CommandRefusal::EnvironmentNotGranted)
-        })
-    }
-}
-
-/// A conversation service on a gateway with two hosts the policy grants
-/// commands on: `devbox`, which takes commands, and `agentbox`, which runs
-/// agents only. What `agents.list`'s `commandHosts` is read from, for the
-/// product socket's test of it.
-pub fn service_with_command_hosts(root: &std::path::Path) -> ConversationService {
-    use crate::application::{Environment, EnvironmentToolConfig, Environments};
-    let mut hosts: std::collections::BTreeMap<String, Arc<dyn Environment>> =
-        std::collections::BTreeMap::new();
-    hosts.insert("devbox".into(), Arc::new(RefusingCommandHost));
-    hosts.insert(
-        "agentbox".into(),
-        crate::infrastructure::in_process_environment(),
-    );
-    let places =
-        Arc::new(crate::infrastructure::FilePlaces::new(&root.join("conversations")).unwrap());
-    let policy = crate::domain::CommandPolicy::new(
-        ["devbox".to_owned(), "agentbox".to_owned()],
-        None,
-        vec![],
-    );
-    let environments = Environments::new(
-        crate::infrastructure::in_process_environment(),
-        hosts,
-        places,
-    );
-    fixture_in(
-        ConversationLimits::default(),
-        environments,
-        EnvironmentToolConfig::with_commands(Arc::new(
-            crate::infrastructure::CedarCommandPolicyEvaluator::new(&policy).unwrap(),
-        )),
-    )
-    .0
 }

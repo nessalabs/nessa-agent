@@ -2288,25 +2288,21 @@ use.
 `share-dialog.mjs` opens the dev server's page with `?gateway` against a
 scripted product session that lists one conversation already shared Drive
 with one linked device, and answers `conversation.shares` a page at a time,
-`.share`, `.unshare`, `credential.list` and `agents.list` (four command hosts). It runs
+`.share`, `.unshare`, `credential.list` and `agents.list`. It runs
 in Chromium and WebKit. The rules are the gateway's; the dialog's order is
 the table in `docs/design/read-grants.md` › "Dialog state and order".
 
 - [ ] **Share… on a session's menu opens one dialog for it, focus inside,
   each grant said in words.** _Check:_ `share-dialog.mjs` (`open`). The title
-  names the session; the existing grant reads "Drive · Read-only tools,
-  commands on devbox".
+  names the session; the existing grant reads "Drive · Read-only tools".
 - [ ] **A Drive grant is sent as the wire takes it, and listed as the
   gateway reads it back.** _Check:_ `drive`. One `conversation.share` with
-  `{ preset: "no_shell", commandHosts: ["devbox", "ci-runner"] }` and a
-  request id and `expectedPolicyRevision` 0 (a first grant); the count reads
-  "2 of 16"; the notice says "Shared."; the
-  notes say what a policy does not stop (unasked calls, hosts named and
-  allowed or nowhere, Ask mode / hooks off / not OpenCode).
-- [ ] **The hosts keep their own bound however full the tool patterns are.**
-  _Check:_ `budget`. Both pattern lists full (16 and 16): "4 of 16", Share
-  able to send; nothing sent. A host past the byte bound stays unavailable
-  in `share-dialog.test.tsx`.
+  `{ preset: "no_shell" }` and a request id and `expectedPolicyRevision` 0
+  (a first grant), and no host list offered (every gateway runs only its
+  own agents, ADR 1417); the notice says "Shared."; the new grant reads
+  "Drive · No shell"; the notes say what a policy does not stop.
+- [ ] **Full tool patterns can still be sent.** _Check:_ `budget`. Both
+  pattern lists full (16 and 16), Share able to send; nothing sent.
 - [ ] **A refusal is said in words, never a wire code.** _Check:_ `refusal`,
   and every step's scan for codes.
 - [ ] **While a change is on its way, and the read after it, the form,
@@ -2362,16 +2358,15 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `conversation-stress.mjs` (`window`: the chat surface reaches the
   window's right edge after many tabs and steps).
 
-## Session rows: hover, menu, rename, delete, swipe
+## Session rows: hover, menu, rename, delete, no swipe
 
 - [ ] **Pinning a session closes its menu without painting a detached copy at
   the top-left.** Row-moving actions dismiss immediately when their anchor can
   move; `session-rows.mjs` samples every closing frame in Chromium and WebKit.
 
 `session-rows.mjs` runs against the dev server's in-memory workspace, in the
-session list (`session-list.tsx`, `session-row-actions.tsx`). The swipe is
-nessa_ui's `SwipeRow`, with the mouse drag and the context menu left to the
-row.
+session list (`session-list.tsx`, `session-row-actions.tsx`). A row takes no
+swipe: the mouse drag is the drag to a pane and the context menu is the row's.
 
 - [ ] **Under the pointer, Archive and More take the time's place.**
   _Check:_ `hover`. Away from the row its time shows and no button does;
@@ -2388,20 +2383,13 @@ row.
 - [ ] **A sideways swipe moves no side column.** A two-finger swipe over the
   chat, the sidebar or the session list leaves the sidebar, the list, the rail
   and the right panel as they were, open or folded; one over a session row
-  only moves the row. _Check:_ `conversation-stress` step `swipe`.
-- [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
-  _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
-  pane) and right-click opens the row's own menu; a swipe rests the row open,
-  slid aside, with Archive and Delete, and opens nothing; Delete asks
-  "Confirm" in place, then removes the row; a long swipe archives. On a Mac
-  trackpad by hand: the swipe follows the fingers and a flick rests open,
-  never archives. The mouse check waits for the published prepared ghost and
-  then its carrying mark before release, and keeps the captured row identity:
-  an unprepared flick is a click, which can retarget a live unselected-row
-  locator. The original 10/11 run and lightweight wrong-row trace failed;
-  anchoring alone exposed two no-open failures (4/5). The private prepared
-  check and exact restoration held 5/5; omitting readiness failed 4/5, while
-  omitting the anchor with readiness held 5/5 (not a negative control).
+  moves nothing either. _Check:_ `conversation-stress` step `swipe`.
+- [ ] **A row takes no swipe.** _Check:_ `swipe`. Two fingers left, a long
+  swipe left, and right: the row stays where it is, no Archive or Delete is
+  uncovered, nothing opens and nothing is archived. A mouse drag does not
+  slide the row (it is the drag to a pane) and right-click opens the row's own
+  menu. The mouse check waits for the published prepared ghost and then its
+  carrying mark before release: an unprepared flick is a click.
 
 ## A record the chat could not read
 
@@ -2619,40 +2607,15 @@ denial checks still apply. The minimized sequence is seed 2 with one pool step
 and one notice step; pool precedes notice, whose page reload used to leave the
 vault dialog blocking the main conversation click.
 
-## Boat VM lifetime settings
+## Where agents run
 
-- [ ] The global default saves from Settings → Connections → Accounts without a
-  Boat token. A saved channel's gear opens its settings in both layouts. A new
-  channel inherits the global lifetime; picking a choice saves it at once (no
-  Save button); an explicit Never overrides
-  it, and Use Nessa default removes only that override. Invalid, null-scope and
-  contradictory commands leave the default unchanged. _Check:_
-  `boat-runtime-settings.mjs` in Chromium/WebKit, columns/sidebar, against a real
-  gateway; the same shared check runs in the conversation stress `channel` step.
-- [ ] The dialog's controls remain usable by keyboard and Escape closes it.
-  It says nothing beyond "Auto-stop VMs" and the choice, except under Never,
-  which adds that VMs keep billing until stopped in Boat. _Check:_ manual
-  screenshot/focus review and the settings control's rendered tests.
-- [ ] **A channel's settings read as one column in the desktop's type
-  (#1340).** Every setting's name, its detail line and the "Order for “Any”"
-  heading start at the dialog title's left edge, within 1 px; names are the
-  desktop's body size (`--desktop-text-body`) and details and headings its
-  footnote size (`--desktop-text-footnote`), both resolved inside the dialog;
-  the order for Any has its heading. _Check:_ `boat-runtime-settings.mjs`
-  (`default-override-reset`) measures each in Chromium and WebKit, columns and
-  sidebar; with `src` at the parent commit it fails on the unresolved type
-  tokens and the 16 px row inset.
-- [ ] **Each of a channel's choices is a menu at its row's end (#1340).** Main
-  agent, new threads, auto-stop and the order for Any are each a button that
-  says the choice and opens a menu; This Mac, Boat and Any computer come first,
-  then each connected computer by name, and a computer saved earlier but not
-  connected is still listed. Every button ends one inset from the dialog's
-  right edge (the title's left inset, within 1 px), and the dialog has no row
-  of tabs, and no note under the order explaining how Any picks a computer
-  (Devices keeps it). _Check:_ `boat-runtime-settings.mjs` measures the four menus and
-  picks through them in Chromium and WebKit, columns and sidebar; the
-  conversation stress `channel` and `place` steps pick Boat, This Mac and a
-  paired worker from them; `channel-settings.test.tsx` lists the menu's items.
+- [ ] **Every agent runs on this gateway's own machine (ADR 1417).** No composer
+  offers Run on, no channel is made or set up with a location, and Settings has
+  no auto-stop for VMs, no thread order and no saved logins or ChatGPT
+  accounts. A conversation an older build placed on another computer stays listed
+  and readable, and a new message to it is refused `environment_not_configured`.
+  _Check:_ the conversation stress `channel` step (no location question, no
+  placement in the listing) and `upgrade` step (the stranded conversation).
 
 
 ## Background tasks
@@ -2661,13 +2624,6 @@ vault dialog blocking the main conversation click.
   the MCP relay. Its original waterfall row stays running after the calling turn
   finishes, then settles with the command's actual output. Exactly one internal
   continuation reaches the conversation and no synthetic user bubble appears.
-- The `vmBackground` step places its conversation on Boat through a test-only
-  gateway composition. Its fake provider uses the real workspace holds, verified
-  helper installer and Shepherd subprocess, with no Boat HTTP or SSH. Send is
-  through the composer. The task runs in its admitted VM cwd, remains running
-  past the fixture’s accelerated idle limit (3 seconds; production remains
-  5 minutes), settles the original row once, and permits rest afterward. Run its
-  default count and raised `--vmBackgroundTasks 3`; the nightly load uses 3.
 - Check the running and completed row in Chromium and WebKit. Ordinary foreground
   tools still settle when their calling turn ends. No separate task list is added.
 

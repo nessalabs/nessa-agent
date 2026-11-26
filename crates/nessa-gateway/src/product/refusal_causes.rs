@@ -113,7 +113,6 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::LeaseRefused(refusal) => return typed(out, "lease-refused", refusal),
         E::LeaseUnreadable => "lease-unreadable",
         E::EnvironmentNotConfigured => "environment-not-configured",
-        E::LinkedFileUnreachable => "linked-file-unreachable",
         E::PlacementUnreadable => "placement-unreadable",
         E::ModelUnavailable => "model-unavailable",
         E::ApprovalModeUnavailable => "approval-mode-unavailable",

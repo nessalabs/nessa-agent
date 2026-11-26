@@ -1596,84 +1596,11 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
-/* Codex's ChatGPT accounts, under its key: one line each, its actions at the end. */
-.settings-chatgpt {
-  display: grid;
-  gap: 8px;
-  padding-block-start: 6px;
-  border-block-start: 1px solid var(--border);
-}
-.settings-chatgpt-accounts {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.settings-chatgpt-accounts > li {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-block-size: 32px;
-}
-.settings-chatgpt-email {
-  min-inline-size: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.settings-chatgpt-state,
-.settings-chatgpt-note {
-  color: var(--muted-foreground);
-  white-space: nowrap;
-}
-.settings-chatgpt-actions {
-  display: inline-flex;
-  gap: 6px;
-  margin-inline-start: auto;
-}
-.settings-chatgpt-waiting {
-  display: grid;
-  gap: 6px;
-}
 /* A token is one short paste: the field need not span the page. */
 .settings-boat-fields .settings-input {
   flex: 0 1 260px;
 }
-.settings-boat-runtime {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-}
-.settings-boat-runtime > p {
-  flex-basis: 100%;
-}
-/* Its row spans the line, so the lifetime's menu ends where every row's does. */
-.settings-boat-runtime > .settings-row {
-  flex: 1 1 100%;
-}
-/* Auto-stop's length: an amount, then its unit's menu, ending the row. */
-.settings-boat-lifetime {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.settings-boat-runtime .settings-boat-amount {
-  inline-size: 64px;
-  block-size: 32px;
-  padding-inline: 10px;
-  font-size: var(--desktop-text-body);
-  text-align: end;
-  font-variant-numeric: tabular-nums;
-  /* Filled like the unit's menu beside it, not outlined. */
-  border-color: transparent;
-  background: var(--secondary);
-}
-.settings-boat-runtime .settings-boat-amount[aria-invalid="true"] {
-  border-color: var(--destructive);
-}
-/* Auto-pick's wait: an amount, then its unit's menu, as Auto-stop's length. */
+/* Auto-pick's wait: an amount, then its unit's menu, ending the row. */
 .settings-decisions-wait {
   display: inline-flex;
   align-items: center;
@@ -1691,6 +1618,30 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 }
 .settings-decisions-wait .settings-decisions-amount[aria-invalid="true"] {
   border-color: var(--destructive);
+}
+/* Terminal › Resume: a program rule's fields, under its row's name. */
+.settings-terminal-rule-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-block-start: 6px;
+}
+.settings-terminal-rule-form .settings-terminal-rule-field {
+  flex: 1 1 140px;
+  min-inline-size: 0;
+  block-size: 32px;
+  padding-inline: 10px;
+  font-size: var(--desktop-text-body);
+  border-color: transparent;
+  background: var(--secondary);
+}
+.settings-terminal-rule-form .settings-terminal-rule-field[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+.settings-terminal-program {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
 }
 .settings-boat-select {
   width: auto;
@@ -1770,19 +1721,4 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   font-size: var(--desktop-text-footnote);
   font-weight: 500;
   line-height: 1.4;
-}
-
-/* Auto-stop is its own row, wrapped for its checks: it takes a row's hairline. */
-.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime {
-  position: relative;
-}
-
-.settings [data-slot="settings-group-card"] > * + .settings-boat-runtime::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: var(--settings-hairline);
 }

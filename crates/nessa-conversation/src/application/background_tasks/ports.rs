@@ -31,11 +31,8 @@ pub struct BackgroundCleanupFailure {
 /// Execution placement resolved by the conversation, never by command text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackgroundTarget {
+    /// This gateway's machine, in the agent's working folder.
     Local(String),
-    Vm {
-        conversation: ConversationId,
-        workspace: String,
-    },
 }
 
 /// Process effects, supplied at composition; independent of provider lifetimes.

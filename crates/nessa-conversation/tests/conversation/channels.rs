@@ -15,8 +15,7 @@ use crate::conversation_test_support::{
     RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use crate::domain::{
-    ChannelDefaults, ChannelExecution, ChannelName, ChannelNotes, ChannelRefusal, Place,
-    ProviderSessionErasure,
+    ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
 };
 use crate::infrastructure::{LocalChannelStore, LocalConversationStore};
 use nessa_protocol::agents::AgentId;
@@ -196,7 +195,6 @@ fn path(text: &str) -> ChannelPath {
 
 fn request(folder: Option<&str>) -> ChannelRequest {
     ChannelRequest {
-        execution: ChannelExecution::default(),
         name: ChannelName::new("design-review").unwrap(),
         folder: folder.map(path),
         defaults: ChannelDefaults {
@@ -225,21 +223,6 @@ impl Fixture {
     ) -> Self {
         Self::built(provider_sessions, channel_store, |_| {
             crate::infrastructure::in_process_environment().into()
-        })
-    }
-
-    /// A gateway that also serves the SSH host `devbox`, and keeps where
-    /// each conversation runs in files, as the real one does.
-    fn with_devbox() -> Self {
-        Self::built(ProviderSessionErasers::default(), None, |root| {
-            crate::application::Environments::new(
-                crate::infrastructure::in_process_environment(),
-                std::collections::BTreeMap::from([(
-                    "devbox".to_string(),
-                    crate::infrastructure::in_process_environment(),
-                )]),
-                Arc::new(crate::infrastructure::FilePlaces::new(root).unwrap()),
-            )
         })
     }
 
@@ -288,7 +271,6 @@ impl Fixture {
                 message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
                 clock: Arc::new(TestClock),
                 environment,
-                tool_config: Default::default(),
             },
             ConversationLimits::default(),
             Some(absolute("/work/default")),
@@ -1159,73 +1141,6 @@ async fn owned_threads_use_channel_start_without_accepting_caller_overrides() {
 }
 
 #[tokio::test]
-async fn only_the_owner_moves_a_made_channel_and_an_unchanged_one_stays_as_it_is() {
-    use crate::application::ChannelError;
-    let fixture = Fixture::new();
-    let made = fixture.channel("request-1", None).await;
-    let boat = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
-    // The default channel has no run location to change, and neither another
-    // person nor an unknown id learns whether a channel exists.
-    for (who, id) in [
-        ("person", ChannelId::default_channel()),
-        ("other", made.id().clone()),
-        ("person", ChannelId::from_random([9; 10])),
-    ] {
-        assert_eq!(
-            fixture
-                .service
-                .set_channel_execution(&caller(who, "move"), &id, boat.clone())
-                .await,
-            Err(ChannelError::Forbidden),
-            "{who} moved {id:?}"
-        );
-    }
-    // Asking for where it already runs changes nothing, main chat included.
-    let same = fixture
-        .service
-        .set_channel_execution(
-            &caller("person", "move"),
-            made.id(),
-            made.execution().clone(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(same, made);
-    let moved = fixture
-        .service
-        .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
-        .await
-        .unwrap();
-    assert_eq!(*moved.execution(), boat);
-    assert_eq!(moved.id(), made.id());
-    // Asked and applied are on record as the person's, with both places; a
-    // refused or unchanged move left none.
-    let records = fixture.settings.records.lock().unwrap().clone();
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0].operation_id, records[1].operation_id);
-    assert_eq!(records[0].caller, caller("person", "move"));
-    assert_eq!(
-        records[0].change,
-        crate::application::SettingsChange::ChannelPlacement {
-            channel: made.id().clone(),
-            before: Box::new(made.execution().clone()),
-            after: Box::new(boat.clone()),
-            coordinator: made.coordinator_id(),
-        }
-    );
-    assert_eq!(
-        fixture.settings.outcomes(),
-        [
-            crate::application::SettingsOutcome::Requested,
-            crate::application::SettingsOutcome::Applied {
-                changed: true,
-                coordinator: Some(moved.coordinator_id()),
-            },
-        ]
-    );
-}
-
-#[tokio::test]
 async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
     use crate::application::{ChannelError, SettingsChange, SettingsOutcome};
     let fixture = Fixture::new();
@@ -1262,7 +1177,6 @@ async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
         .unwrap();
     assert!(!off.coordinator_on());
     assert_eq!(off.coordinator_id(), made.coordinator_id());
-    assert_eq!(off.execution(), made.execution());
     let on = fixture
         .service
         .set_channel_coordinator(&caller("person", "switch"), made.id(), true)
@@ -1380,7 +1294,7 @@ async fn a_switch_that_cannot_be_recorded_is_refused_and_changes_nothing() {
 }
 
 #[tokio::test]
-async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
+async fn a_coordinator_switch_that_cannot_be_recorded_is_refused_and_changes_nothing() {
     use crate::application::ChannelError;
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
@@ -1388,11 +1302,10 @@ async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
         .settings
         .failing
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let boat = ChannelExecution::new(Place::CloudVm, Place::CloudVm);
     assert_eq!(
         fixture
             .service
-            .set_channel_execution(&caller("person", "move"), made.id(), boat.clone())
+            .set_channel_coordinator(&caller("person", "switch"), made.id(), false)
             .await,
         Err(ChannelError::Unavailable)
     );
@@ -1406,51 +1319,20 @@ async fn a_move_that_cannot_be_recorded_is_refused_and_changes_nothing() {
         .iter()
         .find(|each| each.id() == made.id())
         .unwrap();
-    assert_eq!(kept.execution(), made.execution());
+    assert!(kept.coordinator_on());
     assert_eq!(kept.coordinator_id(), made.coordinator_id());
 }
 
 #[tokio::test]
-async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_there() {
-    use crate::application::ChannelError;
-    use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
-    let fixture = Fixture::with_devbox();
-    let devbox = Place::Host(SshDestination::new("devbox").unwrap());
-    // A computer this gateway does not serve, or a paired one not connected,
-    // is refused when the channel is made or moved, and nothing is kept.
-    for (i, absent) in [
-        Place::Host(SshDestination::new("elsewhere").unwrap()),
-        Place::Peer(PeerEnvironment::new([7; PeerEnvironment::KEY_BYTES])),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let asked = ChannelRequest {
-            execution: ChannelExecution::new(Place::Here, absent.clone()),
-            ..request(None)
-        };
-        assert_eq!(
-            fixture
-                .service
-                .create_channel(caller("person", "absent"), format!("absent-{i}"), asked)
-                .await,
-            Err(ChannelError::PlaceUnavailable),
-            "{absent:?}"
-        );
-    }
+async fn a_channels_threads_run_here_and_are_told_its_folder() {
+    let fixture = Fixture::new();
+    // Every gateway runs only its own agents (ADR 1417): a channel has no
+    // other computer to name.
     let made = fixture
         .service
-        .create_channel(
-            caller("person", "make"),
-            "make".into(),
-            ChannelRequest {
-                execution: ChannelExecution::new(Place::Here, devbox.clone()),
-                ..request(None)
-            },
-        )
+        .create_channel(caller("person", "make"), "make".into(), request(None))
         .await
         .unwrap();
-    assert_eq!(made.execution().threads(), &devbox);
     let thread = new_id();
     fixture
         .service
@@ -1464,18 +1346,7 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
         )
         .await
         .unwrap();
-    assert_eq!(
-        fixture
-            .service
-            .inner
-            .environment
-            .placement(&thread)
-            .await
-            .unwrap(),
-        devbox
-    );
-    // Its agent is told the channel, not this gateway's folder, which it
-    // could not open on devbox.
+    // Its agent runs here, so it is told the channel's folder.
     let told = fixture
         .service
         .agent_place(&thread)
@@ -1483,56 +1354,7 @@ async fn a_channel_names_a_computer_the_gateway_serves_and_its_new_chats_run_the
         .unwrap()
         .expect("a channel's thread")
         .instructions;
-    assert!(told.contains(made.name().as_str()), "{told}");
-    assert!(!told.contains(made.folder().path.as_str()), "{told}");
-    // The main agent moves there too; asking for a computer it does not
-    // serve changes nothing.
-    assert_eq!(
-        fixture
-            .service
-            .set_channel_execution(
-                &caller("person", "move"),
-                made.id(),
-                ChannelExecution::new(
-                    Place::Host(SshDestination::new("elsewhere").unwrap()),
-                    devbox.clone()
-                ),
-            )
-            .await,
-        Err(ChannelError::PlaceUnavailable)
-    );
-    let moved = fixture
-        .service
-        .set_channel_execution(
-            &caller("person", "move"),
-            made.id(),
-            ChannelExecution::new(devbox.clone(), devbox.clone()),
-        )
-        .await
-        .unwrap();
-    let main = moved.coordinator_id();
-    fixture
-        .service
-        .create(
-            main.clone(),
-            caller("person", "main"),
-            RequestedConversation {
-                channel: Some(made.id().clone()),
-                ..RequestedConversation::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        fixture
-            .service
-            .inner
-            .environment
-            .placement(&main)
-            .await
-            .unwrap(),
-        devbox
-    );
+    assert!(told.contains(made.folder().path.as_str()), "{told}");
     fixture.service.shutdown().await.unwrap();
 }
 

@@ -351,8 +351,7 @@
         "credentialId": "phone",
         "capabilities": ["read", "comment", "drive"],
         "policy": {
-          "preset": "read_only_tools",
-          "commandHosts": ["devbox"]
+          "preset": "read_only_tools"
         },
         "policyRevision": 1,
         "grantedAtMs": 1
@@ -379,8 +378,6 @@
     ]
   },
   "AgentsListResult": {
-    "environments": ["devbox"],
-    "commandHosts": ["devbox"],
     "agents": [
       {
         "agent": "claude",

@@ -2,11 +2,10 @@
 //! the default channel first and never answers past one frame; each refusal
 //! has its own code.
 use super::*;
-use crate::conversation::domain::{ChannelExecution, ChannelFolder, ChannelParts, Place};
+use crate::conversation::domain::{ChannelFolder, ChannelParts};
 use crate::conversation_test_support::absolute;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::protocol::ResponseFrame;
-use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use serde_json::json;
 
 fn params(value: serde_json::Value) -> ChannelCreateParams {
@@ -36,15 +35,6 @@ fn a_create_reads_into_a_channel_request_with_ask_by_default() {
     .unwrap();
     assert_eq!(chosen.folder.unwrap().as_str(), absolute("/work/repo"));
     assert_eq!(chosen.defaults.mode, ConversationApprovalMode::Full);
-    // A place left out runs here; one named runs there.
-    assert_eq!(request.execution, ChannelExecution::default());
-    let placed = channel_request(&params(json!({
-        "requestId": "r1", "name": "x", "agent": "claude", "model": "m",
-        "threadPlacement": "pool"
-    })))
-    .unwrap();
-    assert_eq!(placed.execution.coordinator(), &Place::Here);
-    assert_eq!(placed.execution.threads(), &Place::Pool);
 }
 
 #[test]
@@ -55,15 +45,18 @@ fn a_create_that_is_not_a_channel_is_refused_before_the_service() {
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "folder": "relative"}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "resources": [absolute("/a"), absolute("/a")]}),
         json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "notes": "bell\u{7}"}),
-        // A kind of place has one spelling; its place name is not it.
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "coordinatorPlacement": "here"}),
-        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "peer:any"}),
     ] {
         assert!(
             channel_request(&params(refused.clone())).is_none(),
             "{refused}"
         );
     }
+    // A channel names no computer: its agents run here (ADR 1417), so a
+    // placement is not even read.
+    assert!(serde_json::from_value::<ChannelCreateParams>(
+        json!({"requestId": "r", "name": "x", "agent": "codex", "model": "m", "threadPlacement": "local"})
+    )
+    .is_err());
 }
 
 fn stored(n: u8, notes: &str) -> Channel {
@@ -72,7 +65,6 @@ fn stored(n: u8, notes: &str) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         ChannelParts {
-            execution: ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{n}")).unwrap(),
             folder: ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/data/channels/{n}"))))
@@ -109,7 +101,7 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
             "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
             "createdAtMs": 0,
-            "coordinatorPlacement": "local", "threadPlacement": "local", "coordinatorConversationId": null,
+            "coordinatorConversationId": null,
             "coordinatorOn": false
         })
     );
@@ -140,7 +132,6 @@ fn long(index: u16) -> Channel {
         OrganizationId::new("org").unwrap(),
         PrincipalId::new("person").unwrap(),
         ChannelParts {
-            execution: ChannelExecution::default(),
             name: ChannelName::new(&format!("channel-{index}")).unwrap(),
             folder: ChannelFolder {
                 path: ChannelPath::new(PathBuf::from(absolute(&format!("/{}", "f".repeat(4000)))))
@@ -232,7 +223,6 @@ fn each_refusal_has_its_own_code() {
         (ChannelError::RequestConflict, "channel_request_conflict"),
         (ChannelError::Forbidden, "forbidden"),
         (ChannelError::InvalidInput, "invalid_request"),
-        (ChannelError::PlaceUnavailable, "channel_place_unavailable"),
         (ChannelError::Unavailable, "temporarily_unavailable"),
     ] {
         assert_eq!(code(refused("r", error)), expected);
@@ -240,41 +230,9 @@ fn each_refusal_has_its_own_code() {
 }
 
 #[test]
-fn a_placement_change_names_a_channel_and_two_places() {
-    let (params, channel, execution) = placement_request(json!({
-        "requestId": "r", "channelId": "ch_aaaaaaaaaa",
-        "coordinatorPlacement": "boat", "threadPlacement": "local"
-    }))
-    .unwrap();
-    assert_eq!(params.request_id, "r");
-    assert_eq!(channel.as_str(), "ch_aaaaaaaaaa");
-    assert_eq!(execution.coordinator(), &Place::CloudVm);
-    assert_eq!(execution.threads(), &Place::Here);
-    // The pool and one named computer are places too; whether this gateway
-    // serves that computer is the service's to say.
-    let peer = PeerEnvironment::new([0xcd; PeerEnvironment::KEY_BYTES]);
-    let (_, _, execution) = placement_request(json!({
-        "requestId": "r", "channelId": "ch_aaaaaaaaaa",
-        "coordinatorPlacement": "pool", "threadPlacement": peer.name()
-    }))
-    .unwrap();
-    assert_eq!(execution.coordinator(), &Place::Pool);
-    assert_eq!(execution.threads(), &Place::Peer(peer));
-    for refused in [
-        json!({"requestId": "r", "channelId": "nope", "coordinatorPlacement": "boat", "threadPlacement": "boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "a b", "threadPlacement": "boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "boat", "threadPlacement": "boat:thread"}),
-        json!({"requestId": "r", "channelId": "ch_aaaaaaaaaa", "coordinatorPlacement": "peer:zz", "threadPlacement": "pool"}),
-    ] {
-        assert!(placement_request(refused.clone()).is_none(), "{refused}");
-    }
-}
-
-#[test]
-fn a_placement_change_asks_to_write_to_conversations() {
+fn a_channel_has_no_placement_to_change() {
     assert_eq!(
         nessa_protocol::product::generated::action_for_method("channel.setPlacement"),
-        Some("conversation.write")
+        None
     );
 }

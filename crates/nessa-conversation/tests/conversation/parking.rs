@@ -10,7 +10,6 @@ use crate::conversation_test_support::{
     MemoryAttachments, MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
     RecordingFileLinkAudit, DELETION_BUDGETS,
 };
-use crate::domain::Place;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
     ConversationLeaseCause, ConversationLeaseState, ConversationMessageStatus,
@@ -21,10 +20,6 @@ use nessa_sdk::application::agent_execution::sessions::{
 };
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
-#[cfg(unix)]
-use std::collections::BTreeMap;
-#[cfg(unix)]
-use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -190,29 +185,6 @@ impl Fixture {
         Self::build_with_save_gate(park_after, images, live, None).await
     }
 
-    /// A conversation in a cloud workspace of its own, whose VM `rested`
-    /// records each rest of, parked once idle for [`LIMIT`] and here never
-    /// otherwise.
-    #[cfg(unix)]
-    async fn in_workspace(rested: Arc<RestedWorkspaces>, placements: &Path) -> Self {
-        let placements = Arc::new(crate::infrastructure::FilePlaces::new(placements).unwrap());
-        let environment = Environments::new(
-            crate::infrastructure::in_process_environment(),
-            BTreeMap::new(),
-            placements,
-        )
-        .with_workspaces(rested);
-        Self::build_in(
-            None,
-            false,
-            ConversationLimits::default().max_conversations,
-            None,
-            environment,
-            Some(Place::CloudVm),
-        )
-        .await
-    }
-
     async fn build_with_save_gate(
         park_after: Option<Duration>,
         images: bool,
@@ -225,7 +197,6 @@ impl Fixture {
             live,
             save_gate,
             crate::infrastructure::in_process_environment().into(),
-            None,
         )
         .await
     }
@@ -236,7 +207,6 @@ impl Fixture {
         live: usize,
         save_gate: Option<Arc<CompletionSaveGate>>,
         environment: Environments,
-        placed: Option<Place>,
     ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
@@ -277,12 +247,10 @@ impl Fixture {
                 ),
                 clock: clock.clone(),
                 environment,
-                tool_config: Default::default(),
             },
             ConversationLimits {
                 park_after,
                 max_conversations: live,
-                workspace_idle: LIMIT,
                 ..ConversationLimits::default()
             },
             None,
@@ -293,10 +261,7 @@ impl Fixture {
             .create(
                 id.clone(),
                 caller("create"),
-                crate::application::RequestedConversation {
-                    environment: placed.and_then(|place| place.remote_name()),
-                    ..Default::default()
-                },
+                crate::application::RequestedConversation::default(),
             )
             .await
             .unwrap();
@@ -575,72 +540,6 @@ async fn a_followed_conversation_is_not_parked() {
     fixture.service.shutdown().await.unwrap();
 }
 
-/// Cloud workspaces that run every conversation here, recording each rest.
-#[cfg(unix)]
-#[derive(Default)]
-struct RestedWorkspaces {
-    rested: StdMutex<Vec<(ConversationId, crate::domain::RestCause)>>,
-}
-#[cfg(unix)]
-impl crate::application::ThreadEnvironments for RestedWorkspaces {
-    fn environment(
-        &self,
-        _: &ConversationId,
-    ) -> Result<Arc<dyn crate::application::Environment>, ConversationError> {
-        Ok(crate::infrastructure::in_process_environment())
-    }
-    fn available(&self) -> crate::application::EnvironmentFuture<'_, bool> {
-        Box::pin(async { true })
-    }
-    fn rest<'a>(
-        &'a self,
-        conversation: &'a ConversationId,
-        cause: crate::domain::RestCause,
-    ) -> crate::application::EnvironmentFuture<'a, bool> {
-        self.rested
-            .lock()
-            .unwrap()
-            .push((conversation.clone(), cause));
-        Box::pin(async { true })
-    }
-}
-
-/// In a cloud workspace of its own, a window showing the conversation does
-/// not keep its agent: once idle for the workspace's limit it is parked and
-/// its VM stopped, and the next message opens it again.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_workspace_conversation_rests_its_vm_once_idle_even_when_followed() {
-    let placements = tempfile::tempdir().unwrap();
-    let rested = Arc::new(RestedWorkspaces::default());
-    let fixture = Fixture::in_workspace(rested.clone(), placements.path()).await;
-    let follower = fixture.service.live_changes(&fixture.id);
-    fixture.turn("first").await;
-    fixture.wait_until_idle().await;
-    assert_eq!(fixture.service.sweep(None).await, 0, "not idle long enough");
-    fixture.wait(LIMIT * 2);
-    assert_eq!(fixture.service.sweep(None).await, 1, "followed, and parked");
-    assert!(fixture.slot().await.is_none());
-    let rested_once = tokio::time::timeout(BOUND, async {
-        while rested.rested.lock().unwrap().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    assert!(rested_once.is_ok(), "its VM was let rest");
-    assert_eq!(
-        *rested.rested.lock().unwrap(),
-        [(fixture.id.clone(), crate::domain::RestCause::Idle)]
-    );
-    // The next message opens it again.
-    fixture.turn("second").await;
-    assert!(fixture.slot().await.is_some());
-    drop(follower);
-    fixture.service.shutdown().await.unwrap();
-    // A gateway's own stop is not a rest.
-    assert_eq!(rested.rested.lock().unwrap().len(), 1);
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_zero_limit_parks_nothing() {
     let fixture = Fixture::new(None).await;
@@ -795,8 +694,9 @@ async fn a_closed_thread_opened_by_a_read_is_parked_again() {
         opened.closing.load(Ordering::SeqCst),
         "it opened still closed"
     );
-    // Its agent holds its history's lease while anything holds the slot.
+    // The read publishes the slot before its agent finishes attaching.
     drop(opened);
+    fixture.attached().await;
     fixture.wait_until_idle().await;
     assert_eq!(fixture.service.sweep(None).await, 1);
     assert!(fixture.slot().await.is_none());
@@ -1189,152 +1089,5 @@ async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_pas
         Err(ConversationError::Capacity)
     ));
     drop((held, follower));
-    fixture.service.shutdown().await.unwrap();
-}
-
-/// The machine here, whose every lease holds a login to be renewed by
-/// `by` (Unix milliseconds; 0 for none), as a ChatGPT token handed to a VM.
-struct Renewing {
-    by: Arc<AtomicU64>,
-}
-
-struct RenewingHold {
-    inner: Arc<dyn crate::application::LeaseHold>,
-    by: Arc<AtomicU64>,
-}
-
-impl crate::application::LeaseHold for RenewingHold {
-    fn model_provider(
-        &self,
-        binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
-    ) -> Result<
-        Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
-        nessa_sdk::application::agent_execution::agents::AgentError,
-    > {
-        self.inner.model_provider(binding)
-    }
-    fn ends(
-        &self,
-    ) -> Option<
-        crate::application::EnvironmentFuture<
-            'static,
-            nessa_sdk::domain::agent_execution::leases::LeaseEndCause,
-        >,
-    > {
-        self.inner.ends()
-    }
-    fn renew_by(&self) -> Option<u64> {
-        Some(self.by.load(Ordering::SeqCst)).filter(|by| *by != 0)
-    }
-    fn end(
-        &self,
-        cause: nessa_sdk::domain::agent_execution::leases::LeaseEndCause,
-    ) -> crate::application::EnvironmentFuture<'_, crate::application::LeaseRelease> {
-        self.inner.end(cause)
-    }
-}
-
-impl crate::application::Environment for Renewing {
-    fn declaration(&self) -> crate::application::EnvironmentDeclaration {
-        crate::infrastructure::in_process_environment().declaration()
-    }
-    fn open<'a>(
-        &'a self,
-        lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-        grant: &'a nessa_sdk::domain::agent_execution::leases::LeaseTerms,
-        binding: Arc<dyn nessa_sdk::application::agent_execution::providers::AgentProvider>,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Result<
-            crate::application::EnvironmentLease,
-            nessa_sdk::domain::agent_execution::leases::LeaseRefusal,
-        >,
-    > {
-        Box::pin(async move {
-            let mut lease = crate::infrastructure::in_process_environment()
-                .open(lease, grant, binding)
-                .await?;
-            lease.hold = Arc::new(RenewingHold {
-                inner: lease.hold,
-                by: self.by.clone(),
-            });
-            Ok(lease)
-        })
-    }
-    fn account<'a>(
-        &'a self,
-        lease: &'a nessa_sdk::domain::agent_execution::leases::LeaseId,
-    ) -> crate::application::EnvironmentFuture<
-        'a,
-        Option<nessa_sdk::domain::agent_execution::leases::LeaseCleanup>,
-    > {
-        Box::pin(async move {
-            crate::infrastructure::in_process_environment()
-                .account(lease)
-                .await
-        })
-    }
-}
-
-impl Fixture {
-    /// A conversation whose lease holds a login to be renewed by `by`.
-    async fn renewing(by: Arc<AtomicU64>) -> Self {
-        let environment: Arc<dyn crate::application::Environment> = Arc::new(Renewing { by });
-        Self::build_in(
-            Some(NEVER),
-            false,
-            ConversationLimits::default().max_conversations,
-            None,
-            environment.into(),
-            None,
-        )
-        .await
-    }
-}
-
-/// Row P1 (`docs/design/chatgpt-sign-in.md`): an idle agent whose handed
-/// login is past its renewal is parked at once, even while followed, so the
-/// next message starts it with a fresh one; before then it waits as usual.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_idle_agent_past_its_logins_renewal_is_parked_even_when_followed() {
-    let by = Arc::new(AtomicU64::new(0));
-    let fixture = Fixture::renewing(by.clone()).await;
-    fixture.turn("first").await;
-    let follower = fixture.service.live_changes(&fixture.id);
-    by.store(fixture.clock.now() + 60_000, Ordering::SeqCst);
-    assert_eq!(fixture.service.park_idle(NEVER).await, 0, "not yet due");
-    fixture.wait(Duration::from_secs(60));
-    assert_eq!(fixture.service.park_idle(NEVER).await, 1, "due, followed");
-    assert!(fixture.slot().await.is_none());
-    assert_eq!(
-        fixture.lease().await,
-        (
-            ConversationLeaseState::Ended,
-            Some(ConversationLeaseCause::Idle)
-        )
-    );
-    drop(follower);
-    fixture.service.shutdown().await.unwrap();
-}
-
-/// Row P2: a turn still running when its login is due keeps its agent;
-/// once it ends, the agent is parked.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_running_turn_past_its_logins_renewal_is_not_parked() {
-    let by = Arc::new(AtomicU64::new(0));
-    let fixture = Fixture::renewing(by.clone()).await;
-    let (release, gate) = oneshot::channel();
-    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
-    let sent = fixture.send("long");
-    tokio::time::timeout(BOUND, fixture.provider.execution_started.notified())
-        .await
-        .expect("the turn reaches the provider");
-    by.store(fixture.clock.now(), Ordering::SeqCst);
-    assert_eq!(fixture.service.park_idle(NEVER).await, 0, "busy");
-    release.send(()).unwrap();
-    sent.await.unwrap().unwrap();
-    fixture.completed("long").await;
-    fixture.wait_until_idle().await;
-    assert_eq!(fixture.service.park_idle(NEVER).await, 1);
     fixture.service.shutdown().await.unwrap();
 }
