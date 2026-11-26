@@ -212,9 +212,15 @@ mod tests {
         input.manifest_base64 = STANDARD.encode(&json);
         assert_eq!(verify_inline(&input).unwrap().manifest().json(), json);
         input.assets[0].bytes_base64 = STANDARD.encode(vec![0; asset.len()]);
-        assert_eq!(validate_inline_package(&input), Err(InlineRefusal::AssetDigest));
+        assert_eq!(
+            validate_inline_package(&input),
+            Err(InlineRefusal::AssetDigest)
+        );
         input.assets[0].bytes_base64.clear();
-        assert_eq!(validate_inline_package(&input), Err(InlineRefusal::AssetLength));
+        assert_eq!(
+            validate_inline_package(&input),
+            Err(InlineRefusal::AssetLength)
+        );
         input.assets[0].path = "other.html".to_owned();
         assert_eq!(
             validate_inline_package(&input),
@@ -244,7 +250,10 @@ mod tests {
     fn bounds_aggregate_decoded_bytes_and_number_of_assets() {
         let mut input = starter();
         input.manifest_base64 = STANDARD.encode(vec![0; MAX_INLINE_BYTES]);
-        assert_eq!(validate_inline_package(&input), Err(InlineRefusal::InlineLimit));
+        assert_eq!(
+            validate_inline_package(&input),
+            Err(InlineRefusal::InlineLimit)
+        );
         input.manifest_base64.clear();
         input.assets = (0..=MAX_INLINE_ASSETS)
             .map(|index| InlineAsset {
@@ -252,7 +261,10 @@ mod tests {
                 bytes_base64: String::new(),
             })
             .collect();
-        assert_eq!(validate_inline_package(&input), Err(InlineRefusal::InlineLimit));
+        assert_eq!(
+            validate_inline_package(&input),
+            Err(InlineRefusal::InlineLimit)
+        );
         assert_eq!(
             scaffold_inline_package("sample-app".to_owned(), "v".repeat(MAX_INLINE_BYTES)),
             Err(InlineRefusal::InlineLimit)
