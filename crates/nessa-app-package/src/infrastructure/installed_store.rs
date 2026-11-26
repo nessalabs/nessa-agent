@@ -1,13 +1,18 @@
 use std::{collections::BTreeMap, path::Path};
 
 use nessa_local_database::{
-    rusqlite::{self, params, types::FromSqlError, Connection, OptionalExtension},
+    rusqlite::{
+        self, params,
+        types::{FromSqlError, ValueRef},
+        Connection, OptionalExtension,
+    },
     OpenError, Schema,
 };
-use nessa_types::app_identity::ExtensionAppId;
+use nessa_types::app_identity::{ExtensionAppId, MAX_EXTENSION_APP_ID_BYTES};
 
 use crate::{
-    parse_manifest, PackageError, VerifiedPackage, MAX_FILES, MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
+    parse_manifest, PackageError, PackageManifest, VerifiedPackage, MAX_FILES, MAX_MANIFEST_BYTES,
+    MAX_PATH_BYTES,
 };
 
 const SCHEMA: &str = include_str!("installed_store.sql");
@@ -21,6 +26,10 @@ pub enum StoreError {
     Database(rusqlite::Error),
     /// The app identity already has an installed record.
     AlreadyInstalled,
+    /// The exact app identity has no installed record to remove.
+    NotInstalled,
+    /// The store holds an invalid installed app identity.
+    InvalidStoredAppId,
     /// The stored manifest and asset bytes failed package validation.
     InvalidPackage(PackageError),
     /// The stored manifest describes a different app than the lookup key.
@@ -30,6 +39,25 @@ pub enum StoreError {
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
         Self::Database(error)
+    }
+}
+
+/// Inventory metadata for one installed app. Asset integrity is checked on load.
+#[derive(Debug, Eq, PartialEq)]
+pub struct InstalledApp {
+    app_id: ExtensionAppId,
+    package_version: String,
+}
+
+impl InstalledApp {
+    /// The exact app identity under which the package is installed.
+    pub fn app_id(&self) -> &ExtensionAppId {
+        &self.app_id
+    }
+
+    /// The package version from the stored manifest.
+    pub fn package_version(&self) -> &str {
+        &self.package_version
     }
 }
 
@@ -81,6 +109,67 @@ impl InstalledAppStore {
         Ok(())
     }
 
+    /// Read installed app metadata in app ID order from one database snapshot.
+    ///
+    /// An empty store returns an empty list. Asset bytes are checked on load.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database or metadata validation error if inventory cannot be read.
+    pub fn inventory(&self) -> Result<Vec<InstalledApp>, StoreError> {
+        // SQLite checks lengths before reading the corresponding column payloads.
+        let mut query = self.connection.prepare(
+            "SELECT CASE WHEN octet_length(app_id) <= ?1 THEN app_id END,
+                        CASE WHEN length(manifest) <= ?2 THEN manifest END
+                 FROM installed_apps ORDER BY app_id",
+        )?;
+        let mut rows = query.query(params![
+            MAX_EXTENSION_APP_ID_BYTES as i64,
+            MAX_MANIFEST_BYTES as i64
+        ])?;
+        let mut installed = Vec::new();
+        while let Some(row) = rows.next()? {
+            let raw_id = row.get_ref(0)?;
+            if raw_id == ValueRef::Null {
+                return Err(StoreError::InvalidStoredAppId);
+            }
+            let id = raw_id
+                .as_str()
+                .map_err(|error| conversion(0, rusqlite::types::Type::Text, error))?;
+            // Bound the borrowed column before handing it to the owned ID constructor.
+            if id.len() > MAX_EXTENSION_APP_ID_BYTES {
+                return Err(StoreError::InvalidStoredAppId);
+            }
+            // Validate the row key through the canonical identity owner before use.
+            let app_id = ExtensionAppId::new(id).map_err(|_| StoreError::InvalidStoredAppId)?;
+            let manifest = stored_manifest(row.get_ref(1)?, 1, &app_id)?;
+            installed.push(InstalledApp {
+                app_id,
+                package_version: manifest.package_version().to_owned(),
+            });
+        }
+        Ok(installed)
+    }
+
+    /// Remove the exact installed app and its assets in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed missing-app outcome or a database failure.
+    pub fn remove(&mut self, app: &ExtensionAppId) -> Result<(), StoreError> {
+        let transaction = self.connection.transaction()?;
+        let app_id = app.as_str();
+        transaction.execute(
+            "DELETE FROM installed_app_assets WHERE app_id = ?1",
+            [app_id],
+        )?;
+        if transaction.execute("DELETE FROM installed_apps WHERE app_id = ?1", [app_id])? == 0 {
+            return Err(StoreError::NotInstalled);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Load a package from one snapshot and rerun the headless verifier.
     ///
     /// Returns an empty result when the requested app has no installed record.
@@ -93,26 +182,15 @@ impl InstalledAppStore {
         let app_id = app.as_str();
         let manifest = transaction
             .query_row(
-                "SELECT manifest FROM installed_apps WHERE app_id = ?1",
-                [app_id],
-                |row| {
-                    let blob = row
-                        .get_ref(0)?
-                        .as_blob()
-                        .map_err(|error| conversion(0, rusqlite::types::Type::Blob, error))?;
-                    Ok((blob.len() <= MAX_MANIFEST_BYTES).then(|| blob.to_vec()))
-                },
+                "SELECT CASE WHEN length(manifest) <= ?2 THEN manifest END
+                 FROM installed_apps WHERE app_id = ?1",
+                params![app_id, MAX_MANIFEST_BYTES as i64],
+                |row| Ok(stored_manifest(row.get_ref(0)?, 0, app)),
             )
             .optional()?;
-        let manifest = match manifest {
-            None => return Ok(None),
-            Some(None) => return Err(StoreError::InvalidPackage(PackageError::ManifestTooLarge)),
-            Some(Some(manifest)) => manifest,
+        let Some(manifest) = manifest.transpose()? else {
+            return Ok(None);
         };
-        let manifest = parse_manifest(manifest).map_err(StoreError::InvalidPackage)?;
-        if manifest.app_id() != app {
-            return Err(StoreError::AppIdentityMismatch);
-        }
         let assets = {
             let mut query = transaction.prepare(
                 "SELECT path, bytes FROM installed_app_assets WHERE app_id = ?1 ORDER BY path",
@@ -147,6 +225,24 @@ impl InstalledAppStore {
             .map_err(StoreError::InvalidPackage)?;
         Ok(Some(package))
     }
+}
+
+fn stored_manifest(
+    value: ValueRef<'_>,
+    index: usize,
+    app: &ExtensionAppId,
+) -> Result<PackageManifest, StoreError> {
+    if value == ValueRef::Null {
+        return Err(StoreError::InvalidPackage(PackageError::ManifestTooLarge));
+    }
+    let bytes = value
+        .as_blob()
+        .map_err(|error| conversion(index, rusqlite::types::Type::Blob, error))?;
+    let manifest = parse_manifest(bytes.to_vec()).map_err(StoreError::InvalidPackage)?;
+    if manifest.app_id() != app {
+        return Err(StoreError::AppIdentityMismatch);
+    }
+    Ok(manifest)
 }
 
 fn conversion(index: usize, kind: rusqlite::types::Type, error: FromSqlError) -> rusqlite::Error {

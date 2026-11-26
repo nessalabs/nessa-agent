@@ -11,4 +11,4 @@ pub use domain::static_package::{
 pub use infrastructure::manifest::{parse_manifest, verify_package};
 
 #[cfg(feature = "disposable-store")]
-pub use infrastructure::installed_store::{InstalledAppStore, StoreError};
+pub use infrastructure::installed_store::{InstalledApp, InstalledAppStore, StoreError};

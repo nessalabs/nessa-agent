@@ -28,3 +28,14 @@ Installing an existing app identity returns `AlreadyInstalled`. A load
 reads a single database snapshot and checks the stored identity, manifest,
 and asset bytes before returning an owned record. The adapter has no mounted
 Product route or authorization.
+
+Inventory reads app IDs and versions from one snapshot. An empty list means
+the store has no installed records. Unreadable or invalid records return an
+error. Asset integrity is still checked on load. Removal matches the exact
+canonical ID and deletes its manifest and assets in one transaction.
+
+| Operation | Stored outcome |
+| --- | --- |
+| Remove an installed ID | That app and its assets are gone. Other apps keep their original records. |
+| Remove an absent ID | Returns `NotInstalled`. |
+| Removing the manifest fails after deleting its assets | The transaction rolls back the asset deletion. |
