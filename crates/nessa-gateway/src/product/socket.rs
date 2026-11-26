@@ -11,8 +11,8 @@ use crate::browser_session::application::{
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
-    access_refusal, AccessDecision, ConversationAdmissionToken, RecordReadLease,
-    ReviewNoticeAuditFailure, WindowCommand, WindowSlot,
+    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure, ReviewNoticeClaim,
+    WindowCommand, WindowSlot,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::conversation_test_support as conversation_support;
@@ -1617,7 +1617,7 @@ async fn forward_review_notices(
         drop(authority_updates.borrow_and_update());
         let mut visible = Vec::with_capacity(reviews.len());
         let mut selected_revision = None;
-        let mut admitted_tokens: Vec<ConversationAdmissionToken> = Vec::new();
+        let mut admitted_claims: Vec<ReviewNoticeClaim> = Vec::new();
         for review in reviews {
             let selection = super::read_access::may_see_review(&state, &session, &review)
                 .await
@@ -1632,7 +1632,7 @@ async fn forward_review_notices(
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
-                    admitted_tokens.push(selection.metadata_token().clone());
+                    admitted_claims.push(selection.metadata_claim().clone());
                     if matches!(selection.decision(), AccessDecision::Allow { .. }) {
                         visible.push(review);
                     }
@@ -1651,30 +1651,30 @@ async fn forward_review_notices(
                 selection_passes += 1;
                 continue 'snapshots;
             }
-            // The token was read with the row Cedar saw. It still has to name
+            // The claim was read with the row Cedar saw. It still has to name
             // that row at this authority snapshot. The board is checked after
             // this await; checking it before would admit a candidate the board
-            // drops while the token read waits.
+            // drops while the claim read waits.
             let Some(metadata) = state.reads.review_metadata.as_ref() else {
                 return Err(ReviewNoticePublicationFailure::Audit(
                     ReviewNoticeAuditFailure::Unavailable,
                 ));
             };
             let mut by_conversation = HashMap::new();
-            for token in &admitted_tokens {
+            for claim in &admitted_claims {
                 if by_conversation
-                    .insert(token.conversation_id().clone(), token)
-                    .is_some_and(|earlier| earlier != token)
+                    .insert(claim.conversation_id().clone(), claim)
+                    .is_some_and(|earlier| earlier != claim)
                 {
                     selection_passes += 1;
                     continue 'snapshots;
                 }
             }
-            for token in by_conversation.values() {
-                let current_token = metadata.admission_current(token).await.map_err(|_| {
+            for claim in by_conversation.values() {
+                let current_claim = metadata.review_claim_current(claim).await.map_err(|_| {
                     ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
                 })?;
-                if !current_token {
+                if !current_claim {
                     selection_passes += 1;
                     continue 'snapshots;
                 }
@@ -3345,6 +3345,7 @@ mod tests {
 
     fn repository_of(rows: Vec<Conversation>) -> Arc<MemoryRepository> {
         let repository = MemoryRepository::default();
+        *repository.catalogue_incarnation.lock().unwrap() = "socket-test-catalogue".into();
         {
             let mut records = repository.records.lock().unwrap();
             for conversation in rows {

@@ -56,6 +56,7 @@ use nessa_sync::replication::catalogue::{
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 #[cfg(any(test, feature = "test-support"))]
@@ -927,11 +928,11 @@ fn read_admission(
             |row| row.get(0),
         )
         .map_err(failed)?;
-    let revision: i64 = transaction
+    let (revision, creation_revision): (i64, i64) = transaction
         .cached_row(
-            "SELECT change_revision FROM conversations WHERE id = ?1",
+            "SELECT change_revision, creation_revision FROM conversations WHERE id = ?1",
             [id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(failed)?;
     let change_revision =
@@ -939,6 +940,9 @@ fn read_admission(
     Ok(Some(ConversationAdmissionSnapshot::new(
         conversation,
         ConversationAdmissionToken::new(incarnation, id.clone(), change_revision),
+        u64::try_from(creation_revision)
+            .ok()
+            .and_then(NonZeroU64::new),
     )))
 }
 
