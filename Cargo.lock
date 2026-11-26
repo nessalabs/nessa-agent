@@ -3706,7 +3706,10 @@ dependencies = [
 name = "nessa-app-package"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "nessa-types",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 

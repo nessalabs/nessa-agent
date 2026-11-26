@@ -1920,10 +1920,12 @@ its locator ancestry stays caller trust, while root ownership and binding remain
 checked. Private delivery-copy tests live in
 `crates/nessa-sdk/tests/domain/agent_execution/uploaded_delivery.rs`.
 
-`crates/nessa-app-package/` checks the byte count and SHA-256 of a held
-static app asset. It uses the validated extension app identity from
-`nessa-types` and returns a view of the verified bytes. The caller supplies
-expected integrity metadata and owns reading and bounding the bytes.
+`crates/nessa-app-package/` validates held static app packages and owns the
+portable manifest contract. The JSON reader is in `infrastructure/manifest.rs`.
+`domain/static_package.rs` requires canonical asset paths, an exact declared
+HTML entrypoint, and matching byte counts and SHA-256 digests. The owned record
+uses the validated extension app identity from `nessa-types` and preserves the
+verified bytes. See the [package contract](../crates/nessa-app-package/README.md).
 
 `crates/nessa-attachments/` (crate `nessa-attachments`) owns the files a
 conversation uploads so its messages can refer to them. The HTTP upload route
