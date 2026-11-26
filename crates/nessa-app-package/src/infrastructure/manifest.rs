@@ -3,15 +3,18 @@ use std::collections::BTreeMap;
 use nessa_types::app_identity::ExtensionAppId;
 use serde::Deserialize;
 
-use crate::domain::static_package::{self, AssetDeclaration};
-use crate::{PackageError, VerifiedPackage, MAX_MANIFEST_BYTES};
+use crate::domain::static_package::{self, AssetDeclaration, ManifestDeclarations};
+use crate::{PackageError, PackageManifest, VerifiedPackage, MAX_MANIFEST_BYTES};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Manifest {
     schema_version: u32,
     app_id: String,
+    package_version: String,
     entrypoint: String,
+    icon: Option<String>,
+    requested_capabilities: Vec<String>,
     assets: Vec<Asset>,
 }
 
@@ -19,7 +22,7 @@ struct Manifest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Asset {
     path: String,
-    byte_count: u64,
+    size_bytes: u64,
     sha256: String,
 }
 
@@ -36,6 +39,15 @@ pub fn verify_package(
     manifest: Vec<u8>,
     assets: BTreeMap<String, Vec<u8>>,
 ) -> Result<VerifiedPackage, PackageError> {
+    parse_manifest(manifest)?.verify_held(assets)
+}
+
+/// Parse and validate provisional V1 declarations before reading any assets.
+///
+/// # Errors
+///
+/// Rejects unsupported versions, malformed declarations, and exceeded bounds.
+pub fn parse_manifest(manifest: Vec<u8>) -> Result<PackageManifest, PackageError> {
     if manifest.len() > MAX_MANIFEST_BYTES {
         return Err(PackageError::ManifestTooLarge);
     }
@@ -57,10 +69,20 @@ pub fn verify_package(
                 .map_err(|_| PackageError::InvalidDigest)?;
             Ok(AssetDeclaration {
                 path: asset.path,
-                byte_count: asset.byte_count,
+                size_bytes: asset.size_bytes,
                 sha256,
             })
         })
         .collect::<Result<_, _>>()?;
-    static_package::verify(app_id, input.entrypoint, declarations, manifest, assets)
+    static_package::validate_declarations(
+        ManifestDeclarations {
+            app_id,
+            package_version: input.package_version,
+            entrypoint: input.entrypoint,
+            icon: input.icon,
+            requested_capabilities: input.requested_capabilities,
+            assets: declarations,
+        },
+        manifest,
+    )
 }

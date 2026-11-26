@@ -5,6 +5,7 @@ mod infrastructure;
 
 pub use domain::asset_integrity::{verify_asset, AssetIntegrityError, VerifiedAsset};
 pub use domain::static_package::{
-    PackageError, VerifiedPackage, MAX_ASSET_BYTES, MAX_FILES, MAX_MANIFEST_BYTES,
+    PackageError, PackageManifest, RequestedCapability, VerifiedPackage, MAX_FILES,
+    MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
-pub use infrastructure::manifest::verify_package;
+pub use infrastructure::manifest::{parse_manifest, verify_package};

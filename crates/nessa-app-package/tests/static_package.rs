@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
 use nessa_app_package::{
-    verify_package, AssetIntegrityError, PackageError, MAX_ASSET_BYTES, MAX_FILES,
-    MAX_MANIFEST_BYTES,
+    parse_manifest, verify_package, AssetIntegrityError, PackageError, RequestedCapability,
+    MAX_FILES, MAX_MANIFEST_BYTES,
 };
 use nessa_types::app_identity::ExtensionAppIdError;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 fn declaration(path: &str, bytes: &[u8]) -> Value {
-    json!({"path": path, "byteCount": bytes.len(), "sha256": hex::encode(Sha256::digest(bytes))})
+    json!({"path": path, "sizeBytes": bytes.len(), "sha256": hex::encode(Sha256::digest(bytes))})
 }
 
 fn manifest(assets: Vec<Value>) -> Value {
-    json!({"schemaVersion": 1, "appId": "calendar", "entrypoint": "index.html", "assets": assets})
+    json!({"schemaVersion": 1, "appId": "calendar", "packageVersion": "1.0.0", "entrypoint": "index.html", "requestedCapabilities": [], "assets": assets})
 }
 
 fn held() -> BTreeMap<String, Vec<u8>> {
@@ -35,10 +35,13 @@ fn returns_one_owned_record_with_the_exact_declared_assets() {
             .collect(),
     ));
     let record = verify_package(manifest.clone(), assets).unwrap();
-    assert_eq!(record.app_id().as_str(), "calendar");
-    assert_eq!(record.entrypoint(), "index.html");
-    assert_eq!(record.manifest(), manifest);
-    assert_eq!(record.asset(record.entrypoint()), Some(b"abc".as_slice()));
+    assert_eq!(record.manifest().app_id().as_str(), "calendar");
+    assert_eq!(record.manifest().entrypoint(), "index.html");
+    assert_eq!(record.manifest().json(), manifest);
+    assert_eq!(
+        record.asset(record.manifest().entrypoint()),
+        Some(b"abc".as_slice())
+    );
     assert_eq!(record.asset("assets/app.css"), Some(b"body{}".as_slice()));
     assert_eq!(record.assets().count(), 2);
 }
@@ -60,7 +63,7 @@ fn refuses_unknown_fields_at_both_levels_and_duplicate_fields() {
         verify_package(encoded(&input), held()).unwrap_err(),
         PackageError::MalformedManifest
     );
-    let duplicate = br#"{"schemaVersion":1,"schemaVersion":1,"appId":"calendar","entrypoint":"index.html","assets":[]}"#;
+    let duplicate = br#"{"schemaVersion":1,"schemaVersion":1,"appId":"calendar","packageVersion":"1","entrypoint":"index.html","requestedCapabilities":[],"assets":[]}"#;
     assert_eq!(
         verify_package(duplicate.to_vec(), held()).unwrap_err(),
         PackageError::MalformedManifest
@@ -164,8 +167,9 @@ fn rejects_bad_digest_encoding() {
 }
 
 #[test]
-fn accepts_the_portable_ceiling_and_rejects_each_overflow() {
-    let mut assets = BTreeMap::from([("index.html".to_string(), vec![b'x'; MAX_ASSET_BYTES])]);
+fn applies_the_byte_ceiling_to_the_manifest_and_not_to_held_assets() {
+    let mut assets =
+        BTreeMap::from([("index.html".to_string(), vec![b'x'; MAX_MANIFEST_BYTES + 1])]);
     assets.extend((1..MAX_FILES).map(|i| (format!("asset-{i}.css"), vec![])));
     let input = encoded(&manifest(
         assets
@@ -175,18 +179,85 @@ fn accepts_the_portable_ceiling_and_rejects_each_overflow() {
     ));
     assert!(verify_package(input.clone(), assets.clone()).is_ok());
 
-    assets.get_mut("index.html").unwrap().push(b'x');
-    assert_eq!(
-        verify_package(input.clone(), assets.clone()).unwrap_err(),
-        PackageError::TooManyAssetBytes
-    );
     assets.insert("extra.css".into(), vec![]);
     assert_eq!(
         verify_package(input, assets).unwrap_err(),
         PackageError::TooManyFiles
     );
     assert_eq!(
-        verify_package(vec![b' '; MAX_MANIFEST_BYTES + 1], held()).unwrap_err(),
+        parse_manifest(vec![b' '; MAX_MANIFEST_BYTES + 1]).unwrap_err(),
         PackageError::ManifestTooLarge
     );
+}
+
+#[test]
+fn parses_version_icon_and_unique_capability_declarations_before_assets() {
+    let mut input = manifest(vec![
+        declaration("index.html", b"abc"),
+        declaration("icon.svg", b"icon"),
+    ]);
+    input["icon"] = json!("icon.svg");
+    input["requestedCapabilities"] = json!(["list", "read", "create", "subscribe", "stop"]);
+    let parsed = parse_manifest(encoded(&input)).unwrap();
+    assert_eq!(parsed.package_version(), "1.0.0");
+    assert_eq!(parsed.icon(), Some("icon.svg"));
+    assert_eq!(parsed.requested_capabilities().len(), 5);
+    assert!(parsed
+        .requested_capabilities()
+        .contains(&RequestedCapability::Subscribe));
+    assert_eq!(
+        parsed.verify_held(held()).unwrap_err(),
+        PackageError::MissingAsset
+    );
+
+    for invalid in [
+        json!(["stop", "stop"]),
+        json!(["admin"]),
+        json!(["list", "read", "create", "subscribe", "stop", "list"]),
+    ] {
+        input["requestedCapabilities"] = invalid;
+        assert_eq!(
+            parse_manifest(encoded(&input)).unwrap_err(),
+            PackageError::InvalidRequestedCapabilities
+        );
+    }
+    input["requestedCapabilities"] = json!([]);
+    input["icon"] = json!("other.svg");
+    assert_eq!(
+        parse_manifest(encoded(&input)).unwrap_err(),
+        PackageError::InvalidIcon
+    );
+}
+
+#[test]
+fn bounds_path_bytes_components_and_depth() {
+    let longest = format!(
+        "{}/{}/{}/{}",
+        "a".repeat(64),
+        "b".repeat(64),
+        "c".repeat(64),
+        "d".repeat(45)
+    );
+    let deepest = "a/b/c/d/e/f/g/h";
+    for path in [&longest, deepest] {
+        let input = manifest(vec![
+            declaration("index.html", b"abc"),
+            declaration(path, b""),
+        ]);
+        assert!(parse_manifest(encoded(&input)).is_ok());
+    }
+    for path in [
+        format!("{longest}d"),
+        "a".repeat(65),
+        format!("{deepest}/i"),
+    ] {
+        let input = manifest(vec![
+            declaration("index.html", b"abc"),
+            declaration(&path, b""),
+        ]);
+        assert_eq!(
+            parse_manifest(encoded(&input)).unwrap_err(),
+            PackageError::InvalidPath
+        );
+    }
 }

@@ -5,17 +5,19 @@ It checks that the manifest describes exactly those bytes and returns one
 owned record. Callers can read the HTML entrypoint and the other assets
 directly from that record.
 
-The local version 1 contract has four fields: `schemaVersion` (1), `appId`
-(the canonical extension app identity), `entrypoint` (the exact path of a
-declared `.html` file), and `assets` (an array of declarations). Each asset
-declares `path`, `byteCount` and a lowercase hexadecimal `sha256`.
-Unknown fields are rejected. Path segments start with a lowercase ASCII
-letter or digit and use lowercase letters, digits, dots, underscores and
-hyphens. Segments cannot end in a dot or use a Windows device name.
-Use forward slashes between segments.
+The provisional version 1 manifest uses `schemaVersion` (1), `appId`,
+`packageVersion`, `entrypoint`, optional `icon`, `assets`, and
+`requestedCapabilities`. Each asset declares `path`, `sizeBytes`, and a
+lowercase hexadecimal `sha256`. The entrypoint names a declared `.html` asset
+and the icon, when present, names a declared asset. Paths use forward slashes
+and have up to 240 bytes, eight components, and 64 bytes per component.
+Components start with a lowercase ASCII letter or digit and use lowercase
+letters, digits, dots, underscores and hyphens. Components cannot end in a dot
+or use a Windows device name.
 
-The portable profile permits up to 128 assets and 64 KiB of total asset
-bytes. The manifest has a separate 64 KiB decode limit. This contract is
-available in the headless library. A Product transport envelope and mounting
-are separate concerns. Integrity establishes that the held bytes match the
-manifest. Publisher trust and permissions require separate authority.
+The parser rejects unknown fields and bounds the manifest JSON to 64 KiB and
+128 asset declarations. The portable verifier accepts bytes that the caller
+already holds. A separate Product transport would bound these bytes before
+delivery. The five possible capability declarations are `list`, `read`,
+`create`, `subscribe`, and `stop`, each at most once. Declarations confer no
+authority. Integrity checks confirm correspondence with the manifest.
