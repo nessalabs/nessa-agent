@@ -44,6 +44,8 @@ nessa-webhooks = { path = "../nessa-webhooks" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
 nessa-backup = { path = "../nessa-backup" }
 nessa-conversation = { path = "../nessa-conversation" }
+# Turn and decision spans, sent only where config.json turns a sink on.
+nessa-telemetry = { path = "../nessa-telemetry", features = ["otel"] }
 base64 = "0.22"
 nessa-protocol = { path = "../nessa-protocol" }
 nessa-projection = { path = "../nessa-projection" }

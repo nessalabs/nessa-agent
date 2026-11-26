@@ -12,8 +12,8 @@ use crate::application::{
 use crate::application::{ConversationAgent, ConversationAgents, ConversationDeletionBudgets};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries, Provider,
-    ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, TestClock, Unlisted,
-    DELETION_BUDGETS,
+    ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, RecordingTurnOriginAudit,
+    TestClock, Unlisted, DELETION_BUDGETS,
 };
 use crate::infrastructure::CedarAppCallPolicyEvaluator;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -548,6 +548,7 @@ impl Fixture {
                 mode_audit: Arc::new(RecordingModeAudit::default()),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: summaries.clone(),
                 listing: Arc::new(Unlisted),

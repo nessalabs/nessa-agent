@@ -70,6 +70,8 @@ mod tunnel;
 mod voice;
 
 mod runtime_config;
+// Which sinks telemetry sends to, from config.json; flushed at exit.
+pub(crate) mod telemetry;
 
 mod agent;
 

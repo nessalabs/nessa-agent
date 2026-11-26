@@ -34,8 +34,8 @@ use crate::{
     },
     conversation_test_support::{
         AcceptingAudit, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository,
-        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted,
-        DELETION_BUDGETS,
+        MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
+        RecordingTurnOriginAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
 };
 use nessa_agent_install::{
@@ -333,6 +333,7 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
             Arc::new(DurableWarmUpAudit::new(root.join("warm-up-audit")).unwrap()),
             Arc::new(SystemClock),
         ),
+        telemetry: nessa_telemetry::Telemetry::off(),
     })
 }
 
@@ -1087,6 +1088,7 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),

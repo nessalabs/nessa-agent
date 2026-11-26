@@ -197,7 +197,7 @@ where
         return;
     }
 
-    run_authenticated(socket, state, session).await;
+    serve_authenticated(socket, state, session, handshake.client_id.into()).await;
 }
 
 /// Surface and client id a successful handshake named. Neither grants
@@ -586,11 +586,14 @@ struct QueuedResponse {
 }
 
 /// What a request on one connection may act through: its window's place
-/// and its place among the person's terminals.
+/// and its place among the person's terminals, and the client it says it is.
 #[derive(Clone, Copy, Default)]
 struct Places<'a> {
     window: Option<&'a WindowSlot>,
     terminals: Option<&'a crate::terminal::TerminalLink>,
+    /// The client id its handshake named (`nessa-browser`, `nessa-cli`, …):
+    /// claimed, never proof, and kept with each send it makes.
+    client: Option<&'a str>,
 }
 
 enum WireResponse {
@@ -924,10 +927,22 @@ type RefreshCheck<'a> = Pin<
     >,
 >;
 
-async fn run_authenticated<S>(
+/// An authenticated connection from a client its tests name `test-client`.
+#[cfg(test)]
+async fn run_authenticated<S>(socket: S, state: ProductRouteState, session: AuthenticatedSession)
+where
+    S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
+{
+    serve_authenticated(socket, state, session, "test-client".into()).await;
+}
+
+/// Serve an authenticated connection from `client`, the id its handshake
+/// named, until it closes.
+async fn serve_authenticated<S>(
     socket: S,
     mut state: ProductRouteState,
     session: AuthenticatedSession,
+    client: Arc<str>,
 ) where
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
@@ -1411,6 +1426,7 @@ async fn run_authenticated<S>(
         let request_session = session.clone();
         let request_window = std::sync::Arc::downgrade(&window);
         let request_terminals = std::sync::Arc::downgrade(&terminals);
+        let request_client = client.clone();
         let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
                 let (request, permit) = admitted.into_parts();
@@ -1440,6 +1456,7 @@ async fn run_authenticated<S>(
                     Places {
                         window: window.as_deref().and_then(Option::as_ref),
                         terminals: terminals.as_deref().and_then(Option::as_ref),
+                        client: Some(&request_client),
                     },
                 )
                 .await;
@@ -2286,7 +2303,8 @@ async fn dispatch_authorized(
         | ProductMethod::ConversationSetModel
         | ProductMethod::ConversationSwitchAgent
         | ProductMethod::ConversationFork => {
-            super::conversation::dispatch(state, session, frame, initiation).await
+            super::conversation::dispatch_from(state, session, frame, initiation, places.client)
+                .await
         }
         ProductMethod::AttachmentWrite => super::attachment::dispatch_write(state, frame).await,
         ProductMethod::AttachmentBegin => super::attachment::dispatch(state, session, frame).await,

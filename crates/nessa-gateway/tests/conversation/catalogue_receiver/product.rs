@@ -13,7 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use conversation_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
-    RecordingFileLinkAudit, TestClock,
+    RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
 };
 use nessa_local_database::rusqlite::Connection;
 use nessa_protocol::agents::AgentId;
@@ -327,6 +327,7 @@ async fn gateway_child() {
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             provider_sessions: conversation_support::claude_erasers(),

@@ -57,6 +57,28 @@ describe("sending", () => {
     ).toBe(false)
   })
 
+  it("says a message the person spoke was spoken, again when it is sent again", async () => {
+    const { store, source } = await ready()
+    store.dispatch(newSession())
+    const [draftId] = shown(store)
+    source.refuse("send", "not-supported")
+    await store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Said aloud.", spoken: true }),
+    )
+    const [refused] = outboxOf(store, draftId)
+    expect(refused).toMatchObject({ spoken: true, delivery: { state: "failed" } })
+    await store.dispatch(
+      resendMessage({ initiator: "person", sessionId: draftId, messageId: refused.id }),
+    )
+    const sends = source.calls.filter((call) => call[0] === "send").map((call) => call[1])
+    expect(sends).toHaveLength(2)
+    for (const sent of sends) expect(sent).toMatchObject({ text: "Said aloud.", spoken: true })
+    // A typed message says nothing of it.
+    await store.dispatch(sendMessage({ initiator: "person", sessionId: draftId, text: "Typed." }))
+    const typed = source.calls.filter((call) => call[0] === "send").at(-1)?.[1]
+    expect(typed).not.toHaveProperty("spoken")
+  })
+
   it("takes the images and files put on a composer onto the person's message, which may be attachments alone", async () => {
     const { store, source } = await ready()
     store.dispatch(newSession())

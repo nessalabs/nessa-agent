@@ -93,6 +93,7 @@ export function storeConversations(store: DesktopStore): VoiceConversations {
           initiator: "person",
           withImages: false,
           messageId: turn,
+          spoken: true,
         }),
       )
       return {

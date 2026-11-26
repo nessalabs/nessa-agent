@@ -186,6 +186,7 @@ mod provider_sessions;
 mod record_read;
 mod retries;
 mod review_notice_audit;
+pub(crate) mod turn_telemetry;
 pub use review_notice_audit::{
     ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord,
     ReviewNoticeAuditor, ReviewNoticeClock, ReviewNoticeSleep,
@@ -280,10 +281,11 @@ pub use ports::{
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
-    ListedConversations, ObservationCursor, ObservedConversations, RuntimeReadiness, SubmittedFile,
-    SubmittedImage, SubmittedMessage, SubmittedUpload, UnfinishedDeletions, UnfinishedMark,
-    UnfinishedTurns, WaitingAutoPick,
+    ListedConversations, ObservationCursor, ObservedConversations, RuntimeReadiness, SentFrom,
+    SubmittedFile, SubmittedImage, SubmittedMessage, SubmittedUpload, UnfinishedDeletions,
+    UnfinishedMark, UnfinishedTurns, WaitingAutoPick,
 };
+pub use ports::{ConversationTurnOriginAudit, ConversationTurnOriginAuditRecord};
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
 };
@@ -298,8 +300,7 @@ pub use service::{
 };
 pub use service::{
     AccessRequestOutcome, ChainEnd, Device, TurnChain, TurnOrigin, TurnReading, ASK_OWNER_TOOL,
-    DECISION_TARGET, EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL,
-    REQUEST_ACCESS_TOOL,
+    EVENT_SURFACE_PREFIX, MAX_EARLIER_TURNS, MAX_TURN_HOPS, READ_TURN_TOOL, REQUEST_ACCESS_TOOL,
 };
 pub use service::{
     AgentBrief, AgentPlace, AwaitedTurn, ChannelError, ChannelFolders, ChannelListing,
@@ -354,6 +355,10 @@ mod attachment_tests;
 #[cfg(test)]
 #[path = "../../tests/conversation/linked_files.rs"]
 mod linked_file_tests;
+
+#[cfg(test)]
+#[path = "../../tests/conversation/turn_origin_records.rs"]
+mod turn_origin_record_tests;
 
 #[cfg(test)]
 #[path = "../../tests/conversation/listing.rs"]

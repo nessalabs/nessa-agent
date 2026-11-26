@@ -9,7 +9,7 @@ use crate::{
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryListing, MemoryRepository,
         MemorySummaries, ObservedPolicy, Provider, ProviderFactory, RecordingFileLinkAudit,
-        TestClock, DELETION_BUDGETS,
+        RecordingTurnOriginAudit, TestClock, DELETION_BUDGETS,
     },
     {
         application::{
@@ -96,6 +96,7 @@ fn listing(limits: ConversationLimits) -> Listing {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: summaries.clone(),
             listing: Arc::new(MemoryListing {
@@ -156,6 +157,7 @@ fn stored(limits: ConversationLimits) -> Stored {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: store.clone(),
             listing: store.clone(),
@@ -795,6 +797,7 @@ async fn a_message_of_files_alone_is_titled_by_its_first_file() {
             owner(),
             "files".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: " ".into(),
                 images: Vec::new(),
@@ -1397,6 +1400,7 @@ async fn a_list_asks_for_one_row_past_its_bound_and_no_more() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: asked.clone(),
@@ -1527,6 +1531,7 @@ fn answering(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Answering(answered)),

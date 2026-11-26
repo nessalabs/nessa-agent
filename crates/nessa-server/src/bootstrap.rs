@@ -28,8 +28,8 @@ pub fn run() -> std::process::ExitCode {
     // Packaged macOS signing and other OS safeguards are independent.
     #[cfg(not(target_os = "linux"))]
     let status = run_protected();
-    // What decision traces are still held go before the process does.
-    logging::shutdown();
+    // What telemetry still holds goes before the process does.
+    crate::composition::telemetry::flush_at_exit();
     status
 }
 

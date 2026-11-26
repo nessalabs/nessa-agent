@@ -110,6 +110,8 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) native_hooks: Arc<crate::agents::infrastructure::NativeHooksPreferences>,
     pub(super) permission_memory: Arc<crate::conversation::infrastructure::PermissionMemory>,
     pub(super) warm_up: CurrentOpenCodeWarmUp,
+    /// Where OpenCode's execution audit is also told as turn spans.
+    pub(super) telemetry: nessa_telemetry::Telemetry,
 }
 
 struct Observation {
@@ -138,6 +140,7 @@ impl CurrentAgentResolver {
                 native_hooks: input.native_hooks,
                 permission_rules: input.permission_memory.clone(),
                 review_notices: input.permission_memory,
+                telemetry: input.telemetry,
             },
             warm_up: input.warm_up,
             warm_up_resolving: Arc::new(AtomicUsize::new(0)),

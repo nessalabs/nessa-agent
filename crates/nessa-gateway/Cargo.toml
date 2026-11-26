@@ -112,10 +112,6 @@ sysinfo = { version = "0.33", default-features = false, features = ["disk", "sys
 # identities against the same pattern.
 regex = "1"
 jsonschema = { version = "0.60.2", default-features = false }
-opentelemetry = "0.33"
-opentelemetry_sdk = "0.33"
-tracing-opentelemetry = "0.34"
-opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Use encrypted Secret Service sessions with interaction explicitly disabled.

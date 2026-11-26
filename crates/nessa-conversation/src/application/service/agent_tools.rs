@@ -105,11 +105,17 @@ impl ConversationService {
             .await
             .ok();
         if let Some(replaced) = replaced {
-            self.inner.decision_traces.settled(conversation, &replaced);
+            self.inner
+                .decision_traces
+                .settled(&self.telemetry(), conversation, &replaced);
         }
-        self.inner
-            .decision_traces
-            .asked(conversation, record.agent(), &ask, settings);
+        self.inner.decision_traces.asked(
+            &self.telemetry(),
+            conversation,
+            record.agent(),
+            &ask,
+            settings,
+        );
         self.inner.auto_pick_wakeup.notify_one();
         Ok(AccessRequestOutcome::Asked)
     }
@@ -221,12 +227,14 @@ impl ConversationService {
             self.inner.live_changes.publish(&conversation);
             self.inner.auto_pick_wakeup.notify_one();
             self.inner.decision_traces.event(
+                &self.telemetry(),
                 ask_id,
                 if paused {
                     "auto_pick_paused"
                 } else {
                     "auto_pick_resumed"
                 },
+                at_ms.unwrap_or_else(|| self.inner.clock.unix_milliseconds()),
             );
         }
         Ok(applied)

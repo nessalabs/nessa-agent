@@ -10,7 +10,8 @@ use crate::conversation::application::{
 use crate::conversation::infrastructure::LocalConversationStore;
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, MemorySummaries,
-    Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    Provider, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
+    DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_projection::retained_view;
@@ -110,6 +111,7 @@ fn service(
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: metadata,

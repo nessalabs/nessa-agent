@@ -14,7 +14,7 @@ use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::conversation::caller;
 use conversation_support::{
     claude_erasers, mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit,
-    AcceptingModeAudit, ObservedPolicy, ProviderFactory, RecordingFileLinkAudit,
+    AcceptingModeAudit, ObservedPolicy, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit,
     RecordingModeExecutionAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
@@ -332,6 +332,7 @@ fn conversation_service_with_summaries(
             mode_audit,
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries,
             listing: metadata.clone(),

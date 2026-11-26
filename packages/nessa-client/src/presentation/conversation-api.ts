@@ -122,6 +122,7 @@ export type ConversationPrepareOptions = ConversationActionOptions & {
   /** Reuse only for the same logical message. */ executionId?: string
   /** Queued by default; steering uses the agent's supported behavior. */ mode?:
     "queued" | "steering"
+  /** The person said it aloud; recorded as this client's claim. */ spoken?: boolean
 }
 /** How a prepared message is submitted. */
 export type ConversationSubmitOptions = {
@@ -636,6 +637,11 @@ export type SubmissionInput = {
   readonly attachments?: readonly ImageAttachment[]
   readonly files?: readonly LinkedFile[]
   readonly uploads?: readonly UploadedFileAttachment[]
+  /**
+   * The person said it aloud and it was transcribed. The gateway keeps it on
+   * the turn's origin record as this client's claim; nothing else changes.
+   */
+  readonly spoken?: boolean
 }
 declare const preparedSubmission: unique symbol
 /** Process-local immutable message and its captured control target. */
@@ -731,6 +737,7 @@ export function prepareSubmission(input: SubmissionInput): PreparedSubmission {
     attachments: Object.freeze(images),
     files: Object.freeze(files),
     uploads: Object.freeze(uploads),
+    ...(input.spoken === true ? { spoken: true } : {}),
     target: issueExecutionTarget(conversationId, executionId),
   }) as PreparedSubmission
   preparedValues.add(prepared)
@@ -821,6 +828,7 @@ export function createConversationApi(
       | readonly ConversationQuestionChoice[]
       | ConversationToolPolicy
       | number
+      | boolean
       | null
       | undefined
     >,
@@ -1067,6 +1075,7 @@ export function createConversationApi(
         attachments,
         files,
         uploads: options.uploads,
+        ...(options.spoken === true ? { spoken: true } : {}),
         mode: options.mode ?? "queued",
         executionId: options.executionId ?? newId(),
         requestId: options.requestId ?? newId(),
@@ -1081,6 +1090,7 @@ export function createConversationApi(
         files,
         mode,
         uploads,
+        spoken,
         target,
       } = preparedSubmissionFields(prepared)
       return mutate(
@@ -1095,6 +1105,7 @@ export function createConversationApi(
           attachments,
           files,
           ...(uploads.length ? { uploads } : {}),
+          ...(spoken ? { spoken: true } : {}),
         },
         (value) =>
           Object.freeze({

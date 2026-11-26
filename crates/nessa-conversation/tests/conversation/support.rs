@@ -1370,6 +1370,29 @@ impl ConversationDeletionAudit for RecordingDeletionAudit {
     }
 }
 
+/// Keeps every turn-origin record it is given, and can refuse instead, so a
+/// submission's behaviour when its origin cannot be recorded is testable.
+#[derive(Default)]
+pub struct RecordingTurnOriginAudit {
+    pub records: Mutex<Vec<crate::application::ConversationTurnOriginAuditRecord>>,
+    pub refuses: AtomicBool,
+}
+impl crate::application::ConversationTurnOriginAudit for RecordingTurnOriginAudit {
+    fn record(
+        &self,
+        record: crate::application::ConversationTurnOriginAuditRecord,
+    ) -> ConversationFuture<'_, ()> {
+        let refuses = self.refuses.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if refuses {
+                return Err(ConversationError::Audit);
+            }
+            self.records.lock().unwrap().push(record);
+            Ok(())
+        })
+    }
+}
+
 /// Keeps every file-link record it is given, and can refuse instead, so a
 /// submission's behaviour when its evidence cannot be committed is testable.
 #[derive(Default)]
@@ -1448,6 +1471,9 @@ pub struct ProviderFactory {
     /// One explicit provider settlement used by failure-path projection tests.
     /// Absence keeps the normal completed response below.
     pub execution_reply: Mutex<Option<ProviderExecutionReply>>,
+    /// Where a finished turn's records go, as a real adapter audits them.
+    /// Absent, they are dropped.
+    pub finish_audit: Mutex<Option<Arc<dyn ExecutionAudit>>>,
     /// Valid observations emitted before an explicit settlement fixture.
     pub execution_updates: Mutex<Vec<ExecutionUpdate>>,
     pub updates_sent: Notify,
@@ -1770,6 +1796,7 @@ pub fn image_fixture_with_model(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments,
             summaries: summaries.clone(),
             listing: Arc::new(MemoryListing {
@@ -1927,6 +1954,7 @@ pub fn mode_fixture_with_summaries(
             mode_audit: mode_audit.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
             attachments: None,
             summaries,
@@ -2025,6 +2053,7 @@ fn assemble(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries,
             listing,
@@ -2199,6 +2228,17 @@ struct Backend {
     authority: PermissionAuthoritySource,
     factory: Arc<ProviderFactory>,
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
+}
+impl Backend {
+    /// Hand a finished turn's records to `finish_audit`, when one is set.
+    async fn audit_finish(&self, records: Vec<ExecutionAuditRecord>) {
+        let audit = self.factory.finish_audit.lock().unwrap().clone();
+        if let Some(audit) = audit {
+            for record in records {
+                audit.record(record).await.unwrap();
+            }
+        }
+    }
 }
 impl ProviderSessionBackend for Backend {
     fn set_model(
@@ -2394,12 +2434,15 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = after_updates {
                 let _ = gate.await;
             }
-            if let Some(reply) = self.factory.execution_reply.lock().unwrap().take() {
-                self.controller
+            let explicit = self.factory.execution_reply.lock().unwrap().take();
+            if let Some(reply) = explicit {
+                let finished = self
+                    .controller
                     .lock()
                     .unwrap()
                     .finish_execution(&request.execution_id, Ok(ExecutionOutcome::Completed))
                     .unwrap();
+                self.audit_finish(finished).await;
                 if self
                     .factory
                     .execution_observation_failure
@@ -2552,11 +2595,13 @@ impl ProviderSessionBackend for Backend {
                     request.execution_id.clone(),
                     ExecutionUpdate::Finished(ExecutionOutcome::Completed),
                 ));
-            self.controller
+            let finished = self
+                .controller
                 .lock()
                 .unwrap()
                 .finish_execution(&request.execution_id, Ok(ExecutionOutcome::Completed))
                 .unwrap();
+            self.audit_finish(finished).await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,

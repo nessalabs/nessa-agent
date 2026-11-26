@@ -2,7 +2,8 @@
 use super::*;
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, ObservedPolicy,
-    Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    Provider, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
+    DELETION_BUDGETS,
 };
 use crate::{
     application::{
@@ -144,6 +145,7 @@ fn fixture_with_sessions(
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: metadata.clone(),
             listing: metadata.clone(),

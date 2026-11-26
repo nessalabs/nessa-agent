@@ -15,7 +15,7 @@ use crate::{
         capabilities, fixture, mode_agents, mode_fixture, only, AcceptingCreationAudit,
         AcceptingDeletionAudit, AcceptingModeAudit, MemoryRepository, MemorySummaries, Provider,
         ProviderFactory, RecordingFileLinkAudit, RecordingModeAudit, RecordingModeExecutionAudit,
-        TestClock, Unlisted, DELETION_BUDGETS,
+        RecordingTurnOriginAudit, TestClock, Unlisted, DELETION_BUDGETS,
     },
     domain::{Conversation, ConversationDeletion},
 };
@@ -1216,6 +1216,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1287,6 +1288,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1405,6 +1407,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1447,6 +1450,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
                 caller("panel", "send-1"),
                 "send-1".into(),
                 SubmittedMessage {
+                    sent_from: None,
                     uploads: Vec::new(),
                     text: "Hello".into(),
                     images: Vec::new(),
@@ -1485,6 +1489,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             caller("phone", "send-2"),
             "send-2".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -1532,6 +1537,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1572,6 +1578,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1657,6 +1664,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -1795,6 +1803,7 @@ async fn permission_consumption_case(
             caller("panel", "send"),
             "review".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "change file".into(),
                 images: Vec::new(),
@@ -1935,6 +1944,7 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
                 caller("panel", "send"),
                 "reviews".into(),
                 SubmittedMessage {
+                    sent_from: None,
                     uploads: Vec::new(),
                     text: "change files".into(),
                     images: Vec::new(),
@@ -2053,6 +2063,7 @@ async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave
             caller("panel", "send"),
             "reviews".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "change files".into(),
                 images: Vec::new(),
@@ -2148,6 +2159,7 @@ async fn a_large_write_review_is_listed_and_read_whole_from_its_live_owner_befor
             caller("panel", "send"),
             "reviews".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "write a big file".into(),
                 images: Vec::new(),
@@ -2296,6 +2308,7 @@ async fn asking(service: &ConversationService) -> ConversationId {
             caller("panel", "send"),
             "asks".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "choose".into(),
                 images: Vec::new(),
@@ -2608,6 +2621,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -2672,6 +2686,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -2688,6 +2703,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("phone", "second"),
             "second".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Again".into(),
                 images: Vec::new(),
@@ -2710,6 +2726,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -2835,6 +2852,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3045,6 +3063,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3137,6 +3156,7 @@ async fn resource_free_provider_failure_waits_for_explicit_close_before_retry() 
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3314,6 +3334,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3389,6 +3410,7 @@ async fn close_releases_only_its_waiting_attachment_owner_and_stale_authorizatio
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3497,6 +3519,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3532,6 +3555,7 @@ async fn bounded_queue_controls_complete_while_attachment_waits_for_runtime() {
                     caller("panel", execution_id),
                     execution_id.into(),
                     SubmittedMessage {
+                        sent_from: None,
                         uploads: Vec::new(),
                         text: text.into(),
                         images: Vec::new(),
@@ -3602,6 +3626,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3691,6 +3716,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3781,6 +3807,7 @@ async fn a_startup_deadline_is_projected_and_explicit_close_allows_retry() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3891,6 +3918,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -3951,6 +3979,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4133,6 +4162,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             caller("panel", "first"),
             "first".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -4158,6 +4188,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4208,6 +4239,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4263,6 +4295,7 @@ async fn delete_after_a_held_opening(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4350,6 +4383,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("panel", "running"),
             "running".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -4366,6 +4400,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("phone", "steer"),
             "steer".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Followup".into(),
                 images: Vec::new(),
@@ -4416,6 +4451,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -4436,6 +4472,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -4462,6 +4499,7 @@ async fn close_then_replay_recovers_without_redispatch_and_new_input_still_works
             caller("phone", "new"),
             "new".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Again".into(),
                 images: Vec::new(),
@@ -4502,6 +4540,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4653,6 +4692,7 @@ async fn desktop_quit_keeps_gateway_admission_open() {
             caller("panel", "submit-next"),
             "next".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -4716,6 +4756,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4771,6 +4812,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4842,6 +4884,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4894,6 +4937,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -4980,6 +5024,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
 
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: Arc::new(MemorySummaries::default()),
                 listing: Arc::new(Unlisted),
@@ -5030,6 +5075,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5119,6 +5165,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
 
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: Arc::new(MemorySummaries::default()),
                 listing: Arc::new(Unlisted),
@@ -5175,6 +5222,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5357,6 +5405,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5459,6 +5508,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
                 caller("panel", wiped),
                 "execution".into(),
                 SubmittedMessage {
+                    sent_from: None,
                     uploads: Vec::new(),
                     text: "Hello".into(),
                     images: Vec::new(),
@@ -5481,6 +5531,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
             caller("panel", "send"),
             "execution".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -5602,6 +5653,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5699,6 +5751,7 @@ async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5799,6 +5852,7 @@ async fn a_note_past_where_one_committed_read_stops_is_still_found() {
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5865,6 +5919,7 @@ async fn two_peers_keep_separate_notes_under_one_request_id() {
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -5949,6 +6004,7 @@ async fn committed_reads_recheck_tombstone_after_title_lookup() {
                 mode_audit: mode_audit.clone(),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: summaries.clone(),
                 listing: Arc::new(Unlisted),
@@ -6098,6 +6154,7 @@ async fn returned_committed_views_bound_late_titles_and_preserve_pending_selecti
                 mode_audit: mode_audit.clone(),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: summaries.clone(),
                 listing: Arc::new(Unlisted),

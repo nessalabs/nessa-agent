@@ -71,8 +71,8 @@ use crate::application::{
 };
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, InMemoryStorage, MemoryRepository,
-    MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
-    DELETION_BUDGETS,
+    MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit,
+    TestClock, DELETION_BUDGETS,
 };
 use crate::domain::ContinuationCause;
 use crate::infrastructure::LocalScheduledMessages;
@@ -143,6 +143,7 @@ fn service_stored(
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing,

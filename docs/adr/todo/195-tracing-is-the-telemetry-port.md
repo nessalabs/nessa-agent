@@ -10,7 +10,7 @@ telemetry ever becoming something the runtime depends on. The research is in
 [design/agent_execution/telemetry.md](../../design/agent_execution/telemetry.md).
 
 - **Date:** 2026-09-25
-- **Status:** proposed
+- **Status:** superseded by [1491](1491-one-telemetry-dispatcher.md)
 - **Argued in:** [#195](https://github.com/nessalabs/nessa-agent/issues/195)
 
 ## Context

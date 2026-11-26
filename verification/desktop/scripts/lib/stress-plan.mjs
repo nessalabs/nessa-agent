@@ -277,6 +277,10 @@ export const KNOBS = {
     default: 1,
     what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
   },
+  telemetries: {
+    default: 1,
+    what: "typed turns checked in the turn-origin audit (person, the window's client, not spoken) and as a turn span exported to a fake OpenTelemetry collector, with none of the message's words",
+  },
   raises: {
     default: 1,
     what: "times the shield raises the main chat from Ask to Full while its turn waits on a review: the agent takes Full mid-turn, the open review is allowed by the raise, and the turn asks nothing more",
@@ -422,6 +426,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.raises, () => ({ kind: "raise" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.resumes, () => ({ kind: "resume" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.telemetries, () => ({ kind: "telemetry" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

@@ -46,8 +46,8 @@ use crate::{
         infrastructure::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
-            DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            DurableOwnershipAudit, DurableTrustedApps,
+            DurableConversationModeAudit, DurableConversationTurnOriginAudit,
+            DurableDriveToolAudit, DurableMcpAppAudit, DurableOwnershipAudit, DurableTrustedApps,
         },
     },
 };
@@ -412,6 +412,7 @@ pub(super) async fn product_state(
     // and its use depends on the order.
     let packaged_agents = bundle.is_some();
     let limits = settings.limits()?;
+    let telemetry = super::telemetry::start(&settings.telemetry)?;
     // Who may locate, act on, read and share a conversation, decided once
     // for every command, passive read and share change (ADR 803 step 3).
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
@@ -448,6 +449,7 @@ pub(super) async fn product_state(
                     access_policy: access_policy.clone(),
                     #[cfg(unix)]
                     github: github.as_ref().map(|github| github.connections.clone()),
+                    telemetry: telemetry.clone(),
                 },
             )
             .await?;
@@ -872,6 +874,8 @@ struct ConversationSettings {
     /// The gateway-owned GitHub sign-in used only by source-authorized reads.
     #[cfg(unix)]
     github: Option<Arc<crate::github::application::GithubConnections>>,
+    /// Where turns and decisions are told, as config.json turns it on.
+    telemetry: nessa_telemetry::Telemetry,
 }
 
 #[cfg(not(unix))]
@@ -1215,6 +1219,7 @@ async fn conversations(
         agent_idle,
         access_policy,
         github,
+        telemetry,
     } = settings;
     let mut warm_ups = Vec::new();
     // The gateway holds the one connection to each MCP server (ADR 344), so
@@ -1387,6 +1392,7 @@ async fn conversations(
         attachments.images.clone(),
         credentials.clone(),
         &deferred,
+        telemetry.clone(),
     )?;
     let permission_memory = built.permission_memory.clone();
     // One warm-up per configured agent, because each runs its own runtime
@@ -1471,6 +1477,11 @@ async fn conversations(
         DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    // Where each attempt at a send came from, written before it is admitted.
+    let turn_origin_audit = Arc::new(
+        DurableConversationTurnOriginAudit::new(root.join("audit").join("turn-origins"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let deletion_audit = Arc::new(
         DurableConversationDeletionAudit::new(root.join("audit").join("deletion"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -1514,6 +1525,7 @@ async fn conversations(
         native_hooks: built.native_hooks.clone(),
         permission_memory: permission_memory.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
+        telemetry: telemetry.clone(),
     }));
     let selected = resolver.default_agent()?;
     // The one registry of how each agent deletes its own record of a session:
@@ -1544,6 +1556,7 @@ async fn conversations(
         creation_audit,
         mode_audit,
         file_link_audit,
+        turn_origin_audit,
         deletion_audit,
         attachments: Some(attachments.conversations),
         summaries: metadata.clone(),
@@ -1590,6 +1603,7 @@ async fn conversations(
         ),
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
+    service.bind_telemetry(telemetry);
     service.bind_commands(storage.clone());
     service.bind_agent_tool_audit(Arc::new(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())

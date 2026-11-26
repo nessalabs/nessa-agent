@@ -2565,6 +2565,7 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
             fixture.caller("with-image"),
             "with-image".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "look".into(),
                 images: vec![SubmittedImage {

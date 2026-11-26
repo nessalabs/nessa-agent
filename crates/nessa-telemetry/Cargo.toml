@@ -1,0 +1,24 @@
+[package]
+name = "nessa-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Emit open-ended telemetry events once; a dispatcher sends each to the sinks that are turned on."
+
+[features]
+default = []
+# The OpenTelemetry sink: spans over OTLP/HTTP.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:rustls", "dep:sha2"]
+
+[dependencies]
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", optional = true }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"], optional = true }
+# The exporter's HTTP client takes the process's TLS provider; this crate
+# installs ring, as every other client in the gateway does.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[lints]
+workspace = true

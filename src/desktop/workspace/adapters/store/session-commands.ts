@@ -112,6 +112,7 @@ function deliver(
         messageId: message.id,
         text: messageText(message),
         ...(message.localImages?.length ? { images: message.localImages } : {}),
+        ...(message.spoken ? { spoken: true as const } : {}),
         model,
         start: knownToSource(session)
           ? undefined
@@ -166,9 +167,12 @@ export function sendMessage({
   initiator,
   withImages = false,
   messageId,
+  spoken = false,
 }: {
   sessionId: string
   text: string
+  /** The person said it aloud (Talk) rather than typed it. */
+  spoken?: boolean
   /**
    * The message's id, when the caller follows the turn it starts (the turn's
    * execution id is the message's); otherwise a new one.
@@ -206,6 +210,7 @@ export function sendMessage({
       at: now(),
       parts: [{ kind: "text", text: content }],
       ...(images.length ? { localImages: images } : {}),
+      ...(spoken ? { spoken: true as const } : {}),
       delivery: { state: "sending" },
     }
     dispatch(messageSent({ sessionId, message, initiator }))

@@ -695,6 +695,27 @@ pub struct SubmittedMessage {
     /// Files on this machine the message points the agent at, in attachment
     /// order. Nothing was uploaded for these.
     pub files: Vec<SubmittedFile>,
+    /// How the person's own client says it sent this, when a client sent
+    /// it. Recorded with the turn's origin, and nothing more: it decides
+    /// nothing, and is not part of what makes two sends the same message.
+    pub sent_from: Option<SentFrom>,
+}
+
+/// How a person's own client says it sent a message: which client, as the
+/// connection named itself when it signed in, and whether the words were
+/// spoken in a voice call rather than typed.
+///
+/// The connection claims both and nothing checks them: a client chooses its
+/// own name, and the credential, not this, is who sent it. They are kept as
+/// attribution in the turn's origin record, never as a reason to allow or
+/// refuse anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentFrom {
+    /// The client id the connection gave at its handshake, such as
+    /// `nessa-browser`, `nessa-cli` or `nessa-mcp`.
+    pub client: String,
+    /// The words came from a voice call.
+    pub spoken: bool,
 }
 
 /// A path as a caller submitted it, before any of it has been checked.
@@ -814,6 +835,45 @@ pub trait ConversationFileLinkAudit: Send + Sync {
     }
 
     fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()>;
+}
+
+/// Durable evidence of where one attempt at a submission came from,
+/// committed before the submission is admitted.
+///
+/// Like [`ConversationFileLinkAuditRecord`], it records intent: somebody, from
+/// here, asked for this turn. A submission refused after it leaves a record
+/// that is still true. It is keyed by the conversation, the submission and
+/// the attempt (`request_id`): one submission may be attempted from more than
+/// one client, such as a send the phone's outbox retries after the window
+/// gave up, and each attempt says where it came from. The attempt the agent
+/// took is the one whose request the execution audit's `queue_admitted`
+/// record names. Only an attempt the agent has not already seen is recorded.
+///
+/// `origin` is the turn's origin as [`TurnOrigin`](super::TurnOrigin) reads
+/// it from the facts the turn is saved with, read when it is submitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationTurnOriginAuditRecord {
+    pub conversation_id: ConversationId,
+    pub organization_id: OrganizationId,
+    /// The submission.
+    pub execution_id: String,
+    /// The attempt at it.
+    pub request_id: String,
+    /// `None` when it could not be read: the registry it is read from was
+    /// unavailable. The initiator below is what it would have been read from.
+    pub origin: Option<super::TurnOrigin>,
+    /// What the person's client said about how it sent this, when one did.
+    pub sent_from: Option<SentFrom>,
+    pub initiator_principal_id: PrincipalId,
+    pub initiator_surface_id: String,
+    pub observed_at_ms: u64,
+}
+
+/// Commits turn-origin evidence before the submission is admitted.
+pub trait ConversationTurnOriginAudit: Send + Sync {
+    /// Commit `record`, or fail: a submission whose origin cannot be recorded
+    /// is refused.
+    fn record(&self, record: ConversationTurnOriginAuditRecord) -> ConversationFuture<'_, ()>;
 }
 
 /// Why a conversation let go of the files uploaded into it.

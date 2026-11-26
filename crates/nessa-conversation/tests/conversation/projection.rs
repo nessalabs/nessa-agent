@@ -8,7 +8,7 @@ use super::{
 use crate::conversation_test_support::{
     fixture, only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
-    RecordingModeAudit, TestClock, Unlisted, DELETION_BUDGETS,
+    RecordingModeAudit, RecordingTurnOriginAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_projection::tool_uis::McpToolUis;
@@ -76,6 +76,7 @@ async fn prepared_empty_history_is_complete_before_provider_attachment_in_both_s
                 mode_audit: Arc::new(AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: Arc::new(MemorySummaries::default()),
                 listing: Arc::new(Unlisted),
@@ -163,6 +164,7 @@ async fn gateway_record_view_waits_for_message_commit() {
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -398,6 +400,7 @@ async fn assert_terminal_failure_round_trip(
             caller("send"),
             "execution".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "Hello".into(),
                 images: Vec::new(),
@@ -487,6 +490,7 @@ async fn assert_terminal_failure_round_trip(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -579,6 +583,7 @@ async fn a_message_after_the_agent_ended_its_own_session_opens_it_again() {
         .await
         .unwrap();
     let message = |text: &str| SubmittedMessage {
+        sent_from: None,
         uploads: Vec::new(),
         text: text.into(),
         images: Vec::new(),
@@ -833,6 +838,7 @@ fn service_with_cached_tool_uis(
             mode_audit: audit,
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),

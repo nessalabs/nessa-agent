@@ -1055,6 +1055,8 @@ export interface ConversationSendParams {
   uploads?: UploadedFileAttachment[]
   /** Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none. */
   files: LinkedFile[]
+  /** The person said this message aloud and it was transcribed, rather than typed. Kept on the turn's origin audit record as the client's claim; it changes nothing about how the message is handled. Omitted means typed. */
+  spoken?: boolean
 }
 /** Remove an input that has not dispatched. */
 export interface ConversationRemoveParams {

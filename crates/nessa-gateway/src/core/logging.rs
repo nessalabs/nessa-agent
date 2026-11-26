@@ -8,23 +8,14 @@
 //! for the line that matters. Colour is for a terminal, so it is asked for only
 //! when stderr is one.
 //!
-//! It also sends each decision's trace (`nessa_conversation::DECISION_TARGET`)
-//! to an OpenTelemetry collector, when the standard
-//! `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-//! names one. Nothing else is sent, and with neither set nothing is.
-use nessa_conversation::application::DECISION_TARGET;
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+//! Telemetry (turn and decision spans) is not logging: it is told as
+//! `nessa_telemetry` events, sent only where the runtime configuration's
+//! `telemetry` section turns a sink on.
 use std::io::IsTerminal;
-use std::sync::OnceLock;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
-
-/// The trace pipeline `init` started, kept so `shutdown` can send what it holds.
-static TRACES: OnceLock<SdkTracerProvider> = OnceLock::new();
 
 /// Every Nessa crate the gateway is built from has its own directive here: a
 /// filter made of named targets drops every target it does not name, errors
@@ -42,88 +33,13 @@ pub const DEFAULT_FILTER: &str = concat!(
     "nessa_agent_credentials=off,nessa_auth=off,nessa_client_core=off,",
     "nessa_device_client=off,nessa_images=off,nessa_local_database=off,",
     "nessa_local_storage=off,nessa_projection=off,nessa_protocol=off,",
+    "nessa_telemetry=warn,",
     "nessa_timer=off,nessa_vault=off",
 );
 
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
 pub fn init() {
-    let traces = collector_configured(|name| std::env::var_os(name).is_some())
-        .then(|| decision_traces(None))
-        .flatten()
-        .map(|(provider, layer)| {
-            let _ = TRACES.set(provider);
-            layer
-        });
-    subscriber(std::io::stderr, std::io::stderr().is_terminal(), filter())
-        .with(traces)
-        .init();
-}
-
-/// Send the decision traces still held, before the process exits. Bounded by
-/// the exporter's own timeout; nothing to do when none were configured.
-pub fn shutdown() {
-    if let Some(provider) = TRACES.get() {
-        if let Err(error) = provider.shutdown() {
-            tracing::warn!(%error, "decision traces could not all be sent");
-        }
-    }
-}
-
-/// Whether the environment names a collector, by the variables every
-/// OpenTelemetry exporter reads.
-fn collector_configured(set: impl Fn(&str) -> bool) -> bool {
-    [
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    ]
-    .into_iter()
-    .any(set)
-}
-
-/// The layer that sends decision spans, and only those, over OTLP/HTTP to
-/// the collector the environment names (or `endpoint`, a full traces URL),
-/// with the pipeline that sends them. A collector that cannot be set up is
-/// said once and left out: the gateway runs the same without it.
-fn decision_traces<S>(endpoint: Option<&str>) -> Option<(SdkTracerProvider, impl Layer<S>)>
-where
-    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
-{
-    use opentelemetry_otlp::WithExportConfig;
-    // The exporter's HTTP client is the gateway's reqwest, built without a
-    // TLS provider of its own: the process's is ring, as for every other client.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let builder = opentelemetry_otlp::SpanExporter::builder().with_http();
-    let builder = match endpoint {
-        Some(endpoint) => builder.with_endpoint(endpoint),
-        None => builder,
-    };
-    let exporter = match builder.build() {
-        Ok(exporter) => exporter,
-        Err(error) => {
-            eprintln!("nessa: decision traces are off: the OTLP exporter could not start: {error}");
-            return None;
-        }
-    };
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_resource(
-            opentelemetry_sdk::Resource::builder()
-                .with_service_name("nessa-gateway")
-                .build(),
-        )
-        .build();
-    let tracer = provider.tracer("nessa-gateway");
-    Some((
-        provider,
-        tracing_opentelemetry::layer()
-            .with_tracer(tracer)
-            .with_filter(decision_spans()),
-    ))
-}
-
-/// Decision spans and the events inside them; nothing else leaves the process.
-fn decision_spans() -> Targets {
-    Targets::new().with_target(DECISION_TARGET, tracing::Level::INFO)
+    subscriber(std::io::stderr, std::io::stderr().is_terminal(), filter()).init();
 }
 
 /// What is logged when the environment names nothing.
@@ -285,81 +201,6 @@ mod tests {
         );
         assert!(log.contains("error.raw_os_code=5"), "{log}");
     }
-    /// Traces leave the process only when a collector is named, and then
-    /// only decisions: no other span or line is sent.
-    #[test]
-    fn only_decisions_are_traced_and_only_to_a_named_collector() {
-        assert!(!collector_configured(|_| false));
-        assert!(collector_configured(
-            |name| name == "OTEL_EXPORTER_OTLP_ENDPOINT"
-        ));
-        assert!(collector_configured(
-            |name| name == "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
-        ));
-        let spans = decision_spans();
-        let meta = |target: &'static str| spans.would_enable(target, &tracing::Level::INFO);
-        assert!(meta(DECISION_TARGET));
-        assert!(!meta("nessa_conversation::application"));
-        assert!(!meta("nessa_gateway::product"));
-        assert!(!spans.would_enable(DECISION_TARGET, &tracing::Level::DEBUG));
-    }
-
-    /// A decision span reaches the collector as OTLP, with its attributes;
-    /// a span on any other target does not.
-    #[test]
-    fn a_decision_span_is_sent_to_the_collector() {
-        use std::io::{BufRead, BufReader, Read};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let received = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut length = 0;
-            let mut path = String::new();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                if path.is_empty() {
-                    path = line.clone();
-                }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-                if line == "\r\n" {
-                    break;
-                }
-            }
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            let mut stream = stream;
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
-                .unwrap();
-            (path, body)
-        });
-        let (provider, layer) =
-            decision_traces(Some(&format!("http://{address}/v1/traces"))).unwrap();
-        tracing::subscriber::with_default(Registry::default().with(layer), || {
-            let other = tracing::info_span!(target: "nessa_gateway::product", "not_a_decision");
-            other.in_scope(|| {});
-            let span = tracing::info_span!(
-                target: DECISION_TARGET,
-                "decision",
-                "decision.outcome" = "auto_picked"
-            );
-            span.in_scope(|| tracing::info!(target: DECISION_TARGET, "settled"));
-        });
-        provider.force_flush().unwrap();
-        let (path, body) = received.join().unwrap();
-        provider.shutdown().unwrap();
-        assert!(path.starts_with("POST /v1/traces "), "{path}");
-        let body = String::from_utf8_lossy(&body);
-        assert!(body.contains("decision.outcome"), "{body}");
-        assert!(body.contains("auto_picked"), "{body}");
-        assert!(body.contains("nessa-gateway"), "{body}");
-        assert!(!body.contains("not_a_decision"), "{body}");
-    }
-
     #[test]
     fn default_filter_includes_timings_without_enabling_other_sdk_info() {
         let captured = Captured::default();

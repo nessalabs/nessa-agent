@@ -724,6 +724,7 @@ pub(super) fn providers(
     images: Arc<dyn UserImageSource>,
     credentials: Arc<dyn AgentCredentialSource>,
     deferred: &HashSet<AgentId>,
+    telemetry: nessa_telemetry::Telemetry,
 ) -> Result<ConfiguredAgents, RunError> {
     let configured: HashSet<_> = config
         .agents()
@@ -759,6 +760,7 @@ pub(super) fn providers(
         native_hooks: native_hooks.clone(),
         permission_rules: permission_memory.clone(),
         review_notices: permission_memory.clone(),
+        telemetry,
     };
     for (agent, runtime) in config.agents() {
         if agent == AgentId::Opencode || deferred.contains(&agent) {
@@ -1018,6 +1020,8 @@ pub(super) struct ProviderDependencies {
         Arc<dyn nessa_sdk::application::agent_execution::permissions::PermissionRules>,
     pub(super) review_notices:
         Arc<dyn nessa_sdk::application::agent_execution::permissions::ReviewNotices>,
+    /// Where each agent's written execution audit is also told as turn spans.
+    pub(super) telemetry: nessa_telemetry::Telemetry,
 }
 
 /// Claude and Codex keep the composed rules. OpenCode is given none, so it
@@ -1051,7 +1055,7 @@ pub(super) mod build {
     use crate::agents::application::NativeHooksAgent;
     use crate::conversation::{
         application::ProviderSessionEraser,
-        infrastructure::{BindingSessionEraser, DurableExecutionAudit},
+        infrastructure::{BindingSessionEraser, DurableExecutionAudit, ObservedExecutionAudit},
     };
     use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_sdk::domain::agent_execution::leases::SandboxProfiles;
@@ -1370,13 +1374,19 @@ pub(super) mod build {
             None => TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
                 .map_err(|e| RunError::Agent(e.to_string()))?,
         };
-        let audit = Arc::new(
-            DurableExecutionAudit::new(
-                dependencies.directory.join("audit"),
-                dependencies.clock.clone(),
-            )
-            .map_err(invalid)?,
-        );
+        // Each record written is then told as the turn's span
+        // (`ObservedExecutionAudit`); with telemetry off it is the audit alone.
+        let audit = Arc::new(ObservedExecutionAudit::new(
+            Arc::new(
+                DurableExecutionAudit::new(
+                    dependencies.directory.join("audit"),
+                    dependencies.clock.clone(),
+                )
+                .map_err(invalid)?,
+            ),
+            dependencies.telemetry.clone(),
+            dependencies.clock.clone(),
+        ));
         let published_workspace = workspace.to_str().map(str::to_owned);
         let mut acp = launch_configuration(
             config,

@@ -10,7 +10,8 @@ use crate::{
     conversation_test_support::{
         image_fixture, image_fixture_with_model, only, AcceptingCreationAudit,
         AcceptingDeletionAudit, MemoryAttachments, MemoryRepository, MemorySummaries, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+        ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, Unlisted,
+        DELETION_BUDGETS,
     },
     domain::Conversation,
 };
@@ -110,6 +111,7 @@ async fn send(
             caller("panel", execution),
             execution.into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: text.into(),
                 images: images.iter().map(submitted).collect(),
@@ -297,6 +299,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: Some(attachments),
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
@@ -421,6 +424,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: Some(attachments.clone()),
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),
