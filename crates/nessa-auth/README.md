@@ -36,6 +36,11 @@ Composition → verifier + access reader + clock → AuthenticateSession
   the audit port used when registry bytes cannot be trusted.
 - `application/session.rs`: verify evidence, load one committed access snapshot,
   check IDs/audience/membership/time, then construct a context with bounded expiry.
+- `application/session/app.rs`: the unmounted app proof path checks the
+  app bearer and its original registry-bound approval in one snapshot, then
+  asks Cedar for app-session entry. Its scoped session is an identity, not a
+  Product session or an operation permit. Current reads compare the original
+  binding and use the same expiry and revocation rules as ordinary liveness.
 - `application/authorization.rs`: re-read current state and check lifetime/linkage
   before evaluating an action. Older-than-login snapshots fail unavailable.
 - `adapters/cedar/`: parse and validate the policy bundle once, project trusted

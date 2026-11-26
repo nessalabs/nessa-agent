@@ -694,8 +694,9 @@ async fn a_closed_thread_opened_by_a_read_is_parked_again() {
         opened.closing.load(Ordering::SeqCst),
         "it opened still closed"
     );
-    // Its agent holds its history's lease while anything holds the slot.
+    // The read publishes the slot before its agent finishes attaching.
     drop(opened);
+    fixture.attached().await;
     fixture.wait_until_idle().await;
     assert_eq!(fixture.service.sweep(None).await, 1);
     assert!(fixture.slot().await.is_none());

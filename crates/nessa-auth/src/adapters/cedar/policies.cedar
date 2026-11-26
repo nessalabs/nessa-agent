@@ -199,3 +199,18 @@ when {
     principal.active &&
     ["bootstrap", "admin_issue", "device_pairing", "surface_provision", "owner_recovery"].contains(principal.issuance)
 };
+
+// A registry-proven app can enter only the separate app session. The marker
+// establishes identity at this audience; it does not admit any app operation.
+@id("session.app_origin")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.enter",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.role == "member" &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId })
+};
