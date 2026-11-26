@@ -263,7 +263,7 @@ export const KNOBS = {
   },
   swipes: {
     default: 1,
-    what: "times two-finger sideways swipes over the chat, the sidebar and the session list are checked to move no side column and not the right panel (all open, or the sidebars folded), while a wide table, a wide code block and a session row still take their own swipes",
+    what: "times two-finger sideways swipes over the chat, the sidebar and the session list are checked to move no side column and not the right panel (all open, or the sidebars folded), while a wide table and a wide code block still take their own swipes and a session row takes none",
   },
   styles: {
     default: 1,

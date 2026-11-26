@@ -2358,16 +2358,15 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   _Check:_ `conversation-stress.mjs` (`window`: the chat surface reaches the
   window's right edge after many tabs and steps).
 
-## Session rows: hover, menu, rename, delete, swipe
+## Session rows: hover, menu, rename, delete, no swipe
 
 - [ ] **Pinning a session closes its menu without painting a detached copy at
   the top-left.** Row-moving actions dismiss immediately when their anchor can
   move; `session-rows.mjs` samples every closing frame in Chromium and WebKit.
 
 `session-rows.mjs` runs against the dev server's in-memory workspace, in the
-session list (`session-list.tsx`, `session-row-actions.tsx`). The swipe is
-nessa_ui's `SwipeRow`, with the mouse drag and the context menu left to the
-row.
+session list (`session-list.tsx`, `session-row-actions.tsx`). A row takes no
+swipe: the mouse drag is the drag to a pane and the context menu is the row's.
 
 - [ ] **Under the pointer, Archive and More take the time's place.**
   _Check:_ `hover`. Away from the row its time shows and no button does;
@@ -2384,20 +2383,13 @@ row.
 - [ ] **A sideways swipe moves no side column.** A two-finger swipe over the
   chat, the sidebar or the session list leaves the sidebar, the list, the rail
   and the right panel as they were, open or folded; one over a session row
-  only moves the row. _Check:_ `conversation-stress` step `swipe`.
-- [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
-  _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
-  pane) and right-click opens the row's own menu; a swipe rests the row open,
-  slid aside, with Archive and Delete, and opens nothing; Delete asks
-  "Confirm" in place, then removes the row; a long swipe archives. On a Mac
-  trackpad by hand: the swipe follows the fingers and a flick rests open,
-  never archives. The mouse check waits for the published prepared ghost and
-  then its carrying mark before release, and keeps the captured row identity:
-  an unprepared flick is a click, which can retarget a live unselected-row
-  locator. The original 10/11 run and lightweight wrong-row trace failed;
-  anchoring alone exposed two no-open failures (4/5). The private prepared
-  check and exact restoration held 5/5; omitting readiness failed 4/5, while
-  omitting the anchor with readiness held 5/5 (not a negative control).
+  moves nothing either. _Check:_ `conversation-stress` step `swipe`.
+- [ ] **A row takes no swipe.** _Check:_ `swipe`. Two fingers left, a long
+  swipe left, and right: the row stays where it is, no Archive or Delete is
+  uncovered, nothing opens and nothing is archived. A mouse drag does not
+  slide the row (it is the drag to a pane) and right-click opens the row's own
+  menu. The mouse check waits for the published prepared ghost and then its
+  carrying mark before release: an unprepared flick is a click.
 
 ## A record the chat could not read
 

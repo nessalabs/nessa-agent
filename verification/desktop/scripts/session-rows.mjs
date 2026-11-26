@@ -2,11 +2,10 @@
 /**
  * What a session row does in place (`session-list.tsx`,
  * `session-row-actions.tsx`): Archive and "More" under the pointer, Rename
- * where the title was, Delete once asked, and a two-finger swipe left that
- * uncovers Archive and Delete as Mail's rows do, while a mouse drag stays the
- * drag to a pane and a right-click stays the row's menu.
+ * where the title was, and Delete once asked. A two-finger swipe over a row
+ * does nothing, a mouse drag is the drag to a pane, and a right-click is the
+ * row's menu.
  */
-import { settledOffset } from "./lib/swipe-geometry.mjs"
 import { sessionRowMenuMatches } from "./lib/session-row-menu.mjs"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
@@ -31,10 +30,9 @@ Checks, per engine:
             again after it; Delete removes the row
   archive   the Archive button archives the row and does not open it; Archive
             from the menu hands focus to the row in its place
-  swipe     two fingers left uncover Archive and Delete without opening the
-            row; Delete asks once more in place, then removes the row; a long
-            swipe rests open and never archives, and Archive is one press; a
-            mouse drag moves nothing and right-click is the row's own menu`,
+  swipe     a two-finger swipe either way, short or long, uncovers nothing,
+            moves no row, opens nothing and archives nothing; a mouse drag
+            does not slide the row and right-click is the row's own menu`,
   },
   async ({ options, rep, url }) => {
     await withEngines(options, rep, async (engine, browser) => {
@@ -205,10 +203,10 @@ Checks, per engine:
       await check("swipe", async (page) => {
         const failures = []
         const before = await openId(page)
-        let row = await quietRow(page)
-        let id = await row.getAttribute("data-session-row")
-        row = rowById(page, id)
-        const wrapper = () => rowById(page, id).locator("xpath=..")
+        const row = await quietRow(page)
+        const id = await row.getAttribute("data-session-row")
+        const count = await page.locator(`${css.sessionList} [data-session-row]`).count()
+        const left = async () => (await rowById(page, id).boundingBox())?.x
 
         // A mouse drag is the drag to a pane: the row does not slide.
         const box = await row.boundingBox()
@@ -221,75 +219,50 @@ Checks, per engine:
         await page
           .locator(".split-panes-ghost:not([data-drag-waiting])")
           .waitFor({ state: "attached", timeout: 3_000 })
-        const dragged = await wrapper().getAttribute("data-swipe")
+        const dragged = await left()
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
         await page.mouse.up()
-        if (dragged) failures.push(`a mouse drag slid the row (${dragged})`)
+        if (Math.abs(dragged - box.x) > 1)
+          failures.push(`a mouse drag slid the row to ${dragged}, from ${box.x}`)
         await page.keyboard.press("Escape")
 
-        // Right-click is the row's menu, not its swipe actions.
+        // Right-click is the row's menu.
         await row.click({ button: "right" })
         await need(page, css.menuItem, "the row's menu")
-        if (await wrapper().getAttribute("data-swipe"))
-          failures.push("right-click uncovered the swipe actions")
         await page.keyboard.press("Escape")
         await page.locator(css.menuItem).first().waitFor({ state: "detached" })
 
-        // Two fingers left uncover Archive and Delete.
-        const closed = await contentLeft(wrapper())
-        await row.hover()
-        await swipe(row, [40, 40, 40])
-        await waitAttr(wrapper(), "data-swipe", "open")
-        // At rest open: the row slid left by exactly the tray's width.
-        const rest = await settledOffset(wrapper(), closed)
-        if (Math.abs(rest.offset + rest.tray) > 1)
-          failures.push(`the row rests at ${rest.offset} px, not -${rest.tray} px`)
-        const tray = await wrapper()
-          .locator('[data-slot="workspace-swipe-row-action"]')
-          .allInnerTexts()
-        if (tray.map((each) => each.trim()).join("|") !== "Archive|Delete")
-          failures.push(`the swipe uncovered ${JSON.stringify(tray)}`)
-        const open = await shot(page, options, engine, "swipe", wrapper())
-        if ((await openId(page)) !== before) failures.push("the swipe opened the row")
-
-        // Delete asks once more in place, then removes the row. The tray is
-        // the pointer's alone (the row's menu is the keyboard's way to the
-        // same actions), so its buttons are found by their slot, not a role.
-        const action = (word) =>
-          wrapper().locator('[data-slot="workspace-swipe-row-action"]', { hasText: word })
-        await action("Delete").click()
-        const confirm = wrapper().locator(
-          '[data-slot="workspace-swipe-row-action"][data-confirming]',
-        )
-        await confirm.waitFor({ timeout: 3_000 })
-        const asked = await confirm.getAttribute("aria-label")
-        if (!asked?.startsWith("Confirm: Delete "))
-          failures.push(`the second press reads ${JSON.stringify(asked)}`)
-        const confirming = await shot(page, options, engine, "swipe-confirm", wrapper())
-        await confirm.click()
-        await rowById(page, id).waitFor({ state: "detached", timeout: 3_000 })
-
-        // A long two-finger swipe never archives: the row rests open, held
-        // at its tray, and Archive is one press away.
-        row = await quietRow(page)
-        id = await row.getAttribute("data-session-row")
-        await row.hover()
-        await swipe(row, [
-          3,
-          6,
-          9,
-          ...Array.from({ length: 30 }, (_, at) => (at % 2 ? 9 : 11)),
-        ])
-        await waitAttr(wrapper(), "data-swipe", "open")
-        await page.waitForTimeout(400)
-        if (!(await rowById(page, id).count()))
-          failures.push("the long swipe archived the row")
-        else {
-          await action("Archive").click()
-          await rowById(page, id).waitFor({ state: "detached", timeout: 5_000 })
+        // Two fingers either way, short and long, do nothing to the row.
+        for (const [label, deltas] of [
+          ["a swipe left", [40, 40, 40]],
+          [
+            "a long swipe left",
+            [3, 6, 9, ...Array.from({ length: 30 }, (_, at) => (at % 2 ? 9 : 11))],
+          ],
+          ["a swipe right", [-40, -40, -40]],
+        ]) {
+          await rowById(page, id).hover()
+          await swipe(rowById(page, id), deltas)
+          // Past the 140 ms a wheel gesture would take to end, and its settle.
+          await page.waitForTimeout(500)
+          if (!(await rowById(page, id).count())) {
+            failures.push(`${label} removed the row`)
+            break
+          }
+          const at = await left()
+          if (Math.abs(at - box.x) > 1)
+            failures.push(`${label} moved the row to ${at}, from ${box.x}`)
+          const uncovered = await rowById(page, id)
+            .locator("xpath=..")
+            .locator('[data-slot*="swipe"]')
+            .count()
+          if (uncovered) failures.push(`${label} drew ${uncovered} swipe action(s)`)
+          if ((await openId(page)) !== before) failures.push(`${label} opened a row`)
         }
-        if ((await openId(page)) !== before) failures.push("the long swipe opened a row")
-        return { failures, evidence: [open, confirming].filter(Boolean) }
+        const after = await page.locator(`${css.sessionList} [data-session-row]`).count()
+        if (after !== count) failures.push(`the list went from ${count} rows to ${after}`)
+        const rest = await shot(page, options, engine, "swipe", rowById(page, id))
+        return { failures, evidence: [rest].filter(Boolean) }
       })
     })
   },
@@ -354,15 +327,6 @@ function swipe(row, deltas) {
   }, deltas)
 }
 
-/** Where the row's content starts, from its wrapper's edge. */
-function contentLeft(wrapper) {
-  return wrapper.evaluate(
-    (element) =>
-      element.firstElementChild.getBoundingClientRect().left -
-      element.getBoundingClientRect().left,
-  )
-}
-
 /** The label's text once it reads `want`, or what it reads at the deadline. */
 async function waitText(locator, want) {
   const deadline = Date.now() + 3_000
@@ -388,16 +352,6 @@ async function waitFocusedRow(page, holds) {
   for (;;) {
     const now = await focusedRow(page)
     if (holds(now) || Date.now() > deadline) return now
-    await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-}
-
-async function waitAttr(locator, name, value) {
-  const deadline = Date.now() + 3_000
-  for (;;) {
-    if ((await locator.getAttribute(name)) === value) return
-    if (Date.now() > deadline)
-      throw new Error(`${name} never read ${value} (${await locator.getAttribute(name)})`)
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
 }

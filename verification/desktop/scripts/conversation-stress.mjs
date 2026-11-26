@@ -125,7 +125,7 @@ import {
  *               sidebar and the list folded by their keys a swipe right
  *               opens nothing; a wide table and a wide code block (its
  *               lines in a shadow root) still scroll under a swipe, and a
- *               session row's own swipe still opens and closes its actions
+ *               session row takes no swipe: nothing slides or uncovers
  *   touchId     the vault is sealed and Settings › Accounts asks for it,
  *               with a fake Touch ID on: the dialog offers Touch ID ticked
  *               and keeps the typed passphrase; the next unlock is the
@@ -716,8 +716,8 @@ const ended = (turn) => turnEnded(turn.status)
  * The `swipe` step's swipes, with the rail on and the wide table drawn in
  * `message` (its scroller `port`) beside the wide code block `code`: a
  * sideways two-finger swipe moves no side column and not the right panel,
- * whether everything is open or the sidebars are folded, while the table,
- * the code and a session row still take their own swipes.
+ * whether everything is open or the sidebars are folded, while the table
+ * and the code still take their own swipes, and a session row takes none.
  */
 async function sidewaysSwipes(run, step, message, port, code, failures) {
   const page = run.page
@@ -907,13 +907,11 @@ async function sidewaysSwipes(run, step, message, port, code, failures) {
     await swipe(over, -15)
     await expect(`a swipe right over ${label}`, all)
   }
-  // A session row's own two-finger swipe is still the row's: left uncovers
-  // its Archive and Delete, right covers them again, and no column moves.
-  // The row ends a wheel swipe after 140 ms without an event by its own
-  // clock, which a slow round trip from here would open, so each swipe
-  // goes in from the page as one burst, as session-rows.mjs sends them.
+  // A session row takes no swipe of its own: a swipe either way over it
+  // uncovers no actions, moves no row and no column, and opens nothing.
+  // Each swipe goes in from the page as one burst, as session-rows.mjs
+  // sends them, and waits past the 140 ms a wheel gesture takes to end.
   const row = page.locator(selectorFor.sessionListRowFor(run.main.id))
-  const tray = () => row.locator("xpath=..").getAttribute("data-swipe")
   const rowSwipe = async (deltaX) => {
     await row.scrollIntoViewIfNeeded()
     await row.hover()
@@ -925,14 +923,23 @@ async function sidewaysSwipes(run, step, message, port, code, failures) {
     }, deltaX)
     await page.waitForTimeout(400)
   }
-  await rowSwipe(40)
-  await expect("a swipe left over a session row", all)
-  if (!(await waitFor(async () => (await tray()) === "open", 3_000)))
-    failures.push(`a swipe left over a session row left it ${await tray()}, not open`)
-  await rowSwipe(-40)
-  await expect("a swipe right over an open session row", all)
-  if (!(await waitFor(async () => (await tray()) === null, 3_000)))
-    failures.push(`a swipe right over an open session row left it ${await tray()}`)
+  const rowAt = async () => (await row.boundingBox())?.x
+  const rowStart = await rowAt()
+  for (const [label, deltaX] of [
+    ["a swipe left over a session row", 40],
+    ["a swipe right over a session row", -40],
+  ]) {
+    await rowSwipe(deltaX)
+    await expect(label, all)
+    const at = await rowAt()
+    if (at === undefined || Math.abs(at - rowStart) > 1)
+      failures.push(`${label} moved it to ${at}, from ${rowStart}`)
+    const uncovered = await row
+      .locator("xpath=..")
+      .locator('[data-slot*="swipe"]')
+      .count()
+    if (uncovered) failures.push(`${label} drew ${uncovered} swipe action(s)`)
+  }
   // Folded by their keys, the sidebar and the list stay folded under a
   // swipe right, as they once would have opened.
   await page.keyboard.press(keys.toggleSessionList)
