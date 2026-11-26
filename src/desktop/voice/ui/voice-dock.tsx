@@ -6,7 +6,9 @@
  * (`voice-rim.tsx`).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { StatusLabel } from "@nessa-ui/react/status-label"
+import { Button } from "@nessa-ui/react/button"
+import { DesktopIcon } from "../../ui/icons"
+import { IconButton } from "../../ui/icon-button"
 import { VoiceKeyButton } from "../../settings/ui/voice-key-row"
 import { useVaultUnlock } from "../../../vault"
 import type { VoiceSnapshot } from "../application/voice-controller"
@@ -86,38 +88,53 @@ export function VoiceDock({ sessionId }: { sessionId: string }) {
   if (snapshot.phase === "failed" || snapshot.phase === "dropped")
     return (
       <div className="voice-dock" data-phase={snapshot.phase}>
-        <StatusLabel role="status" tone="warning" className="voice-notice">
-          {snapshot.notice}
-        </StatusLabel>
-        {snapshot.fix === "unlock" ? (
-          <button
-            type="button"
-            className="voice-notice-dismiss"
-            data-voice-fix="unlock"
-            onClick={() => {
-              void unlock().then((open) => {
-                // Unlocked, the call starts as the person first asked.
-                if (open) void controller.start(sessionId)
-              })
-            }}
-          >
-            Unlock
-          </button>
-        ) : snapshot.fix === "key" ? (
-          <VoiceKeyButton
-            className="voice-notice-dismiss"
-            onSaved={() => controller.dismiss()}
-          >
-            Add key
-          </VoiceKeyButton>
-        ) : null}
-        <button
-          type="button"
-          className="voice-notice-dismiss"
-          onClick={() => controller.dismiss()}
+        {/*
+          One quiet row: what stopped the call, the one thing that fixes it
+          in place (if any), and a close. No box: it reads as the call's
+          line, where the call's words would have been.
+        */}
+        <div
+          className="voice-notice"
+          role="status"
+          data-voice-fix={snapshot.fix ?? "none"}
         >
-          OK
-        </button>
+          <DesktopIcon name="voice" className="voice-notice-mark" />
+          <span className="voice-notice-text">{snapshot.notice}</span>
+          {snapshot.fix === "unlock" ? (
+            <Button
+              variant="tinted"
+              shape="pill"
+              size="26"
+              className="voice-notice-fix"
+              data-voice-fix="unlock"
+              onClick={() => {
+                void unlock().then((open) => {
+                  // Unlocked, the call starts as the person first asked.
+                  if (open) void controller.start(sessionId)
+                })
+              }}
+            >
+              Unlock
+            </Button>
+          ) : snapshot.fix === "key" ? (
+            <VoiceKeyButton
+              className="voice-notice-fix"
+              onSaved={() => controller.dismiss()}
+            >
+              Add key
+            </VoiceKeyButton>
+          ) : null}
+          <IconButton
+            icon="close"
+            label="Dismiss"
+            size="sm"
+            shape="pill"
+            tone="faint"
+            className="voice-notice-close"
+            data-voice-dismiss
+            onClick={() => controller.dismiss()}
+          />
+        </div>
       </div>
     )
   const line = voiceLine(snapshot)
