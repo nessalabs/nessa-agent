@@ -49,6 +49,17 @@ export const settingsCategories = [
     ],
   },
   {
+    id: "terminal",
+    label: "Terminal",
+    tabs: [
+      {
+        id: "terminal-resume",
+        label: "Resume",
+        keywords: "osc 7577 restart restore reopen programs claude nvim filter",
+      },
+    ],
+  },
+  {
     id: "connections",
     label: "Connections",
     // MCP servers first: Accounts reads the vault, so opening Connections on
@@ -236,6 +247,28 @@ export const settingsEntries = [
     tab: "decisions",
     label: "Pick after",
     keywords: "wait minutes hours",
+  },
+  // Terminal › Resume
+  {
+    id: "terminal-resume",
+    tab: "terminal-resume",
+    label: "Resume programs after a restart",
+    detail: "Programs that support it come back in their terminal when Nessa restarts.",
+    keywords: "osc 7577 restore reopen restart",
+  },
+  {
+    id: "terminal-resume-programs",
+    tab: "terminal-resume",
+    label: "Programs",
+    keywords: "allow never rules filter name path folder flags arguments",
+  },
+  {
+    id: "terminal-resume-kept",
+    tab: "terminal-resume",
+    label: "Kept programs",
+    detail:
+      "What comes back at the next restart. Closing a terminal forgets its program.",
+    keywords: "saved records forget",
   },
   // Connections › Accounts
   {

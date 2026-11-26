@@ -2200,7 +2200,10 @@ async fn dispatch_authorized(
         | ProductMethod::TerminalInput
         | ProductMethod::TerminalHistory
         | ProductMethod::TerminalClose
-        | ProductMethod::TerminalRename => {
+        | ProductMethod::TerminalRename
+        | ProductMethod::TerminalResumeSettings
+        | ProductMethod::TerminalSetResumeSettings
+        | ProductMethod::TerminalForgetSaved => {
             super::terminal::dispatch(state, session, frame, places.terminals).await
         }
         ProductMethod::WorkspacePublish => super::workspace::publish(window, frame),

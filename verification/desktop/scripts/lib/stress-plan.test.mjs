@@ -198,6 +198,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         menuPanels: "0",
         menus: "0",
         terminals: "0",
+        resumes: "0",
         runs: "0",
         composers: "0",
         pickers: "0",

@@ -37,6 +37,7 @@ const categoryIcons: Record<SettingsCategoryId, DesktopIconRole> = {
   appearance: "appearance",
   workspace: "workspace",
   chat: "chatSettings",
+  terminal: "terminal",
   connections: "connections",
   privacy: "privacy",
   advanced: "advanced",

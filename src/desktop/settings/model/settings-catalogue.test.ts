@@ -92,12 +92,14 @@ describe("the settings catalogue", () => {
       "appearance",
       "workspace",
       "chat",
+      "terminal",
       "connections",
       "privacy",
       "advanced",
       "about",
     ])
     expect(tabsOf("chat").map((tab) => tab.id)).toEqual(["decisions"])
+    expect(tabsOf("terminal").map((tab) => tab.id)).toEqual(["terminal-resume"])
     expect(tabsOf("connections").map((tab) => tab.id)).toEqual([
       // Accounts reads the vault: Connections does not open on it.
       "integrations",

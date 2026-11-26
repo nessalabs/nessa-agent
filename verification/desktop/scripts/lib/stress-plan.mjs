@@ -197,6 +197,10 @@ export const KNOBS = {
     default: 1,
     what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
   },
+  resumes: {
+    default: 1,
+    what: "programs in terminals kept across a gateway restart (OSC 7577): resume is turned on in Settings › Terminal with a rule allowing one program, two terminals report a program each, and after the restart only the allowed one is back in its terminal, by the same id, running again; closing it and turning resume off forget it",
+  },
   runs: {
     default: 1,
     what: "replies with shell fences the person runs: Run shows the output inline and ends with its exit and time, the stop icon interrupts a console fence's command, Run again starts anew and the terminal icon opens the run in a pane",
@@ -416,6 +420,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.accessRequests, () => ({ kind: "accessRequest" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.raises, () => ({ kind: "raise" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.resumes, () => ({ kind: "resume" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

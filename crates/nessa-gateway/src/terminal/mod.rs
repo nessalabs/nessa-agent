@@ -18,6 +18,12 @@
 //! window ◀── terminal.output {view, frame} ◀── TerminalLink queue ◀────────── engine thread
 //! ```
 //!
+//! A program in a terminal may ask to come back after the gateway restarts
+//! (OSC 7577, `resume_*`): the engine checks its report against the
+//! terminal's token, the hub keeps the record in a private folder, and the
+//! next start opens the terminal again, by the same id, running the
+//! command, when the person turned resume on and a rule allows it.
+//!
 //! The engine is a seam: the Ghostty one is built with the `terminals`
 //! feature on Unix; without it the hub refuses every open as unavailable.
 #[cfg(all(unix, feature = "terminals"))]
@@ -31,7 +37,12 @@ pub use engine::GhosttyEngine;
 mod hub;
 mod model;
 mod ports;
+mod processes;
 mod program_status;
+mod resume_report;
+mod resume_rules;
+mod resume_store;
+mod resume_tracker;
 mod runtime;
 mod system_host;
 mod title;
@@ -39,7 +50,12 @@ mod title;
 pub use hub::*;
 pub use model::*;
 pub use ports::*;
+pub use processes::{ProcessFacts, Processes, SystemProcesses};
 pub use program_status::*;
+pub use resume_report::{display_command, new_token, ResumeCommand, TOKEN_VAR};
+pub use resume_rules::*;
+pub use resume_store::*;
+pub use resume_tracker::{AcceptedRecord, ResumeChange, ResumeTracker};
 pub use runtime::*;
 pub use system_host::SystemTerminalHost;
 #[cfg(test)]
