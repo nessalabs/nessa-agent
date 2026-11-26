@@ -25,9 +25,7 @@ use crate::application::{
     ShareGrants, EMPTY_GRANT_INCARNATION, GRANT_LOG_RETAINED, MAX_DRIVE_GRANTS_PER_CONVERSATION,
     MAX_POLICY_REVISION, MAX_SHARE_GRANTS_PER_CONVERSATION,
 };
-use crate::domain::{
-    Capabilities, CommandHosts, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules,
-};
+use crate::domain::{Capabilities, ShareAccess, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
 use nessa_auth::application::ports::AccessHold;
 use nessa_auth::domain::{CredentialId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
@@ -320,24 +318,29 @@ fn preset_named(name: &str) -> Option<ToolPreset> {
 }
 
 /// A policy as its stored JSON: `{"preset": …}` or `{"allow": […], "deny":
-/// […]}`, with `"commandHosts": […]` beside either when it names any. One
-/// policy has one spelling, so two are the same policy exactly when their
-/// texts are equal, which is how a change and a retry compare them. A policy
-/// stored before command hosts were has no `commandHosts`, and names none.
+/// […]}`. One policy has one spelling, so two are the same policy exactly
+/// when their texts are equal, which is how a change and a retry compare
+/// them.
 fn policy_text(policy: &ToolPolicy) -> String {
-    let mut text = match policy.tools() {
+    match policy.tools() {
         ToolChoice::Preset(preset) => json!({ "preset": preset_name(*preset) }),
         ToolChoice::Rules(rules) => json!({ "allow": rules.allow(), "deny": rules.deny() }),
-    };
-    let hosts = policy.command_hosts();
-    if let (false, Value::Object(fields)) = (hosts.is_empty(), &mut text) {
-        fields.insert(COMMAND_HOSTS.to_owned(), json!(hosts.names()));
     }
-    text.to_string()
+    .to_string()
 }
 
-/// The field a policy's command hosts are stored under.
-const COMMAND_HOSTS: &str = "commandHosts";
+/// The field an older build stored a policy's command hosts under: the
+/// machines a grant's turns could run commands on before every gateway ran
+/// only its own agents (ADR 1417). No command runs anywhere but here now, so
+/// a policy that still names some is read without them; the journal keeps
+/// them as the owner granted them.
+const RETIRED_COMMAND_HOSTS: &str = "commandHosts";
+
+/// The most bytes an older build's [`RETIRED_COMMAND_HOSTS`] took in one
+/// stored policy: 16 hosts of at most 253 bytes, each quoted and separated,
+/// and the field's name. Counted in [`MAX_POLICY_TEXT_BYTES`] so a policy
+/// stored then is still read rather than taken for damage.
+const RETIRED_COMMAND_HOSTS_BYTES: usize = 16 * (253 + 3) + 16;
 
 fn policy_from(text: &str) -> Option<ToolPolicy> {
     let Value::Object(mut fields) = serde_json::from_str::<Value>(text).ok()? else {
@@ -350,14 +353,8 @@ fn policy_from(text: &str) -> Option<ToolPolicy> {
             .map(|item| item.as_str().map(str::to_owned))
             .collect()
     };
-    // Stored only when it names a host: an empty list is not its spelling.
-    let hosts = match fields.remove(COMMAND_HOSTS) {
-        None => CommandHosts::none(),
-        Some(value) => {
-            Some(CommandHosts::new(strings(&value)?).ok()?).filter(|hosts| !hosts.is_empty())?
-        }
-    };
-    let tools = match fields.len() {
+    fields.remove(RETIRED_COMMAND_HOSTS);
+    match fields.len() {
         1 => preset_named(fields.get("preset")?.as_str()?).map(ToolPolicy::preset),
         2 => ToolRules::new(
             strings(fields.get("allow")?)?,
@@ -366,18 +363,17 @@ fn policy_from(text: &str) -> Option<ToolPolicy> {
         .ok()
         .map(ToolPolicy::rules),
         _ => None,
-    }?;
-    Some(tools.with_command_hosts(hosts))
+    }
 }
 
 /// The longest policy text a valid policy writes: every pattern at its
 /// longest and every byte of it a quote or backslash, which JSON writes in two
 /// (a control character, which it writes in six, is refused by `ToolRules`),
-/// every command host at its longest beside those patterns (a host has nothing
-/// JSON escapes), and the object around them. A stored text past it is read as
-/// damage before it is parsed.
+/// the command hosts an older build may have stored beside them, and the
+/// object around them. A stored text past it is read as damage before it is
+/// parsed.
 const MAX_POLICY_TEXT_BYTES: usize = 2 * ToolRules::MAX_RULES * (2 * ToolRules::MAX_RULE_BYTES + 3)
-    + CommandHosts::MAX_HOSTS * (CommandHosts::MAX_HOST_BYTES + 3)
+    + RETIRED_COMMAND_HOSTS_BYTES
     + 64;
 
 /// A stored journal sequence, which SQLite numbers from 1.

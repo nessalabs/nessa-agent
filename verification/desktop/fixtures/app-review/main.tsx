@@ -45,7 +45,6 @@ import {
   type AuthApi,
   type GithubApi,
   type VoiceApi,
-  type LoginsApi,
   type ConversationMessage,
   type ConversationPermission,
   type ConversationView,
@@ -321,7 +320,6 @@ const settingsParts = {
   auth: {} as AuthApi,
   github: {} as GithubApi,
   voice: {} as VoiceApi,
-  logins: {} as LoginsApi,
   vault: {} as import("@nessa/client").VaultApi,
   // The Devices page is not opened here.
   devices: {} as import("@nessa/client").DevicesApi,

@@ -522,6 +522,44 @@ async fn review_notice_continuous_change_has_bounded_selection_attempts() {
     );
 }
 
+#[tokio::test]
+async fn review_notice_exhaustion_names_the_check_behind_each_pass() {
+    let mut fixture = ReviewFixture::new(
+        Arc::new(RecordingReviewNoticeAudit::default()),
+        Arc::new(MonotonicReviewNoticeClock::new()),
+    );
+    let audit = Arc::new(ChangingAudit {
+        authority: fixture.authority.clone(),
+        records: Mutex::new(Vec::new()),
+    });
+    fixture.state = fixture
+        .state
+        .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            audit,
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
+    let session = authenticate(&fixture.state).await;
+    let (_authority, updates) = watch::channel(session.auth_revision());
+    let (send, mut receive) = mpsc::channel(1);
+    let result = forward_review_notices(
+        fixture.board.clone(),
+        send,
+        Arc::new(Semaphore::new(1)),
+        fixture.state,
+        session,
+        updates,
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err(ReviewNoticePublicationFailure::Unstable(SpentSelectionPasses(
+            [Some(SelectionDiscard::AuthorityMoved); MAX_SELECTION_PASSES]
+        ))),
+        "each thrown-away pass must name the check that threw it away"
+    );
+    assert!(receive.recv().await.is_none());
+}
+
 /// Adds a review of another conversation to the board while each of the first
 /// `churns` audits is written, as other busy agents do.
 struct BoardChurnAudit {
@@ -2174,6 +2212,52 @@ async fn replaced_incarnation_with_a_reused_revision_does_not_publish_deleted_me
         assert!(matches!(records[0].decision(), AccessDecision::Allow { .. }));
         assert!(records.last().unwrap().deleted());
     }
+    drop(authority);
+    assert_eq!(task.await.unwrap(), Ok(()));
+}
+
+#[tokio::test]
+async fn review_notice_refuses_unknown_catalogue_before_disclosure_or_audit() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    fixture.repository.catalogue_incarnation.lock().unwrap().clear();
+    let (task, mut receive, _authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    assert_eq!(
+        timeout(Duration::from_secs(2), task).await.unwrap().unwrap(),
+        Err(ReviewNoticePublicationFailure::Audit(
+            ReviewNoticeAuditFailure::Unavailable
+        ))
+    );
+    assert!(receive.recv().await.is_none());
+    assert!(audit.records.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_summary_revision_during_audited_selection_does_not_force_another_answer() {
+    let audit = Arc::new(RecordingReviewNoticeAudit::default());
+    let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
+    let (entered, waiting) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    *fixture.repository.metadata_load_gate.lock().unwrap() = Some((entered, released));
+    let (task, mut receive, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .repository
+        .change_revisions
+        .lock()
+        .unwrap()
+        .insert(ConversationId::new(TARGET).unwrap(), 3);
+    assert!(receive.try_recv().is_err());
+    release.send(()).unwrap();
+    let queued = timeout(Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(review_count(queued), 1);
+    assert_eq!(audit.records.lock().unwrap().len(), 1);
     drop(authority);
     assert_eq!(task.await.unwrap(), Ok(()));
 }

@@ -21,7 +21,11 @@ pub struct SkillName(String);
 impl SkillName {
     /// Validate and construct a [`SkillName`].
     pub fn new(raw: impl Into<String>) -> Result<Self, McpSkillError> {
-        let value = raw.into();
+        Self::validated(raw.into())
+    }
+
+    // Not generic, so every caller's coverage lands on one copy.
+    fn validated(value: String) -> Result<Self, McpSkillError> {
         if value.is_empty()
             || value.len() > MAX_SKILL_NAME_BYTES
             || value.starts_with('-')
@@ -56,12 +60,15 @@ impl SkillUri {
     /// Accepts any valid URI scheme (conventionally `skill://`) whose path ends
     /// in `/<skill-name>/SKILL.md` with no query or fragment.
     pub fn new(raw: impl Into<String>) -> Result<Self, McpSkillError> {
-        let uri = raw.into();
-        validate_uri_syntax(&uri, McpSkillError::InvalidSkillUri)?;
+        Self::validated(raw.into())
+    }
+
+    // Not generic, so every caller's coverage lands on one copy.
+    fn validated(uri: String) -> Result<Self, McpSkillError> {
+        // The scheme's `://` is the first one, so it sits before the
+        // `/SKILL.md` suffix and inside the root directory too.
+        let scheme_sep = validate_uri_syntax(&uri, McpSkillError::InvalidSkillUri)?;
         let Some(root_dir) = uri.strip_suffix(&format!("/{SKILL_FILE_NAME}")) else {
-            return Err(McpSkillError::InvalidSkillUri);
-        };
-        let Some(scheme_sep) = root_dir.find("://") else {
             return Err(McpSkillError::InvalidSkillUri);
         };
         let after_scheme = &root_dir[scheme_sep + 3..];
@@ -75,7 +82,8 @@ impl SkillUri {
         {
             return Err(McpSkillError::InvalidSkillUri);
         }
-        let last = *segments.last().ok_or(McpSkillError::InvalidSkillUri)?;
+        // `after_scheme` is not empty, so `split` gave at least one segment.
+        let last = segments[segments.len() - 1];
         let skill_name = SkillName::new(last).map_err(|_| McpSkillError::InvalidSkillUri)?;
         Ok(Self {
             uri: uri.clone(),
@@ -132,7 +140,11 @@ pub struct SkillFileUri(String);
 impl SkillFileUri {
     /// Validate and construct a [`SkillFileUri`].
     pub fn new(raw: impl Into<String>) -> Result<Self, McpSkillError> {
-        let uri = raw.into();
+        Self::validated(raw.into())
+    }
+
+    // Not generic, so every caller's coverage lands on one copy.
+    fn validated(uri: String) -> Result<Self, McpSkillError> {
         validate_uri_syntax(&uri, McpSkillError::InvalidFileUri)?;
         if uri.ends_with('/') {
             return Err(McpSkillError::InvalidFileUri);
@@ -185,7 +197,11 @@ impl SkillDigest {
 
     /// Validate and parse a `sha256:{64 lowercase hex}` digest string.
     pub fn parse(raw: impl Into<String>) -> Result<Self, McpSkillError> {
-        let value = raw.into();
+        Self::validated(raw.into())
+    }
+
+    // Not generic, so every caller's coverage lands on one copy.
+    fn validated(value: String) -> Result<Self, McpSkillError> {
         let Some(hex) = value.strip_prefix("sha256:") else {
             return Err(McpSkillError::InvalidDigest);
         };
@@ -474,9 +490,10 @@ impl SkillEntry {
             let Some(rest) = entry.uri().as_str().strip_prefix(&prefix) else {
                 continue;
             };
+            // A file URI never ends in `/`, so `rest` is never empty.
             if let Some((subdir, _)) = rest.split_once('/') {
                 dirs.insert(subdir.to_owned());
-            } else if !rest.is_empty() {
+            } else {
                 files.insert(rest.to_owned(), entry.uri().as_str().to_owned());
             }
         }
@@ -516,7 +533,8 @@ pub(crate) fn guess_mime_type(name: &str) -> &'static str {
     }
 }
 
-fn validate_uri_syntax(uri: &str, err: McpSkillError) -> Result<(), McpSkillError> {
+/// Checks `uri`'s syntax and answers where its scheme's `://` starts.
+fn validate_uri_syntax(uri: &str, err: McpSkillError) -> Result<usize, McpSkillError> {
     if uri.is_empty() || uri.len() > MAX_SKILL_URI_BYTES {
         return Err(err);
     }
@@ -538,13 +556,10 @@ fn validate_uri_syntax(uri: &str, err: McpSkillError) -> Result<(), McpSkillErro
     {
         return Err(err);
     }
-    Ok(())
+    Ok(sep)
 }
 
+/// The lowercase hex digit of a nibble (`0..=15`).
 fn hex_nibble(nibble: u8) -> char {
-    match nibble {
-        0..=9 => (b'0' + nibble) as char,
-        10..=15 => (b'a' + (nibble - 10)) as char,
-        _ => unreachable!(),
-    }
+    char::from(b"0123456789abcdef"[usize::from(nibble)])
 }

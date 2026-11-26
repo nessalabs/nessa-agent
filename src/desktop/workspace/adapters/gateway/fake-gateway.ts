@@ -34,6 +34,7 @@ import {
   type Subscription,
   type SubscriptionEnd,
   type TerminalApi,
+  type TerminalResumeSettings,
   type TerminalSummary,
   type ViewSubscriptionHandlers,
   type WorkspaceAnswerParams,
@@ -1241,6 +1242,7 @@ function fakeTerminals(publish: (event: string, payload: unknown) => void): Term
     { lines: string[]; typed: string; views: Map<string, number> }
   >()
   let next = 0
+  let resume: TerminalResumeSettings = { enabled: false, rules: [] }
   const listed = () => publish("terminal.listed", { terminals: [...terminals] })
   const paint = (terminalId: string, viewId: string, cols: number, rows: number) => {
     const screen = screens.get(terminalId)
@@ -1347,5 +1349,13 @@ function fakeTerminals(publish: (event: string, payload: unknown) => void): Term
       listed()
       return Promise.resolve()
     },
+    // Resume settings kept as the gateway keeps them; it keeps no programs.
+    resumeSettings: () => Promise.resolve({ settings: { ...resume }, saved: [] }),
+    setResumeSettings: (settings) => {
+      resume = { enabled: settings.enabled, rules: [...settings.rules] }
+      return Promise.resolve({ settings: { ...resume }, saved: [] })
+    },
+    forgetSaved: () =>
+      Promise.reject(new NessaRpcError("terminal_not_found", "No such kept program")),
   }
 }

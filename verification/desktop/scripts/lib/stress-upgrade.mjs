@@ -117,6 +117,18 @@ function writePrivate(directory, name, value) {
 }
 
 /**
+ * Write the place record an older build kept for conversation `id`, which
+ * ran here: `places/<id>.json` `{schemaVersion, placed: "here"}`. This build
+ * writes none, and must still read it as here.
+ */
+export function asOlderHere(conversations, id) {
+  writePrivate(join(conversations, "places"), `${id}.json`, {
+    schemaVersion: 1,
+    placed: "here",
+  })
+}
+
+/**
  * Where conversation `id` runs, as the gateway keeps it under its
  * `conversations` directory: `places/<id>.json`, else an older build's
  * `placements/<id>.json` and, for the pool, `bindings/<id>.json`. `null`

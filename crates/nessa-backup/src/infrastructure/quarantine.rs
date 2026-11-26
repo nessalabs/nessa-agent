@@ -39,11 +39,11 @@ use crate::application::{
 };
 use crate::domain::{
     conversation_is_fenced, credential_is_fenced, encode_deferred, encode_identity, fresher_fences,
-    leases_to_interrupt, metadata_omitted, normalized_root, paths_conflict_on,
-    relative_path_is_safe, session_sidecar, share_grant_is_fenced, staging_id_is_usable,
-    CredentialKind, DeferredEntry, DeferredLine, DeletionFence, DeletionLog, FenceKind,
-    Fingerprint, LeaseMark, ManifestListing, MetadataFacts, MetadataRow, RestoreFault, SealedFile,
-    StoreKind, VolumeCase, VolumeProbe, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
+    metadata_omitted, normalized_root, paths_conflict_on, relative_path_is_safe, session_sidecar,
+    share_grant_is_fenced, staging_id_is_usable, CredentialKind, DeferredEntry, DeferredLine,
+    DeletionFence, DeletionLog, FenceKind, Fingerprint, ManifestListing, MetadataFacts,
+    MetadataRow, RestoreFault, SealedFile, StoreKind, VolumeCase, VolumeProbe, IDENTITY_BODY,
+    MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
@@ -90,7 +90,6 @@ impl CutMaterializer for DirectoryMaterializer {
             .map(|entry| entry.fence().clone())
             .collect::<Vec<_>>();
         let mut files = Vec::new();
-        let mut leases = Vec::new();
         let mut deferred = Vec::new();
         for store in listing.stores() {
             for line in store.deferred() {
@@ -100,7 +99,6 @@ impl CutMaterializer for DirectoryMaterializer {
                 }
                 deferred.push(row);
             }
-            let mut lease_files = Vec::new();
             for record in store.records().iter().filter(|record| record.is_public()) {
                 let reader = bundle
                     .record(store.store(), &record.encoded_identity())
@@ -113,8 +111,10 @@ impl CutMaterializer for DirectoryMaterializer {
                     Some(filtered) => filtered,
                     None => body,
                 };
+                // A remote worker's lease ledger, which an older gateway cut
+                // (ADR 1417): checked with the rest, and not placed, since
+                // nothing reads it and no worker runs for it any more.
                 if store.store() == StoreKind::LeaseRecords {
-                    lease_files.push((record.encoded_identity(), body));
                     continue;
                 }
                 if omit_record(store.store(), record.identity(), &body, &fence_list)? {
@@ -129,49 +129,6 @@ impl CutMaterializer for DirectoryMaterializer {
                     body,
                 ));
             }
-            lease_files.sort_by(|left, right| {
-                line_rank(&left.0)
-                    .cmp(&line_rank(&right.0))
-                    .then_with(|| left.0.cmp(&right.0))
-            });
-            let mut folded = Vec::new();
-            let mut per_file = Vec::new();
-            for (identity, body) in lease_files {
-                let text = std::str::from_utf8(&body)
-                    .map_err(|_| RestoreFault::Unreadable)?
-                    .to_owned();
-                let events = lease_events(&text)?;
-                folded.extend(events.iter().cloned());
-                per_file.push((identity, text, events));
-            }
-            let open = leases_to_interrupt(&folded);
-            let mut last_open = Vec::new();
-            for (index, (_, _, events)) in per_file.iter().enumerate() {
-                for (id, mark) in events {
-                    if *mark != LeaseMark::Opened || !open.iter().any(|existing| existing == id) {
-                        continue;
-                    }
-                    if let Some(slot) = last_open.iter_mut().find(|(existing, _)| existing == id) {
-                        *slot = (id.clone(), index);
-                    } else {
-                        last_open.push((id.clone(), index));
-                    }
-                }
-            }
-            for (index, (identity, text, _)) in per_file.into_iter().enumerate() {
-                let here = last_open
-                    .iter()
-                    .filter(|(_, at)| *at == index)
-                    .map(|(id, _)| id.clone())
-                    .collect::<Vec<_>>();
-                files.push((
-                    format!("records/{}/{}", StoreKind::LeaseRecords.as_str(), identity),
-                    interrupt_leases(&text, &here)?,
-                ));
-            }
-            if store.store() == StoreKind::LeaseRecords {
-                leases = open;
-            }
         }
         write_missing_conversation_fences(&mut files, &fence_list)?;
         files.push((
@@ -182,7 +139,6 @@ impl CutMaterializer for DirectoryMaterializer {
         files.push(("identity.txt".into(), IDENTITY_BODY.as_bytes().to_vec()));
         Ok(PreparedCut {
             files,
-            leases,
             deferred,
             freshness,
         })
@@ -397,70 +353,6 @@ fn text_field(value: &Value, name: &str) -> Result<String, ()> {
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
         .ok_or(())
-}
-
-fn line_rank(identity: &str) -> (u8, u64) {
-    identity
-        .strip_prefix("line-")
-        .and_then(|rest| rest.parse::<u64>().ok())
-        .map(|number| (0, number))
-        .unwrap_or((1, 0))
-}
-
-fn lease_events(text: &str) -> Result<Vec<(String, LeaseMark)>, RestoreFault> {
-    let mut events = Vec::new();
-    for line in text.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let value: Value = serde_json::from_str(line).map_err(|_| RestoreFault::Unreadable)?;
-        let kind = value
-            .get("kind")
-            .and_then(Value::as_str)
-            .ok_or(RestoreFault::Unreadable)?;
-        let lease = value.get("lease").and_then(Value::as_str);
-        let mark = match kind {
-            "granted" | "command_granted" => LeaseMark::Opened,
-            "ended" => LeaseMark::Closed,
-            _ => LeaseMark::Noted,
-        };
-        if matches!(mark, LeaseMark::Opened | LeaseMark::Closed) {
-            let lease = lease.ok_or(RestoreFault::Unreadable)?;
-            if lease.is_empty() || lease.len() > MAX_NAME_BYTES {
-                return Err(RestoreFault::Unreadable);
-            }
-            events.push((lease.to_owned(), mark));
-        }
-    }
-    Ok(events)
-}
-
-fn interrupt_leases(text: &str, open: &[String]) -> Result<Vec<u8>, RestoreFault> {
-    if open.is_empty() {
-        return Ok(text.as_bytes().to_vec());
-    }
-    let mut out = text.to_owned();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    for id in open {
-        out.push_str(&ended_lease_line(id)?);
-        out.push('\n');
-    }
-    Ok(out.into_bytes())
-}
-
-fn ended_lease_line(lease_id: &str) -> Result<String, RestoreFault> {
-    if lease_id.is_empty() || lease_id.bytes().any(|byte| byte < 0x20) {
-        return Err(RestoreFault::Unreadable);
-    }
-    serde_json::to_string(&json!({
-        "kind": "ended",
-        "lease": lease_id,
-        "cleanup": {"outcome": "uncertain"},
-        "cause": "lost"
-    }))
-    .map_err(|_| RestoreFault::Unreadable)
 }
 
 fn read_reader(
@@ -5293,24 +5185,6 @@ fn a_mount_point_with_a_space_is_that_filesystem() {
     );
     assert_eq!(decode_mount_field(r"/mnt/My\040Drive"), "/mnt/My Drive");
     assert_eq!(decode_mount_field(r"\011\012\134"), "\t\n\\");
-}
-
-/// The ended line is the `ended` record the retired environment ledger wrote,
-/// so a backup taken by an older build restores with its open leases closed.
-#[cfg(all(test, unix))]
-#[test]
-fn an_interrupted_lease_line_is_the_ledger_ended_record() {
-    let line = ended_lease_line("lease-1").unwrap();
-    let parsed: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(
-        parsed,
-        json!({
-            "kind": "ended",
-            "lease": "lease-1",
-            "cleanup": {"outcome": "uncertain"},
-            "cause": "lost"
-        })
-    );
 }
 
 #[cfg(target_os = "macos")]

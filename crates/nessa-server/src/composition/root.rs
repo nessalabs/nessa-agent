@@ -294,6 +294,10 @@ impl CompositionRoot {
         } else {
             None
         };
+        // On Unix the stop subscriptions must exist before any listener
+        // address is visible to a caller. The existing cleanup owner below
+        // still waits for and handles the stop request.
+        let shutdown = shutdown_signal().map_err(RunError::Serve)?;
         let listen_addr = config.listen_addr();
         let listener = tokio::net::TcpListener::bind(&listen_addr)
             .await
@@ -545,9 +549,9 @@ impl CompositionRoot {
         // A signal stops it for good, before the restart or during its drain
         // (`SelfRestart` owns that order).
         #[cfg(unix)]
-        let asked = crate::core::self_restart::stop_or_restart(shutdown_signal(), restart.clone());
+        let asked = crate::core::self_restart::stop_or_restart(shutdown, restart.clone());
         #[cfg(not(unix))]
-        let asked = shutdown_signal();
+        let asked = shutdown;
         let stop = stop_signal(asked, native_watch);
         // The native listener ending stops the run too: a restart not yet
         // asked for does not happen.
@@ -574,6 +578,11 @@ impl CompositionRoot {
                 })?;
         }
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
+            // Terminals end with the gateway; that is not the person ending
+            // their programs, so the ones kept to come back stay kept.
+            if let Some(terminals) = &shutdown_product.terminals.hub {
+                terminals.freeze();
+            }
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
             if let Some(native) = native.as_mut() {
@@ -963,22 +972,20 @@ fn runtime_dependencies(config: &Environment) -> RuntimeDependencies {
     }
 }
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        match signal(SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
+#[cfg(unix)]
+fn shutdown_signal() -> std::io::Result<impl Future<Output = ()> + Send + 'static> {
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    Ok(async move {
+        tokio::select! { _ = interrupt.recv() => {}, _ = terminate.recv() => {} }
+    })
+}
+
+#[cfg(not(unix))]
+fn shutdown_signal() -> std::io::Result<impl Future<Output = ()> + Send + 'static> {
+    Ok(async {
         let _ = tokio::signal::ctrl_c().await;
-    }
+    })
 }
 
 /// The startup warm-ups, as the work outside conversations a refused

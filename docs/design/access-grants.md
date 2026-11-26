@@ -120,7 +120,7 @@ names. `hold.peer` is unchanged.
 
 [Share grants](read-grants.md) are `(receiver, conversation id, role, tool
 policy)`, in `share_grants`, journaled in `share_grant_changes`. The role is
-Read, Comment, or Drive. Drive carries a tool policy and `commandHosts`.
+Read, Comment, or Drive. Drive carries a tool policy.
 `policy_revision` is the journal sequence of the last role or policy change.
 `conversation.share`, `.unshare`, and `.shares` are the owner's, admitted
 through `shares.cedar`.
@@ -209,7 +209,7 @@ policy engine, a new crate, or a grant-by-list.
 | Piece | What happens |
 | --- | --- |
 | Share role Read / Comment / Drive | Becomes the capability set: Read is `read`, Comment is `read` + `comment`, Drive is those plus `drive`. One wire field, `capabilities`. The role enum goes. |
-| Tool policy and `commandHosts` | Stay as constraints on a grant that has `drive`. |
+| Tool policy | Stays as a constraint on a grant that has `drive`. |
 | `policy_revision` | Stays, under the name grant epoch. |
 | `paired.peer_gateway` | Not in this build's Cedar policies. `grant.comment` and `grant.drive` require the capability. A gateway principal is admitted by that capability. Startup does not delete the id out of an older conversation file. An older grant store is refused whole. That refusal does not open or delete the conversation file. |
 | A stored Drive role that a peer cannot use | `conversation.share` asks those permits before it writes. A denial writes nothing and returns the policy ids. The use case does not match a gateway principal on its own. The same permits deny a hand-built row at admission. |

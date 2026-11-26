@@ -2,8 +2,7 @@
 /**
  * The share dialog as drawn: the grants and what each holds, a share and a
  * revoke sent once each and the list read again, every refusal in words and
- * never a wire code, the hosts held to their own bound however full the
- * patterns are, and the notes on what a policy does not stop.
+ * never a wire code, and the notes on what a policy does not stop.
  */
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -105,26 +104,7 @@ const choose = async (group: string, label: string) => {
   if (!option) throw new Error(`no ${label} in ${group}`)
   await click(option)
 }
-const type = async (input: HTMLInputElement, value: string) => {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
-      input,
-      value,
-    )
-    input.dispatchEvent(new Event("input", { bubbles: true }))
-  })
-}
 const submit = () => find<HTMLButtonElement>('[data-share-action="submit"]')
-const hostBoxes = () => [
-  ...find("[data-share-hosts]").querySelectorAll<HTMLInputElement>(
-    'input[type="checkbox"]',
-  ),
-]
-const box = (index: number) => {
-  const found = hostBoxes()[index]
-  if (!found) throw new Error(`no host box ${index}`)
-  return found
-}
 const within = (scope: HTMLElement, selector: string) => {
   const found = scope.querySelector<HTMLElement>(selector)
   if (!found) throw new Error(`nothing matches ${selector}`)
@@ -246,7 +226,7 @@ describe("the share dialog", () => {
     expect(dialog()?.querySelector("[data-share-read-failure]")).toBeNull()
   })
 
-  it("asks Drive for a tool policy and hosts, and says what a policy cannot stop", async () => {
+  it("asks Drive for a tool policy, and says what a policy cannot stop", async () => {
     const sharing = inMemorySharing({ now: testNow })
     const share = sharing.share
     const sent: unknown[] = []
@@ -260,102 +240,22 @@ describe("the share dialog", () => {
     expect(dialog()?.querySelector("[data-share-drive]")).toBeNull()
     await choose("[data-share-role]", "Drive")
     expect(find("[data-share-notes]").textContent).toBe(driveNote)
-    expect(hostBoxes()).toHaveLength(2)
-    await click(box(1))
+    // No machine but this gateway's own runs a grant's commands (ADR 1417).
+    expect(dialog()?.querySelector("[data-share-hosts]")).toBeNull()
     await choose("[data-share-presets]", "No shell")
     await click(submit())
     expect(sent).toEqual([
       {
         credentialId: "sample-phone",
         role: "drive",
-        policy: {
-          kind: "preset",
-          preset: "no_shell",
-          commandHosts: ["me@build.example"],
-        },
+        policy: { kind: "preset", preset: "no_shell" },
         // A first grant: built on a list where the device held none.
         expectedPolicyRevision: 0,
       },
     ])
     expect(find('[data-share-grant="sample-phone"]').textContent).toContain(
-      "Drive · No shell, commands on me@build.example",
+      "Drive · No shell",
     )
-  })
-
-  it("keeps every fitting host available however full the patterns are", async () => {
-    const limits = { patterns: 16, hosts: 4, hostBytes: 8 }
-    const memory = inMemorySharing({
-      now: testNow,
-      commandHosts: ["a", "b", "c", "much-too-long"],
-    })
-    const sharing: SharingSource = {
-      ...memory,
-      choices: async () => ({ ...(await memory.choices()), limits }),
-    }
-    const store = await render(sharing)
-    await open(store)
-    await choose("[data-share-targets]", "-phone")
-    await choose("[data-share-role]", "Drive")
-    const tooLong = box(3)
-    expect(tooLong.closest("[data-slot=checkbox-list-row]")?.textContent).toContain(
-      "Name too long for a grant",
-    )
-    expect(tooLong.disabled || tooLong.getAttribute("aria-disabled") === "true").toBe(
-      true,
-    )
-    for (const box of hostBoxes().slice(0, 3)) await click(box)
-    expect(hostBoxes().filter((box) => box.checked)).toHaveLength(3)
-    await choose("[data-share-presets]", "Custom")
-    const many = (count: number, name: string) =>
-      Array.from({ length: count }, (_, at) => `${name}${at}`).join(", ")
-    await type(find<HTMLInputElement>('[data-share-pattern="allow"]'), many(16, "Allow"))
-    await type(find<HTMLInputElement>('[data-share-pattern="deny"]'), many(16, "Deny"))
-    expect(find("[data-share-hosts]").textContent).toContain("3 of 4 selected")
-    expect(dialog()?.querySelector("[data-share-reason]")).toBeNull()
-    expect(submit().disabled).toBe(false)
-  })
-
-  it("keeps, and shows, a held host the gateway does not offer now", async () => {
-    const sharing = inMemorySharing({ now: testNow })
-    const store = await render(sharing)
-    await sharing.share(
-      "a",
-      {
-        credentialId: "sample-phone",
-        role: "drive",
-        policy: { kind: "preset", preset: "all", commandHosts: ["offline-peer"] },
-        expectedPolicyRevision: 0,
-      },
-      "seed",
-    )
-    await open(store)
-    await click(
-      within(find('[data-share-grant="sample-phone"]'), '[data-share-action="change"]'),
-    )
-    const away = hostBoxes().find((each) =>
-      each
-        .closest("[data-slot=checkbox-list-row]")
-        ?.textContent?.includes("offline-peer"),
-    )
-    expect(away?.checked).toBe(true)
-    expect(away?.closest("[data-slot=checkbox-list-row]")?.textContent).toContain(
-      "Not taking your commands now",
-    )
-    await choose("[data-share-presets]", "No shell")
-    const sent: unknown[] = []
-    sharing.share = async (_sessionId, request) => {
-      sent.push(request)
-      return 2
-    }
-    await click(submit())
-    expect(sent).toEqual([
-      {
-        credentialId: "sample-phone",
-        role: "drive",
-        policy: { kind: "preset", preset: "no_shell", commandHosts: ["offline-peer"] },
-        expectedPolicyRevision: 1,
-      },
-    ])
   })
 
   it("starts from nothing for a device without a grant, never another's", async () => {
@@ -366,7 +266,7 @@ describe("the share dialog", () => {
       {
         credentialId: "sample-phone",
         role: "drive",
-        policy: { kind: "preset", preset: "all", commandHosts: ["devbox"] },
+        policy: { kind: "preset", preset: "all" },
         expectedPolicyRevision: 0,
       },
       "seed",
@@ -661,7 +561,7 @@ describe("the share dialog", () => {
       {
         credentialId: "sample-phone",
         role: "drive",
-        policy: { kind: "preset", preset: "all", commandHosts: [] },
+        policy: { kind: "preset", preset: "all" },
         expectedPolicyRevision: 1, // the revision this window listed
       },
       "elsewhere",

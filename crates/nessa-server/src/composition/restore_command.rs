@@ -21,9 +21,9 @@ use crate::timer::clock;
 use nessa_backup::application::{
     binding_from_pointer, confirm_accepted, deliver_historical_commands,
     list_accepted_conversations, open_accepted_conversation, stage_quarantine, AbsentSessionSource,
-    AcceptReport, AcceptRequest, AcceptedBinding, AcceptedFetch, DeferredConversationOpen,
-    DeferredOpenFailure, ExportClock, FetchProgress, InventoryCause, LeaseReceipts,
-    QuarantineLayout, RestoreAction, RestoreFacts, StageRequest, VerificationLimits,
+    AcceptRequest, AcceptedBinding, AcceptedFetch, DeferredConversationOpen, DeferredOpenFailure,
+    ExportClock, FetchProgress, InventoryCause, QuarantineLayout, RestoreAction, RestoreFacts,
+    StageRequest, VerificationLimits,
 };
 use nessa_backup::domain::{
     credentials_imported_on_restore, decode_deferred, encode_accepted_restore, paths_are_distinct,
@@ -55,17 +55,6 @@ impl FetchProgress for Quiet {
     fn report(&mut self, _read: u64, _total: u64) {}
 }
 
-struct ArgReceipts(Vec<(String, String)>);
-
-impl LeaseReceipts for ArgReceipts {
-    fn receipt(&self, lease_id: &str) -> Option<String> {
-        self.0
-            .iter()
-            .find(|(id, _)| id == lease_id)
-            .map(|(_, text)| text.clone())
-    }
-}
-
 fn person(action: RestoreAction) -> RestoreFacts<'static> {
     RestoreFacts {
         kind: "person",
@@ -86,12 +75,9 @@ fn surface() -> RestoreFacts<'static> {
 #[serde(tag = "status", rename_all = "snake_case")]
 enum RestoreOutput {
     Quarantined {
-        leases: Vec<String>,
         freshness: String,
     },
-    Accepted {
-        leases: Vec<String>,
-    },
+    Accepted,
     Listed {
         conversations: Vec<String>,
     },
@@ -166,14 +152,7 @@ pub fn run_backup_restore(arguments: &[std::ffi::OsString], output: &mut dyn Wri
         RestoreCommand::Accept {
             destination,
             namespace,
-            receipts,
-        } => accept(
-            output,
-            &policy,
-            &destination,
-            namespace.as_deref(),
-            &receipts,
-        ),
+        } => accept(output, &policy, &destination, namespace.as_deref()),
         RestoreCommand::List { destination } => list(output, &destination),
         RestoreCommand::Open {
             destination,
@@ -217,7 +196,7 @@ fn prepare_for_stress(
     {
         return 1;
     }
-    if accept(output, policy, destination, Some(namespace), &[]) != 0 {
+    if accept(output, policy, destination, Some(namespace)) != 0 {
         return 1;
     }
     write_prepare_report(output, namespace, &prepared.source, &prepared)
@@ -337,7 +316,6 @@ fn stage(
     print(
         output,
         &RestoreOutput::Quarantined {
-            leases: report.leases,
             freshness: report.freshness.as_str().to_owned(),
         },
         0,
@@ -349,7 +327,6 @@ fn accept(
     policy: &CedarInventoryPolicy,
     destination: &Path,
     namespace: Option<&Path>,
-    receipts: &[(String, String)],
 ) -> u8 {
     let roots = roots(destination);
     if let Some(namespace) = namespace {
@@ -369,25 +346,23 @@ fn accept(
             facts: person(RestoreAction::Accept),
             quarantine: &roots.quarantine,
             live: &roots.live,
-            receipts: &ArgReceipts(receipts.to_vec()),
         },
         policy,
         &audit,
         &DirectoryQuarantine,
     );
-    let report = match report {
-        Ok(report) => report,
+    match report {
+        Ok(()) => {}
         // The quarantine is spent once the rename has happened. A later
         // accept, including one whose pointer write failed, still records
         // the pointer when the live tree is already the authority.
         Err(error @ (RestoreFault::LiveOccupied | RestoreFault::Tamper)) => {
-            match accepted_leases(&roots.live, &audit) {
-                Ok(leases) => AcceptReport { leases },
-                Err(_) => return refused(output, error),
+            if already_accepted(&roots.live, &audit).is_err() {
+                return refused(output, error);
             }
         }
         Err(error) => return refused(output, error),
-    };
+    }
     if let Some(namespace) = namespace {
         let source = match recorded_source(destination) {
             Ok(source) => source,
@@ -403,13 +378,7 @@ fn accept(
             return refused(output, RestoreFault::Unreadable);
         }
     }
-    print(
-        output,
-        &RestoreOutput::Accepted {
-            leases: report.leases,
-        },
-        0,
-    )
+    print(output, &RestoreOutput::Accepted, 0)
 }
 
 fn list(output: &mut dyn Write, destination: &Path) -> u8 {
@@ -495,14 +464,11 @@ fn serving_namespace_is_foreign(namespace: &Path, live: &Path) -> bool {
     (metadata.is_file() || sessions.is_file()) && !restore_install_matches(namespace, live)
 }
 
-fn accepted_leases(
-    live: &Path,
-    audit: &FileRestoreAudit<WallClock>,
-) -> Result<Vec<String>, RestoreFault> {
+fn already_accepted(live: &Path, audit: &FileRestoreAudit<WallClock>) -> Result<(), RestoreFault> {
     confirm_accepted(live, &DirectoryQuarantine, audit)?;
     let anchored = DirectoryQuarantine.anchor(live)?;
     let loaded = DirectoryQuarantine.load(&anchored)?;
-    Ok(read_journal(&loaded.journal)?.leases)
+    read_journal(&loaded.journal).map(|_| ())
 }
 
 fn later_text(path: &Path) -> Result<String, RestoreFault> {

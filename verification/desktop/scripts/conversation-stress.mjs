@@ -273,6 +273,12 @@ import {
  *               again: it upgrades the file to the current version, lists every
  *               conversation it listed before, and the message sent in the
  *               window after it is answered
+ *   resume      Settings › Terminal turns resume on with a rule allowing one
+ *               program; two terminals each run a program that reports
+ *               itself (OSC 7577), and Settings says only the allowed one
+ *               comes back. After a gateway restart only that one is back,
+ *               by the same id, running again and kept again; ending it
+ *               forgets it, and resume is turned off in Settings after
  *   channel     a channel is made from the sidebar's +, asked in the
  *               transcript: named, a folder chosen in the host's picker that
  *               agents may not work in (the root) refused at its question,
@@ -469,7 +475,7 @@ import { freePort } from "./lib/server.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import {
-  asEarlierPlaces,
+  asOlderHere,
   asOlderBuild,
   metadataFile,
   schemaVersion,
@@ -2189,6 +2195,61 @@ async function switchesBack(run, grid, row, listed, opened, word) {
   )
   if (second) await run.client.terminals.close(second.terminalId).catch(() => {})
   return Boolean(second && away && back)
+}
+
+/** Opens Settings › Terminal, where a person turns resume on and names programs. */
+async function openTerminalSettings(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page
+    .locator(css.settingsCategory, { hasText: "Terminal" })
+    .click({ timeout: 10_000 })
+  await page
+    .locator(selectorFor.settingRow("terminal-resume"))
+    .waitFor({ timeout: 10_000 })
+}
+
+/** Back to the workspace from Settings. */
+async function leaveTerminalSettings(page) {
+  if (!(await page.$(css.settings))) return
+  await page.getByRole("button", { name: names.leaveSettings }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * Opens a terminal with ⌘J and types `command` into it, as a person does;
+ * the gateway's entry for it once `shown` is on its screen, else undefined.
+ */
+async function runInNewTerminal(run, command, shown) {
+  const page = run.page
+  const listed = await run.client.terminals.list()
+  await page.keyboard.press(keys.newTerminal)
+  const grid = page.locator(
+    `.workspace-terminal-pane${css.focusedPane} [data-slot="terminal-grid"]`,
+  )
+  if (
+    !(await grid.waitFor({ timeout: 15_000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    return undefined
+  const opened = await waitFor(async () => {
+    const now = await run.client.terminals.list()
+    return now.find(
+      (each) =>
+        each.kind === "shell" &&
+        !listed.some((old) => old.terminalId === each.terminalId),
+    )
+  }, 10_000)
+  if (!opened) return undefined
+  await grid.click()
+  await page.keyboard.type(command)
+  await page.keyboard.press(keys.enter)
+  const ran = await waitFor(
+    async () => (await gridRows(grid)).some((row) => row.trim() === shown),
+    15_000,
+  )
+  return ran ? opened : undefined
 }
 
 /** A terminal grid's rows as text, top to bottom. */
@@ -6776,26 +6837,22 @@ const steps = {
         const count = failures.length
         const old = run.client
         run.restarts += 1
-        let earlier
         await run.stack.gateway.restart("SIGTERM", async () => {
           older = asOlderBuild(path)
-          // And every place record as the two files an older build kept.
-          earlier = asEarlierPlaces(conversationsOf(run))
+          // And the main conversation's place as an older build kept it:
+          // this build writes no place record, and reads that one as here.
+          asOlderHere(conversationsOf(run), run.main.id)
           // And one of them as an older build placed it: on a paired
           // worker, which no build runs now (ADR 1417).
           strandOnWorker(conversationsOf(run), stranded)
         })
         old.close()
         run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-        log(
-          `upgrade: restarted on a version ${older} file and ${earlier.length} older place files`,
-        )
+        log(`upgrade: restarted on a version ${older} file and an older place record`)
         if (older === CURRENT_METADATA_VERSION)
           failures.push(
             "the conversation metadata could not be downgraded without losing its app namespace",
           )
-        if (!earlier.includes(run.main.id))
-          failures.push("the main conversation had no place record to turn back")
         const version = schemaVersion(path)
         if (version !== CURRENT_METADATA_VERSION)
           failures.push(
@@ -10743,6 +10800,204 @@ const steps = {
       )
         failures.push("the session list still shows the ended terminal")
       await showMainAgain(run, failures)
+    })
+  },
+  async resume(run, step, failures) {
+    if (!(await terminalsBuilt(run, failures))) return
+    await run.exclusive(async () => {
+      const page = run.page
+      const word = `stress-resume-r${step.index}-s${run.knobs.seed}`
+      // The probe reports itself (OSC 7577) and waits; a second name for it
+      // that no rule allows reports the same way.
+      const probe = join(
+        repoRoot,
+        "verification/desktop/scripts/fixtures/resume-probe.sh",
+      )
+      const aside = mkdtempSync(join(tmpdir(), "nessa-resume-"))
+      const other = join(aside, "other-probe.sh")
+      symlinkSync(probe, other)
+      try {
+        // 1. Settings › Terminal: resume on, and a rule allowing the probe.
+        await openTerminalSettings(page)
+        const toggle = page.locator(
+          `${selectorFor.settingRow("terminal-resume")} [role='switch']`,
+        )
+        await toggle.waitFor({ timeout: 10_000 })
+        if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click()
+        await page.locator("[data-terminal-resume-program]").fill("resume-probe.sh")
+        await page.locator("[data-terminal-resume-add-button]").click()
+        const ruled = await waitFor(async () => {
+          const kept = await run.client.terminals.resumeSettings()
+          return (
+            kept.settings.enabled &&
+            kept.settings.rules.some(
+              (rule) => rule.program === "resume-probe.sh" && rule.action === "allow",
+            )
+          )
+        }, 10_000)
+        if (!ruled) {
+          failures.push(
+            "Settings › Terminal did not keep resume on with the probe allowed",
+          )
+          return
+        }
+        if (
+          !(await page
+            .locator('[data-terminal-resume-rule="resume-probe.sh"]')
+            .waitFor({ timeout: 5_000 })
+            .then(
+              () => true,
+              () => false,
+            ))
+        )
+          failures.push("Settings › Terminal does not list the rule it kept")
+        await leaveTerminalSettings(page)
+
+        // 2. Two terminals, each running a program that asks to come back.
+        await showMainAgain(run, failures)
+        const allowed = await runInNewTerminal(
+          run,
+          `${probe} kept ${word}`,
+          `kept ${word}`,
+        )
+        const refused = await runInNewTerminal(
+          run,
+          `${other} kept ${word}-other`,
+          `kept ${word}-other`,
+        )
+        if (!allowed || !refused) {
+          failures.push(
+            `a probe never ran in its terminal: ${JSON.stringify({ allowed: !!allowed, refused: !!refused })}`,
+          )
+          return
+        }
+        const reported = await waitFor(async () => {
+          const now = await run.client.terminals.list()
+          const command = (id) =>
+            now.find((each) => each.terminalId === id)?.resumeCommand
+          return (
+            command(allowed.terminalId)?.includes(`resume-probe.sh resumed ${word}`) &&
+            command(refused.terminalId)?.includes(`other-probe.sh resumed ${word}-other`)
+          )
+        }, 15_000)
+        if (!reported) {
+          failures.push(
+            `the gateway did not take both probes' reports: ${JSON.stringify(
+              (await run.client.terminals.list()).map((each) => [
+                each.title,
+                each.resumeCommand ?? null,
+              ]),
+            )}`,
+          )
+          return
+        }
+        // Settings lists both, and says only the allowed one comes back.
+        await openTerminalSettings(page)
+        for (const [terminal, back] of [
+          [allowed, "true"],
+          [refused, "false"],
+        ]) {
+          const row = page.locator(`[data-terminal-resume-kept="${terminal.terminalId}"]`)
+          const said = await waitFor(
+            async () =>
+              (await row
+                .getAttribute("data-terminal-resume-comes-back")
+                .catch(() => null)) === back,
+            10_000,
+          )
+          if (!said)
+            failures.push(
+              `Settings › Terminal does not say the ${back === "true" ? "allowed" : "other"} probe ${back === "true" ? "comes back" : "stays gone"}`,
+            )
+        }
+        await leaveTerminalSettings(page)
+
+        // 3. The gateway restarts: only the allowed probe is back, by the
+        // same id, started again as it asked.
+        await run.restartConsole.during(run.opened, async () => {
+          const before = failures.length
+          const old = run.client
+          run.restarts += 1
+          await run.stack.gateway.restart("SIGTERM")
+          old.close()
+          run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          const back = await waitFor(async () => {
+            const now = await run.client.terminals.list()
+            return now.find(
+              (each) =>
+                each.terminalId === allowed.terminalId && each.resumedAtMs !== undefined,
+            )
+          }, 30_000)
+          const listed = await run.client.terminals.list()
+          if (!back)
+            failures.push(
+              `the allowed probe's terminal is not back after the restart: ${JSON.stringify(listed.map((each) => each.terminalId))}`,
+            )
+          if (listed.some((each) => each.terminalId === refused.terminalId))
+            failures.push("a program no rule allows came back after the restart")
+          const kept = await run.client.terminals.resumeSettings()
+          if (kept.saved.some((saved) => saved.terminalId === refused.terminalId))
+            failures.push("the program no rule allows is still kept after the restart")
+          if (!back) return failures.length === before
+          if (!(await run.restartConsole.readable(30_000)))
+            failures.push("the window did not come back after the restart")
+          // Its row shows it, running the probe again.
+          const row = page.locator(`[data-terminal-row="${allowed.terminalId}"]`)
+          await row.click({ timeout: 15_000 }).catch(() => {})
+          const grid = page.locator(
+            `.workspace-terminal-pane${css.focusedPane} [data-slot="terminal-grid"]`,
+          )
+          const resumed = await waitFor(
+            async () =>
+              (await gridRows(grid)).some((each) => each.trim() === `resumed ${word}`),
+            20_000,
+          )
+          if (!resumed)
+            failures.push(
+              `the resumed terminal does not show its program running again: ${JSON.stringify((await gridRows(grid)).filter((each) => each.trim()).slice(-4))}`,
+            )
+          // Started again, the probe reports again: it would come back again.
+          const again = await waitFor(async () => {
+            const now = await run.client.terminals.resumeSettings()
+            return now.saved.find(
+              (saved) => saved.terminalId === allowed.terminalId && saved.comesBack,
+            )
+          }, 15_000)
+          if (!again) failures.push("the resumed probe's new report was not kept")
+          // 4. Ending its terminal forgets it.
+          await page
+            .locator(`.workspace-terminal-pane${css.focusedPane}`)
+            .getByRole("button", { name: "End Terminal" })
+            .click({ timeout: 10_000 })
+            .catch(() => run.client.terminals.close(allowed.terminalId))
+          const forgotten = await waitFor(async () => {
+            const now = await run.client.terminals.resumeSettings()
+            return !now.saved.some((saved) => saved.terminalId === allowed.terminalId)
+          }, 10_000)
+          if (!forgotten)
+            failures.push("ending the resumed terminal did not forget its program")
+          return failures.length === before
+        })
+      } finally {
+        // 5. Resume off again, in Settings, as the person leaves it.
+        await openTerminalSettings(page).catch(() => {})
+        const toggle = page.locator(
+          `${selectorFor.settingRow("terminal-resume")} [role='switch']`,
+        )
+        if ((await toggle.getAttribute("aria-checked").catch(() => null)) === "true")
+          await toggle.click().catch(() => {})
+        const off = await waitFor(
+          async () => !(await run.client.terminals.resumeSettings()).settings.enabled,
+          10_000,
+        )
+        if (!off) failures.push("Settings › Terminal did not turn resume off")
+        await leaveTerminalSettings(page).catch(() => {})
+        for (const each of await run.client.terminals.list().catch(() => []))
+          if (each.title.includes("probe") || each.resumeCommand)
+            await run.client.terminals.close(each.terminalId).catch(() => {})
+        rmSync(aside, { recursive: true, force: true })
+        await showMainAgain(run, failures)
+      }
     })
   },
   async run(run, step, failures) {

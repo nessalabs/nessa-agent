@@ -40,6 +40,11 @@
  *   (Chat settings › Decisions:      (`client.conversation`
  *    auto-pick and its wait)          decisionSettings and setDecisionSettings)
  *
+ *   ui/terminal-resume-rows.tsx ──▶ model/terminal-resume.ts
+ *   (Terminal › Resume: the         (a rule as typed and read)
+ *    switch, program rules and     adapters/terminal-resume-gateway.ts
+ *    kept programs)                (`client.terminals` resume methods)
+ *
  *   ui/permission-rule-rows.tsx ──▶ adapters/permission-rules-gateway.ts
  *   (Access: remembered rules     (`client.conversation` list and
  *    and revoke)                   revokePermissionRule)
@@ -51,11 +56,6 @@
  *          ▲
  *          └── adapters/github-avatar.tsx (the account's picture from
  *              GitHub, composed by `main.tsx`; the row alone draws an initial)
- *
- *   ui/saved-logins.tsx ──▶ adapters/saved-logins-gateway.ts
- *   (Accounts: a login per   (`client.logins` read into the window's
- *    agent; a computer's      words, with a sentence for each code)
- *    switch in Devices)
  *
  *   ui/review-notice-rows.tsx
  *   (Access: the button that asks the browser to allow a notification
@@ -74,7 +74,6 @@ export { LinkedDevicesProvider } from "./ui/linked-devices-tab"
 export { GatewayRegistryProvider } from "./ui/gateways-tab"
 export { GithubProvider } from "./ui/github-row"
 export { VoiceKeyProvider } from "./ui/voice-key-row"
-export { SavedLoginsProvider } from "./ui/saved-logins"
 export { NativeHooksProvider } from "./ui/native-hooks-rows"
 export { DecisionSettingsProvider, useAutoPickWords } from "./ui/decision-settings-rows"
 export {
@@ -83,6 +82,12 @@ export {
   type DecisionSettingsGateway,
 } from "./adapters/decision-settings-gateway"
 export { PermissionRulesProvider } from "./ui/permission-rule-rows"
+export { TerminalResumeProvider } from "./ui/terminal-resume-rows"
+export {
+  terminalResumeGateway,
+  type TerminalResumeClient,
+  type TerminalResumeGateway,
+} from "./adapters/terminal-resume-gateway"
 export {
   mcpServersGateway,
   type McpServersClient,
@@ -104,11 +109,6 @@ export {
   type GithubGateway,
 } from "./adapters/github-gateway"
 export { githubAvatar } from "./adapters/github-avatar"
-export {
-  savedLoginsGateway,
-  type SavedLoginsClient,
-  type SavedLoginsGateway,
-} from "./adapters/saved-logins-gateway"
 export {
   permissionRulesGateway,
   type PermissionRulesClient,

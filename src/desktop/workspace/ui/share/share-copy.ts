@@ -21,7 +21,7 @@ export const changeFailureCopy: Record<SharingFailure, string> = {
   "not-paired":
     "That device is no longer linked to you, or may not read conversations. Link it again in Settings › Linked devices.",
   invalid:
-    "The gateway didn’t accept that grant. Check the tool patterns and hosts, then try again.",
+    "The gateway didn’t accept that grant. Check the tool patterns, then try again.",
   deleted: "This conversation was deleted.",
   "not-found": "The gateway doesn’t have this conversation.",
   busy: "The gateway is busy. Nothing changed. Try again in a moment.",
@@ -58,11 +58,11 @@ export const readFailureCopy: Record<SharingFailure, string> = {
 }
 
 /**
- * Why the dialog could not read the linked devices and hosts it offers. The
+ * Why the dialog could not read the linked devices it offers. The
  * grants it did read stay, and each can still be revoked.
  */
 const choicesUnread =
-  "The gateway couldn’t list your linked devices and the hosts they could use. You can still revoke a device below."
+  "The gateway couldn’t list your linked devices. You can still revoke a device below."
 export const choicesFailureCopy: Record<SharingFailure, string> = {
   "not-paired": choicesUnread,
   invalid: choicesUnread,
@@ -113,33 +113,24 @@ export const presetCopy: Record<
 
 /**
  * What a policy does not stop, said beside the Drive controls (nessa_ui#128).
- * The one note there: what the hosts and the conversation's mode allow is
- * said by the controls and the gateway's refusal (`changeFailureCopy`).
+ * The one note there: what the conversation's mode allows is said by the
+ * gateway's refusal (`changeFailureCopy`).
  */
 export const driveNote =
   "Calls the agent doesn’t ask about aren’t checked: Claude reads files without asking, and Codex runs commands in its read-only sandbox without asking. A deny pattern doesn’t stop those."
 
-/** A host's list, said in words: "devbox and build", or "nowhere". */
-function hostsLine(hosts: readonly string[]): string {
-  if (hosts.length === 0) return "commands nowhere"
-  if (hosts.length === 1) return `commands on ${hosts[0]}`
-  return `commands on ${hosts.slice(0, -1).join(", ")} and ${hosts[hosts.length - 1]}`
-}
-
 function policyLine(policy: ToolPolicy): string {
-  const tools =
-    policy.kind === "preset"
-      ? presetCopy[policy.preset].label
-      : [
-          policy.allow.length ? `allows ${policy.allow.join(", ")}` : null,
-          policy.deny.length ? `denies ${policy.deny.join(", ")}` : null,
-        ]
-          .filter((part) => part !== null)
-          .join(", ")
-  return `${tools}, ${hostsLine(policy.commandHosts)}`
+  return policy.kind === "preset"
+    ? presetCopy[policy.preset].label
+    : [
+        policy.allow.length ? `allows ${policy.allow.join(", ")}` : null,
+        policy.deny.length ? `denies ${policy.deny.join(", ")}` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(", ")
 }
 
-/** A grant in one line: its role, and for Drive its tools and hosts. */
+/** A grant in one line: its role, and for Drive its tools. */
 export function grantSummary(grant: ShareGrant): string {
   const role = roleCopy[grant.role].label
   return grant.policy ? `${role} · ${policyLine(grant.policy)}` : role
@@ -158,7 +149,6 @@ export function draftReasonCopy(reason: DraftHold, limits: SharingLimits): strin
       "This device’s sharing changed since this draft began. Start again from what it holds now.",
     "no-pattern": "Name at least one tool to allow or deny.",
     "too-many-patterns": `At most ${limits.patterns} tools in each of Allow and Deny.`,
-    "too-many-hosts": `At most ${limits.hosts} hosts.`,
   }
   return said[reason]
 }

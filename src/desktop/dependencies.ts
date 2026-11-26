@@ -1,4 +1,3 @@
-import { codexChatgptSignIn } from "../provider-authentication/model/chatgpt-sign-in"
 import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
 import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
 import {
@@ -75,15 +74,14 @@ import {
 import {
   decisionSettingsGateway,
   githubGateway,
-  savedLoginsGateway,
-  type SavedLoginsClient,
-  type SavedLoginsGateway,
   linkedDevicesGateway,
   mcpServersGateway,
   nativeHooksGateway,
   permissionRulesGateway,
+  terminalResumeGateway,
   type DecisionSettingsClient,
   type DecisionSettingsGateway,
+  type TerminalResumeGateway,
   type GithubClient,
   type GithubGateway,
   type LinkedDevicesClient,
@@ -174,6 +172,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly nativeHooks: NativeHooksGateway | undefined
   /** Auto-pick, for Settings › Chat settings › Decisions; absent without a gateway. Provided by `main.tsx`. */
   readonly decisionSettings: DecisionSettingsGateway | undefined
+  /** Terminal resume settings and kept programs, for Settings › Terminal; absent without a gateway. Provided by `main.tsx`. */
+  readonly terminalResume: TerminalResumeGateway | undefined
   /** Remembered permission rules, for Settings; absent without a gateway. Provided by `main.tsx`. */
   readonly permissionRules: PermissionRulesGateway | undefined
   /** The gateway's GitHub sign-in, for Settings; absent without a gateway. Provided by `main.tsx`. */
@@ -186,8 +186,6 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly voice: VoiceGateway | undefined
   /** The saved voice key, for Settings; absent without a gateway. */
   readonly voiceKey: VoiceKeyGateway | undefined
-  /** The agents' saved logins, for Settings and Devices; absent without a gateway. */
-  readonly savedLogins: SavedLoginsGateway | undefined
   readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
@@ -215,8 +213,6 @@ export function createDesktopDependencies(
     workspace?: WorkspaceSource
     signInToProvider?: WorkspaceDependencies["signInToProvider"]
     providerLoginAvailable?: WorkspaceDependencies["providerLoginAvailable"]
-    /** Hands an address to the person's own browser, where the host can. */
-    openInBrowser?: (url: string) => void
     /**
      * Connects to the gateway whose conversations the window shows, and whose
      * servers' apps it draws where `apps` are; ignored beside `workspace`.
@@ -376,16 +372,6 @@ export function createDesktopDependencies(
       : undefined,
     signInToProvider: options.signInToProvider,
     providerLoginAvailable: options.providerLoginAvailable,
-    // A ChatGPT account for Codex on other computers, kept by the gateway.
-    codexChatgptSignIn: source
-      ? codexChatgptSignIn({
-          status: async () => (await (await source.connected()).logins.status()).chatgpt,
-          begin: async (accountId) =>
-            (await (await source.connected()).logins.chatgptSignIn(accountId)).chatgpt,
-          open: options.openInBrowser,
-          pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        })
-      : undefined,
     mcpServers: source
       ? mcpServersGateway({ connected: () => source.connected(), after })
       : undefined,
@@ -399,6 +385,9 @@ export function createDesktopDependencies(
     decisionSettings: source
       ? decisionSettingsGateway({ connected: () => source.connected() })
       : undefined,
+    terminalResume: source
+      ? terminalResumeGateway({ connected: () => source.connected() })
+      : undefined,
     permissionRules: source
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
@@ -409,7 +398,6 @@ export function createDesktopDependencies(
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
     voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
-    savedLogins: source ? savedLoginsGateway(() => source.connected()) : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source
@@ -471,7 +459,6 @@ export function createDesktopDependencies(
 type WindowGatewayClient = GatewayClient &
   DevicesClient &
   VoiceClient &
-  SavedLoginsClient &
   GithubClient & {
     readonly vault: VaultApi
     readonly boat: BoatApi

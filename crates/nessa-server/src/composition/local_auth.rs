@@ -276,9 +276,6 @@ pub(super) async fn product_state(
     let vault = super::vault::compose(namespace);
     #[cfg(unix)]
     let _ = rustls::crypto::ring::default_provider().install_default();
-    // One store per agent's saved login, shared by everything that reads
-    // or writes it (issue #1260).
-    let login_stores = crate::logins::infrastructure::login_stores(&vault.vault);
     #[cfg(unix)]
     let (workspace_service, cloud_boxes_service) = {
         let boat_settings = Arc::new(VaultSettings(vault.vault.clone()));
@@ -421,11 +418,6 @@ pub(super) async fn product_state(
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     // Voice calls, with their key in the same vault.
     let voice = super::voice::compose(namespace, vault.vault.clone());
-    // The agents' saved logins, in the same vault (issue #1260).
-    let login_changed: Arc<dyn Fn(nessa_protocol::agents::AgentId) + Send + Sync> =
-        Arc::new(|_| {});
-    let saved_logins =
-        super::logins::compose(namespace, vault.vault.clone(), login_stores, login_changed)?;
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.
@@ -595,19 +587,31 @@ pub(super) async fn product_state(
     if let Some(voice) = voice {
         product = product.with_voice(voice);
     }
-    product = product.with_logins(saved_logins);
     // Terminals (docs/design/terminals.md): the engine bootstrap prepared
     // before the async runtime, when this build and process have one. With
     // none, every `terminal.*` answers terminal_unavailable, list included,
     // so no window offers a terminal it cannot open.
     if let Some(engine) = crate::terminal::prepared_engine() {
-        product = product.with_terminals(
-            crate::terminal::TerminalHub::new(
-                Some(engine),
-                Arc::new(crate::terminal::SystemTerminalClock),
-            ),
-            Arc::new(crate::terminal::SystemTerminalHost),
+        // Programs that asked to come back (OSC 7577) are kept in
+        // `<namespace>/terminals`, readable by the person only, and the ones
+        // the person's rules allow are started again now, in terminals of
+        // the same ids, before any window lists them.
+        let hub = crate::terminal::TerminalHub::with_resume(
+            Some(engine),
+            Arc::new(crate::terminal::SystemTerminalClock),
+            Some(crate::terminal::ResumeParts {
+                store: Arc::new(crate::terminal::FileResumeStore::new(
+                    namespace.join("terminals"),
+                )),
+                processes: Arc::new(crate::terminal::SystemProcesses),
+            }),
         );
+        let host = Arc::new(crate::terminal::SystemTerminalHost);
+        let resumed = hub.resume_saved(host.as_ref());
+        if resumed > 0 {
+            tracing::info!(target: "nessa::terminal", resumed, "terminal programs resumed after restart");
+        }
+        product = product.with_terminals(hub, host);
     } else if let Some(reason) = crate::terminal::unprepared_reason() {
         tracing::warn!(reason, "terminals unavailable: pty runtime not built");
     }

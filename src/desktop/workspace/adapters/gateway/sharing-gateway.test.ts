@@ -51,7 +51,7 @@ const shares: ConversationSharesResult = {
     {
       credentialId: "laptop",
       capabilities: ["drive", "read", "comment"],
-      policy: { preset: "no_shell", commandHosts: ["devbox"] },
+      policy: { preset: "no_shell" },
       policyRevision: 1,
       grantedAtMs: 7,
     },
@@ -108,7 +108,7 @@ function client(
 }
 
 describe("reading a session's sharing", () => {
-  it("reads its grants, the linked devices and the schema's bounds, with no command hosts to offer", async () => {
+  it("reads its grants, the linked devices and the schema's bounds", async () => {
     const gateway = client()
     const source = sharingGateway({ connected: async () => gateway })
     const grants = await source.grants("c1")
@@ -121,14 +121,14 @@ describe("reading a session's sharing", () => {
       {
         credentialId: "tablet",
         role: "drive",
-        policy: { kind: "rules", allow: ["Read"], deny: [], commandHosts: [] },
+        policy: { kind: "rules", allow: ["Read"], deny: [] },
         policyRevision: 3,
         grantedAtMs: 6,
       },
       {
         credentialId: "laptop",
         role: "drive",
-        policy: { kind: "preset", preset: "no_shell", commandHosts: ["devbox"] },
+        policy: { kind: "preset", preset: "no_shell" },
         policyRevision: 1,
         grantedAtMs: 7,
       },
@@ -136,13 +136,10 @@ describe("reading a session's sharing", () => {
     // Not the session's own, not revoked, not one holding more than reading,
     // and not the owner's phone, which reads every chat already.
     expect(read.targets.map((target) => target.credentialId)).toEqual(["phone", "tablet"])
-    expect(read.commandHosts).toEqual([])
     expect(read.limits).toBe(toolPolicyBounds)
     expect(read.limits).toEqual({
       patterns: 16,
       patternBytes: 48,
-      hosts: 16,
-      hostBytes: 253,
     })
   })
 
@@ -393,7 +390,7 @@ describe("sharing and revoking", () => {
       {
         credentialId: "phone",
         role: "drive",
-        policy: { kind: "rules", allow: ["Read"], deny: [], commandHosts: ["devbox"] },
+        policy: { kind: "rules", allow: ["Read"], deny: [] },
         expectedPolicyRevision: 4,
       },
       "req-2",
@@ -402,7 +399,7 @@ describe("sharing and revoking", () => {
       "c1",
       "phone",
       ["read", "comment", "drive"],
-      { allow: ["Read"], deny: [], commandHosts: ["devbox"] },
+      { allow: ["Read"], deny: [] },
       { requestId: "req-2", expectedPolicyRevision: 4 },
     )
     await source.unshare("c1", "phone", 9, "req-3")
@@ -412,13 +409,12 @@ describe("sharing and revoking", () => {
     })
   })
 
-  it("names hosts on the wire only when the policy has some", () => {
-    expect(wirePolicy({ kind: "preset", preset: "all", commandHosts: [] })).toEqual({
-      preset: "all",
+  it("puts a policy on the wire as its preset, or its allow and deny", () => {
+    expect(wirePolicy({ kind: "preset", preset: "all" })).toEqual({ preset: "all" })
+    expect(wirePolicy({ kind: "rules", allow: [], deny: ["Write"] })).toEqual({
+      allow: [],
+      deny: ["Write"],
     })
-    expect(
-      wirePolicy({ kind: "rules", allow: [], deny: ["Write"], commandHosts: [] }),
-    ).toEqual({ allow: [], deny: ["Write"] })
   })
 })
 

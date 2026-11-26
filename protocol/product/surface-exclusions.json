@@ -18,5 +18,8 @@
   "terminal.input": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
   "terminal.history": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
   "terminal.close": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
-  "terminal.rename": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+  "terminal.rename": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does.",
+  "terminal.resumeSettings": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it.",
+  "terminal.setResumeSettings": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it.",
+  "terminal.forgetSaved": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
 }

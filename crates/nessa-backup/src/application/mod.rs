@@ -35,7 +35,7 @@ pub use ports::{
     DecisionAuditError, DeferredSessionSource, DeletionLogStore, ExportClock, ExportSource,
     FenceSource, FetchProgress, InventoryAction, InventoryCapturePolicyEvaluator, InventoryCause,
     InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
-    InventoryReconciliationLease, JournalFields, LeaseReceipts, LogStoreError, MacError, MacKey,
+    InventoryReconciliationLease, JournalFields, LogStoreError, MacError, MacKey,
     ManifestPublisher, MutationAdmission, PinnedStore, PublicationIds, PublishedRecord,
     RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SealFields,
     SessionCut, SessionSourceError, StagingIds,
@@ -44,8 +44,8 @@ pub use ports::{
 pub use restore::ordered_roots;
 pub use restore::{
     accept_quarantine, accepted_tree_matches, open_deferred_conversation, root_posture,
-    servable_deferred_sessions, stage_quarantine, AcceptReport, AcceptRequest, AnchoredRoot,
-    CutMaterializer, LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted, PublishedSession,
-    QuarantineLayout, RestoreHold, SealedInventoryReader, SessionAttempt, StageReport,
-    StageRequest, StagedTreeOwner, Staging, TreeId,
+    servable_deferred_sessions, stage_quarantine, AcceptRequest, AnchoredRoot, CutMaterializer,
+    LoadedTree, OpenReport, OpenRequest, PreparedCut, Promoted, PublishedSession, QuarantineLayout,
+    RestoreHold, SealedInventoryReader, SessionAttempt, StageReport, StageRequest, StagedTreeOwner,
+    Staging, TreeId,
 };

@@ -1316,7 +1316,7 @@ export const ConversationToolPreset = {
 } as const
 export type ConversationToolPreset =
   (typeof ConversationToolPreset)[keyof typeof ConversationToolPreset]
-/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. An allowed run goes only to a host commandHosts names and the gateway grants commands on, and runs only a program the gateway allows. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads. */
+/** The tool policy a drive grant's turns run under: either preset alone, or allow and deny together. Allow and deny each hold at most 16 patterns, and at least one of the two holds one (both empty is refused); each pattern is 1 to 48 UTF-8 bytes with no surrounding whitespace and no control character; anything else is refused invalid_request. A pattern's * matches any run of characters and every other character is itself; a pattern matches a tool's name as the agent or the gateway names it (Read, read, run), and a deny wins over an allow. Every tool call a drive turn's agent asks permission for, and the gateway's own run, artifacts_publish and artifacts_fetch, is checked against the policy at the revision the turn was admitted under; a refused call is answered as refused and the turn goes on. One thing a policy does not limit: what the agent does in the ask approval mode without asking (Claude reads files; Codex runs commands in its read-only, offline sandbox), so a deny pattern naming a read tool does not stop those reads. */
 export interface ConversationToolPolicy {
   /** A named policy. Present alone, without allow or deny. */
   preset?: ConversationToolPreset
@@ -1324,8 +1324,6 @@ export interface ConversationToolPolicy {
   allow?: string[]
   /** Tools the holder's turns may never call. Present with allow, without preset. */
   deny?: string[]
-  /** The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host. */
-  commandHosts?: string[]
 }
 /** Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and cannot be followed. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
 export interface ConversationShareParams {
@@ -1968,16 +1966,13 @@ export const McpServersErrorCode = {
 } as const
 export type McpServersErrorCode =
   (typeof McpServersErrorCode)[keyof typeof McpServersErrorCode]
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. agent_sign_in_required means the agent could not start because it is not signed in where the conversation runs (the provider answered that it needs authentication): nothing was sent to it, and signing it in there is what changes the answer; a switchAgent refused so leaves the conversation on its agent. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming any environment other than here, or a command on a conversation an older build placed on another computer: every gateway runs only its own agents (ADR 1417), so nothing ran, and the conversation's history stays readable. environment_unavailable is a workspace that could not be opened: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once it is available. environment_version_mismatch, environment_platform_unsupported and environment_install_failed are refusals older builds recorded for a conversation placed on another computer; this build states none of them, and reads them in a lease's history. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. agent_sign_in_required means the agent could not start because it is not signed in where the conversation runs (the provider answered that it needs authentication): nothing was sent to it, and signing it in there is what changes the answer; a switchAgent refused so leaves the conversation on its agent. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. sandbox_unavailable means no lease could be granted to run the agent because the sandbox it asks for is not one both its agent binding and the place it would run can enforce; nothing ran, the refusal is in the conversation's records, and repeating the command fails the same way until that configuration changes. environment_not_configured is a create naming any environment other than here, or a command on a conversation an older build placed on another computer: every gateway runs only its own agents (ADR 1417), so nothing ran, and the conversation's history stays readable. environment_unavailable is a workspace that could not be opened: no lease was granted, the refusal is in the conversation's records, and the same command may succeed once it is available. A lease refusal an older build recorded for a conversation placed on another computer is read in its lease history (ConversationLeaseRefusal), not answered as a code here. The image codes answer `attachment.begin`, a message naming uploads, and `artifact.read`: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image or artifact this conversation does not hold — never uploaded or published into it, expired, or released when it closed — which also ends an artifact.read; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment.write answers four codes of its own, and each refusal of a piece ends that upload: upload_ticket_invalid is a ticket that cannot be used (never issued, expired, or already spent); upload_failed is an upload that stopped short of being kept (a piece out of order, bytes that did not match the declared size or digest, pieces that stopped past the upload deadline, or a conversation that let go of its files meanwhile), and beginning again is the whole remedy; unsupported_image is bytes that are not an image the gateway can read; image_too_large is an image past what the model takes even once reduced. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. conversation_deleted refuses every command its owner sends on a conversation somebody deleted, except deleting it again; anyone else is told conversation_not_found. Its identity is never reused, so a surface still holding it should let it go. conversation_erasure_incomplete is a delete that did happen — the conversation is gone and every command on it is refused — whose erasure of stored data did not finish; repeating the delete, and each gateway start, tries again, but an agent that keeps refusing to delete its own session, or a damaged history, needs the operator. The mcp_ codes refuse an MCP App's request (mcp.callTool, mcp.readResource, mcp.sendMessage, mcp.updateModelContext): mcp_app_unknown, the app is not an MCP tool call with a UI in this conversation, or the resource is not an app's; mcp_server_mismatch, it names another server than the app's; mcp_tool_not_for_app, the tool is not listed with visibility including app; mcp_session_unavailable, the conversation has no open session of that server, or it ended; mcp_approval_denied and mcp_approval_expired, the person refused, or did not answer within x-mcpAppCallTiming.reviewDeadlineMs; mcp_cancelled, the review was withdrawn because the request was cancelled, the app was torn down, or the conversation ended, or, with no review withdrawn, the app's mount was released or the opening it was drawn in ended (closed, deleted, stopped, another begun, or the gateway stopping) before the request took effect, which for mcp.sendMessage sends nothing and opens nothing; mcp_request_too_large and mcp_result_too_large, past a request's bound (the arguments' 32 KiB, a message's input bound or its review's room, a context's 8 KiB) and a result's 56 KiB; turn_running also refuses an app's message while a turn runs or input waits; mcp_timed_out, the server did not answer in time; mcp_remote_error, the server answered with a JSON-RPC error (McpRemoteErrorDetails), or with something that is no MCP answer (no details). mcp_unauthorized, the remote endpoint refused the caller and the tool was not run; the answer carries no token. mcp_unreachable, the remote endpoint could not be reached and nothing was retained. mcp_insufficient_scope, the caller's scope was not enough and the call was not retried. These three are not mcp_session_unavailable: the session was not reported as ended. capabilities_refused: conversation.share asked Cedar's grant.comment or grant.drive before writing those capabilities and was denied. details.policies names the Cedar policy ids; it is empty when no permit matched. Nothing was written. The share does not match a gateway principal on its own. share_target_not_paired: conversation.share named a credential that is not an active paired device or peer gateway of the conversation's owner holding conversation.read. share_grant_changed: conversation.share or conversation.unshare named an expectedPolicyRevision the device's grant no longer holds: it was changed or revoked since that revision was read; nothing was changed, and conversation.shares says what it holds now. idempotency_conflict: conversation.message reused a requestId that already left another note (another text, delivery, surface or authority; the same grant at a later policy revision is the same authority); nothing was saved, and the first note stands. message_quota_exceeded: conversation.message found the conversation holding its most notes, or its author past its rate; nothing was saved. drive_policy_unenforceable: a Drive grant's conversation.send or conversation.steer where its tools cannot all be checked against the grant's tool policy (an OpenCode conversation, an approval mode other than ask, native hooks allowed, or the policy unreadable); nothing was saved or sent, and the same command fails the same way until the owner changes that. revoked: a Drive grant's conversation.send, or a steer that is queued rather than injected, whose grant was revoked or changed after the admitted revision was read and before the turn was saved; nothing was saved, the command receipt is settled as no_effect, and retrying that same request is answered revoked again. A new request is admitted only under the grant as it stands now. revoked_after_save: a native steer that was saved and then refused because the grant moved before injection; the saved attempt is settled as refused and nothing reached the agent. The command receipt is settled as refused_after_save, and retrying that same request is answered revoked_after_save again and is not admitted again. Retrying it as a different initiation is a submission conflict. unavailable_after_save: a native steer that was saved and then could not be checked because the grant record could not be read before injection; nothing reached the agent. The command receipt is settled as unavailable_after_save, and retrying that same request is answered unavailable_after_save again and is not admitted again. A new request is admitted only under the grant as it stands now. channel_not_found: conversation.create named a channelId the caller has no channel under; nothing was created. deferred_source_unavailable: conversation.read of a restored conversation whose recorded version is no longer at its source. Nothing was fetched and no agent was started; other conversations are unchanged. deferred_source_changed: that recorded version no longer matches the source. Nothing was fetched and no agent was started; other conversations are unchanged. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
   SandboxUnavailable: "sandbox_unavailable",
   EnvironmentNotConfigured: "environment_not_configured",
   EnvironmentUnavailable: "environment_unavailable",
-  EnvironmentVersionMismatch: "environment_version_mismatch",
-  EnvironmentPlatformUnsupported: "environment_platform_unsupported",
-  EnvironmentInstallFailed: "environment_install_failed",
   ModelUnavailable: "model_unavailable",
   ApprovalModeUnavailable: "approval_mode_unavailable",
   ApprovalModeNotApplied: "approval_mode_not_applied",
@@ -4025,116 +4020,6 @@ export interface ConversationWebhookResetResult {
   /** Original native selection observation time in Unix milliseconds, retained unchanged on replay. */
   appliedAtMs: number
 }
-/** An agent whose sign-in the gateway can keep as a saved login. */
-export const LoginAgent = {
-  Claude: "claude",
-  Codex: "codex",
-  Opencode: "opencode",
-} as const
-export type LoginAgent = (typeof LoginAgent)[keyof typeof LoginAgent]
-/** Whether one agent has a saved login. The login itself is never returned. */
-export interface SavedLogin {
-  /** The agent. */
-  agent: LoginAgent
-  /** Whether a login is saved in the gateway's vault for it. */
-  saved: boolean
-}
-/** Result of every logins method: which agents have a saved login, handed to agents on the cloud boxes this gateway makes; this gateway's own machine never is. */
-export interface LoginsStatus {
-  /** One entry per agent, in the order claude, codex, opencode. */
-  logins: SavedLogin[]
-  /** The ChatGPT accounts Codex can use on other machines in place of its API key, and the sign-in. Absent when this gateway keeps none (ChatGPT sign-in is off this run). */
-  chatgpt?: ChatgptLogins
-}
-/** Save an agent's login in the gateway's vault, replacing any saved one (logins.save). Applies to agents opened after it on a machine that receives logins; an agent already open keeps the login it opened with. */
-export interface LoginsSaveParams {
-  /** The agent the login is for. */
-  agent: LoginAgent
-  /** The login: a Claude setup-token, or the agent's API key. Printable ASCII with no spaces. */
-  login: string
-}
-/** Delete an agent's saved login (logins.remove). Agents already open keep the one they opened with until they close. */
-export interface LoginsRemoveParams {
-  /** The agent. */
-  agent: LoginAgent
-}
-/** One ChatGPT account kept for Codex. Its tokens are never returned. */
-export interface ChatgptAccount {
-  /** The account, as the other ChatGPT methods name it. */
-  id: string
-  /** The email the account signed in with, as OpenAI's ID token gave it; empty when it gave none. */
-  email: string
-  /** Whether Codex on other machines is handed this account's token. At most one account is. */
-  inUse: boolean
-  /** Whether OpenAI refused to refresh it, so it must be signed in again before it is used. */
-  needsSignIn: boolean
-}
-/** How a ChatGPT sign-in ended. signed_in: the account is kept. declined: it was declined in the browser. incomplete: the browser came back without what a sign-in gives. wrong_account: signing an account in again came back as another account. exchange_failed: OpenAI did not give tokens for the sign-in. invalid_identity: OpenAI's ID token did not verify. plan_not_enabled: the account's plan did not grant use of ChatGPT tokens. too_many_accounts: as many accounts as are kept already are. not_saved: the tokens could not be kept in the vault. timed_out: the browser did not come back in time. cancelled: it was cancelled. replaced: another sign-in started in its place. listen_failed: this computer could not listen for the browser's return. */
-export const ChatgptSignInEnd = {
-  SignedIn: "signed_in",
-  Declined: "declined",
-  Incomplete: "incomplete",
-  WrongAccount: "wrong_account",
-  ExchangeFailed: "exchange_failed",
-  InvalidIdentity: "invalid_identity",
-  PlanNotEnabled: "plan_not_enabled",
-  TooManyAccounts: "too_many_accounts",
-  NotSaved: "not_saved",
-  TimedOut: "timed_out",
-  Cancelled: "cancelled",
-  Replaced: "replaced",
-  ListenFailed: "listen_failed",
-} as const
-export type ChatgptSignInEnd = (typeof ChatgptSignInEnd)[keyof typeof ChatgptSignInEnd]
-/** Where the ChatGPT sign-in stands: waiting for the browser to come back from authorizeUrl, or idle with how the last one this run ended. */
-export interface ChatgptSignIn {
-  /** Whether a sign-in waits for the browser. */
-  state: "idle" | "waiting"
-  /** While waiting: this attempt; while idle: the attempt last ended. A window that started one knows its own end by it. */
-  attempt?: string
-  /** While waiting: where to open the browser. It must be opened on the computer this gateway runs on, which the browser returns to. */
-  authorizeUrl?: string
-  /** While waiting: the account signing in again; absent for a new account. */
-  accountId?: string
-  /** While idle: how the last sign-in this run ended, if one did. */
-  last?: ChatgptSignInEnd
-}
-/** The ChatGPT accounts kept for Codex, and the sign-in. */
-export interface ChatgptLogins {
-  /** The accounts, in the order they were first signed in. */
-  accounts: ChatgptAccount[]
-  /** The sign-in. */
-  signIn: ChatgptSignIn
-  /** Only in the answer to logins.chatgptSignIn: the attempt that call started. signIn may already show another one, started meanwhile. */
-  started?: string
-}
-/** Start a ChatGPT sign-in for Codex (logins.chatgptSignIn): of an account again, or of a new one. Answers at once, waiting; open signIn.authorizeUrl and read logins.status until it is idle. A sign-in already waiting ends as replaced. */
-export interface LoginsChatgptSignInParams {
-  /** The account to sign in again; absent for a new account. */
-  accountId?: string
-}
-/** Choose the ChatGPT account Codex on other machines uses (logins.chatgptUse), or none, so its API key is used again. Applies to agents opened after it. */
-export interface LoginsChatgptUseParams {
-  /** The account, or null for none. */
-  accountId: string | null
-}
-/** Forget a ChatGPT account (logins.chatgptRemove), revoking its refresh token at OpenAI when it can. Agents already open keep the token they opened with until it is renewed. */
-export interface LoginsChatgptRemoveParams {
-  /** The account. */
-  accountId: string
-}
-/** Why the gateway refused a logins method. logins_not_configured: this gateway keeps no saved logins. logins_storage_unavailable: the vault could not read or change them; what was saved still is. logins_audit_unavailable: the change could not be recorded before it was made, so nothing changed. logins_change_unrecorded: the change was made but its outcome could not be recorded; read logins.status for how things stand. logins_too_many_devices: more paired machines are switched on than a list holds. logins_unknown_account: no ChatGPT account has that id. logins_chatgpt_not_configured: ChatGPT sign-in is off this run. vault_locked: unlock Nessa first. */
-export const LoginsErrorCode = {
-  LoginsNotConfigured: "logins_not_configured",
-  LoginsStorageUnavailable: "logins_storage_unavailable",
-  LoginsAuditUnavailable: "logins_audit_unavailable",
-  LoginsChangeUnrecorded: "logins_change_unrecorded",
-  LoginsTooManyDevices: "logins_too_many_devices",
-  LoginsUnknownAccount: "logins_unknown_account",
-  LoginsChatgptNotConfigured: "logins_chatgpt_not_configured",
-  VaultLocked: "vault_locked",
-} as const
-export type LoginsErrorCode = (typeof LoginsErrorCode)[keyof typeof LoginsErrorCode]
 /** Result of voice.status, voice.saveKey and voice.forgetKey: whether the gateway holds a realtime voice key. The key itself is never returned. */
 export interface VoiceStatus {
   /** Whether a key is saved in the gateway's vault. */
@@ -4297,6 +4182,10 @@ export interface TerminalSummary {
   endedAtMs?: number
   /** Most urgent active OSC 7501 program status record (or detected agent app) for this terminal. */
   programStatus?: TerminalProgramStatus
+  /** While the terminal's program has asked to come back after a restart (OSC 7577): the command it would come back as, escaped for display. Shown, never run, by a surface. */
+  resumeCommand?: string
+  /** When a gateway restart opened this terminal again and started its kept program. */
+  resumedAtMs?: number
 }
 /** Active program status for a terminal, from OSC 7501 (Program Status Protocol, rev 0.4). */
 export interface TerminalProgramStatus {
@@ -4378,6 +4267,53 @@ export interface TerminalRenameParams {
   /** The new name: 1 to 80 characters, no control characters, not only spaces. */
   title: string
 }
+/** One rule for which terminal programs come back after a restart. Never rules win over Allow rules; a program no Allow rule matches does not come back. */
+export interface TerminalResumeRule {
+  /** * for every program, a name (claude, nvim) for a program by the last part of its path, or an absolute path for exactly that file. */
+  program: string
+  /** Only where the program works in this absolute folder or one inside it. */
+  folder?: string
+  /** Only when every one of these is an argument of the command, exactly. */
+  args?: string[]
+  /** allow: matching programs come back. never: they never do. */
+  action: "allow" | "never"
+}
+/** Whether terminal programs come back after the gateway restarts (OSC 7577), and which. Off until the person turns it on. */
+export interface TerminalResumeSettings {
+  /** On: terminals opened from now on are given an OSC7577_TOKEN, and programs the rules allow come back after a restart. Off: no token, and every kept program is forgotten. */
+  enabled: boolean
+  /** The rules, at most 64. */
+  rules: TerminalResumeRule[]
+}
+/** One terminal program kept to come back after a restart. */
+export interface TerminalSavedProgram {
+  /** The terminal it comes back in, by the same id. */
+  terminalId: TerminalId
+  /** The terminal's name. */
+  title: string
+  /** The command, escaped for display. */
+  command: string
+  /** Where it runs, when known. */
+  folder?: string
+  /** When the program last reported it. */
+  savedAtMs: number
+  /** Whether the next restart starts it, under the settings as they are now. */
+  comesBack: boolean
+  /** Whether its terminal is running now. */
+  open: boolean
+}
+/** The person's terminal resume settings and the programs kept under them. */
+export interface TerminalResumeState {
+  /** The settings as kept. */
+  settings: TerminalResumeSettings
+  /** The kept programs, oldest first. */
+  saved: TerminalSavedProgram[]
+}
+/** Forget one kept terminal program (terminal.forgetSaved): it does not come back. The terminal keeps running. */
+export interface TerminalForgetSavedParams {
+  /** The terminal whose program to forget. */
+  terminalId: TerminalId
+}
 /** One message of pty-runtime's terminal client protocol, version 1 (ready, styles, modes, frame, history, exit, error), for one view (terminal.output). The server renders: the window paints the rows it is given and runs no terminal emulator. */
 export interface TerminalOutput {
   /** The terminal. */
@@ -4449,7 +4385,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 152,
+  maxReadyMethods: 148,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4462,13 +4398,8 @@ export const bounds = {
   minNativeHooksRequestIdCharacters: 1,
   maxNativeHooksRequestIdBytes: 256,
   maxConfiguredAgents: 3,
-  maxChatgptAccounts: 8,
-  maxChatgptEmailBytes: 320,
-  maxChatgptAuthorizeUrlBytes: 8192,
   maxToolPolicyPatterns: 16,
   maxToolPatternBytes: 48,
-  maxCommandHosts: 16,
-  maxCommandHostBytes: 253,
   maxShareGrants: 64,
   maxSharePage: 8,
   maxAgentInstallVersionBytes: 128,
@@ -4805,13 +4736,6 @@ export const ProductMethod = {
   CloudBoxesDelete: "cloud.boxes.delete",
   ConversationWebhookCursor: "conversation.webhook.cursor",
   ConversationWebhookReset: "conversation.webhook.reset",
-  LoginsStatus: "logins.status",
-  LoginsSave: "logins.save",
-  LoginsRemove: "logins.remove",
-  LoginsChatgptSignIn: "logins.chatgptSignIn",
-  LoginsChatgptCancel: "logins.chatgptCancel",
-  LoginsChatgptUse: "logins.chatgptUse",
-  LoginsChatgptRemove: "logins.chatgptRemove",
   VoiceStatus: "voice.status",
   VoiceSaveKey: "voice.saveKey",
   VoiceForgetKey: "voice.forgetKey",
@@ -4826,6 +4750,9 @@ export const ProductMethod = {
   TerminalHistory: "terminal.history",
   TerminalClose: "terminal.close",
   TerminalRename: "terminal.rename",
+  TerminalResumeSettings: "terminal.resumeSettings",
+  TerminalSetResumeSettings: "terminal.setResumeSettings",
+  TerminalForgetSaved: "terminal.forgetSaved",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -4975,13 +4902,6 @@ export const productReadyMethods = [
   "cloud.boxes.delete",
   "conversation.webhook.cursor",
   "conversation.webhook.reset",
-  "logins.status",
-  "logins.save",
-  "logins.remove",
-  "logins.chatgptSignIn",
-  "logins.chatgptCancel",
-  "logins.chatgptUse",
-  "logins.chatgptRemove",
   "voice.status",
   "voice.saveKey",
   "voice.forgetKey",
@@ -4996,6 +4916,9 @@ export const productReadyMethods = [
   "terminal.history",
   "terminal.close",
   "terminal.rename",
+  "terminal.resumeSettings",
+  "terminal.setResumeSettings",
+  "terminal.forgetSaved",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -5131,13 +5054,6 @@ export const productMethodGrants = {
   "cloud.boxes.delete": "credential.manage",
   "conversation.webhook.cursor": "credential.manage",
   "conversation.webhook.reset": "credential.manage",
-  "logins.status": "credential.manage",
-  "logins.save": "credential.manage",
-  "logins.remove": "credential.manage",
-  "logins.chatgptSignIn": "credential.manage",
-  "logins.chatgptCancel": "credential.manage",
-  "logins.chatgptUse": "credential.manage",
-  "logins.chatgptRemove": "credential.manage",
   "voice.status": "credential.manage",
   "voice.saveKey": "credential.manage",
   "voice.forgetKey": "credential.manage",
@@ -5152,6 +5068,9 @@ export const productMethodGrants = {
   "terminal.history": "credential.manage",
   "terminal.close": "credential.manage",
   "terminal.rename": "credential.manage",
+  "terminal.resumeSettings": "credential.manage",
+  "terminal.setResumeSettings": "credential.manage",
+  "terminal.forgetSaved": "credential.manage",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

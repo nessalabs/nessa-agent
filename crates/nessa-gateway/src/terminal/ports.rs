@@ -10,6 +10,12 @@ pub trait EngineEvents: Send + Sync {
     fn exited(&self, terminal: &str, status: Option<i32>, program_status: Option<ProgramStatus>);
     /// The terminal's effective OSC 7501 program status changed.
     fn program_status(&self, terminal: &str, status: Option<ProgramStatus>);
+    /// The terminal's OSC 7577 record changed.
+    fn resume(&self, _terminal: &str, _change: ResumeChange) {}
+    /// What reads the processes a resume report names.
+    fn processes(&self) -> Arc<dyn Processes> {
+        Arc::new(SystemProcesses)
+    }
 }
 
 /// A running terminal's engine side.

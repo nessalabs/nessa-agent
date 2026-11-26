@@ -79,6 +79,18 @@
     {
       "method": "terminal.rename",
       "reason": "A person's terminal: only the window showing it opens, reads or types into it. No agent, CLI or MCP call does."
+    },
+    {
+      "method": "terminal.resumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.setResumeSettings",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "terminal.forgetSaved",
+      "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
     }
   ],
   "methods": [
@@ -932,55 +944,6 @@
     {
       "name": "conversation.webhook.reset",
       "params": "ConversationWebhookResetParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
-      "name": "logins.status",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": true,
-      "destructive": false
-    },
-    {
-      "name": "logins.save",
-      "params": "LoginsSaveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.remove",
-      "params": "LoginsRemoveParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": true
-    },
-    {
-      "name": "logins.chatgptSignIn",
-      "params": "LoginsChatgptSignInParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptCancel",
-      "params": null,
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptUse",
-      "params": "LoginsChatgptUseParams",
-      "grant": "credential.manage",
-      "readOnly": false,
-      "destructive": false
-    },
-    {
-      "name": "logins.chatgptRemove",
-      "params": "LoginsChatgptRemoveParams",
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": true

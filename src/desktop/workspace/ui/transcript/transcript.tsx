@@ -465,11 +465,7 @@ export const Transcript = memo(function Transcript({
             />
           ) : null}
           {recoveryShown && provider ? (
-            <ProviderSignIn
-              key={provider}
-              provider={provider}
-              environment={transcript?.lease?.environment}
-            />
+            <ProviderSignIn key={provider} provider={provider} />
           ) : null}
           {transcript?.interactionNotice ? (
             <p
