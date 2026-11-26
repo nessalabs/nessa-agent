@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { EventEmitter } from "node:events"
+import { EventEmitter, once } from "node:events"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -26,6 +26,7 @@ function ownedCommand(clean = true, captureLimit = 16) {
   child.pid = 41
   child.stdout = new PassThrough()
   const calls = []
+  child.unref = () => calls.push("unref")
   const run = runOwnedCommand(
     "fixture-command",
     [],
@@ -78,7 +79,59 @@ test("owned command limits captured bytes and preserves unconfirmed cleanup", as
     assert.match(error.cause.errors[0].message, /exceeded 3 bytes/)
     return true
   })
-  assert.deepEqual(calls, [["fixture-command", [], true], 41])
+  assert.equal(child.stdout.destroyed, true)
+  assert.deepEqual(calls, [["fixture-command", [], true], 41, "unref"])
+})
+
+test("unconfirmed cleanup lets the supervising Node process exit while its child lives", async (context) => {
+  if (process.platform === "win32") return context.skip("POSIX process groups only")
+  const directory = mkdtempSync(join(tmpdir(), "nessa-smoke-unconfirmed-"))
+  const pidFile = join(directory, "child.pid")
+  const processes = new URL("./native-smoke-processes.mjs", import.meta.url)
+  const parent = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `
+        import { spawn } from "node:child_process"
+        import { writeFileSync } from "node:fs"
+        import { runOwnedCommand, OwnedCommandCleanupError } from ${JSON.stringify(processes.href)}
+
+        const owner = new AbortController()
+        try {
+          await runOwnedCommand(process.execPath, ["-e", "setTimeout(() => {}, 12_000)"], {
+            signal: owner.signal,
+            timeout: 2_000,
+            captureLimit: 16,
+          }, {
+            start(command, args, options) {
+              const child = spawn(command, args, options)
+              writeFileSync(process.argv[1], String(child.pid))
+              child.once("spawn", () => owner.abort(new Error("fixture interrupted")))
+              return child
+            },
+            stop: async () => false,
+          })
+        } catch (error) {
+          if (!(error instanceof OwnedCommandCleanupError)) throw error
+          process.exitCode = 37
+        }
+      `,
+      pidFile,
+    ],
+    { detached: true, stdio: "ignore" },
+  )
+  try {
+    const exit = await once(parent, "exit", { signal: AbortSignal.timeout(5_000) })
+    assert.deepEqual(exit, [37, null])
+    assert.equal(alive(Number(readFileSync(pidFile, "utf8"))), true)
+  } finally {
+    const parentGone = await stopOwnedGroup(parent.pid, 500)
+    const childGone = await stopOwnedGroup(Number(readFile(pidFile)), 500)
+    rmSync(directory, { recursive: true, force: true })
+    assert.ok(parentGone && childGone, "test process cleanup unconfirmed")
+  }
 })
 
 function controlled(snapshot, sendSignal) {

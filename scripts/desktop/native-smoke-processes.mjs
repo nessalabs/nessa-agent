@@ -214,6 +214,9 @@ export async function runOwnedCommand(
         throw new Error("owned group still present or unobservable")
     } catch (error) {
       const cause = failure ? new AggregateError([failure, error]) : error
+      // Release this Node process's handles while preserving the uncertain outcome.
+      child.stdout?.destroy()
+      child.unref()
       failure = new OwnedCommandCleanupError(`${command} group cleanup unconfirmed`, {
         cause,
       })
