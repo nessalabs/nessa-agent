@@ -1,5 +1,7 @@
 //! Native enrollment composition preserves the existing physical worker and
 //! purge-before-end policy. Status effects are collected inside its admission.
+#[cfg(feature = "test-support")]
+use super::joined_status::{JoinedRecordFixture, JoinedRecordSelection, JoinedStatusFixture};
 use super::RetainedOwnerStatus;
 use super::{cache_failure, retained_policy, ReadFailure, RetainedCache};
 use crate::pairing::{
@@ -17,6 +19,10 @@ use nessa_protocol::{
     clock::Clock as MonotonicClock,
     pairing::{socket::NativeWakeReport, wire::NativePairingStatus},
 };
+#[cfg(feature = "test-support")]
+use nessa_sync::replication::domain::Page;
+#[cfg(feature = "test-support")]
+use std::net::SocketAddr;
 use std::{net::TcpStream, path::PathBuf, sync::Arc};
 
 /// Original durable receiver purge evidence. Re-reading it does not repeat
@@ -75,6 +81,22 @@ impl RetainedEnrollmentStatus {
     pub fn purge(&self) -> Option<&Result<RetainedPurge, ReadFailure>> {
         self.purge.as_ref()
     }
+}
+
+/// Owner-held inputs for a disposable joined record persistence fixture.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub struct JoinedRecordCommitFixture {
+    /// Numeric address of the selected disposable relay.
+    pub relay: SocketAddr,
+    /// The exact enrolled gateway pin.
+    pub pin: [u8; 44],
+    /// The fixture's independently observed and authorized record scope.
+    pub scope: super::Scope,
+    /// The same stop source used by both physical legs and local publication.
+    pub stop: Arc<super::ReadStop>,
+    /// One absolute deadline in the client's injected monotonic clock.
+    pub expires_ms: u64,
 }
 
 /// One long-lived device enrollment worker over one private store/cache scope.
@@ -267,6 +289,109 @@ impl RetainedEnrollmentClient {
                 },
             )
             .await
+    }
+
+    /// Fixture-only: one enrolled Status and one read-only relayed record Page
+    /// share the original physical admission and absolute time budget.
+    /// Verifies wire bytes without opening or publishing to a record cache.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn joined_record_page_for_test(
+        &self,
+        relay: std::net::SocketAddr,
+        pin: [u8; 44],
+        scope: super::Scope,
+        stop: Arc<super::ReadStop>,
+        expires_ms: u64,
+    ) -> Result<Result<Page, ReadFailure>, NativeClientError> {
+        self.with_joined_record_fixture(
+            JoinedRecordCommitFixture {
+                relay,
+                pin,
+                scope,
+                stop,
+                expires_ms,
+            },
+            super::joined_status::read_joined_record_page_for_test,
+        )
+        .await
+    }
+
+    /// Drive one authorized joined fixture Page into the caller's disposable cache.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn retain_joined_record_page_for_test(
+        &self,
+        inputs: JoinedRecordCommitFixture,
+        open_cache: impl FnOnce() -> Result<RetainedCache, ReadFailure> + Send + 'static,
+        before_commit: impl FnOnce(super::RecordCommitIntent<'_>) + Send + 'static,
+    ) -> Result<Result<(u64, usize), ReadFailure>, NativeClientError> {
+        self.with_joined_record_fixture(inputs, move |selection| {
+            super::joined_status::retain_joined_record_page_for_test(
+                selection,
+                open_cache,
+                before_commit,
+            )
+        })
+        .await
+    }
+
+    #[cfg(feature = "test-support")]
+    async fn with_joined_record_fixture<T: Send + 'static>(
+        &self,
+        inputs: JoinedRecordCommitFixture,
+        complete: impl FnOnce(JoinedRecordSelection) -> Result<T, ReadFailure> + Send + 'static,
+    ) -> Result<Result<T, ReadFailure>, NativeClientError> {
+        let JoinedRecordCommitFixture {
+            relay,
+            pin,
+            scope,
+            stop,
+            expires_ms,
+        } = inputs;
+        let route = || {
+            super::joined_status::JoinedStatusRoute::new(
+                relay,
+                pin,
+                Arc::new(super::TokioJoinedDial),
+            )
+            .map_err(|error| NativeClientError::Io(error.kind()))
+        };
+        let status_route = route()?;
+        let selected_route = route()?;
+        let wake = nessa_protocol::pairing::socket::WakeEndpoint::new(relay);
+        let begin = self.store.clone();
+        let finish = self.store.clone();
+        self.client
+            .status_joined_then(
+                JoinedStatusFixture {
+                    route: status_route,
+                    stop,
+                    expires_ms,
+                    continuation: Some(wake.clone()),
+                },
+                None,
+                move || begin.begin_status(),
+                move |status, state, episode, reactor| {
+                    if finish.finish_status().is_some_and(|result| result.is_err()) {
+                        return Err(NativeClientError::Phase);
+                    }
+                    let selection = super::joined_status::join_after_active_for_test(
+                        status,
+                        state,
+                        JoinedRecordFixture {
+                            trusted_scope: &scope,
+                            requested_scope: &scope,
+                            route: selected_route,
+                            episode,
+                            wake,
+                        },
+                        reactor,
+                    )?;
+                    Ok(complete(selection))
+                },
+            )
+            .await?
     }
 
     /// Retry through the existing strict-pin owner. Its original Unclaimed

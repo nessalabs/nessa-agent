@@ -1,15 +1,17 @@
 //! One enrolled binary Head behind the existing direct and joined relay.
-use super::{completion, Device, Gateway, REFUSED};
+use super::{completion, Device, Gateway, Time, Wall, REFUSED};
 use crate::composition::read_only_online_tests::fixtures::{Setup, WireClient};
 use nessa_auth::{
-    adapters::pairing::{GatewayTrust, NativeTransport},
+    adapters::pairing::{FilePairingState, GatewayTrust, NativeTransport},
     domain::{pairing::TerminalCause, CredentialId},
 };
 use nessa_client_core::retained::{
-    dial_gateway, ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedTranscript,
+    dial_gateway, JoinedRecordCommitFixture, ReadFailure, ReadStop, ReaderAccess, ReaderRole,
+    RecordCommitIntent, RetainedCache, RetainedEnrollmentClient, RetainedTranscript,
 };
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
 use nessa_protocol::{
+    clock::Clock,
     conversation::domain::ConversationId,
     pairing::{
         wire::{
@@ -35,12 +37,38 @@ use nessa_sync::replication::{
 use std::{
     io::{self, ErrorKind, Read, Write},
     net::TcpStream,
-    sync::Arc,
-    time::Duration,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
 const WAIT: Duration = Duration::from_secs(5);
+
+struct CommitClock {
+    start: Instant,
+    expired: AtomicBool,
+}
+
+impl Clock for CommitClock {
+    fn elapsed_ms(&self) -> u64 {
+        if self.expired.load(Ordering::SeqCst) {
+            u64::MAX
+        } else {
+            u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AtCommit {
+    None,
+    Stop,
+    Expire,
+}
 
 // The same socket owner provides the physical interrupt, underneath the one
 // verified Nessa TLS stream. No secondary reader or TLS engine is created.
@@ -499,6 +527,148 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
         let expected = scoped_raw_rows(&device, "page-baseline.sqlite3", scope);
         assert!(expected.len() >= 2);
         assert_eq!((expected[0].0, expected[1].0), (1, 2));
+
+        if use_relay {
+            // Actual enrolled state and the exact scope just observed through
+            // Product. Prove Bind/Page on that joined transport without a cache.
+            let profile: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(device.root.join("profile.json")).unwrap())
+                    .unwrap();
+            let state = FilePairingState::open(
+                Path::new(profile["stateRoot"].as_str().unwrap()),
+                Path::new(profile["stateDirectory"].as_str().unwrap()),
+            )
+            .unwrap();
+            let unused_cache = device.caches.join("joined-selector-unused.sqlite3");
+            let client = RetainedEnrollmentClient::new(
+                Arc::new(state),
+                unused_cache.clone(),
+                Arc::new(Wall),
+                Arc::new(Time(Instant::now())),
+            )
+            .unwrap();
+            let relay = device.relay().as_str().parse().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let page = runtime
+                .block_on(client.joined_record_page_for_test(
+                    relay,
+                    device.pin,
+                    scope.clone(),
+                    ReadStop::new(),
+                    WAIT.as_millis().try_into().unwrap(),
+                ))
+                .unwrap()
+                .unwrap();
+            runtime.block_on(client.shutdown());
+            // The drained client still owns the pairing-state lock.
+            drop(client);
+            assert_eq!(&page.request.scope, scope);
+            assert_eq!(page.request.after, 0);
+            assert_eq!(page.records.len(), 1);
+            let record = &page.records[0];
+            assert_eq!(record.position, expected[0].0);
+            assert_eq!(record.id.as_str(), expected[0].1);
+            assert_eq!(record.payload.as_slice(), expected[0].2.as_slice());
+            assert!(!unused_cache.exists());
+
+            for (name, refusal) in [
+                ("joined-stopped.sqlite3", AtCommit::Stop),
+                ("joined-expired.sqlite3", AtCommit::Expire),
+            ] {
+                let run = |expected_after, at_commit, payload: (u64, String, Vec<u8>)| {
+                    let state = FilePairingState::open(
+                        Path::new(profile["stateRoot"].as_str().unwrap()),
+                        Path::new(profile["stateDirectory"].as_str().unwrap()),
+                    )
+                    .unwrap();
+                    let clock = Arc::new(CommitClock {
+                        start: Instant::now(),
+                        expired: AtomicBool::new(false),
+                    });
+                    let path = device.caches.join(name);
+                    let client = RetainedEnrollmentClient::new(
+                        Arc::new(state),
+                        path.clone(),
+                        Arc::new(Wall),
+                        clock.clone(),
+                    )
+                    .unwrap();
+                    let stop = ReadStop::new();
+                    let hit = Arc::new(AtomicBool::new(false));
+                    let hit_before = hit.clone();
+                    let gate_stop = stop.clone();
+                    let result = runtime
+                        .block_on(client.retain_joined_record_page_for_test(
+                            JoinedRecordCommitFixture {
+                                relay,
+                                pin: device.pin,
+                                scope: scope.clone(),
+                                stop,
+                                expires_ms: WAIT.as_millis().try_into().unwrap(),
+                            },
+                            move || {
+                                RetainedCache::open(
+                                    &path,
+                                    Arc::new(Wall),
+                                    Arc::new(Time(Instant::now())),
+                                )
+                            },
+                            move |intent| {
+                                let RecordCommitIntent::Page(plan) = intent else {
+                                    panic!("seeded replay must reach the record Page commit");
+                                };
+                                assert_eq!(plan.expected().position(), expected_after);
+                                assert_eq!(plan.next().position(), payload.0);
+                                assert_eq!(plan.records().len(), 1);
+                                let record = &plan.records()[0];
+                                assert_eq!(record.id.as_str(), payload.1);
+                                assert_eq!(record.payload.as_slice(), payload.2.as_slice());
+                                assert!(!hit_before.swap(true, Ordering::SeqCst));
+                                match at_commit {
+                                    AtCommit::None => {}
+                                    AtCommit::Stop => gate_stop.stop(),
+                                    AtCommit::Expire => clock.expired.store(true, Ordering::SeqCst),
+                                }
+                            },
+                        ))
+                        .unwrap();
+                    runtime.block_on(client.shutdown());
+                    assert!(hit.load(Ordering::SeqCst), "after stage, before COMMIT");
+                    result
+                };
+
+                assert_eq!(run(0, AtCommit::None, expected[0].clone()), Ok((1, 1)));
+                assert_eq!(scoped_raw_rows(&device, name, scope), expected[..1]);
+                let expected_refusal = match refusal {
+                    AtCommit::Stop => ReadFailure::Stopped,
+                    AtCommit::Expire => ReadFailure::Unreachable,
+                    AtCommit::None => unreachable!(),
+                };
+                assert_eq!(run(1, refusal, expected[1].clone()), Err(expected_refusal));
+                let mut reopened = device.cache(name);
+                let RetainedTranscript::Retained(saved) = reopened
+                    .transcript_view(
+                        &device.receiver,
+                        scope.origin().as_str(),
+                        &conversation,
+                        Uuid::nil(),
+                    )
+                    .unwrap()
+                else {
+                    panic!("the refused COMMIT must leave the original checkpoint");
+                };
+                assert_eq!(saved.progress().scope(), scope);
+                assert_eq!(saved.progress().downloaded(), 1);
+                drop(reopened);
+                assert_eq!(scoped_raw_rows(&device, name, scope), expected[..1]);
+
+                assert_eq!(run(1, AtCommit::None, expected[1].clone()), Ok((2, 1)));
+                assert_eq!(scoped_raw_rows(&device, name, scope), expected[..2]);
+            }
+        }
 
         let name = "binary-staged.sqlite3";
         for after in [0_u64, 1] {

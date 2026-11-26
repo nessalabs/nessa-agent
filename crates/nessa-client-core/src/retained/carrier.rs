@@ -1,10 +1,10 @@
 //! Private process-fixture adapter for one retained record page.
 use super::{
-    failure, DeviceEvidence, GatewayConnector, GatewayStream, MonotonicClock, ReadFailure,
-    ReadStop, ReaderAccess, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
-    HANDSHAKE_MS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
+    failure, run_records, CacheError, DeviceEvidence, GatewayConnector, GatewayStream,
+    MonotonicClock, ReadFailure, ReadStop, ReaderAccess, RecordCommitIntent, RelayRoute,
+    RetainedCache, Scope, StoppableConnector, Stopping, HANDSHAKE_MS,
+    PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
-use crate::protected::DeadlineStream;
 use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
 use nessa_protocol::{
@@ -16,14 +16,15 @@ use nessa_protocol::{
         },
         NativeFrameError,
     },
+    product::generated::{MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES},
 };
 use nessa_sync::replication::infrastructure::session::{
     CapabilityRecordSession, InterruptibleSessionIo, RecordSessionError, SessionInterrupt,
     SessionLimits,
 };
 use nessa_sync::replication::{
-    application::{RecordSource, SourceError},
-    domain::{CapabilitySupport, Page, PageRequest},
+    application::{Access, RecordSource, ScopeAuthorizer, SourceError},
+    domain::{validate_page, CapabilitySupport, Checkpoint, Limits, Page, PageRequest},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -71,12 +72,12 @@ impl<S: RecordSource> RecordSource for PageCutSource<'_, S> {
     }
 }
 
-struct RecordIo<'a> {
-    transport: NativeTransport<DeadlineStream>,
+struct RecordIo<'a, S: Read + Write> {
+    transport: NativeTransport<S>,
     interrupt: Arc<dyn SessionInterrupt>,
     cut: Option<&'a Cell<CutState>>,
 }
-impl Read for RecordIo<'_> {
+impl<S: Read + Write> Read for RecordIo<'_, S> {
     fn read(&mut self, bytes: &mut [u8]) -> IoResult<usize> {
         if !bytes.is_empty() {
             if let Some(cut) = self.cut {
@@ -107,7 +108,7 @@ impl Read for RecordIo<'_> {
         self.transport.read(bytes)
     }
 }
-impl Write for RecordIo<'_> {
+impl<S: Read + Write> Write for RecordIo<'_, S> {
     fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
         self.transport.write(bytes)
     }
@@ -115,7 +116,7 @@ impl Write for RecordIo<'_> {
         self.transport.flush()
     }
 }
-impl InterruptibleSessionIo for RecordIo<'_> {
+impl<S: Read + Write> InterruptibleSessionIo for RecordIo<'_, S> {
     fn interrupt_handle(&self) -> Arc<dyn SessionInterrupt> {
         self.interrupt.clone()
     }
@@ -232,16 +233,16 @@ impl RetainedCache {
                 .ok_or(ReadFailure::Protocol)?,
             cut,
         };
-        let session = CapabilityRecordSession::connect(
-            io,
-            scope.clone(),
-            SessionLimits {
-                control_bytes: 2048,
-                bindings: 1,
-            },
-            CapabilitySupport::current(),
-        )
-        .map_err(bind_failure)?;
+        self.page_on_selected_carrier(scope, io)
+    }
+
+    fn page_on_selected_carrier<S: Read + Write>(
+        &mut self,
+        scope: &Scope,
+        io: RecordIo<'_, S>,
+    ) -> Result<(u64, usize), ReadFailure> {
+        let cut = io.cut;
+        let session = bind_fixture(io, scope)?;
         let (mut authorizer, mut source) = session.parts();
         let result = match cut {
             Some(cut) => self.one_record_page_for_test(
@@ -256,9 +257,127 @@ impl RetainedCache {
         let _ = session.close();
         result
     }
+
+    pub(super) fn retain_selected_page_for_test<S: Read + Write, P>(
+        &mut self,
+        transport: NativeTransport<S>,
+        interrupt: Arc<dyn SessionInterrupt>,
+        scope: &Scope,
+        claim: impl FnOnce(RecordCommitIntent<'_>) -> Result<P, ReadFailure>,
+    ) -> Result<(u64, usize), ReadFailure> {
+        let session = bind_fixture(
+            RecordIo {
+                transport,
+                interrupt,
+                cut: None,
+            },
+            scope,
+        )?;
+        let (mut authorizer, mut source) = session.parts();
+        let policy = self.policy.suffix_page();
+        let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
+            .map_err(|_| ReadFailure::Protocol)?;
+        let refusal = Cell::new(None);
+        let run = {
+            let mut records = self.cache.records_with_admission(|intent| {
+                claim(intent).map_err(|reason| {
+                    refusal.set(Some(reason));
+                    CacheError::Unavailable
+                })
+            });
+            run_records(
+                scope,
+                &mut authorizer,
+                &mut source,
+                &mut records,
+                limits,
+                1,
+                self.wall.as_ref(),
+            )
+        };
+        // An already admitted durable outcome outlives the transport.
+        let _ = session.close();
+        match refusal.get() {
+            Some(reason) => Err(reason),
+            None => self.record_fixture_result(run),
+        }
+    }
 }
 
-fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {
+fn bind_fixture<'a, S: Read + Write>(
+    io: RecordIo<'a, S>,
+    scope: &Scope,
+) -> Result<CapabilityRecordSession<RecordIo<'a, S>>, ReadFailure> {
+    CapabilityRecordSession::connect(
+        io,
+        scope.clone(),
+        SessionLimits {
+            control_bytes: 2048,
+            bindings: 1,
+        },
+        CapabilitySupport::current(),
+    )
+    .map_err(bind_failure)
+}
+
+/// Read one verified Page on the accepted fixture transport. No store is
+/// supplied, so validation cannot publish the returned copy of the records.
+pub(super) fn read_selected_page_for_test<S: Read + Write>(
+    transport: NativeTransport<S>,
+    interrupt: Arc<dyn SessionInterrupt>,
+    scope: &Scope,
+    fence: impl Fn() -> Result<(), ReadFailure>,
+) -> Result<Page, ReadFailure> {
+    let io = RecordIo {
+        transport,
+        interrupt,
+        cut: None,
+    };
+    let session = bind_fixture(io, scope)?;
+    let result = (|| {
+        fence()?;
+        let (mut authorizer, mut source) = session.parts();
+        if !matches!(authorizer.authorize(scope), Access::Allowed(actual) if actual == *scope) {
+            return Err(ReadFailure::Refused);
+        }
+        let map_source = |err| bind_failure(RecordSessionError::Source(err));
+        let target = source.head(scope).map_err(map_source)?;
+        fence()?;
+        let limits = Limits::new(
+            1,
+            MAX_RECORD_PAGE_PAYLOAD_BYTES,
+            MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        )
+        .map_err(|_| ReadFailure::Protocol)?;
+        let request = PageRequest {
+            scope: scope.clone(),
+            after: 0,
+            target,
+            max_records: limits.max_records(),
+            max_payload_bytes: limits.max_payload_bytes(),
+            max_record_bytes: limits.max_record_bytes(),
+        };
+        let page = source.page(&request).map_err(map_source)?;
+        fence()?;
+        validate_page(
+            &Checkpoint::new(scope.clone(), 0),
+            &request,
+            page.clone(),
+            limits,
+        )
+        .map_err(|_| ReadFailure::Protocol)?;
+        Ok(page)
+    })();
+    let closed = session.close();
+    let page = result?;
+    closed.map_err(bind_failure)?;
+    fence()?;
+    Ok(page)
+}
+
+pub(super) fn accept_selection(
+    frame: Result<Vec<u8>, NativeFrameError>,
+) -> Result<(), ReadFailure> {
     let reply = frame.map_err(|error| match error {
         NativeFrameError::Wire(_) => ReadFailure::Protocol,
         NativeFrameError::Io(_) => ReadFailure::Unreachable,

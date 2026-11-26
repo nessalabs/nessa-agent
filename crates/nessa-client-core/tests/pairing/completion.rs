@@ -1,5 +1,7 @@
 //! Physical admission owns effect capture even after the calling future ends.
 use super::{NativeClientError, NativeEnrollmentClient};
+#[cfg(feature = "test-support")]
+use crate::retained::joined_status::JoinedRecordFixture;
 use crate::retained::RetainedEnrollmentClient;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::{
@@ -608,5 +610,251 @@ async fn joined_selected_owner_injects_one_dial_and_drains_on_stop() {
         );
         assert_eq!(port.calls.load(Ordering::SeqCst), expected_calls);
         assert_eq!(port.dropped.load(Ordering::SeqCst), pend);
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn joined_record_selection_admits_one_dial_only_for_current_matching_authority() {
+    use crate::retained::{
+        joined_status::{
+            join_after_active_for_test, select_joined_record_for_test, JoinedDialFuture,
+            JoinedEpisode, JoinedStatusDial, JoinedStatusRoute,
+        },
+        ReadFailure, ReadStop, TokioJoinedDial,
+    };
+    use nessa_auth::{
+        adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy},
+        domain::{pairing::DisclosedConsent, AudienceId, OrganizationId, Resource},
+    };
+    use nessa_protocol::{
+        pairing::{
+            socket::WakeEndpoint,
+            wire::{
+                decode_request, encode_record_carrier_accepted, NativePairingRequest,
+                NativePairingStatus, RecordCarrierMode,
+            },
+            EnrollmentChannel,
+        },
+        relay::{read_frame, write_frame, RelayFrame},
+        tunnel::TunnelSecret,
+    };
+    use nessa_sync::replication::domain::{Id, Scope};
+    use std::{io, net::SocketAddr, sync::atomic::AtomicU64};
+
+    struct DialClock(AtomicU64);
+    impl Clock for DialClock {
+        fn elapsed_ms(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    struct CountDial(AtomicUsize);
+    impl JoinedStatusDial for CountDial {
+        fn dial(&self, address: SocketAddr) -> JoinedDialFuture {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            TokioJoinedDial.dial(address)
+        }
+    }
+
+    let other_pin = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let scope = |receiver: &str, epoch: &str, incarnation: &str| {
+        let id = |value: &str| Id::new(value).unwrap();
+        Scope::new(
+            id(receiver),
+            id("origin"),
+            id("conversation"),
+            id(incarnation),
+            id("schema"),
+            id(epoch),
+        )
+    };
+    for case in [
+        "match",
+        "stop-after-accepted",
+        "expire-after-accepted",
+        "refused",
+        "pending",
+        "pin",
+        "scope",
+        "receiver",
+        "epoch",
+        "credential",
+        "stop",
+        "expiry",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+        let pin = gateway.public_spki();
+        let credential = CredentialId::new("issued").unwrap();
+        let state = DiscoverySaved {
+            intent,
+            pin,
+            credential: credential.clone(),
+        };
+        let status = match case {
+            "refused" => Err(NativeClientError::Refused),
+            "pending" => Ok(NativePairingStatus::Pending(intent)),
+            _ => Ok(NativePairingStatus::Active {
+                consent: Box::new(
+                    DisclosedConsent::new(
+                        intent,
+                        AudienceId::new("gateway").unwrap(),
+                        ConsentClass::DeviceRead
+                            .grant(Resource::new(
+                                OrganizationId::new("org").unwrap(),
+                                ResourceId::new("owner").unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                ),
+                credential: if case == "credential" {
+                    CredentialId::new("other").unwrap()
+                } else {
+                    credential
+                },
+                receiver: ResourceId::new("receiver").unwrap(),
+                access_epoch: 13,
+                tunnel_secret: TunnelSecret::new([9; 32]),
+            }),
+        };
+        let trusted = scope(
+            if case == "receiver" {
+                "other"
+            } else {
+                "receiver"
+            },
+            if case == "epoch" {
+                "epoch-14"
+            } else {
+                "epoch-13"
+            },
+            "incarnation",
+        );
+        let requested = if case == "scope" {
+            scope("receiver", "epoch-13", "other-incarnation")
+        } else {
+            trusted.clone()
+        };
+        let active = matches!(
+            case,
+            "match" | "stop-after-accepted" | "expire-after-accepted"
+        );
+        let peer = if active {
+            let key = relay_key(&pin).unwrap();
+            let expected_scope = trusted.clone();
+            Some(std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let (mut socket, _) = loop {
+                    match listener.accept() {
+                        Ok(accepted) => break accepted,
+                        Err(error)
+                            if error.kind() == io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < until =>
+                        {
+                            std::thread::park_timeout(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                socket
+                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                assert!(
+                    matches!(read_frame(&mut socket), Ok(RelayFrame::Connect { key: actual }) if actual == key)
+                );
+                write_frame(&mut socket, &RelayFrame::Joined).unwrap();
+                let mut peer =
+                    EnrollmentChannel::new(NativeTransport::accept(socket, &gateway).unwrap());
+                let request = decode_request(&peer.receive_envelope().unwrap()).unwrap();
+                let NativePairingRequest::OpenRecordCarrierV1(open) = request else {
+                    panic!("expected selected record carrier");
+                };
+                assert_eq!(open.credential.as_str(), "issued");
+                assert_eq!(open.access_epoch, 13);
+                assert_eq!(open.scope, expected_scope);
+                assert!(matches!(open.mode, RecordCarrierMode::Page));
+                peer.send_envelope(&encode_record_carrier_accepted().unwrap())
+                    .unwrap();
+            }))
+        } else {
+            None
+        };
+        let dial = Arc::new(CountDial(AtomicUsize::new(0)));
+        let route = JoinedStatusRoute::new(
+            address,
+            if case == "pin" { other_pin } else { pin },
+            dial.clone(),
+        )
+        .unwrap();
+        let stop = ReadStop::new();
+        if case == "stop" {
+            stop.stop();
+        }
+        let clock = Arc::new(DialClock(AtomicU64::new(0)));
+        let expires_ms = if case == "expiry" { 0 } else { 1_000 };
+        let episode = JoinedEpisode::new(clock.clone(), stop.clone(), expires_ms);
+        let reactor = tokio::runtime::Handle::current();
+        let result = tokio::task::spawn_blocking(move || {
+            join_after_active_for_test(
+                status,
+                &state,
+                JoinedRecordFixture {
+                    trusted_scope: &trusted,
+                    requested_scope: &requested,
+                    route,
+                    episode,
+                    wake: WakeEndpoint::new(address),
+                },
+                &reactor,
+            )
+        })
+        .await
+        .unwrap();
+        match (case, result) {
+            (_, Ok(selection)) if active => {
+                let selected = tokio::task::spawn_blocking(move || {
+                    select_joined_record_for_test(selection, || match case {
+                        "stop-after-accepted" => stop.stop(),
+                        "expire-after-accepted" => clock.0.store(expires_ms, Ordering::SeqCst),
+                        _ => {}
+                    })
+                })
+                .await
+                .unwrap();
+                if case == "match" {
+                    assert_eq!(selected, Ok(()));
+                } else {
+                    assert_eq!(selected, Err(ReadFailure::Unreachable), "{case}");
+                }
+                peer.unwrap().join().unwrap();
+            }
+            ("stop", Err(NativeClientError::Io(io::ErrorKind::ConnectionAborted)))
+            | ("expiry", Err(NativeClientError::Io(io::ErrorKind::TimedOut)))
+            | ("credential", Err(NativeClientError::Storage(PrivateStateError::Conflict))) => {}
+            (_, Err(NativeClientError::Refused))
+                if !active && !matches!(case, "stop" | "expiry" | "credential") => {}
+            _ => panic!("unexpected admission result for {case}"),
+        }
+        let calls = if active { 1 } else { 0 };
+        assert_eq!(dial.0.load(Ordering::SeqCst), calls, "{case}");
     }
 }
