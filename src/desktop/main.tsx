@@ -362,6 +362,7 @@ function DesktopRoot() {
                                                       >
                                                         <VoiceProvider
                                                           controller={voice}
+                                                          keys={dependencies.voiceKey}
                                                           title={(sessionId) => {
                                                             const sessions =
                                                               store.getState().workspace

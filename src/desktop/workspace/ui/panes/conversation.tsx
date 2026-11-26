@@ -19,7 +19,7 @@ import {
   selectComposerText,
   selectNextModel,
 } from "../../adapters/store/selectors"
-import type { ModelRef } from "../../model/workspace-index"
+import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
 import { useComposerVoice, VoiceDock } from "../../../voice"
@@ -177,7 +177,16 @@ export const Conversation = memo(function Conversation({
 
 /** The window's call, above the composer, when it talks to this conversation. */
 function ConversationVoice({ sessionId }: { sessionId: string }) {
-  return <VoiceDock sessionId={sessionId} />
+  // The call's light takes the colour of the agent the chat runs.
+  const model = useNextModel(sessionId)
+  const agent = model ? agentOf(model) : undefined
+  return (
+    <VoiceDock
+      sessionId={sessionId}
+      agent={agent}
+      agentName={agent ? agentName(agent) : undefined}
+    />
+  )
 }
 
 /** The docked composer, showing the model the session's next message is sent with. */

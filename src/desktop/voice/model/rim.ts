@@ -1,11 +1,11 @@
 /**
- * How the glow on the composer's edge looks for a call's phase: the numbers
- * the rim's drawing eases towards (`ui/voice-rim.tsx`). Kept apart from the
+ * How the call's light behind the composer looks for a call's phase: the
+ * numbers the glow eases towards (`ui/voice-glow.tsx`). Kept apart from the
  * drawing so what each phase looks like is one table, tested without a
- * canvas.
+ * page. (Named for the rim of light on the composer's edge it first drew.)
  *
- * The rim is quiet by design: a thin line of light with a short halo, never
- * a wash over the conversation.
+ * The light is quiet by design: a glow from below, never a wash over the
+ * conversation.
  */
 import type { VoicePhase } from "./phase"
 

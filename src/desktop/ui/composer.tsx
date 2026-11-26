@@ -75,22 +75,14 @@ export interface ComposerImages {
 
 /**
  * A voice call from the composer, owned outside (`voice/ui/composer-voice.ts`):
- * the button that starts one, and while one talks to this conversation
- * (`active`) its speaker and microphone switches, Pause or Resume, and End,
- * in place of the voice button.
+ * the button that starts one. While one talks to this conversation
+ * (`active`) the button stays, pressed, and the call's own switches are on
+ * the call's tab above the composer (`voice/ui/voice-dock.tsx`): the
+ * composer is the same composer during a call.
  */
 export interface ComposerVoice {
   readonly active: boolean
   readonly start: () => void
-  readonly end: () => void
-  /** Hung up with the provider and kept: Resume reconnects it. */
-  readonly paused: boolean
-  readonly pause: () => void
-  readonly resume: () => void
-  readonly microphoneOn: boolean
-  readonly speakerOn: boolean
-  readonly setMicrophone: (on: boolean) => void
-  readonly setSpeaker: (on: boolean) => void
 }
 
 /**
@@ -408,60 +400,28 @@ function said(note: ComposerNote | undefined) {
   }
 }
 
-/** The voice button, or a call's speaker, microphone, pause and end. */
+/** The voice button: Talk, or pressed while a call talks to this chat. */
 function VoiceControls({ voice }: { voice: ComposerVoice }) {
-  if (!voice.active)
-    return (
-      <IconButton
-        key="voice"
-        icon="voice"
-        label="Talk"
-        tooltipSide="above"
-        className="desktop-voice-start"
-        onClick={voice.start}
-      />
-    )
-  return (
-    <>
-      <IconButton
-        key="speaker"
-        icon={voice.speakerOn ? "speaker" : "speakerOff"}
-        label={voice.speakerOn ? "Mute voice" : "Unmute voice"}
-        tooltipSide="above"
-        className="desktop-voice-toggle"
-        aria-pressed={voice.speakerOn}
-        onClick={() => voice.setSpeaker(!voice.speakerOn)}
-      />
-      <IconButton
-        key="microphone"
-        icon={voice.microphoneOn ? "microphone" : "microphoneOff"}
-        label={voice.microphoneOn ? "Mute microphone" : "Unmute microphone"}
-        tooltipSide="above"
-        className="desktop-voice-toggle"
-        aria-pressed={voice.microphoneOn}
-        onClick={() => voice.setMicrophone(!voice.microphoneOn)}
-      />
-      <IconButton
-        key="pause"
-        icon={voice.paused ? "resume" : "pause"}
-        label={voice.paused ? "Resume call" : "Pause call"}
-        tooltipSide="above"
-        className="desktop-voice-toggle"
-        aria-pressed={voice.paused}
-        onClick={voice.paused ? voice.resume : voice.pause}
-      />
-      <button
-        key="end"
-        type="button"
-        className="desktop-voice-end"
-        aria-label="End call"
-        {...tooltip("End call", { side: "above" })}
-        onClick={voice.end}
-      >
-        <DesktopIcon name="endCall" />
-        <span>End</span>
-      </button>
-    </>
+  return voice.active ? (
+    <IconButton
+      key="voice"
+      icon="voice"
+      label="In a call"
+      tooltipSide="above"
+      className="desktop-voice-start"
+      aria-pressed
+      aria-disabled
+      data-active=""
+    />
+  ) : (
+    <IconButton
+      key="voice"
+      icon="voice"
+      label="Talk"
+      tooltipSide="above"
+      className="desktop-voice-start"
+      onClick={voice.start}
+    />
   )
 }
 

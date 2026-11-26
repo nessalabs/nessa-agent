@@ -5955,17 +5955,34 @@ const steps = {
     const row = run.page.locator('[data-setting="voice"]')
     const pane = dock(run.page)
     const talk = pane.getByRole("button", { name: "Talk", exact: true })
+    const asked = run.page.locator('[data-voice-key="dialog"]')
+    const tab = pane.locator(".voice-tab")
+    const phase = () =>
+      run.page
+        .locator(".voice-dock")
+        .getAttribute("data-phase", { timeout: 1_000 })
+        .catch(() => null)
+    const before = realtime.calls()
     await run.exclusive(async () => {
-      // With no key saved, the refused call offers to add one where it was
-      // refused, instead of sending the person to Settings.
+      // With no key saved, Talk asks for the key straight away: no call is
+      // shown first and then taken back (the window asked the gateway
+      // before Talk was pressed). Any call UI that appears, even for a
+      // frame, is caught by a watcher set before the press.
+      await run.page.evaluate(() => {
+        window.__voiceShown = false
+        window.__voiceWatch?.disconnect()
+        window.__voiceWatch = new MutationObserver(() => {
+          if (document.querySelector(".voice-dock")) window.__voiceShown = true
+        })
+        window.__voiceWatch.observe(document.body, { childList: true, subtree: true })
+      })
       await talk.click({ timeout: 10_000 })
-      const notice = run.page.locator('.voice-dock[data-phase="failed"]')
-      const add = notice.locator('[data-voice-key="add"]')
-      // A locked Nessa (after a restart) offers Unlock in place, and then
-      // starts the call it was asked for.
-      const unlock = notice.locator('[data-voice-fix="unlock"]')
+      // A locked Nessa (after a restart) cannot say whether a key is saved,
+      // so the call is tried, refused, and offers Unlock in place; unlocked,
+      // Talk goes on as first asked, and asks for the key.
+      const unlock = run.page.locator('.voice-dock [data-voice-fix="unlock"]')
       await Promise.race([
-        add.waitFor({ timeout: 15_000 }),
+        asked.waitFor({ timeout: 15_000 }),
         unlock.waitFor({ timeout: 15_000 }),
       ]).catch(() => {})
       if (await unlock.isVisible()) {
@@ -5975,66 +5992,26 @@ const steps = {
           .locator('[data-vault-dialog="unlock"]')
           .waitFor({ timeout: 10_000 })
         await unlockVault(run.page)
+        await run.page.evaluate(() => (window.__voiceShown = false))
       }
       if (
-        !(await add.waitFor({ timeout: 15_000 }).then(
+        !(await asked.waitFor({ timeout: 15_000 }).then(
           () => true,
           () => false,
         ))
       ) {
-        failures.push("a call refused for want of a key does not offer to add one")
+        failures.push("Talk with no key saved does not ask for the key")
         return
       }
-      if (/Settings ›/.test((await notice.textContent()) ?? ""))
-        failures.push("the missing-key notice still sends the person to Settings")
-      // The notice says the key is for voice, and is one quiet row: the
-      // sentence, Add key, and a close side by side on one line, not
-      // buttons stacked under it, and no OK.
-      const said = (await notice.textContent()) ?? ""
-      if (!/voice/i.test(said) || !/OpenAI API key/.test(said))
-        failures.push(
-          `the missing-key notice does not say voice needs an OpenAI API key: "${said}"`,
-        )
-      const close = notice.locator("[data-voice-dismiss]")
-      if ((await close.count()) !== 1)
-        failures.push("the missing-key notice has no close")
-      if ((await notice.getByRole("button", { name: "OK", exact: true }).count()) > 0)
-        failures.push("the missing-key notice still offers OK")
-      const layout = await notice.evaluate((dock) => {
-        const parts = [
-          ".voice-notice-text",
-          '[data-voice-key="add"]',
-          "[data-voice-dismiss]",
-        ].map((selector) => dock.querySelector(selector)?.getBoundingClientRect())
-        if (parts.some((box) => !box)) return null
-        const middles = parts.map((box) => box.top + box.height / 2)
-        const lefts = parts.map((box) => box.left)
-        return {
-          spread: Math.max(...middles) - Math.min(...middles),
-          inOrder: lefts[0] < lefts[1] && lefts[1] < lefts[2],
-          // A border or a fill of its own would make it a panel.
-          boxed: (() => {
-            const style = getComputedStyle(dock.querySelector(".voice-notice"))
-            return (
-              parseFloat(style.borderTopWidth) > 0 ||
-              parseFloat(style.borderBottomWidth) > 0 ||
-              !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(style.backgroundColor)
-            )
-          })(),
-        }
-      })
-      if (!layout)
-        failures.push("the missing-key notice lacks its sentence, Add key or close")
-      else {
-        if (layout.spread > 4 || !layout.inOrder)
-          failures.push(
-            `the missing-key notice is not one row (spread ${layout.spread}px)`,
-          )
-        if (layout.boxed) failures.push("the missing-key notice is drawn as a box")
-      }
-      await shot("key-missing")
-      await add.click()
-      const asked = run.page.locator('[data-voice-key="dialog"]')
+      if (await run.page.evaluate(() => window.__voiceShown))
+        failures.push("Talk with no key saved showed a call before asking for the key")
+      if (realtime.calls() !== before)
+        failures.push("Talk with no key saved opened a call before the key was saved")
+      // The dialog says why it asks, and that saving starts the call.
+      const said = (await asked.textContent()) ?? ""
+      if (!/OpenAI/.test(said) || !/Save and talk/.test(said))
+        failures.push(`the key dialog does not ask for the key to talk: "${said}"`)
+      await shot("key-asked")
       await asked.locator('[data-voice-key="input"]').fill(realtime.key)
       await asked.locator('[data-voice-key="save"]').click()
       const unlocking = run.page.locator('[data-vault-dialog="unlock"]')
@@ -6049,14 +6026,18 @@ const steps = {
           () => false,
         ))
       )
-        failures.push("the key dialog stayed open after Save")
+        failures.push("the key dialog stayed open after Save and talk")
+      await run.page.evaluate(() => window.__voiceWatch?.disconnect())
+      // Saving the key started the call it was asked for.
       if (
-        !(await notice.waitFor({ state: "hidden", timeout: 5_000 }).then(
-          () => true,
-          () => false,
+        !(await waitFor(
+          async () => realtime.open() && (await phase()) === "listening",
+          15_000,
         ))
       )
-        failures.push("the missing-key notice stayed after the key was saved")
+        failures.push(`Save and talk did not open a call (phase ${await phase()})`)
+      if (realtime.calls() !== before + 1)
+        failures.push(`Save and talk opened ${realtime.calls() - before} calls, not one`)
       // Settings says the key is saved, in one word, with no field to type in.
       await openAccounts(run.page)
       const saved = await run.page
@@ -6073,71 +6054,38 @@ const steps = {
     if (failures.length) return
     if (!(await run.client.voice.status()).keySaved)
       failures.push("the gateway does not report the voice key saved")
-    const rim = run.page.locator(".workspace-dock .voice-rim")
-    const phase = () =>
-      run.page
-        .locator(".voice-dock")
-        .getAttribute("data-phase", { timeout: 1_000 })
-        .catch(() => null)
-    const before = realtime.calls()
-    await talk.click({ timeout: 10_000 })
-    if (
-      !(await waitFor(
-        async () => realtime.open() && (await phase()) === "listening",
-        15_000,
-      ))
-    ) {
-      failures.push(`Talk did not open a call (phase ${await phase()})`)
+    if (!(await waitFor(async () => (await phase()) === "listening", 10_000))) {
+      failures.push(`the call is ${await phase()} after Settings closed, not listening`)
       return
     }
-    if (realtime.calls() !== before + 1)
-      failures.push(`Talk opened ${realtime.calls() - before} calls, not one`)
-    // The call is a glow on the composer's edge: its canvas lies over the
-    // composer's card and lights the page just outside it. No orb is left.
-    if ((await rim.count()) !== 1) failures.push("the call shows no glow on the composer")
+    // The call is a tab on the composer and a light behind it: the composer
+    // keeps its own controls, with the voice button only pressed.
+    const glow = run.page.locator(".workspace-dock .voice-glow")
+    if ((await glow.count()) !== 1)
+      failures.push("the call shows no light behind the composer")
     else {
-      const boxes = await rim.evaluate((canvas) => {
-        const card = canvas
-          .closest(".workspace-dock")
-          ?.querySelector("form.desktop-composer")
-          ?.getBoundingClientRect()
-        const over = canvas.getBoundingClientRect()
-        const edges = (box) =>
-          box ? [box.left, box.top, box.right, box.bottom].map(Math.round) : null
-        return { rim: canvas.dataset.rim, over: edges(over), card: edges(card) }
-      })
-      // Chromium can always run the shader: a still ring there is a glow
-      // that failed to start. Elsewhere the canvas may not be drawn at all.
-      if (boxes.rim === "plain" && run.engine === "chromium")
-        failures.push("the call's glow fell back to the still ring")
-      if (
-        boxes.rim !== "plain" &&
-        !(
-          boxes.card &&
-          boxes.over[0] < boxes.card[0] &&
-          boxes.over[1] <= boxes.card[1] &&
-          boxes.over[2] > boxes.card[2] &&
-          boxes.over[3] >= boxes.card[3]
-        )
+      const agent = await run.page.locator(".voice-dock").getAttribute("data-agent")
+      if (!agent || agent === "none")
+        failures.push("the call's light does not take the chat's agent's colour")
+      // Behind, not over: the light is under the composer's card.
+      const behind = await glow.evaluate(
+        (light) => Number.parseInt(getComputedStyle(light).zIndex, 10) < 0,
       )
-        failures.push(
-          `the call's glow ${JSON.stringify(boxes.over)} does not reach around the composer ${JSON.stringify(boxes.card)}`,
-        )
-      // Lit is read off the screen: the strip of page just left of the card
-      // looks different with the glow than with it taken away, and the same
-      // twice without it, so nothing else there is moving.
+      if (!behind) failures.push("the call's light is drawn over the composer")
+      // Lit is read off the screen: the strip of page beside the card looks
+      // different with the light than with it taken away, and the same twice
+      // without it, so nothing else there is moving.
       const lit = await waitFor(async () => {
-        if ((await rim.getAttribute("data-rim")) === "plain") return true
         const card = await pane.locator("form.desktop-composer").boundingBox()
         if (!card) return false
         const clip = {
-          x: Math.round(card.x) - 6,
+          x: Math.max(0, Math.round(card.x) - 12),
           y: Math.round(card.y + card.height / 2) - 10,
-          width: 5,
+          width: 8,
           height: 20,
         }
         const hide = await run.page.addStyleTag({
-          content: ".voice-rim { visibility: hidden !important; }",
+          content: ".voice-glow { visibility: hidden !important; }",
         })
         const without = await run.page.screenshot({ clip })
         const again = await run.page.screenshot({ clip })
@@ -6145,15 +6093,50 @@ const steps = {
         const withGlow = await run.page.screenshot({ clip })
         return without.equals(again) && !withGlow.equals(without)
       }, 5_000)
-      if (!lit) failures.push("the call's glow lights nothing beside the composer")
+      if (!lit) failures.push("the call's light lights nothing beside the composer")
     }
-    if ((await run.page.locator(".voice-orb").count()) > 0)
-      failures.push("the call still shows the orb")
-    for (const name of ["Mute voice", "Mute microphone", "End call"])
-      if (!(await pane.getByRole("button", { name, exact: true }).isVisible()))
-        failures.push(`the composer shows no ${name} button during the call`)
+    if ((await run.page.locator(".voice-orb, .voice-rim").count()) > 0)
+      failures.push("the call still shows the orb or the composer's rim")
+    for (const name of ["Mute voice", "Mute microphone", "Pause call", "End call"])
+      if (!(await tab.getByRole("button", { name, exact: true }).isVisible()))
+        failures.push(`the call's tab shows no ${name} button`)
+    const composerForm = pane.locator("form.desktop-composer")
+    if (
+      (await composerForm
+        .getByRole("button", { name: "End call", exact: true })
+        .count()) > 0
+    )
+      failures.push("the composer still holds the call's switches")
     if ((await talk.count()) > 0) failures.push("Talk is still offered during the call")
+    if (
+      (await composerForm
+        .locator('.desktop-voice-start[aria-pressed="true"]')
+        .count()) !== 1
+    )
+      failures.push("the composer's voice button is not shown pressed during the call")
     await expectShown(run.page, "Listening", failures)
+    // The tab sits on the composer: its foot meets the card's top edge, and
+    // it is narrower than the card by the card's corners.
+    const fit = await tab.evaluate((element) => {
+      const card = element
+        .closest(".workspace-dock")
+        ?.querySelector("form.desktop-composer")
+        ?.getBoundingClientRect()
+      const box = element.getBoundingClientRect()
+      return card
+        ? {
+            gap: Math.round(card.top - box.bottom),
+            inside: box.left > card.left && box.right < card.right,
+            width: box.width,
+          }
+        : null
+    })
+    if (!fit) failures.push("the call's tab has no composer under it")
+    else {
+      if (Math.abs(fit.gap) > 2)
+        failures.push(`the call's tab stands ${fit.gap}px off the composer`)
+      if (!fit.inside) failures.push("the call's tab is wider than the composer")
+    }
     await shot("listening")
     // The gateway asked for the call as the coordinator, with both tools.
     const session = realtime.minted.at(-1)?.session
@@ -6194,52 +6177,61 @@ const steps = {
       )
     await shot("answered")
 
-    // Words said or heard stay on one line however long they run: the
-    // newest are kept, the older run off the line's start, and short words
-    // sit centred. Measured on a copy of the line with words put in it, in
-    // the dock's own layout, since the call speaks for a moment only.
-    const lines = await run.page.evaluate(() => {
-      const line = document.querySelector(".voice-dock .voice-bubble")
-      if (!line) return null
-      const measure = (text) => {
-        const copy = line.cloneNode(true)
-        copy.setAttribute("data-running", "")
-        copy.querySelector(".voice-bubble-words").textContent = text
-        line.after(copy)
-        const box = copy.getBoundingClientRect()
-        const words = copy.querySelector(".voice-bubble-words").getBoundingClientRect()
-        const one = parseFloat(getComputedStyle(copy).lineHeight)
-        copy.remove()
-        return {
-          lines: box.height / one,
-          left: words.left - box.left,
-          right: box.right - words.right,
-        }
-      }
-      return {
-        long: measure(
-          "I can pass along anything you ask, whether it is code analysis, file checks or project digging, straight to the agent, and I will tell you what it says once it is done. ".repeat(
-            3,
+    // The tab holds what was said, a few lines at a time, and never changes
+    // width; opened, the same tab is taller and holds the whole call.
+    const words = tab.locator(".voice-tab-words")
+    const measure = () =>
+      tab.evaluate((element) => ({
+        width: element.getBoundingClientRect().width,
+        words:
+          element.querySelector(".voice-tab-words")?.getBoundingClientRect().height ?? 0,
+        lines: element.querySelectorAll(".voice-tab-line").length,
+      }))
+    if (
+      !(await waitFor(
+        async () =>
+          /voice/.test(
+            (await words
+              .locator('.voice-tab-line[data-who="person"]')
+              .last()
+              .textContent()
+              .catch(() => "")) ?? "",
           ),
-        ),
-        short: measure("Sure, one moment."),
-      }
-    })
-    if (!lines) failures.push("the call shows no line above the composer")
-    else {
-      if (lines.long.lines > 1.2 || lines.short.lines > 1.2)
-        failures.push(
-          `words on the call's line take ${lines.long.lines.toFixed(1)} lines when long and ${lines.short.lines.toFixed(1)} when short, not one`,
-        )
-      if (Math.abs(lines.long.right) > 1 || lines.long.left > -50)
-        failures.push(
-          `long words on the call's line do not keep their end in view (start ${Math.round(lines.long.left)}px, end ${Math.round(lines.long.right)}px inside the line)`,
-        )
-      if (lines.short.left < 0 || Math.abs(lines.short.left - lines.short.right) > 2)
-        failures.push(
-          `short words on the call's line are not centred (${Math.round(lines.short.left)}px before, ${Math.round(lines.short.right)}px after)`,
-        )
-    }
+        10_000,
+      ))
+    )
+      failures.push("the call's tab does not show what the person said")
+    const closed = await measure()
+    if (fit && Math.abs(closed.width - fit.width) > 1)
+      failures.push(
+        `the call's tab changed width as words came (${fit.width}px, then ${closed.width}px)`,
+      )
+    if (closed.lines > 3)
+      failures.push(`the closed tab shows ${closed.lines} lines, not three at most`)
+    await tab.getByRole("button", { name: "Show transcript", exact: true }).click()
+    const opened = await waitFor(
+      async () => (await measure()).words > closed.words + 40,
+      3_000,
+    )
+    const open = await measure()
+    if (!opened) failures.push("Show transcript did not open the call's tab")
+    if (Math.abs(open.width - closed.width) > 1)
+      failures.push(
+        `opening the call's tab changed its width (${closed.width}px, then ${open.width}px)`,
+      )
+    if (!(await words.locator(".voice-tab-who", { hasText: "You" }).first().isVisible()))
+      failures.push("the open tab does not say who said each line")
+    await shot("transcript")
+    await tab.getByRole("button", { name: "Hide transcript", exact: true }).click()
+    if (
+      !(await waitFor(
+        async () => Math.abs((await measure()).words - closed.words) < 1,
+        3_000,
+      ))
+    )
+      failures.push(
+        "Hide transcript did not bring the call's tab back to its closed height",
+      )
 
     // Muting the microphone throws away what it half heard.
     const clears = () =>
@@ -6323,7 +6315,7 @@ const steps = {
       const beside = await waitFor(
         async () =>
           (await run.page.locator(css.pane).count()) === 2 &&
-          (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 0,
+          (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 0,
         10_000,
       )
       if (!beside)
@@ -6333,7 +6325,7 @@ const steps = {
         if (
           !(await waitFor(
             async () =>
-              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+              (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1,
             5_000,
           ))
         )
@@ -6351,7 +6343,7 @@ const steps = {
           !(await waitFor(
             async () =>
               (await run.page.locator(css.pane).count()) === 1 &&
-              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+              (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1,
             10_000,
           ))
         )
@@ -6555,7 +6547,7 @@ const steps = {
       if (
         !(await waitFor(
           async () =>
-            (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1 &&
+            (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1 &&
             (await face.count()) === 0,
           10_000,
         ))
@@ -6595,7 +6587,7 @@ const steps = {
           async () =>
             realtime.calls() === calls + 1 &&
             realtime.open() &&
-            (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1 &&
+            (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1 &&
             (await phase()) === "listening",
           15_000,
         ))
@@ -6658,7 +6650,7 @@ const steps = {
             async () =>
               realtime.calls() === dropped + 1 &&
               realtime.open() &&
-              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1 &&
+              (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1 &&
               (await phase()) === "listening",
             15_000,
           ))
@@ -6817,7 +6809,7 @@ const steps = {
             async () =>
               (await run.page.locator(`${css.focusedPane} ${css.paneHome}`).count()) ===
                 0 &&
-              (await run.page.locator(`${css.focusedPane} .voice-rim`).count()) === 1,
+              (await run.page.locator(`${css.focusedPane} .voice-glow`).count()) === 1,
             10_000,
           ))
         )
@@ -10389,7 +10381,7 @@ const steps = {
         const card = element.querySelector("form.desktop-composer")
         return card?.nextElementSibling?.className ?? null
       })
-      if (under !== null && !String(under).includes("voice-rim"))
+      if (under !== null)
         failures.push(`something stands under the composer: ${JSON.stringify(under)}`)
       if (run.evidence)
         await dock.screenshot({

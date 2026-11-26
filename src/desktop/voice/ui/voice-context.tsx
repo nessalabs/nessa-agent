@@ -16,6 +16,9 @@ import {
 } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { Dialog, DialogClose } from "@nessa-ui/react/dialog"
+import { VoiceKeyDialog } from "../../settings/ui/voice-key-row"
+import { useVaultSettled } from "../../../vault"
+import type { WatchedVoiceKey } from "../adapters/watched-voice-key"
 import type { VoiceController, VoiceSnapshot } from "../application/voice-controller"
 
 interface Voice {
@@ -51,17 +54,26 @@ const notShown = () => false
  * would end that call, so the person is asked first, once for the window:
  * the question names the chat whose call ends (`title`, by its session).
  *
+ * A call needs an OpenAI key, so the window asks the gateway whether one is
+ * saved before Talk is pressed (`keys`). With none saved Talk asks for the
+ * key at once and shows no call at all until it is saved, rather than a call
+ * that connects and is then refused. A call the gateway refuses all the same
+ * (the key was removed meanwhile, or the answer is not in yet) says so in
+ * the chat as before.
+ *
  * A call goes on while no pane shows its chat, so one that fails or drops
  * then has no pane to say so in. The window says it instead, with the way
  * back to the chat (`showChat`), where the chat's own notice offers the fix.
  */
 export function VoiceProvider({
   controller,
+  keys,
   title,
   showChat,
   children,
 }: {
   controller: VoiceController | undefined
+  keys?: WatchedVoiceKey
   title?: (sessionId: string) => string | null
   showChat?: (sessionId: string) => void
   children: ReactNode
@@ -79,13 +91,43 @@ export function VoiceProvider({
   )
   // The chat Talk was pressed in while a call talks to another.
   const [asked, setAsked] = useState<string | null>(null)
+  // The chat Talk was pressed in with no key saved: the key is asked for,
+  // and saving it starts the call there.
+  const [keyFor, setKeyFor] = useState<string | null>(null)
+  // Whether a key is saved is asked as the window opens, and again once
+  // Nessa is unlocked, since a locked vault cannot say.
+  const vaultSettled = useVaultSettled()
+  useEffect(() => {
+    void keys?.read()
+  }, [keys, vaultSettled])
+  // A call refused for want of a key means none is saved, whatever was heard.
+  const refusedForKey = snapshot?.phase === "failed" && snapshot.fix === "key"
+  useEffect(() => {
+    if (refusedForKey) keys?.missing()
+  }, [keys, refusedForKey])
+  /** Starts the call, or asks for the key first when the gateway said none is saved. */
+  const talk = useCallback(
+    async (sessionId: string) => {
+      if (!controller) return
+      // Asked again before it is acted on: a key saved elsewhere since counts.
+      if (keys?.known() === false) {
+        const now = await keys.read()
+        if (now.kind === "read" && !now.keySaved) {
+          setKeyFor(sessionId)
+          return
+        }
+      }
+      void controller.start(sessionId)
+    },
+    [controller, keys],
+  )
   const start = useCallback(
     (sessionId: string) => {
       if (!controller) return
       if (callElsewhere(controller.snapshot(), sessionId)) setAsked(sessionId)
-      else void controller.start(sessionId)
+      else void talk(sessionId)
     },
-    [controller],
+    [controller, talk],
   )
   const voice = useMemo(
     () => (controller ? { controller, start } : undefined),
@@ -137,7 +179,7 @@ export function VoiceProvider({
                 data-voice-move-action="confirm"
                 onClick={() => {
                   setAsked(null)
-                  void controller.start(moving.to)
+                  void talk(moving.to)
                 }}
               >
                 Talk here
@@ -176,6 +218,14 @@ export function VoiceProvider({
               </DialogClose>
             </>
           }
+        />
+      ) : controller && keyFor !== null ? (
+        <VoiceKeyDialog
+          forCall
+          onClose={(saved) => {
+            setKeyFor(null)
+            if (saved) void controller.start(keyFor)
+          }}
         />
       ) : null}
     </VoiceContext.Provider>

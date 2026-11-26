@@ -7,6 +7,7 @@ const idle: VoiceSnapshot = {
   sessionId: null,
   hearing: "",
   saying: "",
+  transcript: [],
   microphoneOn: true,
   speakerOn: true,
   notice: null,

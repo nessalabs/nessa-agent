@@ -70,6 +70,25 @@ Tidying (`model/tidy.ts`) is a pure function: fillers ("um", "uh", "erm"),
 repeated words and a leading lowercase are fixed, nothing else. The
 transcription model is also asked for clean punctuated text.
 
+In the pane, a call is a tab tucked onto the top of the composer
+(`voice/ui/voice-dock.tsx`) and a light rising from behind it in the colour of
+the agent the chat runs (`voice-glow.tsx`); the composer itself does not
+change, and its voice button only shows pressed. The tab is one width
+whatever is said: a header saying where the call stands ("Listening",
+"Codex is working…") with the call's switches, and under it the last three
+lines said, from `VoiceSnapshot.transcript` and the words still being said.
+Opened, the same tab is taller and scrolls through the whole call. A call that
+failed or dropped keeps the header alone, with the one fix and a close.
+
+Talk asks the gateway first. The window keeps the gateway's last answer about
+the key (`adapters/watched-voice-key.ts`: read as the window opens and when
+Nessa is unlocked, updated by every save and removal, and marked missing when a
+call is refused for want of one). When it says no key is saved, Talk asks the
+gateway again and, still none, opens the key dialog at once, showing no call
+at all; saving the key starts the call. The gateway stays the authority: a
+call it refuses anyway (no answer yet, the key removed meanwhile) says so on
+the tab, with Add key.
+
 A new chat's home offers Talk too, so a chat can be started by talking. The
 call is about the id the window chose for the new chat, which the gateway
 does not know yet: `voice.startCall` admits a call about a chat that is

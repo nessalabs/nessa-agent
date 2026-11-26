@@ -1,8 +1,8 @@
 /**
- * A conversation composer's voice controls, from the window's call: the
- * button starts a call about this session, and while the call talks to it
- * the composer shows that call's switches, Pause or Resume among them.
- * Undefined without a controller.
+ * A conversation composer's voice button, from the window's call: it starts
+ * a call about this session (asking for the key first when none is saved),
+ * and shows pressed while the call talks to it. The call's switches are on
+ * its tab (`voice-dock.tsx`). Undefined without a controller.
  */
 import { useMemo } from "react"
 import type { ComposerVoice } from "../../ui/composer"
@@ -18,9 +18,6 @@ export function useComposerVoice(sessionId: string): ComposerVoice | undefined {
     snapshot.phase !== "idle" &&
     snapshot.phase !== "failed" &&
     snapshot.phase !== "dropped"
-  const paused = open && snapshot.phase === "paused"
-  const microphoneOn = snapshot?.microphoneOn ?? true
-  const speakerOn = snapshot?.speakerOn ?? true
   return useMemo(
     () =>
       controller && start
@@ -28,16 +25,8 @@ export function useComposerVoice(sessionId: string): ComposerVoice | undefined {
             active: open,
             // Asked first when a call talks to another chat: starting ends it.
             start: () => start(sessionId),
-            end: () => controller.end(),
-            paused,
-            pause: () => controller.pause(),
-            resume: () => void controller.resume(),
-            microphoneOn,
-            speakerOn,
-            setMicrophone: (on: boolean) => controller.setMicrophone(on),
-            setSpeaker: (on: boolean) => controller.setSpeaker(on),
           }
         : undefined,
-    [controller, start, open, paused, microphoneOn, speakerOn, sessionId],
+    [controller, start, open, sessionId],
   )
 }
