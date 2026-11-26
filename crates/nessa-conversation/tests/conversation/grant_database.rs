@@ -361,7 +361,9 @@ async fn compatibility_open_preserves_activated_grants_without_a_directory_write
     drop(store);
     assert_eq!(std::fs::read(&grants).unwrap(), before);
 
-    let store = LocalConversationStore::open(&opened.path).unwrap();
+    let store = LocalConversationStore::open(&opened.path)
+        .unwrap()
+        .with_access_policy(crate::conversation_test_support::access_policy());
     assert_eq!(store.grant_stream("phone").await.unwrap(), original_stream);
     assert!(grant(&store, &second, "phone").await);
     let next = store.grant_stream("phone").await.unwrap();
