@@ -30,6 +30,7 @@ use nessa_sync::replication::{
     catalogue::{CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES},
     domain::{Id, Scope},
 };
+use nessa_types::app_identity::MAX_EXTENSION_APP_ID_BYTES;
 use std::path::{Path, PathBuf};
 use std::{
     future::Future,
@@ -1296,7 +1297,7 @@ async fn extension_namespace_conversations_round_trip_and_stay_out_of_default_li
         ConversationRepository::load(&store, &ext_id).await,
         Err(ConversationError::Metadata)
     ));
-    let overlong = "a".repeat(nessa_auth::domain::MAX_EXTENSION_APP_ID_BYTES + 1);
+    let overlong = "a".repeat(MAX_EXTENSION_APP_ID_BYTES + 1);
     connection
         .execute(
             "UPDATE conversations SET app_namespace = ?2 WHERE id = ?1",

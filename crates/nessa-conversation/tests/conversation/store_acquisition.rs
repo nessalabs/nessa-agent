@@ -1,13 +1,14 @@
 //! Actual SQLite projections refuse oversized text before selecting its bytes.
 use super::{conversation, summary, text};
 use crate::domain::Conversation;
-use nessa_auth::domain::{DEFAULT_APP_NAMESPACE, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
 use nessa_local_database::rusqlite::{params, types::Value, Connection};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationModelId, ConversationPreview, ConversationTitle,
 };
 use nessa_sync::replication::domain::MAX_ID_BYTES;
+use nessa_types::app_identity::DEFAULT_APP_NAMESPACE;
 
 #[test]
 fn acquisition_admits_full_multibyte_text_in_utf8_and_utf16_without_selecting_oversize() {

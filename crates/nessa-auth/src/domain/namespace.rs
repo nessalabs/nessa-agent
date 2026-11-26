@@ -6,13 +6,8 @@
 //! [`ExtensionAppId::new`] rejects `"nessa"` with
 //! [`ExtensionAppIdError::Reserved`]; namespace construction translates it to
 //! [`DomainError::ReservedAppNamespace`].
-use nessa_types::app_identity::ExtensionAppIdError;
-
 use super::DomainError;
-
-pub use nessa_types::app_identity::{
-    ExtensionAppId, DEFAULT_APP_NAMESPACE, MAX_EXTENSION_APP_ID_BYTES,
-};
+use nessa_types::app_identity::{ExtensionAppId, ExtensionAppIdError, DEFAULT_APP_NAMESPACE};
 
 fn namespace_error(error: ExtensionAppIdError) -> DomainError {
     match error {
@@ -83,6 +78,7 @@ impl AppNamespace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nessa_types::app_identity::MAX_EXTENSION_APP_ID_BYTES;
 
     #[test]
     fn default_namespace_is_hardcoded_nessa() {

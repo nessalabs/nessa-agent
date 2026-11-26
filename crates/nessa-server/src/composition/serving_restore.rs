@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
+use nessa_types::app_identity::DEFAULT_APP_NAMESPACE;
 
 use nessa_backup::domain::{
     decode_deferred, decode_identity, deferred_session_name, Fingerprint, JOURNAL_HEADER,
@@ -483,7 +484,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
             agent: "restored".into(),
             model: "restored".into(),
             approval_mode: "ask".into(),
-            app_namespace: nessa_auth::domain::DEFAULT_APP_NAMESPACE.into(),
+            app_namespace: DEFAULT_APP_NAMESPACE.into(),
             creation_revision: 1,
             change_revision: 1,
             title: None,
@@ -509,7 +510,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 agent: "restored".into(),
                 model: "restored".into(),
                 approval_mode: "ask".into(),
-                app_namespace: nessa_auth::domain::DEFAULT_APP_NAMESPACE.into(),
+                app_namespace: DEFAULT_APP_NAMESPACE.into(),
                 creation_revision: 1,
                 change_revision: 1,
                 title: None,
@@ -961,7 +962,7 @@ fn merge_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::conversation_fields;
+    use super::{conversation_fields, DEFAULT_APP_NAMESPACE};
     use serde_json::json;
 
     fn exported(app_namespace: Option<&str>) -> serde_json::Value {
@@ -989,10 +990,7 @@ mod tests {
     #[test]
     fn conversation_fields_default_a_legacy_row_to_nessa() {
         let fields = conversation_fields(&exported(None)).expect("restorable");
-        assert_eq!(
-            fields.app_namespace,
-            nessa_auth::domain::DEFAULT_APP_NAMESPACE
-        );
+        assert_eq!(fields.app_namespace, DEFAULT_APP_NAMESPACE);
     }
 
     #[test]

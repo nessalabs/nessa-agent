@@ -39,9 +39,7 @@ pub use models::{
     Credential, Grant, Membership, MembershipRole, MembershipStatus, Organization, Principal,
     PrincipalKind, Resource,
 };
-pub use namespace::{
-    AppNamespace, ExtensionAppId, DEFAULT_APP_NAMESPACE, MAX_EXTENSION_APP_ID_BYTES,
-};
+pub use namespace::AppNamespace;
 pub use transition::{
     CredentialLifecycle, CredentialTransition, Initiator, IssuanceCause, RevocationCause,
     Supersession, TransitionCause,

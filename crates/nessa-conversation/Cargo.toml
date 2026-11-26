@@ -21,6 +21,7 @@ nessa-agent-install = { path = "../nessa-agent-install" }
 nessa-attachments = { path = "../nessa-attachments" }
 nessa-device-pairing = { path = "../nessa-device-pairing" }
 nessa-auth = { path = "../nessa-auth" }
+nessa-types = { path = "../nessa-types" }
 nessa-mcp-authorization = { path = "../nessa-mcp-authorization" }
 nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
 nessa-local-storage = { path = "../nessa-local-storage", features = ["physical-operation"] }
