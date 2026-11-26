@@ -36,8 +36,9 @@
 }
 
 /*
- * The light: a wide soft bloom from the foot of the pane, behind the
- * composer, swelling with whoever talks (`--voice-glow`, `--voice-reach`,
+ * The light: a wide soft bloom centred on the composer's foot, behind the
+ * composer, fading out below as well as above (a home's composer sits
+ * mid-page, with room under it; a conversation's pane cuts it off), swelling with whoever talks (`--voice-glow`, `--voice-reach`,
  * set each frame by `voice-glow.tsx`) and draining to grey with the
  * microphone off (`--voice-grey`). A fine dot screen over it keeps a broad
  * gradient from banding.
@@ -45,17 +46,17 @@
 .voice-glow {
   position: absolute;
   z-index: -1;
-  bottom: 0;
+  bottom: -200px;
   left: 50%;
   width: 160%;
-  height: 340px;
+  height: 540px;
   pointer-events: none;
   transform: translateX(-50%) scaleY(var(--voice-reach, 1));
-  transform-origin: 50% 100%;
+  transform-origin: 50% 63%;
   opacity: var(--voice-glow, 0);
   filter: grayscale(var(--voice-grey, 0));
   background: radial-gradient(
-    55% 70% at 50% 100%,
+    55% 44% at 50% 63%,
     rgb(var(--voice-light) / 0.7) 0%,
     rgb(var(--voice-light) / 0.24) 45%,
     transparent 75%
@@ -68,8 +69,8 @@
   inset: 0;
   background-image: radial-gradient(rgb(255 255 255 / 0.06) 1px, transparent 1px);
   background-size: 4px 4px;
-  -webkit-mask-image: radial-gradient(55% 70% at 50% 100%, #000, transparent 75%);
-  mask-image: radial-gradient(55% 70% at 50% 100%, #000, transparent 75%);
+  -webkit-mask-image: radial-gradient(55% 44% at 50% 63%, #000, transparent 75%);
+  mask-image: radial-gradient(55% 44% at 50% 63%, #000, transparent 75%);
 }
 
 /*
