@@ -61,8 +61,11 @@ pub struct Report {
 pub enum Verdict {
     Ignored,
     /// Forget the records of `pid`; `None` when its pid was unreadable.
+    /// `time` is the report's signed time, so a rejected report older than
+    /// one already taken from `pid` can be ignored as a replay.
     Rejected {
         pid: Option<u32>,
+        time: u64,
     },
     Accepted(Report),
 }
@@ -147,7 +150,7 @@ pub fn verify(body: &str, token: &str, now_secs: u64) -> Verdict {
         .and_then(positive)
         .and_then(|pid| u32::try_from(pid).ok())
         .filter(|pid| i32::try_from(*pid).is_ok());
-    let rejected = Verdict::Rejected { pid };
+    let rejected = Verdict::Rejected { pid, time };
     let Some(pid) = pid else {
         return rejected;
     };
@@ -386,7 +389,7 @@ mod tests {
     #[test]
     fn rejects_what_breaks_a_rule_after_the_mac_and_time() {
         let rejected = |body: &str| verify(&signed(body, TOKEN), TOKEN, 1000);
-        let at = |pid| Verdict::Rejected { pid };
+        let at = |pid| Verdict::Rejected { pid, time: 1000 };
         // A relative program or folder, an option as the program.
         assert_eq!(
             rejected(&format!("pid=42:time=1000:argv={}", b64("bin/nvim"))),
