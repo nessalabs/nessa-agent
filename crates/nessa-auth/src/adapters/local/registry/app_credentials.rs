@@ -25,11 +25,12 @@ use crate::{
         session::{AuthenticatedSession, ReadCurrentSession},
     },
     domain::{
-        Action, AudienceId, CredentialId, DomainError, ExtensionAppId, MembershipId,
-        OrganizationId, PrincipalId, Resource, ResourceId,
+        Action, AudienceId, CredentialId, DomainError, MembershipId, OrganizationId, PrincipalId,
+        Resource, ResourceId,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use nessa_types::app_identity::ExtensionAppId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

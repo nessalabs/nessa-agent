@@ -1,8 +1,6 @@
 //! Stable identity selectors established by application session verification.
-use super::{
-    AppNamespace, AudienceId, CredentialId, ExtensionAppId, MembershipId, OrganizationId,
-    PrincipalId,
-};
+use super::{AppNamespace, AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId};
+use nessa_types::app_identity::ExtensionAppId;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Verified identity selectors, not a snapshot of roles or permission decisions.

@@ -8,8 +8,9 @@ use super::{
     ports::{AccessError, AccessSnapshot, CredentialEvidence, PortFuture},
 };
 use crate::domain::{
-    AudienceId, CredentialId, ExtensionAppId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
+    AudienceId, CredentialId, Initiator, IssuanceCause, OrganizationId, PrincipalId,
 };
+use nessa_types::app_identity::ExtensionAppId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 

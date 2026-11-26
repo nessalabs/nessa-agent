@@ -1,11 +1,12 @@
 //! Bounded SQLite text selection before UTF-8 conversion and owned acquisition.
 use crate::domain::Conversation;
-use nessa_auth::domain::{MAX_EXTENSION_APP_ID_BYTES, MAX_IDENTIFIER_BYTES};
+use nessa_auth::domain::MAX_IDENTIFIER_BYTES;
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationModelId, ConversationPreview, ConversationTitle,
 };
 use nessa_sync::replication::domain::MAX_ID_BYTES;
+use nessa_types::app_identity::MAX_EXTENSION_APP_ID_BYTES;
 
 /// SQL names are fixed by this adapter, never supplied by a caller.
 pub(super) fn text(column: &str, utf8_max: usize, nullable: bool) -> String {

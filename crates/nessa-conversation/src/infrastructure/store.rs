@@ -34,9 +34,7 @@ use crate::domain::{
     ProviderSessionLink,
 };
 use cached::CachedSql;
-use nessa_auth::domain::{
-    AppNamespace, OrganizationId, PrincipalId, DEFAULT_APP_NAMESPACE, MAX_IDENTIFIER_BYTES,
-};
+use nessa_auth::domain::{AppNamespace, OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{
     params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
 };
@@ -55,6 +53,7 @@ use nessa_sync::replication::catalogue::{
     validate_manifest_request, CataloguePass, EntryKey, ManifestRequest, MAX_CATALOGUE_ENTRIES,
 };
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
+use nessa_types::app_identity::DEFAULT_APP_NAMESPACE;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU64;
 use std::path::Path;
