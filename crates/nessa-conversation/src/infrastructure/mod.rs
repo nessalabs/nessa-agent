@@ -122,6 +122,8 @@ mod receiver_authority;
 // built, tests included, where both ends exist.
 pub mod background_tasks;
 mod channels;
+mod directory_policy;
+pub use directory_policy::CedarDirectoryPolicyEvaluator;
 mod scheduled_messages;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
