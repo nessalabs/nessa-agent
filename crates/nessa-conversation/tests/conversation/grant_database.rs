@@ -284,3 +284,96 @@ fn a_refused_current_grant_shape_preserves_wal_mode_and_contents() {
         "wal"
     );
 }
+
+#[tokio::test]
+async fn compatibility_open_leaves_existing_v2_grants_in_place() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(grant(&opened.store, &id, "phone").await);
+    drop(opened.store);
+    let grants = opened.path.with_extension("grants.sqlite3");
+    let before = std::fs::read(&grants).unwrap();
+    let store = LocalConversationStore::open(&opened.path).unwrap();
+    assert!(store.held_grant(&id, "phone").await.unwrap().is_some());
+    drop(super::super::store::MetadataSnapshot::open(&opened.path).unwrap());
+    drop(store);
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+    let database = Connection::open(&grants).unwrap();
+    assert_eq!(grant_file_version(&database), 2);
+    let directory_tables: i64 = database
+        .query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name IN
+             ('directory_grant_state','directory_receiver_log','directory_grant_evidence')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(directory_tables, 0);
+}
+
+fn grant_file_version(database: &Connection) -> i64 {
+    database
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn compatibility_open_preserves_activated_grants_without_a_directory_writer() {
+    let opened = opened();
+    let id = new_id();
+    opened.store.create(owned(&id)).await.unwrap();
+    assert!(grant(&opened.store, &id, "phone").await);
+    drop(opened.store);
+    let grants = opened.path.with_extension("grants.sqlite3");
+    let mut database = Connection::open(&grants).unwrap();
+    let transaction = database.transaction().unwrap();
+    transaction
+        .execute_batch(include_str!(
+            "../../src/infrastructure/store/grants_from_2.sql"
+        ))
+        .unwrap();
+    transaction
+        .execute_batch(
+            "INSERT INTO directory_grant_state
+                VALUES ('directory','fixture','/fixture','receiver','phone',1,'[]',1);
+             INSERT INTO directory_receiver_log
+                VALUES ('phone',1,'directory','fixture','/fixture',1,1);
+             INSERT INTO directory_grant_evidence
+                VALUES (1,'fixture-evidence','operator','request','set','fixture','/fixture',
+                        'receiver','phone','{}','{}',0);",
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    assert_eq!(grant_file_version(&database), 3);
+    drop(database);
+    let before = std::fs::read(&grants).unwrap();
+    let store = LocalConversationStore::open(&opened.path).unwrap();
+    assert!(store.held_grant(&id, "phone").await.unwrap().is_some());
+    drop(super::super::store::MetadataSnapshot::open(&opened.path).unwrap());
+    drop(store);
+    assert_eq!(std::fs::read(&grants).unwrap(), before);
+}
+
+#[test]
+fn a_v3_header_with_missing_directory_tables_is_refused_without_writes() {
+    let opened = opened();
+    drop(opened.store);
+    let grants = opened.path.with_extension("grants.sqlite3");
+    Connection::open(&grants)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 3")
+        .unwrap();
+    let metadata_before = std::fs::read(&opened.path).unwrap();
+    let grant_before = std::fs::read(&grants).unwrap();
+    assert!(matches!(
+        LocalConversationStore::open(&opened.path),
+        Err(crate::infrastructure::ConversationStoreOpenError::Grants {
+            cause: nessa_local_database::OpenError::Damaged(_),
+            ..
+        })
+    ));
+    assert!(super::super::store::MetadataSnapshot::open(&opened.path).is_err());
+    assert_eq!(std::fs::read(&opened.path).unwrap(), metadata_before);
+    assert_eq!(std::fs::read(&grants).unwrap(), grant_before);
+}
