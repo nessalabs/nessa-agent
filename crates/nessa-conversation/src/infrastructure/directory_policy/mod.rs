@@ -1,3 +1,3 @@
 mod cedar;
 
-pub use cedar::observe_directory_policy;
+pub use cedar::CedarDirectoryPolicyEvaluator;

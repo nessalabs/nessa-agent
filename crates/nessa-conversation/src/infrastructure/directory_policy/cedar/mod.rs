@@ -6,7 +6,10 @@ use cedar_policy::{
 };
 use serde_json::{json, Value};
 
-use crate::application::{DirectoryOperation, DirectoryPolicyAnswer, DirectoryPolicyError};
+use crate::application::{
+    DirectoryDenialReason, DirectoryOperation, DirectoryPolicyAnswer, DirectoryPolicyError,
+    DirectoryPolicyEvaluator,
+};
 use crate::domain::{DirectoryGrantState, DirectoryRuleEffect};
 
 struct DirectoryPolicyFacts<'a> {
@@ -14,55 +17,56 @@ struct DirectoryPolicyFacts<'a> {
     within: bool,
     enforced_exec_boundary: bool,
     program: &'a str,
-    argv: &'a [String],
+    argv: &'a [Box<str>],
 }
 
-/// Observe policy for an already selected resource and bounded host facts.
-/// This does not authenticate a caller, select scope, authorize an effect, or audit.
-pub fn observe_directory_policy(
-    state: DirectoryGrantState,
-    operation: &DirectoryOperation,
-) -> Result<DirectoryPolicyAnswer, DirectoryPolicyError> {
-    if !operation.valid()
-        || matches!(
-            &state,
+/// Cedar adapter for the application's unmounted observation port.
+pub struct CedarDirectoryPolicyEvaluator;
+
+impl DirectoryPolicyEvaluator for CedarDirectoryPolicyEvaluator {
+    fn evaluate(
+        &self,
+        state: &DirectoryGrantState,
+        operation: &DirectoryOperation,
+    ) -> Result<DirectoryPolicyAnswer, DirectoryPolicyError> {
+        if matches!(
+            state,
             DirectoryGrantState::Live { revision, .. }
                 | DirectoryGrantState::Revoked { revision } if *revision <= 0
+        ) {
+            return Err(DirectoryPolicyError::InvalidFacts);
+        }
+        let (operation, within, enforced_exec_boundary, program, argv) = match operation {
+            DirectoryOperation::Read { within } => ("read", *within, false, "", &[][..]),
+            DirectoryOperation::Write { within } => ("write", *within, false, "", &[][..]),
+            DirectoryOperation::Exec {
+                within,
+                enforced_boundary,
+                command,
+            } => (
+                "exec",
+                *within,
+                *enforced_boundary,
+                command.program(),
+                command.argv(),
+            ),
+        };
+        evaluate(
+            state,
+            &DirectoryPolicyFacts {
+                operation,
+                within,
+                enforced_exec_boundary,
+                program,
+                argv,
+            },
         )
-    {
-        return Err(DirectoryPolicyError::InvalidFacts);
+        .map_err(|()| DirectoryPolicyError::Unavailable)
     }
-    let (operation, within, enforced_exec_boundary, program, argv) = match operation {
-        DirectoryOperation::Read { within } => ("read", *within, false, "", &[][..]),
-        DirectoryOperation::Write { within } => ("write", *within, false, "", &[][..]),
-        DirectoryOperation::Exec {
-            within,
-            enforced_boundary,
-            program,
-            argv,
-        } => (
-            "exec",
-            *within,
-            *enforced_boundary,
-            program.as_str(),
-            argv.as_slice(),
-        ),
-    };
-    evaluate(
-        state,
-        &DirectoryPolicyFacts {
-            operation,
-            within,
-            enforced_exec_boundary,
-            program,
-            argv,
-        },
-    )
-    .map_err(|()| DirectoryPolicyError::Unavailable)
 }
 
 fn evaluate(
-    state: DirectoryGrantState,
+    state: &DirectoryGrantState,
     facts: &DirectoryPolicyFacts<'_>,
 ) -> Result<DirectoryPolicyAnswer, ()> {
     let (schema, _) =
@@ -72,23 +76,23 @@ fn evaluate(
     let live = if let DirectoryGrantState::Live { grant, .. } = state {
         capabilities = grant.capabilities().facts();
         for (index, rule) in grant.command_rules().iter().enumerate() {
-            let effect = match rule.effect {
+            let effect = match rule.effect() {
                 DirectoryRuleEffect::Allow => "permit",
                 DirectoryRuleEffect::Deny => "forbid",
             };
             let id = PolicyId::new(format!("directory.command.{index}.{effect}"));
             let mut conditions = vec![
                 json!({"==":{"left":attr("operation"),"right":{"Value":"exec"}}}),
-                json!({"==":{"left":attr("program"),"right":{"Value":rule.program}}}),
+                json!({"==":{"left":attr("program"),"right":{"Value":rule.program()}}}),
                 attr("live"),
                 attr("within"),
                 attr("exec"),
                 attr("enforced_exec_boundary"),
             ];
-            if !rule.argv.is_empty() {
+            if !rule.argv().is_empty() {
                 conditions
-                    .push(json!({"==":{"left":attr("argc"),"right":{"Value":rule.argv.len()}}}));
-                for (position, pattern) in rule.argv.iter().enumerate() {
+                    .push(json!({"==":{"left":attr("argc"),"right":{"Value":rule.argv().len()}}}));
+                for (position, pattern) in rule.argv().iter().enumerate() {
                     conditions.push(json!({"like":{
                         "left":attr(&format!("arg{position}")),
                         "pattern":like(pattern)
@@ -119,7 +123,7 @@ fn evaluate(
     });
     for position in 0..crate::domain::MAX_DIRECTORY_ARGV_ITEMS {
         context[format!("arg{position}")] =
-            json!(facts.argv.get(position).map_or("", String::as_str));
+            json!(facts.argv.get(position).map_or("", |argument| argument.as_ref()));
     }
     let entity = |value: &str| -> Result<EntityUid, ()> { value.parse().map_err(|_| ()) };
     let request = Request::new(
@@ -134,15 +138,21 @@ fn evaluate(
     if answer.diagnostics().errors().next().is_some() {
         return Err(());
     }
-    let mut reasons: Vec<_> = answer
+    let mut policy_ids: Vec<Box<str>> = answer
         .diagnostics()
         .reason()
-        .map(ToString::to_string)
+        .map(|id| id.to_string().into_boxed_str())
         .collect();
-    reasons.sort_unstable();
-    Ok(DirectoryPolicyAnswer {
-        permitted: answer.decision() == Decision::Allow,
-        reasons,
+    policy_ids.sort_unstable();
+    let policy_ids = policy_ids.into_boxed_slice();
+    Ok(match answer.decision() {
+        Decision::Allow => DirectoryPolicyAnswer::Permit { policy_ids },
+        Decision::Deny if policy_ids.is_empty() => {
+            DirectoryPolicyAnswer::Deny(DirectoryDenialReason::DefaultDeny)
+        }
+        Decision::Deny => {
+            DirectoryPolicyAnswer::Deny(DirectoryDenialReason::MatchedForbids { policy_ids })
+        }
     })
 }
 

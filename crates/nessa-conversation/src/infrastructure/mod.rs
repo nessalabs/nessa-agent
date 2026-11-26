@@ -123,7 +123,7 @@ mod receiver_authority;
 pub mod background_tasks;
 mod channels;
 mod directory_policy;
-pub use directory_policy::observe_directory_policy;
+pub use directory_policy::CedarDirectoryPolicyEvaluator;
 mod scheduled_messages;
 mod store;
 #[cfg(any(test, feature = "test-support"))]

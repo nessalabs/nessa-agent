@@ -13,21 +13,46 @@ pub const MAX_DIRECTORY_ARGV_PATTERN_BYTES: usize = 128;
 /// Maximum UTF-8 bytes in a durable grant selector.
 pub const MAX_DIRECTORY_SELECTOR_BYTES: usize = 256;
 
-/// The exact stored subject key. A receiver is a different key space from a principal.
+/// The subject's identity space; equal text in different spaces is distinct.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectorySubjectKind {
+    Principal,
+    Receiver,
+}
+
+/// Validated, compact immutable selector for one kind of subject.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DirectorySubject {
-    /// Credential-backed unpaired principal.
-    Principal(String),
-    /// Paired receiver ID, not its linked principal.
-    Receiver(String),
+pub struct DirectorySubject {
+    kind: DirectorySubjectKind,
+    id: Box<str>,
+}
+
+impl DirectorySubject {
+    pub fn new(kind: DirectorySubjectKind, id: String) -> Result<Self, InvalidDirectoryGrant> {
+        if !selector_valid(&id) {
+            return Err(InvalidDirectoryGrant);
+        }
+        Ok(Self {
+            kind,
+            id: id.into_boxed_str(),
+        })
+    }
+
+    pub fn kind(&self) -> DirectorySubjectKind {
+        self.kind
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
 }
 
 /// The canonical location the grantor attested in the named environment.
 /// This value does not check the filesystem or prove that the path still exists.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryResource {
-    environment: String,
-    canonical_path: String,
+    environment: Box<str>,
+    canonical_path: Box<str>,
 }
 
 impl DirectoryResource {
@@ -40,8 +65,8 @@ impl DirectoryResource {
             return Err(InvalidDirectoryGrant);
         }
         Ok(Self {
-            environment,
-            canonical_path,
+            environment: environment.into_boxed_str(),
+            canonical_path: canonical_path.into_boxed_str(),
         })
     }
 
@@ -114,33 +139,63 @@ pub enum DirectoryRuleEffect {
     Deny,
 }
 
-/// Raw matcher data, not Cedar source text. [`DirectoryGrant::new`] validates
-/// these fields before they become grant facts.
+/// Validated matcher facts, not Cedar source text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryCommandRule {
-    pub effect: DirectoryRuleEffect,
-    pub program: String,
-    /// Empty matches all argv for this program; a nonempty list matches exact arity.
-    pub argv: Vec<String>,
+    effect: DirectoryRuleEffect,
+    program: Box<str>,
+    argv: Box<[Box<str>]>,
 }
 
 impl DirectoryCommandRule {
-    fn valid(&self) -> bool {
-        valid_text(&self.program, MAX_DIRECTORY_PROGRAM_BYTES)
-            && !self.program.contains(['/', '\\'])
-            && self.argv.len() <= MAX_DIRECTORY_ARGV_ITEMS
-            && self.argv.iter().all(|part| {
-                part.len() <= MAX_DIRECTORY_ARGV_PATTERN_BYTES
-                    && !part.chars().any(char::is_control)
+    /// Empty argv matches all arguments; nonempty matches exact arity.
+    pub fn new(
+        effect: DirectoryRuleEffect,
+        program: String,
+        argv: Vec<String>,
+    ) -> Result<Self, InvalidDirectoryGrant> {
+        if !valid_directory_program(&program)
+            || argv.len() > MAX_DIRECTORY_ARGV_ITEMS
+            || argv.iter().any(|part| {
+                part.len() > MAX_DIRECTORY_ARGV_PATTERN_BYTES
+                    || part.chars().any(char::is_control)
             })
+        {
+            return Err(InvalidDirectoryGrant);
+        }
+        Ok(Self {
+            effect,
+            program: program.into_boxed_str(),
+            argv: compact_argv(argv),
+        })
     }
+
+    pub fn effect(&self) -> DirectoryRuleEffect {
+        self.effect
+    }
+
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub fn argv(&self) -> &[Box<str>] {
+        &self.argv
+    }
+}
+
+pub(crate) fn valid_directory_program(value: &str) -> bool {
+    valid_text(value, MAX_DIRECTORY_PROGRAM_BYTES) && !value.contains(['/', '\\'])
+}
+
+pub(crate) fn compact_argv(values: Vec<String>) -> Box<[Box<str>]> {
+    values.into_iter().map(String::into_boxed_str).collect()
 }
 
 /// Validated grant facts (not permission).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectoryGrant {
     capabilities: DirectoryCapabilities,
-    command_rules: Vec<DirectoryCommandRule>,
+    command_rules: Box<[DirectoryCommandRule]>,
 }
 
 impl DirectoryGrant {
@@ -149,14 +204,12 @@ impl DirectoryGrant {
         capabilities: DirectoryCapabilities,
         command_rules: Vec<DirectoryCommandRule>,
     ) -> Result<Self, InvalidDirectoryGrant> {
-        if command_rules.len() > MAX_DIRECTORY_RULES
-            || !command_rules.iter().all(DirectoryCommandRule::valid)
-        {
+        if command_rules.len() > MAX_DIRECTORY_RULES {
             return Err(InvalidDirectoryGrant);
         }
         Ok(Self {
             capabilities,
-            command_rules,
+            command_rules: command_rules.into_boxed_slice(),
         })
     }
 
@@ -186,4 +239,42 @@ pub enum DirectoryGrantState {
     Revoked {
         revision: i64,
     },
+}
+
+#[cfg(test)]
+mod retained_capacity_tests {
+    use super::*;
+
+    fn spare(text: &str) -> String {
+        let mut retained = String::with_capacity(16_384);
+        retained.push_str(text);
+        retained
+    }
+
+    #[test]
+    fn directory_value_objects_discard_spare_input_allocations() {
+        let subject = DirectorySubject::new(DirectorySubjectKind::Principal, spare("id")).unwrap();
+        assert_eq!(subject.id.into_string().capacity(), 2);
+
+        let resource = DirectoryResource::from_canonical(spare("host"), spare("/fixture")).unwrap();
+        assert_eq!(resource.environment.into_string().capacity(), 4);
+        assert_eq!(resource.canonical_path.into_string().capacity(), 8);
+
+        let mut args = Vec::with_capacity(256);
+        args.push(spare("arg"));
+        let mut rules = Vec::with_capacity(256);
+        rules.push(
+            DirectoryCommandRule::new(DirectoryRuleEffect::Allow, spare("program"), args)
+                .unwrap(),
+        );
+        let rights = DirectoryCapabilities::new(&[DirectoryCapability::Exec]).unwrap();
+        let grant = DirectoryGrant::new(rights, rules).unwrap();
+        let mut rules = grant.command_rules.into_vec();
+        assert_eq!(rules.capacity(), 1);
+        let rule = rules.pop().unwrap();
+        assert_eq!(rule.program.into_string().capacity(), 7);
+        let mut args = rule.argv.into_vec();
+        assert_eq!(args.capacity(), 1);
+        assert_eq!(args.pop().unwrap().into_string().capacity(), 3);
+    }
 }

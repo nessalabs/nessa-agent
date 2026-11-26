@@ -375,4 +375,7 @@ pub use input_files::{LocalInputFile, LocalInputFilePlacement};
 pub mod background_tasks;
 
 mod directory_grants;
-pub use directory_grants::{DirectoryOperation, DirectoryPolicyAnswer, DirectoryPolicyError};
+pub use directory_grants::{
+    DirectoryCommand, DirectoryDenialReason, DirectoryOperation, DirectoryPolicyAnswer,
+    DirectoryPolicyError, DirectoryPolicyEvaluator,
+};
