@@ -69,6 +69,8 @@ use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_protocol::tunnel::{TunnelAddress, TunnelSecret};
 #[cfg(feature = "test-support")]
+use crate::read_only_sync::application::driver::RecordRun;
+#[cfg(feature = "test-support")]
 use nessa_sync::replication::application::{RecordSource, ScopeAuthorizer};
 use nessa_sync::replication::infrastructure::session::SessionInterrupt;
 use nessa_sync::replication::{
@@ -116,6 +118,9 @@ pub use artifact::{
     ArtifactFetch, ArtifactFileStep, ArtifactFiles, ArtifactFreshness, ArtifactOpenError,
     ArtifactPartCleanup, ArtifactRequest, DiskArtifactFiles, ThreadPause,
 };
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use device::JoinedRecordCommitFixture;
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};
 pub use saved::{
@@ -889,7 +894,7 @@ impl RetainedCache {
         let policy = self.policy.suffix_page();
         let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
             .map_err(|_| ReadFailure::Protocol)?;
-        run_records(
+        let result = run_records(
             scope,
             authorizer,
             source,
@@ -897,8 +902,16 @@ impl RetainedCache {
             limits,
             1,
             self.wall.as_ref(),
-        )
-        .map(|run| (run.downloaded, run.pages))
+        );
+        self.record_fixture_result(result)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn record_fixture_result(
+        &mut self,
+        result: Result<RecordRun, RecordDriverError>,
+    ) -> Result<(u64, usize), ReadFailure> {
+        result.map(|run| (run.downloaded, run.pages))
         .map_err(|error| match error.cause {
             RecordDriverCause::Cache(error) => cache_failure(&error),
             RecordDriverCause::Core(SyncError::Store(_)) => self

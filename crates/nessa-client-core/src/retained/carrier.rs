@@ -1,6 +1,6 @@
 //! Private process-fixture adapter for one retained record page.
 use super::{
-    failure, DeviceEvidence, GatewayConnector, GatewayStream, MonotonicClock, ReadFailure,
+    failure, run_records, CacheError, DeviceEvidence, GatewayConnector, GatewayStream, MonotonicClock, ReadFailure,
     ReadStop, ReaderAccess, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
     HANDSHAKE_MS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
@@ -23,7 +23,7 @@ use nessa_sync::replication::infrastructure::session::{
 };
 use nessa_sync::replication::{
     application::{Access, RecordSource, ScopeAuthorizer, SourceError},
-    domain::{validate_page, CapabilitySupport, Checkpoint, Limits, Page, PageRequest},
+    domain::{validate_page, CapabilitySupport, Checkpoint, CommitPlan, Limits, Page, PageRequest},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -241,16 +241,7 @@ impl RetainedCache {
         io: RecordIo<'_, S>,
     ) -> Result<(u64, usize), ReadFailure> {
         let cut = io.cut;
-        let session = CapabilityRecordSession::connect(
-            io,
-            scope.clone(),
-            SessionLimits {
-                control_bytes: 2048,
-                bindings: 1,
-            },
-            CapabilitySupport::current(),
-        )
-        .map_err(bind_failure)?;
+        let session = bind_fixture(io, scope)?;
         let (mut authorizer, mut source) = session.parts();
         let result = match cut {
             Some(cut) => self.one_record_page_for_test(
@@ -265,6 +256,52 @@ impl RetainedCache {
         let _ = session.close();
         result
     }
+
+    pub(super) fn retain_selected_page_for_test<S: Read + Write, P>(
+        &mut self,
+        transport: NativeTransport<S>,
+        interrupt: Arc<dyn SessionInterrupt>,
+        scope: &Scope,
+        claim: impl FnOnce(&CommitPlan) -> Result<P, ReadFailure>,
+    ) -> Result<(u64, usize), ReadFailure> {
+        let session = bind_fixture(RecordIo { transport, interrupt, cut: None }, scope)?;
+        let (mut authorizer, mut source) = session.parts();
+        let policy = self.policy.suffix_page();
+        let limits = Limits::new(1, policy.max_payload_bytes(), policy.max_record_bytes())
+            .map_err(|_| ReadFailure::Protocol)?;
+        let refusal = Cell::new(None);
+        let run = {
+            let mut records = self.cache.records_with_admission(|plan| {
+                claim(plan).map_err(|reason| {
+                    refusal.set(Some(reason));
+                    CacheError::Unavailable
+                })
+            });
+            run_records(scope, &mut authorizer, &mut source, &mut records, limits, 1, self.wall.as_ref())
+        };
+        // An already admitted durable outcome outlives the transport.
+        let _ = session.close();
+        match refusal.get() {
+            Some(reason) => Err(reason),
+            None => self.record_fixture_result(run),
+        }
+    }
+}
+
+fn bind_fixture<'a, S: Read + Write>(
+    io: RecordIo<'a, S>,
+    scope: &Scope,
+) -> Result<CapabilityRecordSession<RecordIo<'a, S>>, ReadFailure> {
+    CapabilityRecordSession::connect(
+        io,
+        scope.clone(),
+        SessionLimits {
+            control_bytes: 2048,
+            bindings: 1,
+        },
+        CapabilitySupport::current(),
+    )
+    .map_err(bind_failure)
 }
 
 /// Read one verified Page on the accepted fixture transport. No store is
@@ -280,16 +317,7 @@ pub(super) fn read_selected_page_for_test<S: Read + Write>(
         interrupt,
         cut: None,
     };
-    let session = CapabilityRecordSession::connect(
-        io,
-        scope.clone(),
-        SessionLimits {
-            control_bytes: 2048,
-            bindings: 1,
-        },
-        CapabilitySupport::current(),
-    )
-    .map_err(bind_failure)?;
+    let session = bind_fixture(io, scope)?;
     let result = (|| {
         fence()?;
         let (mut authorizer, mut source) = session.parts();

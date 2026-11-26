@@ -398,6 +398,14 @@ impl ReadOnlyCache {
         Ok(())
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn records_with_admission<'a, P: 'a>(
+        &'a mut self,
+        admit: impl FnOnce(&CommitPlan) -> Result<P, CacheError> + 'a,
+    ) -> impl TranscriptCache + 'a {
+        AdmittedRecords { cache: self, admit: Some(admit) }
+    }
+
     fn apply_plan(&mut self, plan: CommitPlan) -> Result<(), CacheError> {
         self.apply_plan_admitted(plan, |_| Ok(()))
     }
@@ -567,6 +575,44 @@ impl ReplicaStore for ReadOnlyCache {
             Ok(()) => Ok(()),
             Err(error) => Err(self.remember_refusal(error)),
         }
+    }
+}
+
+#[cfg(feature = "test-support")]
+struct AdmittedRecords<'a, F> {
+    cache: &'a mut ReadOnlyCache,
+    admit: Option<F>,
+}
+
+#[cfg(feature = "test-support")]
+impl<F, P> ReplicaStore for AdmittedRecords<'_, F>
+where
+    F: FnOnce(&CommitPlan) -> Result<P, CacheError>,
+{
+    fn load(&mut self, scope: &Scope) -> Result<Option<Checkpoint>, StoreError> {
+        self.cache.load(scope)
+    }
+
+    fn apply(&mut self, plan: CommitPlan) -> Result<(), StoreError> {
+        self.cache.refusal = None;
+        let admit = self.admit.take().ok_or(StoreError::Failed)?;
+        self.cache
+            .apply_plan_admitted(plan, admit)
+            .map_err(|error| self.cache.remember_refusal(error))
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl<F, P> TranscriptCache for AdmittedRecords<'_, F>
+where
+    F: FnOnce(&CommitPlan) -> Result<P, CacheError>,
+{
+    fn observe_head(&mut self, scope: &Scope, head: u64) -> Result<(), CacheError> {
+        self.cache.observe_head(scope, head)
+    }
+
+    fn mark_unknown(&mut self, scope: &Scope) -> Result<(), CacheError> {
+        self.cache.mark_unknown(scope)
     }
 }
 

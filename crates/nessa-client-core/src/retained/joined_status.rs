@@ -1,5 +1,5 @@
 //! One selected relay socket from the Join preamble through pinned status.
-use super::{ReadFailure, ReadStop, StopSocket};
+use super::{ReadFailure, ReadStop, RetainedCache, StopSocket};
 use crate::pairing::NativeClientError;
 use nessa_auth::{
     adapters::pairing::{relay_key, GatewayTrust, NativeTransport},
@@ -18,13 +18,16 @@ use nessa_protocol::{
     },
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
-use nessa_sync::replication::{domain::Page, infrastructure::session::SessionInterrupt};
+use nessa_sync::replication::{
+    domain::{CommitPlan, Page},
+    infrastructure::session::SessionInterrupt,
+};
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result, Write},
     net::{SocketAddr, TcpStream},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, MutexGuard},
     time::Duration,
 };
 
@@ -62,6 +65,15 @@ impl JoinedEpisode {
                 _ = tokio::time::sleep(wait.min(super::STOP_SLICE)) => {}
             }
         }
+    }
+
+    fn claim_publication(&self, wake: &WakeEndpoint) -> Result<MutexGuard<'_, ()>, ReadFailure> {
+        let permit = self.stop.publication_lock();
+        if self.stop.is_stopped() {
+            return Err(ReadFailure::Stopped);
+        }
+        self.remaining(wake).map_err(|_| ReadFailure::Unreachable)?;
+        Ok(permit)
     }
 
     fn remaining(&self, wake: &WakeEndpoint) -> Result<Duration> {
@@ -236,7 +248,7 @@ pub(crate) fn select_joined_record_for_test(
     selection: JoinedRecordSelection,
     after_accepted: impl FnOnce(),
 ) -> std::result::Result<(), ReadFailure> {
-    with_selected_joined_record(selection, after_accepted, |_, _, _, _| Ok(()))
+    with_selected_joined_record(selection, after_accepted, |_, _, _, _, _| Ok(()))
 }
 
 pub(super) fn read_joined_record_page_for_test(
@@ -245,8 +257,27 @@ pub(super) fn read_joined_record_page_for_test(
     with_selected_joined_record(
         selection,
         || {},
-        |transport, interrupt, scope, fence| {
-            super::carrier::read_selected_page_for_test(transport, interrupt, scope, fence)
+        |transport, interrupt, scope, episode, wake| {
+            super::carrier::read_selected_page_for_test(transport, interrupt, scope, || {
+                episode.remaining(wake).map(|_| ()).map_err(|_| ReadFailure::Unreachable)
+            })
+        },
+    )
+}
+
+pub(super) fn retain_joined_record_page_for_test(
+    selection: JoinedRecordSelection,
+    mut cache: RetainedCache,
+    before_commit: impl FnOnce(&CommitPlan),
+) -> std::result::Result<(u64, usize), ReadFailure> {
+    with_selected_joined_record(
+        selection,
+        || {},
+        |transport, interrupt, scope, episode, wake| {
+            cache.retain_selected_page_for_test(transport, interrupt, scope, |plan| {
+                before_commit(plan);
+                episode.claim_publication(wake)
+            })
         },
     )
 }
@@ -258,7 +289,8 @@ fn with_selected_joined_record<T>(
         NativeTransport<DeadlineStream<JoinedStatusSocket>>,
         Arc<dyn SessionInterrupt>,
         &super::Scope,
-        &dyn Fn() -> std::result::Result<(), ReadFailure>,
+        &JoinedEpisode,
+        &WakeEndpoint,
     ) -> std::result::Result<T, ReadFailure>,
 ) -> std::result::Result<T, ReadFailure> {
     let JoinedRecordSelection {
@@ -293,14 +325,8 @@ fn with_selected_joined_record<T>(
     after_accepted();
     // TLS may have buffered the plaintext before stop/wake/expiry changed.
     // Recheck the same episode and exact wake, not just the socket deadline.
-    let fence = || {
-        episode
-            .remaining(&wake)
-            .map(|_| ())
-            .map_err(|_| ReadFailure::Unreachable)
-    };
-    fence()?;
-    use_transport(channel.into_transport(), interrupt, &scope, &fence)
+    episode.remaining(&wake).map_err(|_| ReadFailure::Unreachable)?;
+    use_transport(channel.into_transport(), interrupt, &scope, &episode, &wake)
 }
 
 // The enrollment worker owns this exact socket and registration from Connect
