@@ -5980,6 +5980,51 @@ const steps = {
       }
       if (/Settings ›/.test((await notice.textContent()) ?? ""))
         failures.push("the missing-key notice still sends the person to Settings")
+      // The notice says the key is for voice, and is one quiet row: the
+      // sentence, Add key, and a close side by side on one line, not
+      // buttons stacked under it, and no OK.
+      const said = (await notice.textContent()) ?? ""
+      if (!/voice/i.test(said) || !/OpenAI API key/.test(said))
+        failures.push(
+          `the missing-key notice does not say voice needs an OpenAI API key: "${said}"`,
+        )
+      const close = notice.locator("[data-voice-dismiss]")
+      if ((await close.count()) !== 1)
+        failures.push("the missing-key notice has no close")
+      if ((await notice.getByRole("button", { name: "OK", exact: true }).count()) > 0)
+        failures.push("the missing-key notice still offers OK")
+      const layout = await notice.evaluate((dock) => {
+        const parts = [
+          ".voice-notice-text",
+          '[data-voice-key="add"]',
+          "[data-voice-dismiss]",
+        ].map((selector) => dock.querySelector(selector)?.getBoundingClientRect())
+        if (parts.some((box) => !box)) return null
+        const middles = parts.map((box) => box.top + box.height / 2)
+        const lefts = parts.map((box) => box.left)
+        return {
+          spread: Math.max(...middles) - Math.min(...middles),
+          inOrder: lefts[0] < lefts[1] && lefts[1] < lefts[2],
+          // A border or a fill of its own would make it a panel.
+          boxed: (() => {
+            const style = getComputedStyle(dock.querySelector(".voice-notice"))
+            return (
+              parseFloat(style.borderTopWidth) > 0 ||
+              parseFloat(style.borderBottomWidth) > 0 ||
+              !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(style.backgroundColor)
+            )
+          })(),
+        }
+      })
+      if (!layout)
+        failures.push("the missing-key notice lacks its sentence, Add key or close")
+      else {
+        if (layout.spread > 4 || !layout.inOrder)
+          failures.push(
+            `the missing-key notice is not one row (spread ${layout.spread}px)`,
+          )
+        if (layout.boxed) failures.push("the missing-key notice is drawn as a box")
+      }
       await shot("key-missing")
       await add.click()
       const asked = run.page.locator('[data-voice-key="dialog"]')
