@@ -53,6 +53,9 @@ use crate::read_only_sync::application::{
 };
 use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use crate::read_only_sync::infrastructure::cache::RecordCommitIntent;
 use crate::read_only_sync::infrastructure::gateway::{
     read_named, CatalogueReader, DeviceEvidence, GatewayConnection, Session,
 };

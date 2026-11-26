@@ -1,5 +1,5 @@
 //! One selected relay socket from the Join preamble through pinned status.
-use super::{ReadFailure, ReadStop, RetainedCache, StopSocket};
+use super::{ReadFailure, ReadStop, RecordCommitIntent, RetainedCache, StopSocket};
 use crate::pairing::NativeClientError;
 use nessa_auth::{
     adapters::pairing::{relay_key, GatewayTrust, NativeTransport},
@@ -19,7 +19,7 @@ use nessa_protocol::{
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
 use nessa_sync::replication::{
-    domain::{CommitPlan, Page},
+    domain::Page,
     infrastructure::session::SessionInterrupt,
 };
 use std::{
@@ -268,15 +268,15 @@ pub(super) fn read_joined_record_page_for_test(
 pub(super) fn retain_joined_record_page_for_test(
     selection: JoinedRecordSelection,
     open_cache: impl FnOnce() -> std::result::Result<RetainedCache, ReadFailure>,
-    before_commit: impl FnOnce(&CommitPlan),
+    before_commit: impl FnOnce(RecordCommitIntent<'_>),
 ) -> std::result::Result<(u64, usize), ReadFailure> {
     with_selected_joined_record(
         selection,
         || {},
         |transport, interrupt, scope, episode, wake| {
             let mut cache = open_cache()?;
-            cache.retain_selected_page_for_test(transport, interrupt, scope, |plan| {
-                before_commit(plan);
+            cache.retain_selected_page_for_test(transport, interrupt, scope, |intent| {
+                before_commit(intent);
                 episode.claim_publication(wake)
             })
         },

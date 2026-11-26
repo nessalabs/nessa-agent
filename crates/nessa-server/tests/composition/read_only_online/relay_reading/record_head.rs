@@ -7,6 +7,7 @@ use nessa_auth::{
 };
 use nessa_client_core::retained::{
     dial_gateway, JoinedRecordCommitFixture, ReadFailure, ReadStop, ReaderAccess, ReaderRole,
+    RecordCommitIntent,
     RetainedCache, RetainedEnrollmentClient, RetainedTranscript,
 };
 use nessa_local_database::rusqlite::{params, Connection, OpenFlags};
@@ -28,7 +29,7 @@ use nessa_protocol::{
 };
 use nessa_sync::replication::{
     application::{RecordHeadSource, RecordSource, SourceError},
-    domain::{CapabilitySupport, CommitPlan, Page, PageRequest, Scope, SourceHead},
+    domain::{CapabilitySupport, Page, PageRequest, Scope, SourceHead},
     infrastructure::session::{
         CapabilityRecordSession, InterruptibleSessionIo, RecordSessionError, SessionInterrupt,
         SessionLimits, TcpSessionIo,
@@ -599,7 +600,10 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                             expires_ms: WAIT.as_millis().try_into().unwrap(),
                         },
                         move || RetainedCache::open(&path, Arc::new(Wall), Arc::new(Time(Instant::now()))),
-                        move |plan: &CommitPlan| {
+                        move |intent| {
+                            let RecordCommitIntent::Page(plan) = intent else {
+                                panic!("seeded replay must reach the record Page commit");
+                            };
                             assert_eq!(plan.expected().position(), expected_after);
                             assert_eq!(plan.next().position(), payload.0);
                             assert_eq!(plan.records().len(), 1);

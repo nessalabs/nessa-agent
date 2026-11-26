@@ -1,7 +1,7 @@
 //! Private process-fixture adapter for one retained record page.
 use super::{
     failure, run_records, CacheError, DeviceEvidence, GatewayConnector, GatewayStream, MonotonicClock, ReadFailure,
-    ReadStop, ReaderAccess, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
+    ReadStop, ReaderAccess, RecordCommitIntent, RelayRoute, RetainedCache, Scope, StoppableConnector, Stopping,
     HANDSHAKE_MS, PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use crate::read_only_sync::infrastructure::gateway::select_native;
@@ -23,7 +23,7 @@ use nessa_sync::replication::infrastructure::session::{
 };
 use nessa_sync::replication::{
     application::{Access, RecordSource, ScopeAuthorizer, SourceError},
-    domain::{validate_page, CapabilitySupport, Checkpoint, CommitPlan, Limits, Page, PageRequest},
+    domain::{validate_page, CapabilitySupport, Checkpoint, Limits, Page, PageRequest},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -262,7 +262,7 @@ impl RetainedCache {
         transport: NativeTransport<S>,
         interrupt: Arc<dyn SessionInterrupt>,
         scope: &Scope,
-        claim: impl FnOnce(&CommitPlan) -> Result<P, ReadFailure>,
+        claim: impl FnOnce(RecordCommitIntent<'_>) -> Result<P, ReadFailure>,
     ) -> Result<(u64, usize), ReadFailure> {
         let session = bind_fixture(RecordIo { transport, interrupt, cut: None }, scope)?;
         let (mut authorizer, mut source) = session.parts();
@@ -271,8 +271,8 @@ impl RetainedCache {
             .map_err(|_| ReadFailure::Protocol)?;
         let refusal = Cell::new(None);
         let run = {
-            let mut records = self.cache.records_with_admission(|plan| {
-                claim(plan).map_err(|reason| {
+            let mut records = self.cache.records_with_admission(|intent| {
+                claim(intent).map_err(|reason| {
                     refusal.set(Some(reason));
                     CacheError::Unavailable
                 })

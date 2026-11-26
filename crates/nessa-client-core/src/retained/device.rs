@@ -20,7 +20,7 @@ use nessa_protocol::{
     pairing::{socket::NativeWakeReport, wire::NativePairingStatus},
 };
 #[cfg(feature = "test-support")]
-use nessa_sync::replication::domain::{CommitPlan, Page};
+use nessa_sync::replication::domain::Page;
 #[cfg(feature = "test-support")]
 use std::net::SocketAddr;
 use std::{net::TcpStream, path::PathBuf, sync::Arc};
@@ -317,7 +317,7 @@ impl RetainedEnrollmentClient {
         &self,
         inputs: JoinedRecordCommitFixture,
         open_cache: impl FnOnce() -> Result<RetainedCache, ReadFailure> + Send + 'static,
-        before_commit: impl FnOnce(&CommitPlan) + Send + 'static,
+        before_commit: impl FnOnce(super::RecordCommitIntent<'_>) + Send + 'static,
     ) -> Result<Result<(u64, usize), ReadFailure>, NativeClientError> {
         self.with_joined_record_fixture(inputs, move |selection| {
             super::joined_status::retain_joined_record_page_for_test(selection, open_cache, before_commit)
