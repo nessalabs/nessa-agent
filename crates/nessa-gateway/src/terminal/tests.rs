@@ -549,7 +549,7 @@ fn kept_nvim() -> SavedTerminal {
         channel_id: None,
         conversation_id: None,
         folder: "/tmp".into(),
-        run_command: None,
+        kind: SavedKind::Shell,
         cols: 80,
         rows: 24,
         record: SavedRecord {
@@ -634,7 +634,9 @@ fn forgetting_a_kept_program_whose_file_stays_is_refused() {
 fn a_terminal_started_by_run_comes_back_as_a_run() {
     let store = Arc::new(MemoryResumeStore::default());
     let mut kept = kept_nvim();
-    kept.run_command = Some("nvim".into());
+    kept.kind = SavedKind::Run {
+        command: "nvim".into(),
+    };
     let (hub, _engine) = resuming(store.clone());
     // Over the shell record `resuming` keeps.
     store.save(&kept).unwrap();
@@ -652,5 +654,60 @@ fn a_terminal_started_by_run_comes_back_as_a_run() {
     // Saved again as it was: a Run.
     hub.rename(&owner("ana"), "t_kept", "renamed".into())
         .unwrap();
-    assert_eq!(store.saved()[0].run_command.as_deref(), Some("nvim"));
+    assert_eq!(
+        store.saved()[0].kind,
+        SavedKind::Run {
+            command: "nvim".into()
+        }
+    );
+}
+
+/// Opens `t_kept` and has its program report, so the store and the terminal
+/// both hold a record. Answers the hub and where the engine reports.
+fn kept_and_reported(store: Arc<MemoryResumeStore>) -> (Arc<TerminalHub>, Arc<dyn EngineEvents>) {
+    let (hub, engine) = resuming(store.clone());
+    assert_eq!(hub.resume_saved(&Here), 1);
+    let events = engine.events.lock().unwrap().clone().expect("started");
+    events.resume(
+        "t_kept",
+        ResumeChange::Saved(AcceptedRecord {
+            pid: 20,
+            started: None,
+            uid: 501,
+            argv: vec!["nvim".into()],
+            cwd: None,
+            owner_cwd: None,
+            time: 2,
+        }),
+    );
+    assert_eq!(store.saved()[0].record.pid, 20);
+    (hub, events)
+}
+
+/// Runs `change` on another thread while the write lock is held, lets it
+/// reach the lock, then freezes and lets it go: a change that looked at the
+/// freeze before waiting for the lock would act on a stale answer.
+fn across_a_freeze(hub: &Arc<TerminalHub>, change: impl FnOnce() + Send + 'static) {
+    let held = hub.hold_resume_writes();
+    let waiting = std::thread::spawn(change);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    hub.mark_frozen();
+    drop(held);
+    waiting.join().unwrap();
+}
+
+#[test]
+fn a_forget_waiting_on_the_lock_as_the_gateway_freezes_keeps_the_record() {
+    let store = Arc::new(MemoryResumeStore::default());
+    let (hub, events) = kept_and_reported(store.clone());
+    across_a_freeze(&hub, move || events.resume("t_kept", ResumeChange::Forget));
+    assert_eq!(store.saved().len(), 1);
+}
+
+#[test]
+fn a_terminal_ending_as_the_gateway_freezes_keeps_its_record() {
+    let store = Arc::new(MemoryResumeStore::default());
+    let (hub, events) = kept_and_reported(store.clone());
+    across_a_freeze(&hub, move || events.exited("t_kept", Some(0), None));
+    assert_eq!(store.saved().len(), 1);
 }

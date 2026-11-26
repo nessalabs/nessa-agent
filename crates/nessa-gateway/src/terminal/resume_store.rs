@@ -24,13 +24,23 @@ pub struct SavedTerminal {
     pub conversation_id: Option<String>,
     /// The terminal's own folder (the channel's or the agent's).
     pub folder: String,
-    /// The command of a terminal started by Run in a reply; `None` for a
-    /// shell. It comes back as the same kind, so its Run block still shows it.
-    #[serde(default)]
-    pub run_command: Option<String>,
+    /// What the terminal was opened as. It comes back as the same kind, so
+    /// a Run block still shows its Run.
+    pub kind: SavedKind,
     pub cols: u16,
     pub rows: u16,
     pub record: SavedRecord,
+}
+
+/// A kept terminal's kind, as written to its file. Always written, never
+/// guessed: a file without it is not read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SavedKind {
+    /// A shell, from ⌘J.
+    Shell,
+    /// Run in a reply, with the command it was given.
+    Run { command: String },
 }
 
 /// The record a program reported last.
@@ -225,7 +235,7 @@ mod tests {
 
     fn terminal(id: &str) -> SavedTerminal {
         SavedTerminal {
-            run_command: None,
+            kind: SavedKind::Shell,
             id: id.into(),
             request_id: "r".into(),
             title: "zsh".into(),
@@ -284,5 +294,19 @@ mod tests {
             assert_eq!(mode(&dir.path().join("terminals/saved/t_2.json")), 0o600);
             assert_eq!(mode(&dir.path().join("terminals/settings.json")), 0o600);
         }
+    }
+
+    #[test]
+    fn a_record_that_does_not_say_its_kind_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileResumeStore::new(dir.path().join("terminals"));
+        store.save(&terminal("t_1")).unwrap();
+        let path = dir.path().join("terminals/saved/t_1.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["kind"], serde_json::json!({ "type": "shell" }));
+        json.as_object_mut().unwrap().remove("kind");
+        std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(store.saved().is_empty());
     }
 }
