@@ -76,7 +76,9 @@ impl InstalledAppStore {
     ///
     /// Returns a typed database open failure for an unusable path or schema.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let schema = Schema::new(SCHEMA).map_err(StoreError::Open)?;
+        let schema = Schema::new(SCHEMA)
+            .map_err(StoreError::Open)?
+            .with_validation(validate_shape);
         let connection = nessa_local_database::open(path, &schema).map_err(StoreError::Open)?;
         Ok(Self { connection })
     }
@@ -225,6 +227,42 @@ impl InstalledAppStore {
             .map_err(StoreError::InvalidPackage)?;
         Ok(Some(package))
     }
+}
+
+fn validate_shape(connection: &Connection) -> Result<(), OpenError> {
+    let mut query = connection.prepare(
+        "SELECT sql FROM sqlite_schema
+         WHERE name NOT GLOB 'sqlite_*'
+         ORDER BY sql",
+    )?;
+    let mut rows = query.query([])?;
+    // The same definition owns creation and validation. SQLite stores each
+    // CREATE statement without its terminating semicolon.
+    let mut expected = SCHEMA
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| statement.starts_with("CREATE TABLE "))
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    for definition in expected {
+        let Some(row) = rows.next()? else {
+            return Err(OpenError::Damaged(
+                "installed app schema is incomplete".into(),
+            ));
+        };
+        let found: Option<String> = row.get(0)?;
+        if found.as_deref() != Some(definition) {
+            return Err(OpenError::Damaged(
+                "installed app schema does not match its definition".into(),
+            ));
+        }
+    }
+    if rows.next()?.is_some() {
+        return Err(OpenError::Damaged(
+            "installed app schema has unexpected entries".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn stored_manifest(

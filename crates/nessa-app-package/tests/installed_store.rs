@@ -120,6 +120,11 @@ fn rolls_back_a_failed_asset_insert_before_reopen() {
         Err(StoreError::Database(_))
     ));
     drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER refuse_stylesheet")
+        .unwrap();
+    drop(connection);
     let mut store = InstalledAppStore::open(&path).unwrap();
     assert!(store.load(calendar.manifest().app_id()).unwrap().is_none());
     assert!(store.load(notes.manifest().app_id()).unwrap().is_some());
@@ -233,6 +238,11 @@ fn interrupted_removal_rolls_back_the_asset_delete() {
         Err(StoreError::Database(_))
     ));
     drop(store);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER refuse_removal")
+        .unwrap();
+    drop(connection);
     let mut store = InstalledAppStore::open(&path).unwrap();
     let retained = store.load(app.manifest().app_id()).unwrap().unwrap();
     assert_eq!(
@@ -318,4 +328,32 @@ fn inventory_and_load_refuse_oversized_stored_manifests() {
         store.load(&id),
         Err(StoreError::InvalidPackage(PackageError::ManifestTooLarge))
     ));
+}
+
+#[test]
+fn refuses_a_same_version_unrelated_database_before_changing_journal_mode() {
+    let (_fixture, path) = private_database();
+    let _private =
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::OpenOrCreate).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE unrelated (value TEXT); PRAGMA user_version=1; PRAGMA journal_mode=WAL;",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        InstalledAppStore::open(&path),
+        Err(StoreError::Open(nessa_local_database::OpenError::Damaged(
+            _
+        )))
+    ));
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
 }

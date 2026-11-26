@@ -1,7 +1,10 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt, marker::PhantomData};
 
 use nessa_types::app_identity::ExtensionAppId;
-use serde::Deserialize;
+use serde::{
+    de::{value::MapAccessDeserializer, MapAccess, Visitor},
+    Deserialize, Deserializer,
+};
 
 use crate::domain::static_package::{self, AssetDeclaration, ManifestDeclarations};
 use crate::{PackageError, PackageManifest, VerifiedPackage, MAX_MANIFEST_BYTES};
@@ -15,7 +18,7 @@ struct Manifest {
     entrypoint: String,
     icon: Option<String>,
     requested_capabilities: Vec<String>,
-    assets: Vec<Asset>,
+    assets: Vec<Object<Asset>>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +27,30 @@ struct Asset {
     path: String,
     size_bytes: u64,
     sha256: String,
+}
+
+// Serde's derived struct visitor also accepts positional sequences. Only the
+// map representation is part of the provisional JSON contract.
+struct Object<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectVisitor<T>(PhantomData<T>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+            type Value = Object<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+                T::deserialize(MapAccessDeserializer::new(map)).map(Object)
+            }
+        }
+
+        deserializer.deserialize_map(ObjectVisitor(PhantomData))
+    }
 }
 
 /// Validate one portable static package and take ownership of its bytes.
@@ -51,7 +78,7 @@ pub fn parse_manifest(manifest: Vec<u8>) -> Result<PackageManifest, PackageError
     if manifest.len() > MAX_MANIFEST_BYTES {
         return Err(PackageError::ManifestTooLarge);
     }
-    let input: Manifest =
+    let Object(input): Object<Manifest> =
         serde_json::from_slice(&manifest).map_err(|_| PackageError::MalformedManifest)?;
     if input.schema_version != 1 {
         return Err(PackageError::UnsupportedVersion(input.schema_version));
@@ -60,7 +87,7 @@ pub fn parse_manifest(manifest: Vec<u8>) -> Result<PackageManifest, PackageError
     let declarations = input
         .assets
         .into_iter()
-        .map(|asset| {
+        .map(|Object(asset)| {
             let mut sha256 = [0; 32];
             if asset.sha256.bytes().any(|byte| byte.is_ascii_uppercase()) {
                 return Err(PackageError::InvalidDigest);

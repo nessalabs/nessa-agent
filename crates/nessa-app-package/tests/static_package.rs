@@ -261,3 +261,28 @@ fn bounds_path_bytes_components_and_depth() {
         );
     }
 }
+
+#[test]
+fn refuses_positional_manifest_and_asset_arrays() {
+    let asset = declaration("index.html", b"abc");
+    let positional_manifest = json!([1, "calendar", "1", "index.html", null, [], [asset]]);
+    let positional_asset = json!(["index.html", 3, asset["sha256"]]);
+    for input in [positional_manifest, manifest(vec![positional_asset])] {
+        assert_eq!(
+            parse_manifest(encoded(&input)).unwrap_err(),
+            PackageError::MalformedManifest
+        );
+    }
+}
+
+#[test]
+fn refuses_more_than_128_manifest_declarations_before_held_verification() {
+    let mut assets = vec![declaration("index.html", b"")];
+    assets.extend((1..128).map(|index| declaration(&format!("{index}.css"), b"")));
+    assert!(parse_manifest(encoded(&manifest(assets.clone()))).is_ok());
+    assets.push(declaration("extra.css", b""));
+    assert_eq!(
+        parse_manifest(encoded(&manifest(assets))).unwrap_err(),
+        PackageError::TooManyFiles
+    );
+}
