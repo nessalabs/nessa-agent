@@ -439,8 +439,12 @@ impl TerminalHub {
         drop(hub);
         if forget {
             if let Some(resume) = &self.resume {
+                // Again under the lock `freeze` takes: a freeze between the
+                // first look and here keeps the record.
                 let _writing = resume.writing();
-                resume.forget(terminal);
+                if !resume.frozen.load(Ordering::Acquire) {
+                    resume.forget(terminal);
+                }
             }
         }
     }
