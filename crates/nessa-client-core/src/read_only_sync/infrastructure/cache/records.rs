@@ -399,6 +399,16 @@ impl ReadOnlyCache {
     }
 
     fn apply_plan(&mut self, plan: CommitPlan) -> Result<(), CacheError> {
+        self.apply_plan_admitted(plan, |_| Ok(()))
+    }
+
+    // The cache retains the only transaction. An admission callback can
+    // refuse publication or lend a permit, but cannot act on SQLite.
+    fn apply_plan_admitted<P>(
+        &mut self,
+        plan: CommitPlan,
+        admit: impl FnOnce(&CommitPlan) -> Result<P, CacheError>,
+    ) -> Result<(), CacheError> {
         let scope = plan.expected().scope();
         // A loaded fold retains the generation admitted before the source read.
         // Refreshing it here would erase that witness before the transaction CAS.
@@ -471,7 +481,10 @@ impl ReadOnlyCache {
         if let Some(checkpoint) = checkpoint {
             rows::save_checkpoint(&transaction, scope, &checkpoint, self.policy)?;
         }
-        transaction.commit().map_err(|_| CacheError::Uncertain)?;
+        {
+            let _permit = admit(&plan)?;
+            transaction.commit().map_err(|_| CacheError::Uncertain)?;
+        }
         candidate
             .commit()
             .expect("successful staging leaves the guard active");
@@ -774,6 +787,49 @@ mod tests {
             limits,
         )
         .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refusing_record_commit_preserves_the_committed_prefix_on_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("cache.sqlite3");
+        let (scope, first_page, second_page) = two_pages(root.path()).await;
+        let mut cache = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        ReplicaStore::apply(&mut cache, plan(&scope, 0, first_page)).unwrap();
+        let before = rows::progress(&cache.connection, &scope).unwrap().unwrap();
+        let records = count(&cache, "transcript_records");
+        let checkpoint = checkpoint_payload(&cache);
+        let second_count = second_page.len() as i64;
+        let next = second_page.last().unwrap().position;
+        let mut called = false;
+        let result = cache.apply_plan_admitted(
+            plan(&scope, before.downloaded, second_page.clone()),
+            |staged| -> Result<(), CacheError> {
+                called = true;
+                assert_eq!(staged.expected().position(), before.downloaded);
+                assert_eq!(staged.next().position(), next);
+                assert_eq!(staged.records(), second_page.as_slice());
+                Err(CacheError::Unavailable)
+            },
+        );
+        assert!(called);
+        assert_eq!(result, Err(CacheError::Unavailable));
+        drop(cache);
+
+        let mut reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        assert_eq!(rows::progress(&reopened.connection, &scope).unwrap(), Some(before.clone()));
+        assert_eq!(count(&reopened, "transcript_records"), records);
+        assert_eq!(checkpoint_payload(&reopened), checkpoint);
+        ReplicaStore::apply(&mut reopened, plan(&scope, before.downloaded, second_page)).unwrap();
+        drop(reopened);
+
+        let reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        let after = rows::progress(&reopened.connection, &scope).unwrap().unwrap();
+        assert_eq!(after.downloaded, next);
+        assert_eq!(after.generation, before.generation + 1);
+        assert_eq!(count(&reopened, "transcript_records"), records + second_count);
     }
 
     /// A drop that still names the progress it refused must not erase a commit
