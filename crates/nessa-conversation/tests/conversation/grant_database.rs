@@ -324,6 +324,12 @@ async fn compatibility_open_preserves_activated_grants_without_a_directory_write
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
     assert!(grant(&opened.store, &id, "phone").await);
+    let second = new_id();
+    opened.store.create(owned(&second)).await.unwrap();
+    let original_stream = opened.store.grant_stream("phone").await.unwrap();
+    assert_eq!(original_stream.head, 1);
+    let original_replay = opened.store.grant_log_after("phone", 0).await.unwrap();
+    assert_eq!(original_replay.len(), 1);
     drop(opened.store);
     let grants = opened.path.with_extension("grants.sqlite3");
     let mut database = Connection::open(&grants).unwrap();
@@ -346,6 +352,7 @@ async fn compatibility_open_preserves_activated_grants_without_a_directory_write
         .unwrap();
     transaction.commit().unwrap();
     assert_eq!(grant_file_version(&database), 3);
+    let directory_rows = retained_directory_rows(&database);
     drop(database);
     let before = std::fs::read(&grants).unwrap();
     let store = LocalConversationStore::open(&opened.path).unwrap();
@@ -353,6 +360,71 @@ async fn compatibility_open_preserves_activated_grants_without_a_directory_write
     drop(super::super::store::MetadataSnapshot::open(&opened.path).unwrap());
     drop(store);
     assert_eq!(std::fs::read(&grants).unwrap(), before);
+
+    let store = LocalConversationStore::open(&opened.path).unwrap();
+    assert_eq!(store.grant_stream("phone").await.unwrap(), original_stream);
+    assert!(grant(&store, &second, "phone").await);
+    let next = store.grant_stream("phone").await.unwrap();
+    assert_eq!(next.incarnation, original_stream.incarnation);
+    assert_eq!(next.oldest, original_stream.oldest);
+    assert_eq!(next.head, original_stream.head + 1);
+    let remaining = store
+        .grant_log_after("phone", original_stream.head)
+        .await
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].position, next.head);
+    assert_eq!(remaining[0].conversation_id, second.as_str());
+    drop(store);
+
+    let reopened = LocalConversationStore::open(&opened.path).unwrap();
+    assert!(reopened.held_grant(&id, "phone").await.unwrap().is_some());
+    assert!(reopened
+        .held_grant(&second, "phone")
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(reopened.grant_stream("phone").await.unwrap(), next);
+    assert_eq!(
+        reopened
+            .grant_log_after("phone", original_stream.head)
+            .await
+            .unwrap(),
+        remaining
+    );
+    let complete = reopened.grant_log_after("phone", 0).await.unwrap();
+    assert_eq!(complete, [original_replay, remaining].concat());
+    drop(reopened);
+    let database = Connection::open(&grants).unwrap();
+    assert_eq!(grant_file_version(&database), 3);
+    assert_eq!(retained_directory_rows(&database), directory_rows);
+}
+
+// Keep all typed values (including the pending acknowledgement and its exact
+// event contents), not only counts or identifiers, across the legacy write.
+fn retained_directory_rows(
+    database: &Connection,
+) -> Vec<Vec<nessa_local_database::rusqlite::types::Value>> {
+    [
+        "SELECT * FROM directory_grant_state",
+        "SELECT * FROM directory_receiver_log",
+        "SELECT * FROM directory_grant_evidence",
+    ]
+    .iter()
+    .map(|sql| {
+        let mut statement = database.prepare(sql).unwrap();
+        let columns = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..columns).map(|column| row.get(column)).collect()
+            })
+            .unwrap()
+            .collect::<Result<Vec<Vec<_>>, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        rows.into_iter().next().unwrap()
+    })
+    .collect()
 }
 
 #[test]
