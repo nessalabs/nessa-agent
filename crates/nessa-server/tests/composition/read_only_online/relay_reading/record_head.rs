@@ -563,6 +563,8 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                 .unwrap()
                 .unwrap();
             runtime.block_on(client.shutdown());
+            // The drained client still owns the pairing-state lock.
+            drop(client);
             assert_eq!(&page.request.scope, scope);
             assert_eq!(page.request.after, 0);
             assert_eq!(page.records.len(), 1);
