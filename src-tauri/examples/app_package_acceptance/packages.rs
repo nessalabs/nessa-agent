@@ -29,8 +29,30 @@ pub fn install(database: &Path) -> Result<[VerifiedPackage; 2], String> {
     Ok([load(&mut store, &calendar)?, load(&mut store, &notes)?])
 }
 
-pub fn reopen(database: &Path, expected: &VerifiedPackage) -> Result<(), String> {
-    load(&mut open(database)?, expected).map(|_| ())
+pub fn uninstall(
+    database: &Path,
+    target: &VerifiedPackage,
+    sibling: &VerifiedPackage,
+) -> Result<(), String> {
+    let app_id = target.manifest().app_id();
+    {
+        let mut store = open(database)?;
+        // Stop should leave the installed record intact for explicit removal.
+        load(&mut store, target)?;
+        store
+            .remove(app_id)
+            .map_err(|error| format!("uninstall {}: {error:?}", app_id.as_str()))?;
+    }
+    let mut store = open(database)?;
+    if store
+        .load(app_id)
+        .map_err(|error| format!("check uninstalled {}: {error:?}", app_id.as_str()))?
+        .is_some()
+    {
+        return Err(format!("{} is still installed", app_id.as_str()));
+    }
+    load(&mut store, sibling)?;
+    Ok(())
 }
 
 fn open(database: &Path) -> Result<InstalledAppStore, String> {

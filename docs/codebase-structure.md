@@ -1460,9 +1460,10 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   private store, then opens two Tauri surfaces from their verified bytes. It
   requests Stop for the first surface after both render and waits for that
   surface's native destruction event and removal from the window manager.
-  A missing or mismatched event fails the fixture. After Stop, the second
-  surface must still render and its stored bytes must still match. The
-  fixture executable is separate from the shipped host.
+  A missing or mismatched event fails the fixture. After Stop, the fixture
+  checks the first app is still installed, uninstalls its exact ID and reopens
+  the store. The second surface must still render and its stored bytes must
+  still match. The fixture executable is separate from the shipped host.
 - `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
 - `scripts/desktop/prepare.mjs` selects runtime preparation on macOS and Linux;
   Windows leaves it disabled.

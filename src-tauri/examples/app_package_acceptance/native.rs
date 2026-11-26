@@ -75,8 +75,7 @@ pub fn run(directory: &Path) -> Result<(), String> {
 
     let handle = app.handle().clone();
     let check = thread::spawn(move || {
-        let result =
-            exercise(&handle, &observed).and_then(|()| packages::reopen(&database, &installed[1]));
+        let result = exercise(&handle, &observed, &database, &installed);
         handle.exit(i32::from(result.is_err()));
         result
     });
@@ -96,11 +95,16 @@ pub fn run(directory: &Path) -> Result<(), String> {
     if code != 0 {
         return Err(format!("unexpected native exit code {code}"));
     }
-    println!("app_package_acceptance: two installed packages rendered; matching native Stop confirmed; second app and its stored bytes preserved");
+    println!("app_package_acceptance: fixture-calendar rendered at 137px, stopped and uninstalled; fixture-notes still renders at 173px from unchanged stored bytes");
     Ok(())
 }
 
-fn exercise(handle: &AppHandle, observed: &mpsc::Receiver<Observation>) -> Result<(), String> {
+fn exercise(
+    handle: &AppHandle,
+    observed: &mpsc::Receiver<Observation>,
+    database: &Path,
+    installed: &[VerifiedPackage; 2],
+) -> Result<(), String> {
     let mut loaded = [false; 2];
     for _ in 0..loaded.len() {
         match observed.recv_timeout(EVENT_WAIT) {
@@ -114,6 +118,8 @@ fn exercise(handle: &AppHandle, observed: &mpsc::Receiver<Observation>) -> Resul
     assert_render(&calendar, ("Calendar from installed bytes", 137, true))?;
     assert_render(&notes, ("Notes from installed bytes", 173, true))?;
     stop(handle, &calendar, observed)?;
+    let [target, sibling] = installed;
+    packages::uninstall(database, target, sibling)?;
     assert_render(
         &visible_window(handle, NOTES)?,
         ("Notes from installed bytes", 173, true),
