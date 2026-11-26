@@ -243,6 +243,73 @@ const PATHS: [IssuePath; 6] = [
     IssuePath::StoredOnLoad,
 ];
 
+#[test]
+fn app_author_history_is_readable_but_cannot_be_issued_or_used() {
+    use crate::{
+        application::{dto::CredentialTransitionDto, origin::CredentialOrigin},
+        domain::{Initiator, IssuanceCause},
+    };
+
+    let evaluator = CedarPolicyEvaluator::new().unwrap();
+    let historic = gateway_grant("app.author");
+    for path in PATHS.into_iter().chain([IssuePath::AppIssue]) {
+        for kind in [
+            PrincipalKind::Human,
+            PrincipalKind::Agent,
+            PrincipalKind::Integration,
+            PrincipalKind::Gateway,
+        ] {
+            let expected = if path == IssuePath::StoredOnLoad && kind == PrincipalKind::Integration
+            {
+                Decision::Allow
+            } else {
+                Decision::Deny
+            };
+            assert_eq!(
+                evaluator.may_hold(kind, &historic, path),
+                Ok(expected),
+                "{kind:?} {path:?}"
+            );
+        }
+    }
+    assert_eq!(
+        evaluator.may_hold(
+            PrincipalKind::Integration,
+            &gateway_grant("app.author.extra"),
+            IssuePath::StoredOnLoad,
+        ),
+        Ok(Decision::Deny),
+    );
+
+    let (context, server_read, resource, mut snapshot) = request_values();
+    snapshot.credential = Credential::new(
+        context.credential_id().clone(),
+        context.principal_id().clone(),
+        context.organization_id().clone(),
+        context.audience_id().clone(),
+        100,
+        200,
+        vec![historic],
+    )
+    .unwrap();
+    let issued = snapshot
+        .credential
+        .issued(IssuanceCause::SurfaceProvision, Initiator::LocalOperator)
+        .unwrap();
+    snapshot.origin = CredentialOrigin::restore(
+        CredentialTransitionDto::record(&issued, 1, 1, None),
+        &snapshot.credential,
+    )
+    .unwrap();
+    for action in [Action::new("app.author").unwrap(), server_read] {
+        assert_eq!(
+            evaluator.evaluate(&context, &action, &resource, &snapshot),
+            Ok(Decision::Deny),
+            "{action:?}"
+        );
+    }
+}
+
 /// `hold.administration`: administration is refused only on the product
 /// path. Webhook issuance further restricts the principal and read grant;
 /// other paths retain the kind's own answer.
