@@ -10,6 +10,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -93,7 +94,7 @@ export function VoiceProvider({
   const [asked, setAsked] = useState<string | null>(null)
   // The chat Talk was pressed in with no key saved: the key is asked for,
   // and saving it starts the call there.
-  const [keyFor, setKeyFor] = useState<string | null>(null)
+  const [keyFor, setKeyFor] = useState<{ sessionId: string; intent: number } | null>(null)
   // Whether a key is saved is asked as the window opens, and again once
   // Nessa is unlocked, since a locked vault cannot say.
   const vaultSettled = useVaultSettled()
@@ -105,10 +106,15 @@ export function VoiceProvider({
   useEffect(() => {
     if (refusedForKey) keys?.missing()
   }, [keys, refusedForKey])
+  // The newest Talk. Talk waits on the gateway before it starts a call; a
+  // Talk pressed meanwhile, or a key dialog dismissed, leaves the older
+  // one stale, and a stale Talk starts nothing.
+  const intent = useRef(0)
   /** Starts the call, or asks for the key first when the gateway said none is saved. */
   const talk = useCallback(
     async (sessionId: string) => {
       if (!controller) return
+      const mine = ++intent.current
       // Unless the gateway last said a key is saved, it is asked now: a key
       // saved elsewhere since counts, and a window that could not ask before
       // (Nessa was locked, just unlocked) asks before showing a call that the
@@ -116,8 +122,9 @@ export function VoiceProvider({
       // try, and the refusal offers its own fix.
       if (keys && keys.known() !== true) {
         const now = await keys.read()
+        if (intent.current !== mine) return
         if (now.kind === "read" && !now.keySaved) {
-          setKeyFor(sessionId)
+          setKeyFor({ sessionId, intent: mine })
           return
         }
       }
@@ -128,8 +135,11 @@ export function VoiceProvider({
   const start = useCallback(
     (sessionId: string) => {
       if (!controller) return
-      if (callElsewhere(controller.snapshot(), sessionId)) setAsked(sessionId)
-      else void talk(sessionId)
+      if (callElsewhere(controller.snapshot(), sessionId)) {
+        // Asking about the move supersedes a Talk still waiting on the gateway.
+        intent.current += 1
+        setAsked(sessionId)
+      } else void talk(sessionId)
     },
     [controller, talk],
   )
@@ -228,7 +238,11 @@ export function VoiceProvider({
           forCall
           onClose={(saved) => {
             setKeyFor(null)
-            if (saved) void controller.start(keyFor)
+            // Dismissed, the Talk is over: a save that finishes later keeps
+            // the key but starts no call.
+            if (intent.current !== keyFor.intent) return
+            intent.current += 1
+            if (saved) void controller.start(keyFor.sessionId)
           }}
         />
       ) : null}

@@ -241,7 +241,10 @@ export function VoiceDock({
  */
 function VoiceWords({ snapshot, open }: { snapshot: VoiceSnapshot; open: boolean }) {
   const lines = voiceLines(snapshot)
-  const shown = open ? lines : lines.slice(-SHOWN_LINES)
+  // What to do about audio that is not getting through stays at the foot,
+  // under the lines, however much was said before it.
+  const hint = snapshot.hint
+  const shown = open ? lines : lines.slice(-(hint ? SHOWN_LINES - 1 : SHOWN_LINES))
   const box = useRef<HTMLDivElement>(null)
   // Open, the newest line stays in view, unless the person scrolled up to read.
   const following = useRef(true)
@@ -259,35 +262,39 @@ function VoiceWords({ snapshot, open }: { snapshot: VoiceSnapshot; open: boolean
           element.scrollHeight - element.scrollTop - element.clientHeight < 8
       }}
     >
-      {shown.length === 0 ? (
-        <p className="voice-tab-hint">{snapshot.hint ?? "Say something to start."}</p>
-      ) : (
-        shown.map((line, at) => {
-          const age = shown.length - 1 - at
-          return (
-            <p
-              // Lines are only ever added at the end, so place names a line.
-              key={lines.length - shown.length + at}
-              className="voice-tab-line"
-              data-who={line.who}
-              data-age={open ? undefined : Math.min(age, 2)}
-            >
-              <span className="voice-tab-who">
-                {line.who === "person" ? "You" : "Nessa"}
-              </span>
-              <span className="voice-tab-said">
-                {line.live
-                  ? line.text.split(/(\s+)/).map((word, place) => (
-                      <span key={place} className="voice-tab-word">
-                        {word}
-                      </span>
-                    ))
-                  : line.text}
-              </span>
-            </p>
-          )
-        })
-      )}
+      {shown.length === 0 && !hint ? (
+        <p className="voice-tab-hint">Say something to start.</p>
+      ) : null}
+      {shown.map((line, at) => {
+        const age = shown.length - 1 - at + (hint ? 1 : 0)
+        return (
+          <p
+            // Lines are only ever added at the end, so place names a line.
+            key={lines.length - shown.length + at}
+            className="voice-tab-line"
+            data-who={line.who}
+            data-age={open ? undefined : Math.min(age, 2)}
+          >
+            <span className="voice-tab-who">
+              {line.who === "person" ? "You" : "Nessa"}
+            </span>
+            <span className="voice-tab-said">
+              {line.live
+                ? line.text.split(/(\s+)/).map((word, place) => (
+                    <span key={place} className="voice-tab-word">
+                      {word}
+                    </span>
+                  ))
+                : line.text}
+            </span>
+          </p>
+        )
+      })}
+      {hint ? (
+        <p className="voice-tab-hint" data-voice-hint="">
+          {hint}
+        </p>
+      ) : null}
     </div>
   )
 }
