@@ -6,6 +6,8 @@ use std::process::ExitCode;
 mod native;
 #[cfg(target_os = "linux")]
 mod packages;
+#[cfg(target_os = "linux")]
+mod stop_phase;
 
 fn main() -> ExitCode {
     #[cfg(target_os = "linux")]

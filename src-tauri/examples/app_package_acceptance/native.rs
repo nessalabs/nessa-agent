@@ -2,11 +2,12 @@
 
 use std::{
     path::Path,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
 
+use gtk::prelude::WidgetExt;
 use nessa_app_package::VerifiedPackage;
 use tauri::{
     http::{header, Method, Request, Response, StatusCode},
@@ -16,6 +17,7 @@ use tauri::{
 };
 
 use crate::packages::{self, CALENDAR, NOTES};
+use crate::stop_phase::StopPhase;
 
 const SCHEME: &str = "nessa-package-fixture";
 const EVENT_WAIT: Duration = Duration::from_secs(12);
@@ -29,7 +31,8 @@ const OBSERVE_RENDER: &str = r#"(() => {
 #[derive(Debug)]
 enum Observation {
     Loaded(String),
-    Destroyed(String),
+    Stopped,
+    UnexpectedClose(String),
 }
 
 pub fn run(directory: &Path) -> Result<(), String> {
@@ -42,6 +45,9 @@ pub fn run(directory: &Path) -> Result<(), String> {
     let surfaces = installed.clone();
     let (events, observed) = mpsc::channel();
     let pages = events.clone();
+    let phase = Arc::new(Mutex::new(StopPhase::default()));
+    let native_phase = phase.clone();
+    let loop_phase = phase.clone();
     let app = Builder::<Wry>::default()
         .register_uri_scheme_protocol(SCHEME, move |context, request| {
             respond(&assets, context.webview_label(), &request)
@@ -59,12 +65,20 @@ pub fn run(directory: &Path) -> Result<(), String> {
                 let manifest = package.manifest();
                 let label = manifest.app_id().as_str();
                 let url = Url::parse(&format!("{SCHEME}://localhost/{}", manifest.entrypoint()))?;
-                WebviewWindowBuilder::new(app, label, WebviewUrl::CustomProtocol(url.clone()))
-                    .on_navigation(move |next| *next == url)
-                    .title(label)
-                    .inner_size(480.0, 240.0)
-                    .incognito(true)
-                    .build()?;
+                let window =
+                    WebviewWindowBuilder::new(app, label, WebviewUrl::CustomProtocol(url.clone()))
+                        .on_navigation(move |next| *next == url)
+                        .title(label)
+                        .inner_size(480.0, 240.0)
+                        .incognito(true)
+                        .build()?;
+                if label == CALENDAR {
+                    // GTK emits this before the queued Tauri Destroyed event.
+                    let native_phase = native_phase.clone();
+                    window.gtk_window()?.connect_destroy(move |_| {
+                        native_phase.lock().unwrap().native_destroyed();
+                    });
+                }
             }
             Ok(())
         })
@@ -75,18 +89,31 @@ pub fn run(directory: &Path) -> Result<(), String> {
 
     let handle = app.handle().clone();
     let check = thread::spawn(move || {
-        let result = exercise(&handle, &observed, &database, &installed);
+        let result = exercise(&handle, &observed, &database, &installed, phase);
         handle.exit(i32::from(result.is_err()));
         result
     });
     let code = app.run_return(move |_handle, event| {
-        if let RunEvent::WindowEvent {
-            label,
-            event: WindowEvent::Destroyed,
-            ..
-        } = event
-        {
-            let _ = events.send(Observation::Destroyed(label));
+        if let RunEvent::WindowEvent { label, event, .. } = event {
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    if label == CALENDAR {
+                        loop_phase.lock().unwrap().invalidate();
+                    }
+                    let _ = events.send(Observation::UnexpectedClose(label));
+                }
+                WindowEvent::Destroyed => {
+                    let observation = if label == CALENDAR && loop_phase.lock().unwrap().confirmed()
+                    {
+                        Observation::Stopped
+                    } else {
+                        Observation::UnexpectedClose(label)
+                    };
+                    let _ = events.send(observation);
+                }
+                _ => (),
+            }
         }
     });
     check
@@ -104,6 +131,7 @@ fn exercise(
     observed: &mpsc::Receiver<Observation>,
     database: &Path,
     installed: &[VerifiedPackage; 2],
+    phase: Arc<Mutex<StopPhase>>,
 ) -> Result<(), String> {
     let mut loaded = [false; 2];
     for _ in 0..loaded.len() {
@@ -117,7 +145,7 @@ fn exercise(
     let notes = visible_window(handle, NOTES)?;
     assert_render(&calendar, ("Calendar from installed bytes", 137, true))?;
     assert_render(&notes, ("Notes from installed bytes", 173, true))?;
-    stop(handle, &calendar, observed)?;
+    stop(handle, observed, phase)?;
     let [target, sibling] = installed;
     packages::uninstall(database, target, sibling)?;
     assert_render(
@@ -128,20 +156,44 @@ fn exercise(
 
 fn stop(
     handle: &AppHandle,
-    target: &WebviewWindow,
     observed: &mpsc::Receiver<Observation>,
+    phase: Arc<Mutex<StopPhase>>,
 ) -> Result<(), String> {
-    let label = target.label();
-    // The enqueue receipt is separate from the native event for this window.
-    target
-        .destroy()
-        .map_err(|error| format!("request Stop for {label}: {error}"))?;
+    let app = handle.clone();
+    let (admitted, admission) = mpsc::channel();
+    handle
+        .run_on_main_thread(move || {
+            let result = (|| {
+                // The fixture creates this label once. Both the lookup and
+                // arming run on the loop that receives its GTK destruction.
+                let target = visible_window(&app, CALENDAR)?;
+                if !phase.lock().unwrap().arm() {
+                    return Err(format!(
+                        "surface {CALENDAR} was already closed or destroyed"
+                    ));
+                }
+                target.destroy().map_err(|error| {
+                    phase.lock().unwrap().invalidate();
+                    format!("request Stop for {CALENDAR}: {error}")
+                })
+            })();
+            let _ = admitted.send(result);
+        })
+        .map_err(|error| format!("schedule Stop for {CALENDAR}: {error}"))?;
+    admission
+        .recv_timeout(EVENT_WAIT)
+        .map_err(|error| format!("await Stop admission for {CALENDAR}: {error}"))??;
     match observed.recv_timeout(EVENT_WAIT) {
-        Ok(Observation::Destroyed(destroyed)) if destroyed == label => (),
-        other => return Err(format!("Stop awaited destruction of {label}: {other:?}")),
+        Ok(Observation::Stopped) => (),
+        Ok(Observation::UnexpectedClose(label)) => {
+            return Err(format!(
+                "unexpected close of {label} during Stop for {CALENDAR}"
+            ));
+        }
+        other => return Err(format!("Stop awaited destruction of {CALENDAR}: {other:?}")),
     }
-    if handle.get_webview_window(label).is_some() {
-        return Err(format!("stopped surface {label} is still registered"));
+    if handle.get_webview_window(CALENDAR).is_some() {
+        return Err(format!("stopped surface {CALENDAR} is still registered"));
     }
     Ok(())
 }

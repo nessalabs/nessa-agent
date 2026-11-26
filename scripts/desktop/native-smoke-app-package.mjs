@@ -1,25 +1,28 @@
 import assert from "node:assert/strict"
-import { spawn, spawnSync } from "node:child_process"
-import { once } from "node:events"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { builtExecutables } from "./native-smoke-build.mjs"
-import { stopOwnedGroup, watchInterruptions } from "./native-smoke-processes.mjs"
+import {
+  OwnedCommandCleanupError,
+  runOwnedCommand,
+  watchInterruptions,
+} from "./native-smoke-processes.mjs"
 
 export async function runAppPackageSmoke(root) {
   assert.equal(process.platform, "linux", "package native smoke requires Linux")
   assert.ok(process.env.DISPLAY, "run package native smoke with xvfb-run")
-  const native = spawnSync("pkg-config", ["--exists", "webkit2gtk-4.1", "gtk+-3.0"])
-  if (native.error) throw native.error
-  assert.equal(native.status, 0, "package native smoke requires WebKitGTK and GTK")
-
   const directory = mkdtempSync(join(tmpdir(), "nessa-native-package-"))
   const interruption = watchInterruptions()
-  let child
+  const { signal } = interruption
   let failure
   try {
-    const build = spawnSync(
+    await runOwnedCommand("pkg-config", ["--exists", "webkit2gtk-4.1", "gtk+-3.0"], {
+      cwd: root,
+      signal,
+      timeout: 10_000,
+    })
+    const output = await runOwnedCommand(
       "cargo",
       [
         "build",
@@ -33,20 +36,17 @@ export async function runAppPackageSmoke(root) {
       ],
       {
         cwd: root,
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-        stdio: ["inherit", "pipe", "inherit"],
+        signal,
+        timeout: 12 * 60_000,
+        captureLimit: 64 * 1024 * 1024,
       },
     )
-    if (build.error) throw build.error
-    assert.equal(build.status, 0, "package native smoke executable failed to build")
-    const executable = builtExecutables(build.stdout).get("app_package_acceptance")
+    const executable = builtExecutables(output).get("app_package_acceptance")
     assert.ok(executable, "Cargo did not report the package acceptance executable")
-    interruption.signal.throwIfAborted()
-    child = spawn(executable, [directory], {
+    await runOwnedCommand(executable, [directory], {
       cwd: root,
-      detached: true,
-      stdio: "inherit",
+      signal,
+      timeout: 60_000,
       env: {
         ...process.env,
         HOME: directory,
@@ -57,16 +57,12 @@ export async function runAppPackageSmoke(root) {
         WEBKIT_DISABLE_COMPOSITING_MODE: "1",
       },
     })
-    const [code, signal] = await once(child, "exit", {
-      signal: AbortSignal.any([interruption.signal, AbortSignal.timeout(60_000)]),
-    })
-    assert.equal(code, 0, `package native smoke exited with ${signal ?? code}`)
   } catch (error) {
     failure = error
   } finally {
     try {
-      assert.ok(await stopOwnedGroup(child?.pid), "package process cleanup unconfirmed")
-      rmSync(directory, { recursive: true, force: true })
+      if (!(failure instanceof OwnedCommandCleanupError))
+        rmSync(directory, { recursive: true, force: true })
     } catch (cleanup) {
       failure = failure ? new AggregateError([failure, cleanup]) : cleanup
     } finally {

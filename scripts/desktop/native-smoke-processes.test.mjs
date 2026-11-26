@@ -1,19 +1,85 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { PassThrough } from "node:stream"
 import { setTimeout as delay } from "node:timers/promises"
 import test from "node:test"
 
 import {
   alive,
   createProcessControl,
+  OwnedCommandCleanupError,
+  runOwnedCommand,
   stopOwnedGroup,
   watchInterruptions,
 } from "./native-smoke-processes.mjs"
 
 const entry = (pid, groupId, state = "S") => ({ pid, groupId, state })
+
+function ownedCommand(clean = true, captureLimit = 16) {
+  const owner = new AbortController()
+  const deadline = new AbortController()
+  const child = new EventEmitter()
+  child.pid = 41
+  child.stdout = new PassThrough()
+  const calls = []
+  const run = runOwnedCommand(
+    "fixture-command",
+    [],
+    { signal: owner.signal, timeout: 500, captureLimit },
+    {
+      start: (command, args, options) => {
+        calls.push([command, args, options.detached])
+        return child
+      },
+      stop: async (pid) => {
+        calls.push(pid)
+        return clean
+      },
+      timeoutSignal: (timeout) => {
+        assert.equal(timeout, 500)
+        return deadline.signal
+      },
+    },
+  )
+  return { run, owner, deadline, child, calls }
+}
+
+test("owned command waits for stdout close and settles the detached group", async () => {
+  const { run, child, calls } = ownedCommand()
+  child.emit("exit", 0, null)
+  child.stdout.write("artifact")
+  assert.deepEqual(calls, [["fixture-command", [], true]])
+  child.emit("close", 0, null)
+  assert.equal(await run, "artifact")
+  assert.deepEqual(calls, [["fixture-command", [], true], 41])
+})
+
+test("owned command interruption or deadline stops its group without waiting for exit", async () => {
+  for (const interrupt of ["owner", "deadline"]) {
+    const fixture = ownedCommand()
+    fixture[interrupt].abort(new Error("interrupted"))
+    await assert.rejects(
+      fixture.run,
+      interrupt === "owner" ? /interrupted/ : /500ms deadline/,
+    )
+    assert.deepEqual(fixture.calls, [["fixture-command", [], true], 41])
+  }
+})
+
+test("owned command limits captured bytes and preserves unconfirmed cleanup", async () => {
+  const { run, child, calls } = ownedCommand(false, 3)
+  child.stdout.write("four")
+  await assert.rejects(run, (error) => {
+    assert.ok(error instanceof OwnedCommandCleanupError)
+    assert.match(error.cause.errors[0].message, /exceeded 3 bytes/)
+    return true
+  })
+  assert.deepEqual(calls, [["fixture-command", [], true], 41])
+})
 
 function controlled(snapshot, sendSignal) {
   let time = 0
