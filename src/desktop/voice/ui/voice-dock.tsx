@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
-import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "../../../conversation/model"
+import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "../../../conversation"
 import { IconButton } from "../../ui/icon-button"
 import { VoiceKeyButton } from "../../settings/ui/voice-key-row"
 import { useVaultUnlock } from "../../../vault"

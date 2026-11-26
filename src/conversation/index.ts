@@ -23,7 +23,14 @@
  * queries/attachment-resources owns shared original retention classification
  * and resource-wide preview eviction.
  */
-export { AGENT_HUES, questionAnswerReady, questionChoices, textContent } from "./model"
+export {
+  AGENT_HUES,
+  AGENT_ICON_TONE,
+  AGENT_SEED,
+  questionAnswerReady,
+  questionChoices,
+  textContent,
+} from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
