@@ -3670,6 +3670,7 @@ dependencies = [
  "libc",
  "minisign-verify",
  "nessa-agent-credentials",
+ "nessa-app-package",
  "nessa-gateway-endpoint",
  "nessa-local-storage",
  "objc2",

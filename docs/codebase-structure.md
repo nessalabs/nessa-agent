@@ -1454,6 +1454,15 @@ and reuses a generation only for the complete desired command ([ADR 689](adr/689
   and window-size rules in the frontend jsdom gate;
   `verification/desktop/scripts/load-fallback.mjs` measures where it lands on
   a stage larger than the window, in WebKit and Chromium.
+  `xvfb-run --auto-servernum pnpm desktop:smoke --app-package` selects the
+  disposable installed-package fixture on the same Linux runner. The fixture
+  starts with no Nessa window, installs and reloads two packages through the
+  private store, then opens two Tauri surfaces from their verified bytes. It
+  requests Stop for the first surface after both render and waits for that
+  surface's native destruction event and removal from the window manager.
+  A missing or mismatched event fails the fixture. After Stop, the second
+  surface must still render and its stored bytes must still match. The
+  fixture executable is separate from the shipped host.
 - `scripts/desktop/stage.mjs` resolves one named stage for the Tauri command and its Vite child. Vite records the stage beside the assets it builds; `src-tauri/build.rs` resolves Tauri's effective base, platform, and `TAURI_CONFIG` layers and reads that record from the `build.frontendDist` Tauri will embed. It refuses a frontend whose stage differs from the host bundle stage, and the host accepts only an equal runtime `NESSA_STAGE` override.
 - `scripts/desktop/prepare.mjs` selects runtime preparation on macOS and Linux;
   Windows leaves it disabled.
