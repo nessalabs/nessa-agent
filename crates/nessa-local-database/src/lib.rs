@@ -437,7 +437,9 @@ mod initialized_open_tests {
         let private = root.path().join("private");
         nessa_local_storage::create_directory(&private).unwrap();
         let path = private.join("stored.sqlite3");
-        let validate = |_| panic!("a missing or empty file has no shape to validate");
+        let validate = |_: &Connection| -> Result<(), OpenError> {
+            panic!("a missing or empty file has no shape to validate")
+        };
         assert!(matches!(
             open_initialized_version(&path, 3, validate),
             Err(OpenError::File(cause)) if cause.kind() == io::ErrorKind::NotFound
