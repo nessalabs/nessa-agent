@@ -718,6 +718,9 @@ jobs:
         env:
           NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
         run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Exercise the disposable app package window
+        timeout-minutes: 15
+        run: xvfb-run --auto-servernum pnpm desktop:smoke --app-package
       - name: Upload native desktop smoke failure evidence
         if: failure()
         uses: actions/upload-artifact@v4
