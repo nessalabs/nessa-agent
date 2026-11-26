@@ -117,6 +117,8 @@ pub struct Reopened {
     pub id: String,
     pub title: String,
     pub start: ResumeStart,
+    /// The kept record, as the terminal holds it from its first moment.
+    pub saved: crate::terminal::SavedRecord,
 }
 
 /// One terminal as the list shows it.
@@ -169,6 +171,8 @@ pub enum TerminalError {
     Invalid,
     /// The program could not be started.
     Spawn(String),
+    /// A kept program's file could not be changed.
+    Storage(String),
 }
 
 /// A message for one view, as pty-runtime's client protocol JSON text.

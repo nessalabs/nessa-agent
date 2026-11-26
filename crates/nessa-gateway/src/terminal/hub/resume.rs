@@ -223,7 +223,9 @@ impl TerminalHub {
         if !held {
             return Err(TerminalError::NotFound);
         }
-        resume.forget(id);
+        // An explicit forget answers only once the file is gone; otherwise
+        // the program would still come back.
+        resume.store.remove(id).map_err(TerminalError::Storage)?;
         let mut hub = self.lock();
         if let Some(live) = hub.terminals.iter_mut().find(|live| live.entry.id == id) {
             live.saved = None;
@@ -263,6 +265,10 @@ impl TerminalHub {
                     continue;
                 }
             };
+            // Marked started before it starts: a gateway that dies while it
+            // runs does not start it again on the next start.
+            let mut marked = saved.clone();
+            marked.record.resumed = true;
             let request = OpenRequest {
                 owner: TerminalOwner {
                     organization: saved.organization.clone(),
@@ -280,12 +286,9 @@ impl TerminalHub {
                     id: saved.id.clone(),
                     title: saved.title.clone(),
                     start,
+                    saved: marked.record.clone(),
                 }),
             };
-            // Marked started before it starts: a gateway that dies while it
-            // runs does not start it again on the next start.
-            let mut marked = saved.clone();
-            marked.record.resumed = true;
             {
                 let _writing = resume.writing();
                 if let Err(error) = resume.store.save(&marked) {
@@ -297,14 +300,6 @@ impl TerminalHub {
             match self.open(request, shell) {
                 Ok(entry) => {
                     resumed += 1;
-                    if let Some(live) = self
-                        .lock()
-                        .terminals
-                        .iter_mut()
-                        .find(|live| live.entry.id == entry.id)
-                    {
-                        live.saved = Some(marked.record.clone());
-                    }
                     tracing::info!(
                         target: "nessa::terminal",
                         terminal = %entry.id,

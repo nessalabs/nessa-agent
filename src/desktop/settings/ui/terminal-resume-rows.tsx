@@ -17,7 +17,9 @@ import type { TerminalResumeGateway } from "../adapters/terminal-resume-gateway"
 import { setting } from "../model/settings-catalogue"
 import {
   describeRule,
-  parseRule,
+  draftRule,
+  refusalMessage,
+  RuleRefused,
   savedProgramDetail,
   type RuleDraft,
 } from "../model/terminal-resume"
@@ -98,28 +100,36 @@ export function TerminalResumeRows() {
   const change = (
     send: (gateway: TerminalResumeGateway) => Promise<TerminalResumeState>,
     shown: TerminalResumeState,
+    kept?: () => void,
   ) => {
-    if (!gateway || phase.kind !== "ready" || phase.saving) return false
+    if (!gateway || phase.kind !== "ready" || phase.saving) return
+    const before = phase.state
     const current = ++revision.current
     setFailed(false)
     setPhase({ kind: "ready", state: shown, saving: true })
     send(gateway).then(
-      (kept) => {
-        if (current === revision.current)
-          setPhase({ kind: "ready", state: kept, saving: false })
-      },
-      () => {
+      (state) => {
         if (current !== revision.current) return
+        setPhase({ kind: "ready", state, saving: false })
+        kept?.()
+      },
+      (cause: unknown) => {
+        if (current !== revision.current) return
+        if (cause instanceof RuleRefused) {
+          // Refused, so nothing changed: show what was there, and why.
+          setPhase({ kind: "ready", state: before, saving: false })
+          setProblem(refusalMessage(cause.part))
+          return
+        }
         // A lost answer may still have been kept: read what is in effect.
         setFailed(true)
         setRetry((value) => value + 1)
       },
     )
-    return true
   }
-  const save = (settings: TerminalResumeSettings) => {
-    if (phase.kind !== "ready") return false
-    return change((each) => each.set(settings), { ...phase.state, settings })
+  const save = (settings: TerminalResumeSettings, kept?: () => void) => {
+    if (phase.kind !== "ready") return
+    change((each) => each.set(settings), { ...phase.state, settings }, kept)
   }
   const forget = (terminalId: string) => {
     if (phase.kind !== "ready") return
@@ -146,14 +156,12 @@ export function TerminalResumeRows() {
 
   const add = () => {
     if (!settings) return
-    const parsed = parseRule(draft)
-    if ("problem" in parsed) {
-      setProblem(parsed.problem)
-      return
-    }
     setProblem("")
-    if (save({ ...settings, rules: [...settings.rules, parsed.rule] }))
-      setDraft(emptyDraft)
+    // The draft stays until the gateway keeps the rule, so a refusal can be
+    // fixed in place.
+    save({ ...settings, rules: [...settings.rules, draftRule(draft)] }, () =>
+      setDraft(emptyDraft),
+    )
   }
   const remove = (at: number) => {
     if (!settings) return

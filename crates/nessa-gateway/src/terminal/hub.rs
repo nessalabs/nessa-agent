@@ -320,7 +320,9 @@ impl TerminalHub {
         hub.terminals.push(Live {
             owner: request.owner.clone(),
             entry: entry.clone(),
-            saved: None,
+            // Installed before the engine starts, so a report the program
+            // makes at once is never overwritten by this older record.
+            saved: request.reopen.as_ref().map(|reopen| reopen.saved.clone()),
             running: Process::Starting(Vec::new()),
             views: HashMap::new(),
             size_owner: None,

@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { TerminalResumeSettings, TerminalResumeState } from "@nessa/client"
 import type { TerminalResumeGateway } from "../adapters/terminal-resume-gateway"
+import { RuleRefused } from "../model/terminal-resume"
 import { TerminalResumeProvider, TerminalResumeRows } from "./terminal-resume-rows"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -29,6 +30,13 @@ function keeping(start: TerminalResumeState) {
   const gateway = {
     read: vi.fn(async () => kept),
     set: vi.fn(async (settings: TerminalResumeSettings) => {
+      // As the gateway refuses a path that does not start with /.
+      if (
+        settings.rules.some(
+          (rule) => rule.program.includes("/") && !rule.program.startsWith("/"),
+        )
+      )
+        throw new RuleRefused("program")
       kept = {
         settings,
         saved: settings.enabled
@@ -117,16 +125,18 @@ it("adds a program rule with its folder and arguments, and removes it", async ()
   expect(container.querySelector("[data-terminal-resume-rule]")).toBeNull()
 })
 
-it("refuses a relative program before sending it", async () => {
+it("says why the gateway refused a rule and keeps it to fix", async () => {
   const gateway = keeping({ ...off, settings: { enabled: true, rules: [] } })
   await draw(gateway)
   type(field("program"), "bin/claude")
   act(() => button("Add")?.click())
   await settle()
-  expect(gateway.set).not.toHaveBeenCalled()
+  expect(gateway.set).toHaveBeenCalledTimes(1)
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-    "starts with /",
+    "starting with /",
   )
+  expect(field("program").value).toBe("bin/claude")
+  expect(container.querySelector("[data-terminal-resume-rule]")).toBeNull()
 })
 
 it("lists kept programs, whether each comes back, and forgets one", async () => {

@@ -1,41 +1,34 @@
 import { describe, expect, it } from "vitest"
-import { describeRule, parseRule, savedProgramDetail } from "./terminal-resume"
+import {
+  describeRule,
+  draftRule,
+  refusalMessage,
+  savedProgramDetail,
+} from "./terminal-resume"
 
 describe("terminal resume rules", () => {
   it("keeps a rule as typed, trimmed, with only what was given", () => {
     expect(
-      parseRule({ program: " claude ", folder: "", args: "", action: "allow" }),
-    ).toEqual({ rule: { program: "claude", action: "allow" } })
+      draftRule({ program: " claude ", folder: "", args: "", action: "allow" }),
+    ).toEqual({ program: "claude", action: "allow" })
     expect(
-      parseRule({
+      draftRule({
         program: "/opt/homebrew/bin/nvim",
         folder: "/Users/you/code ",
         args: "  -S   session.vim ",
         action: "never",
       }),
     ).toEqual({
-      rule: {
-        program: "/opt/homebrew/bin/nvim",
-        action: "never",
-        folder: "/Users/you/code",
-        args: ["-S", "session.vim"],
-      },
+      program: "/opt/homebrew/bin/nvim",
+      action: "never",
+      folder: "/Users/you/code",
+      args: ["-S", "session.vim"],
     })
   })
 
-  it("refuses what the gateway would refuse", () => {
-    for (const draft of [
-      { program: "  ", folder: "", args: "", action: "allow" as const },
-      { program: "bin/claude", folder: "", args: "", action: "allow" as const },
-      { program: "claude", folder: "code", args: "", action: "allow" as const },
-      {
-        program: "claude",
-        folder: "",
-        args: Array.from({ length: 17 }, (_, i) => `-${i}`).join(" "),
-        action: "allow" as const,
-      },
-    ])
-      expect(parseRule(draft)).toHaveProperty("problem")
+  it("says which part to fix for each refusal the gateway gives", () => {
+    for (const part of ["program", "folder", "args", "count"] as const)
+      expect(refusalMessage(part)).not.toBe("")
   })
 
   it("says what a rule does and whether a kept program comes back", () => {

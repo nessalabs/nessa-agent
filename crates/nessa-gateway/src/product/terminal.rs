@@ -5,7 +5,7 @@
 //! from the request. Every method but `terminal.open` acts through this
 //! connection's [`TerminalLink`], so a view is always this connection's own.
 use super::{
-    socket::{failure, success},
+    socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{ConversationError, TerminalOrigin, TerminalPlace};
@@ -123,7 +123,15 @@ pub(super) async fn dispatch(
                 Err(ResumeSettingsError::Invalid(RuleError::TooMany)) => {
                     failure(&id, "terminal_resume_rules_limit")
                 }
-                Err(ResumeSettingsError::Invalid(_)) => failure(&id, "invalid_request"),
+                // The field it refused, so Settings can say which part to fix
+                // without keeping a copy of these rules.
+                Err(ResumeSettingsError::Invalid(RuleError::Invalid(field))) => {
+                    failure_with_details(
+                        &id,
+                        "terminal_resume_rule_invalid",
+                        serde_json::json!({ "field": field }),
+                    )
+                }
                 Err(ResumeSettingsError::Storage(error)) => {
                     tracing::warn!(target: "nessa::terminal", %error, "terminal resume settings not kept");
                     failure(&id, "terminal_resume_storage_unavailable")
@@ -333,6 +341,10 @@ fn refused(id: &str, error: &TerminalError) -> OutgoingMessage {
         TerminalError::Spawn(reason) => {
             tracing::warn!(target: "nessa::terminal", %reason, "terminal did not start");
             failure(id, "terminal_start_failed")
+        }
+        TerminalError::Storage(reason) => {
+            tracing::warn!(target: "nessa::terminal", %reason, "kept program not changed");
+            failure(id, "terminal_resume_storage_unavailable")
         }
     }
 }

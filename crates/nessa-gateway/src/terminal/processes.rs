@@ -159,11 +159,10 @@ fn system_facts(_pid: u32) -> Option<ProcessFacts> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn reads_this_process_and_its_parent() {
         let processes = SystemProcesses;

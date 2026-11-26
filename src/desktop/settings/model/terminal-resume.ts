@@ -28,24 +28,41 @@ export interface RuleDraft {
   readonly action: "allow" | "never"
 }
 
-/** The rule to send, or why it cannot be. */
-export function parseRule(draft: RuleDraft): { rule: ResumeRule } | { problem: string } {
-  const program = draft.program.trim()
-  if (!program) return { problem: "Name a program, such as claude, or its full path." }
-  if (program.includes("/") && !program.startsWith("/"))
-    return { problem: "A path starts with /, such as /opt/homebrew/bin/nvim." }
+/** The rule to send: the draft trimmed, its arguments split. The gateway
+ * decides whether it is acceptable; see {@link RuleRefused}. */
+export function draftRule(draft: RuleDraft): ResumeRule {
   const folder = draft.folder.trim()
-  if (folder && !folder.startsWith("/"))
-    return { problem: "A folder starts with /, such as /Users/you/code." }
   const args = draft.args.split(/\s+/).filter(Boolean)
-  if (args.length > 16) return { problem: "At most 16 arguments." }
   return {
-    rule: {
-      program,
-      action: draft.action,
-      ...(folder ? { folder } : {}),
-      ...(args.length ? { args } : {}),
-    },
+    program: draft.program.trim(),
+    action: draft.action,
+    ...(folder ? { folder } : {}),
+    ...(args.length ? { args } : {}),
+  }
+}
+
+/** The part of a rule the gateway refused, or `count` for too many rules. */
+export type RefusedPart = "program" | "folder" | "args" | "count"
+
+/** The gateway refused the rules it was sent and kept the ones it had. */
+export class RuleRefused extends Error {
+  constructor(readonly part: RefusedPart) {
+    super(`Terminal resume rule refused (${part})`)
+    this.name = "RuleRefused"
+  }
+}
+
+/** What to fix, for a refused part. */
+export function refusalMessage(part: RefusedPart): string {
+  switch (part) {
+    case "program":
+      return "Name a program, such as claude, or its full path starting with /."
+    case "folder":
+      return "A folder starts with /, such as /Users/you/code."
+    case "args":
+      return "Too many arguments, or one is too long."
+    case "count":
+      return "That is as many rules as Nessa keeps. Remove one first."
   }
 }
 
