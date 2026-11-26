@@ -315,6 +315,7 @@ async fn last_handle_drop_keeps_private_state_owned_until_physical_completion() 
 
 struct DiscoverySaved {
     intent: PublicIntent,
+    pin: [u8; 44],
     credential: CredentialId,
 }
 impl ClientPendingStore for DiscoverySaved {
@@ -325,7 +326,7 @@ impl ClientPendingStore for DiscoverySaved {
         Ok(Some(DeviceCredential::new(
             PendingEnrollment::new(
                 PrivateKeyMaterial::new(zeroize::Zeroizing::new([7; 32])),
-                [8; 44],
+                self.pin,
                 self.intent,
             ),
             self.credential.clone(),
@@ -377,6 +378,7 @@ async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes(
             ConsentClass::PeerRead,
             Arc::new(DiscoverySaved {
                 intent,
+                pin: [8; 44],
                 credential: credential.clone(),
             }),
             Arc::new(Time),
@@ -401,5 +403,210 @@ async fn discovery_refuses_replaced_enrollment_before_any_tls_or_exchange_bytes(
             "no TLS or discovery byte preceded identity admission"
         );
         client.shutdown().await;
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn joined_pinned_status_delivers_one_authenticated_refusal_without_replay() {
+    use crate::retained::{joined_status::JoinedStatusRoute, ReadStop, TokioJoinedDial};
+    use nessa_auth::adapters::pairing::{relay_key, NativeIdentity, NativeTransport, OsEntropy};
+    use nessa_protocol::{
+        pairing::{
+            wire::{decode_request, encode_refused, NativePairingRequest},
+            EnrollmentChannel,
+        },
+        relay::{read_frame, write_frame, RelayFrame},
+    };
+
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let gateway = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    let pin = gateway.public_spki();
+    let key = relay_key(&pin).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = NativeEnrollmentClient::new(
+        Arc::new(DiscoverySaved {
+            intent,
+            pin,
+            credential: CredentialId::new("issued").unwrap(),
+        }),
+        Arc::new(Time),
+    );
+
+    // The owner selected a different pin: refuse before any TCP connection.
+    let other = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let wrong = client
+        .status_joined_completed(
+            JoinedStatusRoute::new(address, other, Arc::new(TokioJoinedDial)).unwrap(),
+            ReadStop::new(),
+            3_000,
+            None,
+            || {},
+            |r| r,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(wrong, Err(NativeClientError::Phase)));
+    listener.set_nonblocking(true).unwrap();
+    assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+
+    // Use the same accepted socket for relay framing, pinned TLS and canonical
+    // status. A received application refusal is authoritative for this attempt.
+    listener.set_nonblocking(false).unwrap();
+    let peer = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        assert!(
+            matches!(read_frame(&mut socket), Ok(RelayFrame::Connect { key: observed }) if observed==key)
+        );
+        write_frame(&mut socket, &RelayFrame::Joined).unwrap();
+        let mut tls = EnrollmentChannel::new(NativeTransport::accept(socket, &gateway).unwrap());
+        let request = decode_request(&tls.receive_envelope().unwrap()).unwrap();
+        assert!(matches!(request, NativePairingRequest::Status(observed) if observed==intent));
+        tls.send_envelope(&encode_refused().unwrap()).unwrap();
+        assert!(
+            tls.receive_envelope().is_err(),
+            "cannot replay status on the joined socket"
+        );
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock),
+            "cannot redial after the authenticated refusal"
+        );
+    });
+    let refusal = timeout(
+        Duration::from_secs(5),
+        client.status_joined_completed(
+            JoinedStatusRoute::new(address, pin, Arc::new(TokioJoinedDial)).unwrap(),
+            ReadStop::new(),
+            3_000,
+            None,
+            || {},
+            |r| r,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(refusal, Err(NativeClientError::Refused)));
+    peer.join().unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn joined_selected_owner_injects_one_dial_and_drains_on_stop() {
+    use crate::retained::{
+        joined_status::{JoinedDialFuture, JoinedStatusDial, JoinedStatusRoute},
+        ReadStop,
+    };
+    use nessa_auth::adapters::pairing::{NativeIdentity, OsEntropy};
+    use std::{
+        future::poll_fn,
+        io::{Error, ErrorKind},
+        net::SocketAddr,
+        sync::atomic::AtomicBool,
+        task::Poll,
+    };
+
+    struct DropWitness(Arc<AtomicBool>);
+    impl Drop for DropWitness {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    struct Dialogue {
+        address: SocketAddr,
+        calls: AtomicUsize,
+        pending: bool,
+        polled: Arc<Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+    impl JoinedStatusDial for Dialogue {
+        fn dial(&self, address: SocketAddr) -> JoinedDialFuture {
+            assert_eq!(address, self.address);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.pending {
+                return Box::pin(async { Err(Error::from(ErrorKind::ConnectionRefused)) });
+            }
+            let witness = DropWitness(self.dropped.clone());
+            let polled = self.polled.clone();
+            Box::pin(poll_fn(move |_| {
+                let _retained = &witness;
+                polled.notify_one();
+                Poll::Pending
+            }))
+        }
+    }
+    let address = "127.0.0.1:9".parse().unwrap();
+    let pin = NativeIdentity::generate(&mut OsEntropy)
+        .unwrap()
+        .public_spki();
+    let intent = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        1_000,
+        ConsentClass::DeviceRead,
+    )
+    .unwrap();
+    let client = NativeEnrollmentClient::new(
+        Arc::new(DiscoverySaved {
+            intent,
+            pin,
+            credential: CredentialId::new("issued").unwrap(),
+        }),
+        Arc::new(Time),
+    );
+    for (expires, pend, expected_calls, expected_kind) in [
+        (0, false, 0, ErrorKind::TimedOut),
+        (1_000, false, 1, ErrorKind::ConnectionRefused),
+        (1_000, true, 1, ErrorKind::ConnectionAborted),
+    ] {
+        let stop = ReadStop::new();
+        let port = Arc::new(Dialogue {
+            address,
+            calls: AtomicUsize::new(0),
+            pending: pend,
+            polled: Arc::new(Notify::new()),
+            dropped: Arc::new(AtomicBool::new(false)),
+        });
+        let route = JoinedStatusRoute::new(address, pin, port.clone()).unwrap();
+        let action =
+            client.status_joined_completed(route, stop.clone(), expires, None, || {}, |r| r);
+        let result = if pend {
+            let stop_after_poll = async {
+                port.polled.notified().await;
+                stop.stop();
+            };
+            timeout(Duration::from_secs(3), async {
+                tokio::join!(action, stop_after_poll).0
+            })
+            .await
+            .unwrap()
+        } else {
+            timeout(Duration::from_secs(3), action).await.unwrap()
+        };
+        assert!(
+            matches!(result.unwrap(), Err(NativeClientError::Io(kind)) if kind == expected_kind)
+        );
+        assert_eq!(port.calls.load(Ordering::SeqCst), expected_calls);
+        assert_eq!(port.dropped.load(Ordering::SeqCst), pend);
     }
 }

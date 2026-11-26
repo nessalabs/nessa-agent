@@ -178,6 +178,17 @@ pub(super) fn connect_any(address: &str, deadline: Instant) -> IoResult<TcpStrea
     Err(refused.unwrap_or_else(|| Error::from(ErrorKind::NotFound)))
 }
 
+// Transport adapter for the explicit enrolled-status fixture. Its future
+// owns just one numeric connection and moves the connected socket out once.
+#[cfg(feature = "test-support")]
+pub(crate) struct TokioJoinedDial;
+#[cfg(feature = "test-support")]
+impl super::joined_status::JoinedStatusDial for TokioJoinedDial {
+    fn dial(&self, address: std::net::SocketAddr) -> super::joined_status::JoinedDialFuture {
+        Box::pin(async move { tokio::net::TcpStream::connect(address).await?.into_std() })
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/retained/relay.rs"]
 mod tests;

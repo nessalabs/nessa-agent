@@ -230,6 +230,45 @@ impl RetainedEnrollmentClient {
             .await
     }
 
+    /// Test-only selected relay; no direct fallback and no status replay.
+    /// `expires_ms` belongs to this client's injected monotonic clock.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn status_joined_for_test(
+        &self,
+        relay: std::net::SocketAddr,
+        pin: [u8; 44],
+        stop: Arc<super::ReadStop>,
+        expires_ms: u64,
+        received: Option<DisclosedConsent>,
+    ) -> Result<RetainedEnrollmentStatus, NativeClientError> {
+        let route = super::joined_status::JoinedStatusRoute::new(
+            relay,
+            pin,
+            Arc::new(super::TokioJoinedDial),
+        )
+        .map_err(|error| NativeClientError::Io(error.kind()))?;
+        let begin = self.store.clone();
+        let finish = self.store.clone();
+        self.client
+            .status_joined_completed(
+                route,
+                stop,
+                expires_ms,
+                received,
+                move || begin.begin_status(),
+                move |enrollment| RetainedEnrollmentStatus {
+                    enrollment,
+                    purge: finish.finish_status().map(|result| {
+                        result
+                            .map(RetainedPurge)
+                            .map_err(|error| cache_failure(&error))
+                    }),
+                },
+            )
+            .await
+    }
+
     /// Retry through the existing strict-pin owner. Its original Unclaimed
     /// receipt is returned only when the entire retry succeeds; later failures
     /// preserve private recovery state but do not return that earlier receipt.

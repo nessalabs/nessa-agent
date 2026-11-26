@@ -79,6 +79,8 @@ use nessa_sync::replication::{
     domain::{Id, Limits, Scope},
 };
 pub(crate) use relay::race;
+#[cfg(feature = "test-support")]
+pub(crate) use relay::TokioJoinedDial;
 use relay::{connect_any, relay_leg, RelayRoute};
 use std::cell::Cell;
 use std::io::{self, ErrorKind, Read, Result as IoResult, Write};
@@ -92,6 +94,8 @@ mod active;
 mod artifact;
 mod device;
 mod follow;
+#[cfg(feature = "test-support")]
+pub(crate) mod joined_status;
 mod owner;
 pub use follow::{
     FollowRule, FollowRuleError, LiveChoice, LiveFollow, FOLLOW_CONVERSATIONS, FOLLOW_KEEP_MAX,

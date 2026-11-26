@@ -31,13 +31,21 @@ pub enum DeadlineError {
 
 pub struct NativeDeadline {
     clock: Arc<dyn Clock>,
-    expires_ms: Mutex<u64>,
+    policy: DeadlinePolicy,
+}
+enum DeadlinePolicy {
+    PhaseWindows(Mutex<u64>),
+    Absolute(u64),
 }
 impl NativeDeadline {
     fn remaining(&self) -> IoResult<Duration> {
-        self.expires_ms
-            .lock()
-            .map_err(|_| Error::other("native deadline owner unavailable"))?
+        let expires_ms = match &self.policy {
+            DeadlinePolicy::PhaseWindows(value) => *value
+                .lock()
+                .map_err(|_| Error::other("native deadline owner unavailable"))?,
+            DeadlinePolicy::Absolute(value) => *value,
+        };
+        expires_ms
             .checked_sub(self.clock.elapsed_ms())
             .filter(|milliseconds| *milliseconds > 0)
             .map(Duration::from_millis)
@@ -155,11 +163,36 @@ impl<S: NativeSocket> DeadlineStream<S> {
             .elapsed_ms()
             .checked_add(TLS_DEADLINE.as_millis() as u64)
             .ok_or(DeadlineError::Io(ErrorKind::InvalidData))?;
-        let deadline = Arc::new(NativeDeadline {
+        Ok(Self::with_policy(
+            stream,
             clock,
-            expires_ms: Mutex::new(expires_ms),
-        });
-        Ok((
+            wake,
+            DeadlinePolicy::PhaseWindows(Mutex::new(expires_ms)),
+        ))
+    }
+
+    /// Use the caller's existing monotonic expiry across all blocking phases.
+    /// The value is measured on this exact clock and is never extended at a
+    /// phase transition. Ordinary `new` keeps independent phase windows.
+    pub fn new_absolute(
+        stream: S,
+        clock: Arc<dyn Clock>,
+        wake: Arc<WakeEndpoint>,
+        expires_ms: u64,
+    ) -> Result<(Self, Arc<NativeDeadline>), DeadlineError> {
+        let result = Self::with_policy(stream, clock, wake, DeadlinePolicy::Absolute(expires_ms));
+        check_deadline(&result.1)?;
+        Ok(result)
+    }
+
+    fn with_policy(
+        stream: S,
+        clock: Arc<dyn Clock>,
+        wake: Arc<WakeEndpoint>,
+        policy: DeadlinePolicy,
+    ) -> (Self, Arc<NativeDeadline>) {
+        let deadline = Arc::new(NativeDeadline { clock, policy });
+        (
             Self {
                 io: NativeIo::Socket(stream),
                 deadline: deadline.clone(),
@@ -167,7 +200,7 @@ impl<S: NativeSocket> DeadlineStream<S> {
                 failed: None,
             },
             deadline,
-        ))
+        )
     }
     pub fn blocking(&self) -> Result<(), DeadlineError> {
         match &self.io {
@@ -277,13 +310,15 @@ impl<S: NativeSocket> Write for DeadlineStream<S> {
 /// Give the connection the enrollment phase's deadline, counted from now.
 pub fn begin_enrollment_phase(deadline: &NativeDeadline) -> Result<(), DeadlineError> {
     check_deadline(deadline)?;
+    let DeadlinePolicy::PhaseWindows(expires) = &deadline.policy else {
+        return Ok(());
+    };
     let expires_ms = deadline
         .clock
         .elapsed_ms()
         .checked_add(ENROLLMENT_DEADLINE.as_millis() as u64)
         .ok_or(DeadlineError::Io(ErrorKind::InvalidData))?;
-    *deadline
-        .expires_ms
+    *expires
         .lock()
         .map_err(|_| DeadlineError::Io(ErrorKind::Other))? = expires_ms;
     Ok(())
