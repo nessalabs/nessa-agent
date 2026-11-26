@@ -8,7 +8,6 @@ use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
 use nessa_protocol::{
     conversation::read_scope::validate_passive_read_selector,
-    product::generated::{MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES},
     pairing::{
         wire::{
             decode_reply, NativePairingReply, NativePairingRequest, RecordCarrierMode,
@@ -16,6 +15,7 @@ use nessa_protocol::{
         },
         NativeFrameError,
     },
+    product::generated::{MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES},
 };
 use nessa_sync::replication::infrastructure::session::{
     CapabilityRecordSession, InterruptibleSessionIo, RecordSessionError, SessionInterrupt,
@@ -275,13 +275,21 @@ pub(super) fn read_selected_page_for_test<S: Read + Write>(
     scope: &Scope,
     fence: impl Fn() -> Result<(), ReadFailure>,
 ) -> Result<Page, ReadFailure> {
-    let io = RecordIo { transport, interrupt, cut: None };
+    let io = RecordIo {
+        transport,
+        interrupt,
+        cut: None,
+    };
     let session = CapabilityRecordSession::connect(
         io,
         scope.clone(),
-        SessionLimits { control_bytes: 2048, bindings: 1 },
+        SessionLimits {
+            control_bytes: 2048,
+            bindings: 1,
+        },
         CapabilitySupport::current(),
-    ).map_err(bind_failure)?;
+    )
+    .map_err(bind_failure)?;
     let result = (|| {
         fence()?;
         let (mut authorizer, mut source) = session.parts();
@@ -295,7 +303,8 @@ pub(super) fn read_selected_page_for_test<S: Read + Write>(
             1,
             MAX_RECORD_PAGE_PAYLOAD_BYTES,
             MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
-        ).map_err(|_| ReadFailure::Protocol)?;
+        )
+        .map_err(|_| ReadFailure::Protocol)?;
         let request = PageRequest {
             scope: scope.clone(),
             after: 0,

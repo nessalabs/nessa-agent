@@ -1,5 +1,7 @@
 //! Native enrollment composition preserves the existing physical worker and
 //! purge-before-end policy. Status effects are collected inside its admission.
+#[cfg(feature = "test-support")]
+use super::joined_status::{JoinedRecordFixture, JoinedStatusFixture};
 use super::RetainedOwnerStatus;
 use super::{cache_failure, retained_policy, ReadFailure, RetainedCache};
 use crate::pairing::{
@@ -299,11 +301,13 @@ impl RetainedEnrollmentClient {
         let finish = self.store.clone();
         self.client
             .status_joined_then(
-                status_route,
-                stop,
-                expires_ms,
+                JoinedStatusFixture {
+                    route: status_route,
+                    stop,
+                    expires_ms,
+                    continuation: Some(wake.clone()),
+                },
                 None,
-                Some(wake.clone()),
                 move || begin.begin_status(),
                 move |status, state, episode, reactor| {
                     if finish.finish_status().is_some_and(|result| result.is_err()) {
@@ -312,11 +316,13 @@ impl RetainedEnrollmentClient {
                     let selection = super::joined_status::join_after_active_for_test(
                         status,
                         state,
-                        &scope,
-                        &scope,
-                        selected_route,
-                        episode,
-                        wake,
+                        JoinedRecordFixture {
+                            trusted_scope: &scope,
+                            requested_scope: &scope,
+                            route: selected_route,
+                            episode,
+                            wake,
+                        },
                         reactor,
                     )?;
                     Ok(super::joined_status::read_joined_record_page_for_test(selection))

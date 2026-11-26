@@ -1,5 +1,7 @@
 //! Physical admission owns effect capture even after the calling future ends.
 use super::{NativeClientError, NativeEnrollmentClient};
+#[cfg(feature = "test-support")]
+use crate::retained::joined_status::JoinedRecordFixture;
 use crate::retained::RetainedEnrollmentClient;
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::{
@@ -783,11 +785,13 @@ async fn joined_record_selection_admits_one_dial_only_for_current_matching_autho
             join_after_active_for_test(
                 status,
                 &state,
-                &trusted,
-                &requested,
-                route,
-                episode,
-                WakeEndpoint::new(address),
+                JoinedRecordFixture {
+                    trusted_scope: &trusted,
+                    requested_scope: &requested,
+                    route,
+                    episode,
+                    wake: WakeEndpoint::new(address),
+                },
                 &reactor,
             )
         })

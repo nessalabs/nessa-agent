@@ -1,25 +1,21 @@
 //! One selected relay socket from the Join preamble through pinned status.
+use super::{ReadFailure, ReadStop, StopSocket};
 use crate::pairing::NativeClientError;
-use super::ReadFailure;
 use nessa_auth::{
-    adapters::pairing::{GatewayTrust, NativeTransport},
+    adapters::pairing::{relay_key, GatewayTrust, NativeTransport},
     domain::CredentialId,
 };
 use nessa_protocol::{
+    clock::Clock,
     conversation::read_scope::validate_passive_read_selector,
     pairing::{
+        socket::{check_deadline, DeadlineStream, NativeDeadline, NativeSocket, WakeEndpoint},
         wire::{
             encode_request, NativePairingRequest, NativePairingStatus, RecordCarrierMode,
             RecordCarrierOpen,
         },
         EnrollmentChannel, NativeFrameError,
     },
-};
-use super::{ReadStop, StopSocket};
-use nessa_auth::adapters::pairing::relay_key;
-use nessa_protocol::{
-    clock::Clock,
-    pairing::socket::{check_deadline, DeadlineStream, NativeDeadline, NativeSocket, WakeEndpoint},
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
 use nessa_sync::replication::{domain::Page, infrastructure::session::SessionInterrupt};
@@ -170,6 +166,23 @@ impl JoinedStatusRoute {
     }
 }
 
+/// Test-support inputs for one physical pinned Status episode.
+pub(crate) struct JoinedStatusFixture {
+    pub(crate) route: JoinedStatusRoute,
+    pub(crate) stop: Arc<ReadStop>,
+    pub(crate) expires_ms: u64,
+    pub(crate) continuation: Option<Arc<WakeEndpoint>>,
+}
+
+/// The exact selected route and scopes carry the existing episode forward.
+pub(crate) struct JoinedRecordFixture<'a> {
+    pub(crate) trusted_scope: &'a super::Scope,
+    pub(crate) requested_scope: &'a super::Scope,
+    pub(crate) route: JoinedStatusRoute,
+    pub(crate) episode: JoinedEpisode,
+    pub(crate) wake: Arc<WakeEndpoint>,
+}
+
 pub(crate) struct JoinedRecordSelection {
     joined: JoinedStream,
     reader: super::RetainedDeviceReader,
@@ -184,13 +197,16 @@ pub(crate) struct JoinedRecordSelection {
 pub(crate) fn join_after_active_for_test(
     status: std::result::Result<NativePairingStatus, NativeClientError>,
     state: &dyn nessa_auth::application::pairing::ClientPendingStore,
-    trusted_scope: &super::Scope,
-    requested_scope: &super::Scope,
-    route: JoinedStatusRoute,
-    episode: JoinedEpisode,
-    wake: Arc<WakeEndpoint>,
+    fixture: JoinedRecordFixture<'_>,
     reactor: &tokio::runtime::Handle,
 ) -> std::result::Result<JoinedRecordSelection, NativeClientError> {
+    let JoinedRecordFixture {
+        trusted_scope,
+        requested_scope,
+        route,
+        episode,
+        wake,
+    } = fixture;
     let status = status?;
     let reader = super::RetainedDeviceReader::from_current(&status, state)?
         .ok_or(NativeClientError::Refused)?;
@@ -272,7 +288,10 @@ fn with_selected_joined_record<T>(
     // TLS may have buffered the plaintext before stop/wake/expiry changed.
     // Recheck the same episode and exact wake, not just the socket deadline.
     let fence = || {
-        episode.remaining(&wake).map(|_| ()).map_err(|_| ReadFailure::Unreachable)
+        episode
+            .remaining(&wake)
+            .map(|_| ())
+            .map_err(|_| ReadFailure::Unreachable)
     };
     fence()?;
     use_transport(channel.into_transport(), interrupt, &scope, &fence)

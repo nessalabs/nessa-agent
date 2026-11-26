@@ -1,4 +1,6 @@
 //! Native Rust enrollment/recovery, with one physically retained client KSF worker.
+#[cfg(feature = "test-support")]
+use crate::retained::joined_status::{JoinedEpisode, JoinedStatusFixture};
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, CryptoRng, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
@@ -322,11 +324,13 @@ impl NativeEnrollmentClient {
         complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
     ) -> Result<T, NativeClientError> {
         self.status_joined_then(
-            route,
-            stop,
-            expires_ms,
+            JoinedStatusFixture {
+                route,
+                stop,
+                expires_ms,
+                continuation: None,
+            },
             received,
-            None,
             begin,
             move |result, _, _, _| complete(result),
         )
@@ -336,25 +340,24 @@ impl NativeEnrollmentClient {
     #[cfg(feature = "test-support")]
     pub(crate) async fn status_joined_then<T: Send + 'static>(
         &self,
-        route: crate::retained::joined_status::JoinedStatusRoute,
-        stop: Arc<crate::retained::ReadStop>,
-        expires_ms: u64,
+        fixture: JoinedStatusFixture,
         received: Option<DisclosedConsent>,
-        continuation: Option<Arc<WakeEndpoint>>,
         begin: impl FnOnce() + Send + 'static,
         complete: impl FnOnce(
             Result<NativePairingStatus, NativeClientError>,
             &dyn ClientPendingStore,
-            crate::retained::joined_status::JoinedEpisode,
+            JoinedEpisode,
             &tokio::runtime::Handle,
         ) -> T + Send + 'static,
     ) -> Result<T, NativeClientError> {
-        let wake = WakeEndpoint::new(route.address());
-        let episode = crate::retained::joined_status::JoinedEpisode::new(
-            self.clock.clone(),
+        let JoinedStatusFixture {
+            route,
             stop,
             expires_ms,
-        );
+            continuation,
+        } = fixture;
+        let wake = WakeEndpoint::new(route.address());
+        let episode = JoinedEpisode::new(self.clock.clone(), stop, expires_ms);
         let reactor = tokio::runtime::Handle::current();
         let mut endpoints = vec![wake.clone()];
         endpoints.extend(continuation);
