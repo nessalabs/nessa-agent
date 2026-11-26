@@ -63,7 +63,12 @@ describe("sending", () => {
     const [draftId] = shown(store)
     source.refuse("send", "not-supported")
     await store.dispatch(
-      sendMessage({ initiator: "person", sessionId: draftId, text: "Said aloud.", spoken: true }),
+      sendMessage({
+        initiator: "person",
+        sessionId: draftId,
+        text: "Said aloud.",
+        spoken: true,
+      }),
     )
     const [refused] = outboxOf(store, draftId)
     expect(refused).toMatchObject({ spoken: true, delivery: { state: "failed" } })
@@ -72,9 +77,12 @@ describe("sending", () => {
     )
     const sends = source.calls.filter((call) => call[0] === "send").map((call) => call[1])
     expect(sends).toHaveLength(2)
-    for (const sent of sends) expect(sent).toMatchObject({ text: "Said aloud.", spoken: true })
+    for (const sent of sends)
+      expect(sent).toMatchObject({ text: "Said aloud.", spoken: true })
     // A typed message says nothing of it.
-    await store.dispatch(sendMessage({ initiator: "person", sessionId: draftId, text: "Typed." }))
+    await store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Typed." }),
+    )
     const typed = source.calls.filter((call) => call[0] === "send").at(-1)?.[1]
     expect(typed).not.toHaveProperty("spoken")
   })
