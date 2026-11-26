@@ -259,7 +259,8 @@ fn app_author_history_is_readable_but_cannot_be_issued_or_used() {
             PrincipalKind::Integration,
             PrincipalKind::Gateway,
         ] {
-            let expected = if path == IssuePath::StoredOnLoad && kind == PrincipalKind::Integration {
+            let expected = if path == IssuePath::StoredOnLoad && kind == PrincipalKind::Integration
+            {
                 Decision::Allow
             } else {
                 Decision::Deny
