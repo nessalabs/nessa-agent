@@ -9,9 +9,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use nessa_auth::domain::AppNamespace;
 use nessa_local_database::rusqlite::{params, Connection, TransactionBehavior};
 use nessa_local_storage::create_directory;
-use nessa_types::app_identity::DEFAULT_APP_NAMESPACE;
 
 use nessa_backup::domain::{
     decode_deferred, decode_identity, deferred_session_name, Fingerprint, JOURNAL_HEADER,
@@ -484,7 +484,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
             agent: "restored".into(),
             model: "restored".into(),
             approval_mode: "ask".into(),
-            app_namespace: DEFAULT_APP_NAMESPACE.into(),
+            app_namespace: AppNamespace::DEFAULT.as_str().into(),
             creation_revision: 1,
             change_revision: 1,
             title: None,
@@ -510,7 +510,7 @@ fn write_metadata(path: &Path, live: &Path) -> Result<(), String> {
                 agent: "restored".into(),
                 model: "restored".into(),
                 approval_mode: "ask".into(),
-                app_namespace: DEFAULT_APP_NAMESPACE.into(),
+                app_namespace: AppNamespace::DEFAULT.as_str().into(),
                 creation_revision: 1,
                 change_revision: 1,
                 title: None,
@@ -809,8 +809,8 @@ fn conversation_fields(value: &serde_json::Value) -> Option<ConversationFields> 
         .max(creation_revision);
     let app_namespace = match value.get("appNamespace") {
         // Legacy pre-v13 backups predate namespaces and belong to default nessa.
-        None => nessa_auth::domain::AppNamespace::DEFAULT,
-        Some(raw) => nessa_auth::domain::AppNamespace::parse(raw.as_str()?).ok()?,
+        None => AppNamespace::DEFAULT,
+        Some(raw) => AppNamespace::parse(raw.as_str()?).ok()?,
     };
     Some(ConversationFields {
         organization: text(value, "organization")?,
@@ -962,7 +962,7 @@ fn merge_stream(
 
 #[cfg(test)]
 mod tests {
-    use super::{conversation_fields, DEFAULT_APP_NAMESPACE};
+    use super::conversation_fields;
     use serde_json::json;
 
     fn exported(app_namespace: Option<&str>) -> serde_json::Value {
@@ -990,7 +990,7 @@ mod tests {
     #[test]
     fn conversation_fields_default_a_legacy_row_to_nessa() {
         let fields = conversation_fields(&exported(None)).expect("restorable");
-        assert_eq!(fields.app_namespace, DEFAULT_APP_NAMESPACE);
+        assert_eq!(fields.app_namespace, "nessa");
     }
 
     #[test]

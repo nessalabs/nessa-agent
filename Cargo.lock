@@ -4185,7 +4185,6 @@ dependencies = [
  "nessa-sdk",
  "nessa-sync",
  "nessa-timer",
- "nessa-types",
  "nessa-vault",
  "nessa-webhooks",
  "reqwest 0.13.4",
