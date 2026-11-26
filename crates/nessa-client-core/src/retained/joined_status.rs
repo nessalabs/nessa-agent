@@ -64,7 +64,10 @@ impl JoinedEpisode {
         }
     }
 
-    fn claim_publication(&self, wake: &WakeEndpoint) -> Result<MutexGuard<'_, ()>, ReadFailure> {
+    fn claim_publication(
+        &self,
+        wake: &WakeEndpoint,
+    ) -> std::result::Result<MutexGuard<'_, ()>, ReadFailure> {
         let permit = self.stop.publication_lock();
         if self.stop.is_stopped() {
             return Err(ReadFailure::Stopped);
