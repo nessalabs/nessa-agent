@@ -157,8 +157,7 @@ impl DirectoryCommandRule {
         if !valid_directory_program(&program)
             || argv.len() > MAX_DIRECTORY_ARGV_ITEMS
             || argv.iter().any(|part| {
-                part.len() > MAX_DIRECTORY_ARGV_PATTERN_BYTES
-                    || part.chars().any(char::is_control)
+                part.len() > MAX_DIRECTORY_ARGV_PATTERN_BYTES || part.chars().any(char::is_control)
             })
         {
             return Err(InvalidDirectoryGrant);
@@ -264,8 +263,7 @@ mod retained_capacity_tests {
         args.push(spare("arg"));
         let mut rules = Vec::with_capacity(256);
         rules.push(
-            DirectoryCommandRule::new(DirectoryRuleEffect::Allow, spare("program"), args)
-                .unwrap(),
+            DirectoryCommandRule::new(DirectoryRuleEffect::Allow, spare("program"), args).unwrap(),
         );
         let rights = DirectoryCapabilities::new(&[DirectoryCapability::Exec]).unwrap();
         let grant = DirectoryGrant::new(rights, rules).unwrap();

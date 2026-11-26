@@ -41,8 +41,12 @@ pub trait DirectoryPolicyEvaluator: Send + Sync {
 /// host owner may bind identity and scope and apply the authorized effect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectoryOperation {
-    Read { within: bool },
-    Write { within: bool },
+    Read {
+        within: bool,
+    },
+    Write {
+        within: bool,
+    },
     Exec {
         within: bool,
         enforced_boundary: bool,

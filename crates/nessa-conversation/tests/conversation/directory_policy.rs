@@ -79,7 +79,10 @@ fn resource_identity_and_grant_inputs_are_bounded() {
     )
     .is_err());
     assert_eq!(
-        DirectoryCommand::new("fixture".into(), vec!["arg".into(); MAX_DIRECTORY_ARGV_ITEMS + 1]),
+        DirectoryCommand::new(
+            "fixture".into(),
+            vec!["arg".into(); MAX_DIRECTORY_ARGV_ITEMS + 1]
+        ),
         Err(DirectoryPolicyError::InvalidFacts)
     );
 }
@@ -112,10 +115,8 @@ fn cedar_requires_live_grant_inside_the_boundary_and_exact_path_capability() {
         DirectoryPolicyAnswer::Permit { .. }
     ));
     assert_eq!(
-        CedarDirectoryPolicyEvaluator.evaluate(
-            &DirectoryGrantState::Revoked { revision: 0 },
-            &within
-        ),
+        CedarDirectoryPolicyEvaluator
+            .evaluate(&DirectoryGrantState::Revoked { revision: 0 }, &within),
         Err(DirectoryPolicyError::InvalidFacts)
     );
 }

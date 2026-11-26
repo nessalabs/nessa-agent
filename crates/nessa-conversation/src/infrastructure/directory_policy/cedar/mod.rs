@@ -122,8 +122,10 @@ fn evaluate(
         "operation":facts.operation,"program":facts.program,"argc":facts.argv.len(),
     });
     for position in 0..crate::domain::MAX_DIRECTORY_ARGV_ITEMS {
-        context[format!("arg{position}")] =
-            json!(facts.argv.get(position).map_or("", |argument| argument.as_ref()));
+        context[format!("arg{position}")] = json!(facts
+            .argv
+            .get(position)
+            .map_or("", |argument| argument.as_ref()));
     }
     let entity = |value: &str| -> Result<EntityUid, ()> { value.parse().map_err(|_| ()) };
     let request = Request::new(
