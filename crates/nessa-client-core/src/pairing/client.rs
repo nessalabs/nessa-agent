@@ -1,4 +1,6 @@
 //! Native Rust enrollment/recovery, with one physically retained client KSF worker.
+#[cfg(feature = "test-support")]
+use crate::retained::joined_status::{JoinedEpisode, JoinedStatusFixture};
 use nessa_auth::{
     adapters::pairing::{
         ClientAttempt, CryptoRng, GatewayTrust, ManualCode, NativeIdentity, NativeTransport,
@@ -321,10 +323,47 @@ impl NativeEnrollmentClient {
         begin: impl FnOnce() + Send + 'static,
         complete: impl FnOnce(Result<NativePairingStatus, NativeClientError>) -> T + Send + 'static,
     ) -> Result<T, NativeClientError> {
+        self.status_joined_then(
+            JoinedStatusFixture {
+                route,
+                stop,
+                expires_ms,
+                continuation: None,
+            },
+            received,
+            begin,
+            move |result, _, _, _| complete(result),
+        )
+        .await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn status_joined_then<T: Send + 'static>(
+        &self,
+        fixture: JoinedStatusFixture,
+        received: Option<DisclosedConsent>,
+        begin: impl FnOnce() + Send + 'static,
+        complete: impl FnOnce(
+                Result<NativePairingStatus, NativeClientError>,
+                &dyn ClientPendingStore,
+                JoinedEpisode,
+                &tokio::runtime::Handle,
+            ) -> T
+            + Send
+            + 'static,
+    ) -> Result<T, NativeClientError> {
+        let JoinedStatusFixture {
+            route,
+            stop,
+            expires_ms,
+            continuation,
+        } = fixture;
         let wake = WakeEndpoint::new(route.address());
-        let clock = self.clock.clone();
+        let episode = JoinedEpisode::new(self.clock.clone(), stop, expires_ms);
         let reactor = tokio::runtime::Handle::current();
-        self.dispatch_owned(vec![wake.clone()], move |pending| {
+        let mut endpoints = vec![wake.clone()];
+        endpoints.extend(continuation);
+        self.dispatch_owned(endpoints, move |pending| {
             begin();
             let result = (|| {
                 if pending
@@ -344,12 +383,12 @@ impl NativeEnrollmentClient {
                 if saved.gateway_pin() != route.pin() {
                     return Err(NativeClientError::Phase);
                 }
-                let (stream, deadline) = route
-                    .join(clock, stop, wake, expires_ms, &reactor)
+                let (stream, deadline, _) = route
+                    .join(&episode, wake, &reactor)
                     .map_err(|error| NativeClientError::Io(error.kind()))?;
                 status_exchange(stream, &deadline, pending, saved, received.as_ref())
             })();
-            Ok(complete(result))
+            Ok(complete(result, pending, episode, &reactor))
         })
         .await
     }

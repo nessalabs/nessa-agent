@@ -37,6 +37,16 @@ pub(crate) enum EarlierFold {
     Page(ConversationEarlier),
 }
 
+/// The existing cache transaction about to publish durable progress in a fixture.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub enum RecordCommitIntent<'a> {
+    /// An authorized, validated record page.
+    Page(&'a CommitPlan),
+    /// A cold cache recording an authoritative empty head for this exact scope.
+    EmptyHead(&'a Scope),
+}
+
 struct LoadedTranscript {
     progress: Option<CachedProgress>,
     fold: TranscriptFold,
@@ -291,6 +301,15 @@ impl ReadOnlyCache {
     }
 
     pub(crate) fn observe_head(&mut self, scope: &Scope, head: u64) -> Result<(), CacheError> {
+        self.observe_head_admitted(scope, head, || Ok(()))
+    }
+
+    fn observe_head_admitted<P>(
+        &mut self,
+        scope: &Scope,
+        head: u64,
+        admit: impl FnOnce() -> Result<P, CacheError>,
+    ) -> Result<(), CacheError> {
         self.refresh(scope)?;
         let loaded = self.loaded.as_mut().expect("refresh supplied a fold");
         let mut candidate = loaded.fold.transaction();
@@ -327,7 +346,11 @@ impl ReadOnlyCache {
         };
         rows::save_progress(&transaction, &progress)?;
         rows::save_checkpoint(&transaction, scope, &checkpoint, self.policy)?;
-        if transaction.commit().is_err() {
+        let committed = {
+            let _permit = admit()?;
+            transaction.commit()
+        };
+        if committed.is_err() {
             drop(candidate);
             self.loaded = None;
             return Err(CacheError::Uncertain);
@@ -398,7 +421,28 @@ impl ReadOnlyCache {
         Ok(())
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn records_with_admission<'a, P: 'a>(
+        &'a mut self,
+        admit: impl FnOnce(RecordCommitIntent<'_>) -> Result<P, CacheError> + 'a,
+    ) -> impl TranscriptCache + 'a {
+        AdmittedRecords {
+            cache: self,
+            admit: Some(admit),
+        }
+    }
+
     fn apply_plan(&mut self, plan: CommitPlan) -> Result<(), CacheError> {
+        self.apply_plan_admitted(plan, |_| Ok(()))
+    }
+
+    // The cache retains the only transaction. An admission callback can
+    // refuse publication or lend a permit, but cannot act on SQLite.
+    fn apply_plan_admitted<P>(
+        &mut self,
+        plan: CommitPlan,
+        admit: impl FnOnce(&CommitPlan) -> Result<P, CacheError>,
+    ) -> Result<(), CacheError> {
         let scope = plan.expected().scope();
         // A loaded fold retains the generation admitted before the source read.
         // Refreshing it here would erase that witness before the transaction CAS.
@@ -471,7 +515,10 @@ impl ReadOnlyCache {
         if let Some(checkpoint) = checkpoint {
             rows::save_checkpoint(&transaction, scope, &checkpoint, self.policy)?;
         }
-        transaction.commit().map_err(|_| CacheError::Uncertain)?;
+        {
+            let _permit = admit(&plan)?;
+            transaction.commit().map_err(|_| CacheError::Uncertain)?;
+        }
         candidate
             .commit()
             .expect("successful staging leaves the guard active");
@@ -554,6 +601,49 @@ impl ReplicaStore for ReadOnlyCache {
             Ok(()) => Ok(()),
             Err(error) => Err(self.remember_refusal(error)),
         }
+    }
+}
+
+#[cfg(feature = "test-support")]
+struct AdmittedRecords<'a, F> {
+    cache: &'a mut ReadOnlyCache,
+    admit: Option<F>,
+}
+
+#[cfg(feature = "test-support")]
+impl<F, P> ReplicaStore for AdmittedRecords<'_, F>
+where
+    F: FnOnce(RecordCommitIntent<'_>) -> Result<P, CacheError>,
+{
+    fn load(&mut self, scope: &Scope) -> Result<Option<Checkpoint>, StoreError> {
+        self.cache.load(scope)
+    }
+
+    fn apply(&mut self, plan: CommitPlan) -> Result<(), StoreError> {
+        self.cache.refusal = None;
+        let admit = self.admit.take().ok_or(StoreError::Failed)?;
+        self.cache
+            .apply_plan_admitted(plan, |staged| admit(RecordCommitIntent::Page(staged)))
+            .map_err(|error| self.cache.remember_refusal(error))
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl<F, P> TranscriptCache for AdmittedRecords<'_, F>
+where
+    F: FnOnce(RecordCommitIntent<'_>) -> Result<P, CacheError>,
+{
+    fn observe_head(&mut self, scope: &Scope, head: u64) -> Result<(), CacheError> {
+        if head != 0 {
+            return self.cache.observe_head(scope, head);
+        }
+        let admit = self.admit.take().ok_or(CacheError::Unavailable)?;
+        self.cache
+            .observe_head_admitted(scope, head, || admit(RecordCommitIntent::EmptyHead(scope)))
+    }
+
+    fn mark_unknown(&mut self, scope: &Scope) -> Result<(), CacheError> {
+        self.cache.mark_unknown(scope)
     }
 }
 
@@ -774,6 +864,110 @@ mod tests {
             limits,
         )
         .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refusing_record_commit_preserves_the_committed_prefix_on_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("cache.sqlite3");
+        let (scope, first_page, second_page) = two_pages(root.path()).await;
+        let mut cache = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        ReplicaStore::apply(&mut cache, plan(&scope, 0, first_page)).unwrap();
+        let before = rows::progress(&cache.connection, &scope).unwrap().unwrap();
+        let records = count(&cache, "transcript_records");
+        let checkpoint = checkpoint_payload(&cache);
+        let second_count = second_page.len() as i64;
+        let next = second_page.last().unwrap().position;
+        let mut called = false;
+        let result = cache.apply_plan_admitted(
+            plan(&scope, before.downloaded, second_page.clone()),
+            |staged| -> Result<(), CacheError> {
+                called = true;
+                assert_eq!(staged.expected().position(), before.downloaded);
+                assert_eq!(staged.next().position(), next);
+                assert_eq!(staged.records(), second_page.as_slice());
+                Err(CacheError::Unavailable)
+            },
+        );
+        assert!(called);
+        assert_eq!(result, Err(CacheError::Unavailable));
+        drop(cache);
+
+        let mut reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        assert_eq!(
+            rows::progress(&reopened.connection, &scope).unwrap(),
+            Some(before.clone())
+        );
+        assert_eq!(count(&reopened, "transcript_records"), records);
+        assert_eq!(checkpoint_payload(&reopened), checkpoint);
+        ReplicaStore::apply(&mut reopened, plan(&scope, before.downloaded, second_page)).unwrap();
+        drop(reopened);
+
+        let reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        let after = rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.downloaded, next);
+        assert_eq!(after.generation, before.generation + 1);
+        assert_eq!(
+            count(&reopened, "transcript_records"),
+            records + second_count
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cold_empty_head_requires_the_same_record_commit_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("cache.sqlite3");
+        let (scope, _, _) = two_pages(root.path()).await;
+        let mut cache = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        let mut witnessed = false;
+        {
+            let mut guarded = cache.records_with_admission(|intent| -> Result<(), CacheError> {
+                let RecordCommitIntent::EmptyHead(observed) = intent else {
+                    panic!("an empty head must not claim to be a record page");
+                };
+                assert_eq!(observed, &scope);
+                witnessed = true;
+                Err(CacheError::Unavailable)
+            });
+            assert_eq!(
+                guarded.observe_head(&scope, 0),
+                Err(CacheError::Unavailable)
+            );
+        }
+        assert!(witnessed);
+        drop(cache);
+
+        let mut reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        assert!(rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .is_none());
+        assert_eq!(count(&reopened, "transcript_checkpoints"), 0);
+        {
+            let mut guarded = reopened.records_with_admission(|intent| {
+                assert!(matches!(intent, RecordCommitIntent::EmptyHead(s) if s == &scope));
+                Ok(())
+            });
+            guarded.observe_head(&scope, 0).unwrap();
+        }
+        drop(reopened);
+
+        let reopened = ReadOnlyCache::open(&path, policy(), Arc::new(FixedClock)).unwrap();
+        let progress = rows::progress(&reopened.connection, &scope)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (progress.downloaded, progress.applied, progress.generation),
+            (0, 0, 1)
+        );
+        assert_eq!(count(&reopened, "transcript_checkpoints"), 1);
+        assert_eq!(count(&reopened, "transcript_records"), 0);
     }
 
     /// A drop that still names the progress it refused must not erase a commit
