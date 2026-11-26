@@ -17,6 +17,8 @@ use nessa_protocol::{
     clock::Clock as MonotonicClock,
     pairing::{socket::NativeWakeReport, wire::NativePairingStatus},
 };
+#[cfg(feature = "test-support")]
+use nessa_sync::replication::domain::Page;
 use std::{net::TcpStream, path::PathBuf, sync::Arc};
 
 /// Original durable receiver purge evidence. Re-reading it does not repeat
@@ -269,19 +271,19 @@ impl RetainedEnrollmentClient {
             .await
     }
 
-    /// Fixture-only: one enrolled Status and one relayed record selector
+    /// Fixture-only: one enrolled Status and one read-only relayed record Page
     /// share the original physical admission and absolute time budget.
-    /// Does not Bind, read Page bytes, or write a record cache.
+    /// Verifies wire bytes without opening or publishing to a record cache.
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub async fn selected_joined_record_for_test(
+    pub async fn joined_record_page_for_test(
         &self,
         relay: std::net::SocketAddr,
         pin: [u8; 44],
         scope: super::Scope,
         stop: Arc<super::ReadStop>,
         expires_ms: u64,
-    ) -> Result<Result<(), ReadFailure>, NativeClientError> {
+    ) -> Result<Result<Page, ReadFailure>, NativeClientError> {
         let route = || {
             super::joined_status::JoinedStatusRoute::new(
                 relay,
@@ -317,7 +319,7 @@ impl RetainedEnrollmentClient {
                         wake,
                         reactor,
                     )?;
-                    Ok(super::joined_status::select_joined_record_for_test(selection, || {}))
+                    Ok(super::joined_status::read_joined_record_page_for_test(selection))
                 },
             )
             .await?

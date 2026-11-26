@@ -8,6 +8,7 @@ use crate::read_only_sync::infrastructure::gateway::select_native;
 use nessa_auth::{adapters::pairing::NativeTransport, domain::CredentialId};
 use nessa_protocol::{
     conversation::read_scope::validate_passive_read_selector,
+    product::generated::{MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES},
     pairing::{
         wire::{
             decode_reply, NativePairingReply, NativePairingRequest, RecordCarrierMode,
@@ -21,8 +22,8 @@ use nessa_sync::replication::infrastructure::session::{
     SessionLimits,
 };
 use nessa_sync::replication::{
-    application::{RecordSource, SourceError},
-    domain::{CapabilitySupport, Page, PageRequest},
+    application::{Access, RecordSource, ScopeAuthorizer, SourceError},
+    domain::{validate_page, CapabilitySupport, Checkpoint, Limits, Page, PageRequest},
 };
 use std::{
     cell::{Cell, RefCell},
@@ -264,6 +265,56 @@ impl RetainedCache {
         let _ = session.close();
         result
     }
+}
+
+/// Read one verified Page on the accepted fixture transport. No store is
+/// supplied, so validation cannot publish the returned copy of the records.
+pub(super) fn read_selected_page_for_test<S: Read + Write>(
+    transport: NativeTransport<S>,
+    interrupt: Arc<dyn SessionInterrupt>,
+    scope: &Scope,
+    fence: impl Fn() -> Result<(), ReadFailure>,
+) -> Result<Page, ReadFailure> {
+    let io = RecordIo { transport, interrupt, cut: None };
+    let session = CapabilityRecordSession::connect(
+        io,
+        scope.clone(),
+        SessionLimits { control_bytes: 2048, bindings: 1 },
+        CapabilitySupport::current(),
+    ).map_err(bind_failure)?;
+    let result = (|| {
+        fence()?;
+        let (mut authorizer, mut source) = session.parts();
+        if !matches!(authorizer.authorize(scope), Access::Allowed(actual) if actual == *scope) {
+            return Err(ReadFailure::Refused);
+        }
+        let map_source = |err| bind_failure(RecordSessionError::Source(err));
+        let target = source.head(scope).map_err(map_source)?;
+        fence()?;
+        let limits = Limits::new(
+            1,
+            MAX_RECORD_PAGE_PAYLOAD_BYTES,
+            MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+        ).map_err(|_| ReadFailure::Protocol)?;
+        let request = PageRequest {
+            scope: scope.clone(),
+            after: 0,
+            target,
+            max_records: limits.max_records(),
+            max_payload_bytes: limits.max_payload_bytes(),
+            max_record_bytes: limits.max_record_bytes(),
+        };
+        let page = source.page(&request).map_err(map_source)?;
+        fence()?;
+        validate_page(&Checkpoint::new(scope.clone(), 0), &request, page.clone(), limits)
+            .map_err(|_| ReadFailure::Protocol)?;
+        Ok(page)
+    })();
+    let closed = session.close();
+    let page = result?;
+    closed.map_err(bind_failure)?;
+    fence()?;
+    Ok(page)
 }
 
 pub(super) fn accept_selection(frame: Result<Vec<u8>, NativeFrameError>) -> Result<(), ReadFailure> {

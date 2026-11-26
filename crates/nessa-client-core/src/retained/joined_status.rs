@@ -22,7 +22,7 @@ use nessa_protocol::{
     pairing::socket::{check_deadline, DeadlineStream, NativeDeadline, NativeSocket, WakeEndpoint},
     relay::{read_frame, write_frame, GatewayKey, RelayFrame, RelayRefusal},
 };
-use nessa_sync::replication::infrastructure::session::SessionInterrupt;
+use nessa_sync::replication::{domain::Page, infrastructure::session::SessionInterrupt};
 use std::{
     future::Future,
     io::{Error, ErrorKind, Read, Result, Write},
@@ -214,11 +214,33 @@ pub(crate) fn join_after_active_for_test(
     })
 }
 
-// Stop at the Accepted boundary until the cache owner can fence publication.
+// Keep the selector-only unit matrix on the same framing and fence.
+#[cfg(test)]
 pub(crate) fn select_joined_record_for_test(
     selection: JoinedRecordSelection,
     after_accepted: impl FnOnce(),
 ) -> std::result::Result<(), ReadFailure> {
+    with_selected_joined_record(selection, after_accepted, |_, _, _, _| Ok(()))
+}
+
+pub(super) fn read_joined_record_page_for_test(
+    selection: JoinedRecordSelection,
+) -> std::result::Result<Page, ReadFailure> {
+    with_selected_joined_record(selection, || {}, |transport, interrupt, scope, fence| {
+        super::carrier::read_selected_page_for_test(transport, interrupt, scope, fence)
+    })
+}
+
+fn with_selected_joined_record<T>(
+    selection: JoinedRecordSelection,
+    after_accepted: impl FnOnce(),
+    use_transport: impl FnOnce(
+        NativeTransport<DeadlineStream<JoinedStatusSocket>>,
+        Arc<dyn SessionInterrupt>,
+        &super::Scope,
+        &dyn Fn() -> std::result::Result<(), ReadFailure>,
+    ) -> std::result::Result<T, ReadFailure>,
+) -> std::result::Result<T, ReadFailure> {
     let JoinedRecordSelection {
         joined,
         reader,
@@ -227,7 +249,7 @@ pub(crate) fn select_joined_record_for_test(
         episode,
         wake,
     } = selection;
-    let (stream, _deadline, _interrupt) = joined;
+    let (stream, _deadline, interrupt) = joined;
     let access = reader.access(address, "joined-record-fixture");
     let transport =
         NativeTransport::connect(stream, access.identity, GatewayTrust::Pinned(access.pin))
@@ -237,7 +259,7 @@ pub(crate) fn select_joined_record_for_test(
         credential: CredentialId::new(access.credential.to_owned())
             .map_err(|_| ReadFailure::Protocol)?,
         access_epoch: access.access_epoch,
-        scope,
+        scope: scope.clone(),
         mode: RecordCarrierMode::Page,
     });
     let envelope = encode_request(&request).map_err(|_| ReadFailure::Protocol)?;
@@ -249,10 +271,11 @@ pub(crate) fn select_joined_record_for_test(
     after_accepted();
     // TLS may have buffered the plaintext before stop/wake/expiry changed.
     // Recheck the same episode and exact wake, not just the socket deadline.
-    episode
-        .remaining(&wake)
-        .map(|_| ())
-        .map_err(|_| ReadFailure::Unreachable)
+    let fence = || {
+        episode.remaining(&wake).map(|_| ()).map_err(|_| ReadFailure::Unreachable)
+    };
+    fence()?;
+    use_transport(channel.into_transport(), interrupt, &scope, &fence)
 }
 
 // The enrollment worker owns this exact socket and registration from Connect

@@ -504,7 +504,7 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
 
         if use_relay {
             // Actual enrolled state and the exact scope just observed through
-            // Product. Prove the joined selector, without opening a cache.
+            // Product. Prove Bind/Page on that joined transport without a cache.
             let profile: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(device.root.join("profile.json")).unwrap(),
             )
@@ -527,8 +527,8 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                 .enable_all()
                 .build()
                 .unwrap();
-            runtime
-                .block_on(client.selected_joined_record_for_test(
+            let page = runtime
+                .block_on(client.joined_record_page_for_test(
                     relay,
                     device.pin,
                     scope.clone(),
@@ -538,6 +538,13 @@ fn enrolled_pages_resume_from_the_existing_retained_database_on_both_routes() {
                 .unwrap()
                 .unwrap();
             runtime.block_on(client.shutdown());
+            assert_eq!(&page.request.scope, scope);
+            assert_eq!(page.request.after, 0);
+            assert_eq!(page.records.len(), 1);
+            let record = &page.records[0];
+            assert_eq!(record.position, expected[0].0);
+            assert_eq!(record.id.as_str(), expected[0].1);
+            assert_eq!(record.payload.as_slice(), expected[0].2.as_slice());
             assert!(!unused_cache.exists());
         }
 
