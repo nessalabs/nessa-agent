@@ -931,8 +931,16 @@ describe("VoiceController", () => {
       first.emit({ type: "response.output_audio_transcript.delta", delta: "Sure, " })
       first.emit({ type: "response.output_audio_transcript.delta", delta: "sending it." })
       first.emit({ type: "response.done", response: { status: "completed" } })
+      const said = [
+        { who: "person", text: "Look at the failing build." },
+        { who: "voice", text: "Sure, sending it." },
+      ]
+      expect(controller.snapshot().transcript).toEqual(said)
       controller.pause()
+      // What was said stays on screen through the pause and the resume.
+      expect(controller.snapshot().transcript).toEqual(said)
       await controller.resume()
+      expect(controller.snapshot().transcript).toEqual(said)
       expect(startCall).toHaveBeenCalledTimes(2)
       expect(startCall).toHaveBeenLastCalledWith("s-1")
       const second = opened[1]
@@ -949,6 +957,17 @@ describe("VoiceController", () => {
       second.emit({ type: "input_audio_buffer.speech_started" })
       second.emit({ type: "response.created" })
       expect(controller.snapshot().phase).toBe("speaking")
+    })
+
+    it("a new call starts with nothing said, and an ended one takes its lines with it", async () => {
+      const { controller, opened } = reconnecting()
+      await controller.start("s-1")
+      says(opened[0], "i1", "Look at the failing build.")
+      expect(controller.snapshot().transcript).toHaveLength(1)
+      controller.end()
+      expect(controller.snapshot().transcript).toEqual([])
+      await controller.start("s-1")
+      expect(controller.snapshot().transcript).toEqual([])
     })
 
     it("V21: a reply that ends while paused is kept and handed over on resume", async () => {

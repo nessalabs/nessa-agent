@@ -34,10 +34,17 @@ export function VoiceKeyProvider({
 
 /**
  * The key, asked for in a dialog: its field, Save, and what went wrong. The
- * one place the key is typed, from Settings' row and from a call that
- * found no key (`VoiceKeyButton`).
+ * one place the key is typed, from Settings' row, from a call that found no
+ * key (`VoiceKeyButton`), and from Talk before a call that would have been
+ * refused for want of one (`forCall`: it says why, and Save starts the call).
  */
-export function VoiceKeyDialog({ onClose }: { onClose: (saved: boolean) => void }) {
+export function VoiceKeyDialog({
+  onClose,
+  forCall = false,
+}: {
+  onClose: (saved: boolean) => void
+  forCall?: boolean
+}) {
   const gateway = useContext(VoiceKeyContext)
   const ensure = useVaultUnlock()
   const keyId = useId()
@@ -67,7 +74,12 @@ export function VoiceKeyDialog({ onClose }: { onClose: (saved: boolean) => void 
       onOpenChange={(open) => {
         if (!open) onClose(false)
       }}
-      title="OpenAI API key"
+      title={forCall ? "Add your OpenAI key" : "OpenAI API key"}
+      description={
+        forCall
+          ? "Voice talks through OpenAI, whichever agent runs this chat. The key stays in your vault."
+          : undefined
+      }
     >
       <form
         className="settings-surface settings-key-form"
@@ -97,7 +109,7 @@ export function VoiceKeyDialog({ onClose }: { onClose: (saved: boolean) => void 
             disabled={!key.trim() || busy || !gateway}
             data-voice-key="save"
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? "Saving…" : forCall ? "Save and talk" : "Save"}
           </button>
         </div>
         {error && (

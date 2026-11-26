@@ -10,12 +10,16 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react"
 import { Button } from "@nessa-ui/react/button"
 import { Dialog, DialogClose } from "@nessa-ui/react/dialog"
+import { VoiceKeyDialog } from "../../settings/ui/voice-key-row"
+import { useVaultSettled } from "../../../vault"
+import type { WatchedVoiceKey } from "../adapters/watched-voice-key"
 import type { VoiceController, VoiceSnapshot } from "../application/voice-controller"
 
 interface Voice {
@@ -51,17 +55,26 @@ const notShown = () => false
  * would end that call, so the person is asked first, once for the window:
  * the question names the chat whose call ends (`title`, by its session).
  *
+ * A call needs an OpenAI key, so the window asks the gateway whether one is
+ * saved before Talk is pressed (`keys`). With none saved Talk asks for the
+ * key at once and shows no call at all until it is saved, rather than a call
+ * that connects and is then refused. A call the gateway refuses all the same
+ * (the key was removed meanwhile, or the answer is not in yet) says so in
+ * the chat as before.
+ *
  * A call goes on while no pane shows its chat, so one that fails or drops
  * then has no pane to say so in. The window says it instead, with the way
  * back to the chat (`showChat`), where the chat's own notice offers the fix.
  */
 export function VoiceProvider({
   controller,
+  keys,
   title,
   showChat,
   children,
 }: {
   controller: VoiceController | undefined
+  keys?: WatchedVoiceKey
   title?: (sessionId: string) => string | null
   showChat?: (sessionId: string) => void
   children: ReactNode
@@ -79,13 +92,56 @@ export function VoiceProvider({
   )
   // The chat Talk was pressed in while a call talks to another.
   const [asked, setAsked] = useState<string | null>(null)
+  // The chat Talk was pressed in with no key saved: the key is asked for,
+  // and saving it starts the call there.
+  const [keyFor, setKeyFor] = useState<{ sessionId: string; intent: number } | null>(null)
+  // Whether a key is saved is asked as the window opens, and again once
+  // Nessa is unlocked, since a locked vault cannot say.
+  const vaultSettled = useVaultSettled()
+  useEffect(() => {
+    void keys?.read()
+  }, [keys, vaultSettled])
+  // A call refused for want of a key means none is saved, whatever was heard.
+  const refusedForKey = snapshot?.phase === "failed" && snapshot.fix === "key"
+  useEffect(() => {
+    if (refusedForKey) keys?.missing()
+  }, [keys, refusedForKey])
+  // The newest Talk. Talk waits on the gateway before it starts a call; a
+  // Talk pressed meanwhile, or a key dialog dismissed, leaves the older
+  // one stale, and a stale Talk starts nothing.
+  const intent = useRef(0)
+  /** Starts the call, or asks for the key first when the gateway said none is saved. */
+  const talk = useCallback(
+    async (sessionId: string) => {
+      if (!controller) return
+      const mine = ++intent.current
+      // Unless the gateway last said a key is saved, it is asked now: a key
+      // saved elsewhere since counts, and a window that could not ask before
+      // (Nessa was locked, just unlocked) asks before showing a call that the
+      // gateway would refuse. A read it refuses (still locked) lets the call
+      // try, and the refusal offers its own fix.
+      if (keys && keys.known() !== true) {
+        const now = await keys.read()
+        if (intent.current !== mine) return
+        if (now.kind === "read" && !now.keySaved) {
+          setKeyFor({ sessionId, intent: mine })
+          return
+        }
+      }
+      void controller.start(sessionId)
+    },
+    [controller, keys],
+  )
   const start = useCallback(
     (sessionId: string) => {
       if (!controller) return
-      if (callElsewhere(controller.snapshot(), sessionId)) setAsked(sessionId)
-      else void controller.start(sessionId)
+      if (callElsewhere(controller.snapshot(), sessionId)) {
+        // Asking about the move supersedes a Talk still waiting on the gateway.
+        intent.current += 1
+        setAsked(sessionId)
+      } else void talk(sessionId)
     },
-    [controller],
+    [controller, talk],
   )
   const voice = useMemo(
     () => (controller ? { controller, start } : undefined),
@@ -137,7 +193,7 @@ export function VoiceProvider({
                 data-voice-move-action="confirm"
                 onClick={() => {
                   setAsked(null)
-                  void controller.start(moving.to)
+                  void talk(moving.to)
                 }}
               >
                 Talk here
@@ -176,6 +232,18 @@ export function VoiceProvider({
               </DialogClose>
             </>
           }
+        />
+      ) : controller && keyFor !== null ? (
+        <VoiceKeyDialog
+          forCall
+          onClose={(saved) => {
+            setKeyFor(null)
+            // Dismissed, the Talk is over: a save that finishes later keeps
+            // the key but starts no call.
+            if (intent.current !== keyFor.intent) return
+            intent.current += 1
+            if (saved) void controller.start(keyFor.sessionId)
+          }}
         />
       ) : null}
     </VoiceContext.Provider>

@@ -15,6 +15,7 @@ export {
   type VoiceClient,
   type VoiceKeyGateway,
 } from "./adapters/voice-gateway"
+export { watchedVoiceKey, type WatchedVoiceKey } from "./adapters/watched-voice-key"
 export { webrtcTransport } from "./adapters/webrtc-transport"
 export { scriptedTransport } from "./adapters/scripted-transport"
 export { storeConversations } from "./adapters/store-chats"

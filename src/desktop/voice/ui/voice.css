@@ -1,162 +1,246 @@
 /*
- * The voice call on a conversation's composer: one line of words above it,
- * and a glow on its edge (`voice-rim.tsx`). The glow has its own fixed
- * colours rather than theme tokens: it is Nessa's voice and looks the same
- * in every theme.
+ * The voice call in a conversation's pane: a tab tucked onto the top of the
+ * composer (`voice-dock.tsx`) and a light rising from behind the composer
+ * (`voice-glow.tsx`). The light has its own fixed colours rather than theme
+ * tokens: each agent's call looks the same in every theme.
  */
 .voice-dock {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 8px var(--desktop-gutter) 12px;
-  pointer-events: none;
+  /* The tab sits on the composer: its foot meets the composer's top edge. */
+  margin-bottom: -1px;
 }
 
-.voice-dock > :not(.voice-rim) {
-  pointer-events: auto;
+/* The light lies behind the dock's composer, so the dock is its own layer. */
+.workspace-dock:has(.voice-glow) {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Each agent's light: Claude warm, Codex blue, OpenCode green, else graphite. */
+.voice-dock {
+  --voice-light: 190 190 200;
+}
+
+.voice-dock[data-agent="claude"] {
+  --voice-light: 217 119 87;
+}
+
+.voice-dock[data-agent="codex"] {
+  --voice-light: 88 132 255;
+}
+
+.voice-dock[data-agent="opencode"] {
+  --voice-light: 96 200 160;
 }
 
 /*
- * The line: plain words, centred. Where the call stands may wrap, since it
- * is short and is read whole. Words said or heard run on as they come and
- * stay on one line: the newest are kept and the older run off the line's
- * start, fading there, so the line never grows or jumps while someone
- * talks.
+ * The light: a wide soft bloom centred on the composer's foot, behind the
+ * composer, fading out below as well as above (a home's composer sits
+ * mid-page, with room under it; a conversation's pane cuts it off), swelling with whoever talks (`--voice-glow`, `--voice-reach`,
+ * set each frame by `voice-glow.tsx`) and draining to grey with the
+ * microphone off (`--voice-grey`). A fine dot screen over it keeps a broad
+ * gradient from banding.
  */
-.voice-bubble {
-  position: relative;
-  max-width: min(36rem, 100%);
-  margin: 0;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-body);
-  line-height: 1.45;
-  text-align: center;
-  overflow-wrap: break-word;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+.voice-glow {
+  position: absolute;
+  z-index: -1;
+  bottom: -200px;
+  left: 50%;
+  width: 160%;
+  height: 540px;
+  pointer-events: none;
+  transform: translateX(-50%) scaleY(var(--voice-reach, 1));
+  transform-origin: 50% 63%;
+  opacity: var(--voice-glow, 0);
+  filter: grayscale(var(--voice-grey, 0));
+  background: radial-gradient(
+    55% 44% at 50% 63%,
+    rgb(var(--voice-light) / 0.7) 0%,
+    rgb(var(--voice-light) / 0.24) 45%,
+    transparent 75%
+  );
+}
+
+.voice-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgb(255 255 255 / 0.06) 1px, transparent 1px);
+  background-size: 4px 4px;
+  -webkit-mask-image: radial-gradient(55% 44% at 50% 63%, #000, transparent 75%);
+  mask-image: radial-gradient(55% 44% at 50% 63%, #000, transparent 75%);
+}
+
+/*
+ * The tab: the composer's width less its corners, so it reads as part of the
+ * composer, and the composer's glass. Its width never follows what is said.
+ */
+.voice-tab {
+  width: calc(100% - 44px);
+  border-radius: var(--desktop-radius-lg) var(--desktop-radius-lg) 0 0;
+  background:
+    linear-gradient(
+      color-mix(in oklab, var(--foreground) 4%, transparent),
+      color-mix(in oklab, var(--foreground) 3%, transparent)
+    ),
+    color-mix(in oklab, var(--card, var(--sidebar)) 62%, transparent);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: inset 0 0.5px 0 color-mix(in oklab, var(--foreground) 10%, transparent);
   overflow: hidden;
 }
 
-/*
- * One line that keeps its end. The row runs from the far edge, so words too
- * long for it spill off the start; with room to spare the auto margins
- * centre them (auto margins give way to nothing once the words overflow).
- */
-.voice-bubble[data-running] {
+/* A call that stopped is its header alone, and needs no square foot to join. */
+.voice-tab[data-ended] {
+  padding-bottom: 2px;
+}
+
+.voice-tab-head {
   display: flex;
-  flex-direction: row-reverse;
-  width: 100%;
-  -webkit-line-clamp: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 6px 8px 4px 12px;
 }
 
-/* Words that run off the start fade there; words that fit are left whole. */
-.voice-bubble[data-running][data-overflow] {
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem);
-  mask-image: linear-gradient(to right, transparent, #000 2.5rem);
-}
-
-.voice-bubble[data-running] > .voice-bubble-words {
+.voice-tab-avatar {
   flex: none;
-  margin-inline: auto;
-  white-space: nowrap;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 50%;
 }
 
-.voice-dock[data-phase="speaking"] .voice-bubble {
+.voice-dock[data-phase="paused"] .voice-tab-avatar,
+.voice-tab[data-ended] .voice-tab-avatar {
+  filter: grayscale(1) brightness(0.7);
+}
+
+.voice-tab-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--desktop-text-body);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.voice-tab-switch[aria-pressed="true"] {
+  color: var(--desktop-faint);
+}
+
+/* End: the tab's one colour, a small red disc. */
+.voice-tab-end {
+  margin-left: 4px;
+  background: var(--destructive);
+  color: #fff;
+}
+
+.voice-tab-end:hover {
+  background: color-mix(in oklab, var(--destructive) 86%, #fff);
+  color: #fff;
+}
+
+.voice-tab-fix + .voice-tab-close {
+  margin-left: 2px;
+}
+
+/*
+ * The lines. Closed: three lines high, the newest at the foot and older
+ * ones fading out at the top; nothing scrolls. Open: taller, every line of
+ * the call with who said it, to scroll back through.
+ */
+.voice-tab-words {
+  --voice-line: calc(var(--desktop-text-body) * 1.5);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: calc(var(--voice-line) * 3 + 12px);
+  padding: 0 16px 12px;
+  overflow: hidden;
+  font-size: var(--desktop-text-body);
+  line-height: var(--voice-line);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 22px);
+  mask-image: linear-gradient(to bottom, transparent, #000 22px);
+  transition: height 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.voice-tab[data-open] .voice-tab-words {
+  display: block;
+  height: 240px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent, #000 16px);
+}
+
+.voice-tab-line,
+.voice-tab-hint {
+  margin: 0;
+}
+
+.voice-tab-hint {
+  color: var(--desktop-faint);
+}
+
+.voice-tab-line[data-who="voice"] .voice-tab-said {
   color: var(--foreground);
 }
 
-/*
- * A call that could not start or dropped: one row where its words would
- * be. The mark says it is about voice, the sentence says what stopped it,
- * then the one fix and a close. No panel or border: it is a line, like the
- * call's own, and wraps under itself only when the pane is too narrow.
- */
-.voice-notice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 6px 10px;
-  max-width: min(36rem, 100%);
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-body);
-  line-height: 1.45;
-  text-align: center;
-}
-
-.voice-notice-mark {
-  flex: none;
-  width: 16px;
-  height: 16px;
+.voice-tab-line[data-who="person"] .voice-tab-said {
   color: var(--desktop-muted);
 }
 
-.voice-notice-text {
-  min-width: 0;
+.voice-tab-line[data-age="1"],
+.voice-tab-line[data-age="2"] {
+  opacity: 0.45;
 }
 
-/* The close sits a little closer to the fix it follows. */
-.voice-notice-fix + .voice-notice-close {
-  margin-inline-start: -4px;
-}
-
-/*
- * The rim's canvas lies over the whole dock and a little past it, above
- * everything the dock holds and taking no pointer. Above, not behind: the
- * composer is glass, and a light behind glass is blurred into the whole
- * card. The shader draws nothing inside the card's edge, so nothing on the
- * composer is tinted or covered.
- */
-.workspace-dock:has(.voice-rim) {
-  position: relative;
-}
-
-.voice-rim {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-/* Where the shader cannot run: a still ring on the composer's edge, the rim's colour. */
-.voice-rim[data-rim="plain"] {
+/* Who said it shows only in the open tab, above each line. */
+.voice-tab-who {
   display: none;
 }
 
-.workspace-dock:has(.voice-rim[data-rim="plain"]) .desktop-composer {
-  --desktop-composer-ring: 0 0 0 1px rgb(134 184 255 / 0.45);
+.voice-tab[data-open] .voice-tab-line {
+  padding-top: 10px;
 }
 
-/* The composer's call controls: speaker, microphone, and End. */
-.desktop-voice-toggle[aria-pressed="false"] {
-  color: var(--desktop-muted);
+.voice-tab[data-open] .voice-tab-who {
+  display: block;
+  color: var(--desktop-faint);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+  text-transform: uppercase;
 }
 
-/* End: a soft red capsule with the handset and the word, the row's one colour. */
-.desktop-voice-end {
-  display: inline-flex;
-  height: 32px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 13px 0 10px;
-  border: 0;
-  border-radius: var(--desktop-radius-pill);
-  background: color-mix(in oklab, var(--destructive) 16%, transparent);
-  color: var(--destructive);
-  font: inherit;
-  font-size: var(--desktop-text-body);
-  font-weight: 500;
+/* A new word fades in from a blur; the words already there stay still. */
+.voice-tab-word {
+  animation: voice-word 320ms ease both;
 }
 
-.desktop-voice-end:hover {
-  background: color-mix(in oklab, var(--destructive) 24%, transparent);
+@keyframes voice-word {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
 }
 
-.desktop-voice-end svg {
-  width: 16px;
-  height: 16px;
+:root[data-motion="reduced"] .voice-tab-word {
+  animation: none;
+}
+
+:root[data-motion="reduced"] .voice-tab-words {
+  transition: none;
+}
+
+/* The composer's voice button, pressed while a call talks to this chat. */
+.desktop-voice-start[data-active] {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  cursor: default;
 }

@@ -67,9 +67,10 @@ import {
 import {
   voiceGateway,
   voiceKeyGateway,
+  watchedVoiceKey,
   type VoiceGateway,
   type VoiceClient,
-  type VoiceKeyGateway,
+  type WatchedVoiceKey,
 } from "./voice"
 import {
   decisionSettingsGateway,
@@ -184,8 +185,11 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly github: GithubGateway | undefined
   /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
   readonly voice: VoiceGateway | undefined
-  /** The saved voice key, for Settings; absent without a gateway. */
-  readonly voiceKey: VoiceKeyGateway | undefined
+  /**
+   * The saved voice key: Settings manages it, and Talk asks for it before a
+   * call that would be refused without one. Absent without a gateway.
+   */
+  readonly voiceKey: WatchedVoiceKey | undefined
   readonly vault: VaultSource | undefined
   /**
    * How the window reads back a file a conversation holds — one its agent
@@ -397,7 +401,9 @@ export function createDesktopDependencies(
     agent37: source ? agent37Gateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
-    voiceKey: source ? voiceKeyGateway(() => source.connected()) : undefined,
+    voiceKey: source
+      ? watchedVoiceKey(voiceKeyGateway(() => source.connected()))
+      : undefined,
     // Shared on the gateway's own client; the sample shares in memory, and a
     // window with neither offers no Share.
     sharing: source

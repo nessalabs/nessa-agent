@@ -35,11 +35,19 @@ export const MAX_REPLY_CHARS = 8_000
 export const RECAP_LINES = 24
 /** The most of one line of what was said a paused call keeps. */
 export const RECAP_LINE_CHARS = 600
+/** How many lines of what was said the call's transcript keeps for the person. */
+export const TRANSCRIPT_LINES = 200
 /** How a resumed call's recap begins, so the voice carries on, not starts over. */
 export const RESUMED =
   "The person paused this call and has now resumed it. Carry on from where it was; do not greet them again. What was said in the call before the pause:"
 
 export type { VoicePhase }
+
+/** One line of what was said in a call: the person's words, or the voice's. */
+export interface VoiceLine {
+  readonly who: "person" | "voice"
+  readonly text: string
+}
 
 export interface VoiceSnapshot {
   readonly phase: VoicePhase
@@ -49,6 +57,12 @@ export interface VoiceSnapshot {
   readonly hearing: string
   /** What the voice is saying now. */
   readonly saying: string
+  /**
+   * What was said in this call so far, oldest first, once each line is
+   * written down: the person's turns as transcribed, the voice's as said.
+   * Kept through a pause; a call that ends takes it with it.
+   */
+  readonly transcript: readonly VoiceLine[]
   readonly microphoneOn: boolean
   readonly speakerOn: boolean
   /** Why the call failed or dropped, for the person. */
@@ -75,6 +89,7 @@ const idle: VoiceSnapshot = {
   sessionId: null,
   hearing: "",
   saying: "",
+  transcript: [],
   microphoneOn: true,
   speakerOn: true,
   notice: null,
@@ -621,13 +636,20 @@ export class VoiceController {
     }
   }
 
-  /** A line of what was said, kept for a resume. */
+  /**
+   * A line of what was said: kept for a resume, and shown to the person in
+   * the call's transcript.
+   */
   private remember(call: Call, who: "Person" | "Voice", said: string): void {
-    const text = said.replace(/\s+/g, " ").trim().slice(0, RECAP_LINE_CHARS)
-    if (!text) return
-    call.recap.push(`${who}: ${text}`)
+    const whole = said.replace(/\s+/g, " ").trim()
+    if (!whole) return
+    call.recap.push(`${who}: ${whole.slice(0, RECAP_LINE_CHARS)}`)
     if (call.recap.length > RECAP_LINES)
       call.recap.splice(0, call.recap.length - RECAP_LINES)
+    const line: VoiceLine = { who: who === "Person" ? "person" : "voice", text: whole }
+    this.update(call, {
+      transcript: [...this.state.transcript, line].slice(-TRANSCRIPT_LINES),
+    })
   }
 
   /** The user item `item`, committed in order the first time it is named. */
