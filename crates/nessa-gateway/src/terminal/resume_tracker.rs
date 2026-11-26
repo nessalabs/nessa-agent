@@ -72,6 +72,11 @@ impl ResumeTracker {
         }
     }
 
+    /// Whether `time` is older than the newest report taken from `pid`.
+    fn older(&self, pid: u32, time: u64) -> bool {
+        self.last_time.get(&pid).is_some_and(|last| time < *last)
+    }
+
     /// One OSC 7577 body from the terminal's output.
     pub fn report(
         &mut self,
@@ -81,14 +86,16 @@ impl ResumeTracker {
     ) -> Option<ResumeChange> {
         let report = match verify(body, &self.token, now_ms / 1000) {
             Verdict::Ignored => return None,
-            Verdict::Rejected { pid } => return self.reject(pid),
+            // Older than what `pid` already sent: a replay, ignored like an
+            // accepted one would be, so it cannot forget the newer record.
+            Verdict::Rejected {
+                pid: Some(pid),
+                time,
+            } if self.older(pid, time) => return None,
+            Verdict::Rejected { pid, .. } => return self.reject(pid),
             Verdict::Accepted(report) => report,
         };
-        if self
-            .last_time
-            .get(&report.pid)
-            .is_some_and(|last| report.time < *last)
-        {
+        if self.older(report.pid, report.time) {
             return None;
         }
         // The pid is checked for lifetime, not trust: it must be a process
@@ -366,6 +373,28 @@ mod tests {
                 &processes
             ),
             Some(ResumeChange::Forget)
+        );
+    }
+
+    #[test]
+    fn an_older_rejected_report_is_a_replay_and_forgets_nothing() {
+        let processes = table();
+        let mut tracker = ResumeTracker::new(TOKEN.into(), 10, false);
+        assert!(matches!(
+            tracker.report(
+                &report(12, 101, &format!("argv={}", argv(&["claude"]))),
+                101_000,
+                &processes
+            ),
+            Some(ResumeChange::Saved(_))
+        ));
+        assert_eq!(
+            tracker.report(
+                &report(12, 100, &format!("argv={}", argv(&["bin/claude"]))),
+                101_000,
+                &processes
+            ),
+            None
         );
     }
 

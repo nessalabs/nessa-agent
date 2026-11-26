@@ -24,6 +24,10 @@ pub struct SavedTerminal {
     pub conversation_id: Option<String>,
     /// The terminal's own folder (the channel's or the agent's).
     pub folder: String,
+    /// The command of a terminal started by Run in a reply; `None` for a
+    /// shell. It comes back as the same kind, so its Run block still shows it.
+    #[serde(default)]
+    pub run_command: Option<String>,
     pub cols: u16,
     pub rows: u16,
     pub record: SavedRecord,
@@ -221,6 +225,7 @@ mod tests {
 
     fn terminal(id: &str) -> SavedTerminal {
         SavedTerminal {
+            run_command: None,
             id: id.into(),
             request_id: "r".into(),
             title: "zsh".into(),

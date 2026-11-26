@@ -43,6 +43,10 @@ impl TerminalHub {
             channel_id: live.entry.channel_id.clone(),
             conversation_id: live.entry.conversation_id.clone(),
             folder: live.entry.folder.clone(),
+            run_command: match &live.entry.kind {
+                TerminalKind::Shell => None,
+                TerminalKind::Run { command } => Some(command.clone()),
+            },
             cols: live.size.cols,
             rows: live.size.rows,
             record,
@@ -54,10 +58,12 @@ impl TerminalHub {
         let Some(resume) = &self.resume else {
             return;
         };
+        // Checked under the write lock `freeze` takes, so a change that
+        // passed the check cannot land after the freeze.
+        let _writing = resume.writing();
         if resume.frozen.load(Ordering::Acquire) {
             return;
         }
-        let _writing = resume.writing();
         let now = self.clock.now_ms();
         let command = {
             let mut hub = self.lock();
@@ -279,7 +285,14 @@ impl TerminalHub {
                 conversation_id: saved.conversation_id.clone(),
                 folder,
                 runs_on: "here".into(),
-                kind: TerminalKind::Shell,
+                // The same kind it was; what runs is `start`, not a Run's
+                // command, so nothing is run twice.
+                kind: match &saved.run_command {
+                    None => TerminalKind::Shell,
+                    Some(command) => TerminalKind::Run {
+                        command: command.clone(),
+                    },
+                },
                 size: GridSize::new(u64::from(saved.cols), u64::from(saved.rows))
                     .unwrap_or(GridSize { cols: 80, rows: 24 }),
                 reopen: Some(Reopened {

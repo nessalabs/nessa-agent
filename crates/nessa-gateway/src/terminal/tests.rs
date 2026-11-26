@@ -549,6 +549,7 @@ fn kept_nvim() -> SavedTerminal {
         channel_id: None,
         conversation_id: None,
         folder: "/tmp".into(),
+        run_command: None,
         cols: 80,
         rows: 24,
         record: SavedRecord {
@@ -627,4 +628,29 @@ fn forgetting_a_kept_program_whose_file_stays_is_refused() {
         Err(TerminalError::Storage(_))
     ));
     assert_eq!(hub.saved_programs(&owner("ana")).len(), 1);
+}
+
+#[test]
+fn a_terminal_started_by_run_comes_back_as_a_run() {
+    let store = Arc::new(MemoryResumeStore::default());
+    let mut kept = kept_nvim();
+    kept.run_command = Some("nvim".into());
+    let (hub, _engine) = resuming(store.clone());
+    // Over the shell record `resuming` keeps.
+    store.save(&kept).unwrap();
+    assert_eq!(hub.resume_saved(&Here), 1);
+    let listed = hub.list(&owner("ana"));
+    assert_eq!(
+        listed
+            .iter()
+            .find(|entry| entry.id == "t_kept")
+            .map(|entry| &entry.kind),
+        Some(&TerminalKind::Run {
+            command: "nvim".into()
+        })
+    );
+    // Saved again as it was: a Run.
+    hub.rename(&owner("ana"), "t_kept", "renamed".into())
+        .unwrap();
+    assert_eq!(store.saved()[0].run_command.as_deref(), Some("nvim"));
 }
