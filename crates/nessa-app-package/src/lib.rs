@@ -9,3 +9,6 @@ pub use domain::static_package::{
     MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
 pub use infrastructure::manifest::{parse_manifest, verify_package};
+
+#[cfg(feature = "disposable-store")]
+pub use infrastructure::installed_store::{InstalledAppStore, StoreError};

@@ -6,12 +6,20 @@ rust-version.workspace = true
 publish = false
 description = "Headless verification of static extension app package assets"
 
+[features]
+disposable-store = ["dep:nessa-local-database"]
+
 [dependencies]
+nessa-local-database = { path = "../nessa-local-database", optional = true }
 nessa-types = { path = "../nessa-types" }
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+
+[dev-dependencies]
+nessa-local-storage = { path = "../nessa-local-storage" }
+tempfile = "3"
 
 [lints]
 workspace = true

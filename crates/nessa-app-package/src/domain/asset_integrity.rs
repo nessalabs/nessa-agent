@@ -45,13 +45,18 @@ pub fn verify_asset<'a>(
     expected_byte_count: u64,
     expected_sha256: [u8; 32],
 ) -> Result<VerifiedAsset<'a>, AssetIntegrityError> {
-    if u64::try_from(bytes.len()) != Ok(expected_byte_count) {
-        return Err(AssetIntegrityError::LengthMismatch);
-    }
+    check_size(bytes.len(), expected_byte_count)?;
     let actual_sha256: [u8; 32] = Sha256::digest(bytes).into();
     if actual_sha256 != expected_sha256 {
         return Err(AssetIntegrityError::DigestMismatch);
     }
 
     Ok(VerifiedAsset { app_id, bytes })
+}
+
+pub(super) fn check_size(actual: usize, expected: u64) -> Result<(), AssetIntegrityError> {
+    if u64::try_from(actual) != Ok(expected) {
+        return Err(AssetIntegrityError::LengthMismatch);
+    }
+    Ok(())
 }

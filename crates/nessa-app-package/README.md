@@ -21,3 +21,10 @@ already holds. A separate Product transport would bound these bytes before
 delivery. The five possible capability declarations are `list`, `read`,
 `create`, `subscribe`, and `stop`, each at most once. Declarations confer no
 authority. Integrity checks confirm correspondence with the manifest.
+
+The optional `disposable-store` feature adds a private SQLite adapter for
+local fixtures. An install writes the manifest and assets in one transaction.
+Installing an existing app identity returns `AlreadyInstalled`. A load
+reads a single database snapshot and checks the stored identity, manifest,
+and asset bytes before returning an owned record. The adapter has no mounted
+Product route or authorization.

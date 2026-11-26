@@ -112,6 +112,17 @@ impl PackageManifest {
         &self.json
     }
 
+    #[cfg(feature = "disposable-store")]
+    pub(crate) fn check_held_asset_size(
+        &self,
+        path: &str,
+        bytes: usize,
+    ) -> Result<(), PackageError> {
+        let asset = self.assets.get(path).ok_or(PackageError::UndeclaredAsset)?;
+        super::asset_integrity::check_size(bytes, asset.size_bytes)
+            .map_err(PackageError::AssetIntegrity)
+    }
+
     /// Bind the declarations to exactly the supplied held bytes.
     ///
     /// # Errors
