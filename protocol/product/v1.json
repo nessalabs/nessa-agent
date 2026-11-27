@@ -9394,7 +9394,10 @@
           "type": "boolean",
           "description": "Whether boat.signIn is offered: this build names a Boat OAuth app."
         },
-        "signIn": { "$ref": "#/$defs/BoatSignInState" }
+        "signIn": {
+          "$ref": "#/$defs/BoatSignInState",
+          "description": "The Sign in with Boat in progress, or the one that last failed; absent when none is running and none failed."
+        }
       },
       "required": ["state"],
       "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."

@@ -3831,6 +3831,7 @@ export interface BoatStatus {
   login?: string
   /** Whether boat.signIn is offered: this build names a Boat OAuth app. */
   signInAvailable?: boolean
+  /** The Sign in with Boat in progress, or the one that last failed; absent when none is running and none failed. */
   signIn?: BoatSignInState
 }
 /** Where the gateway's Sign in with Boat stands. boat.signIn starts one (ending any earlier one): the gateway listens on this machine's loopback for Boat's redirect, exchanges the code with PKCE, reads the account, validates and saves the connection like boat.save, and renews the one-hour access token itself from then on. boat.cancelSignIn stops waiting. */
