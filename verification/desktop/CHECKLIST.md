@@ -1142,9 +1142,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   summary; options compared on the facts some choice has; Undo only when it
   differs; what the agent would do after the options. _Check:_
   `decisions-view.test.tsx`, `waiting-decisions.test.ts`.
-- [ ] **Accept all ticks only easy-to-undo suggestions.** A costly or
-  can't-undo one is shown in the attention colour and left for the person.
-  _Check:_ `decisions-view.test.tsx`.
+- [ ] **Accept all ticks only easy-to-undo suggestions.** A can't-undo one
+  is shown in the destructive ink and left for the person. _Check:_
+  `decisions-view.test.tsx`.
+- [ ] **One left edge, readable columns, Decide in reach.** In Chromium and
+  WebKit, at the run's size and at 720×560: the agent's line, the question
+  and the first radio start within 1px of each other; each choice's column in
+  the brief is at least 120px wide (the table scrolls sideways instead); Decide
+  sits inside the dialog and the window. _Check:_ `conversation-stress.mjs`
+  step `ask` (`measureDecisions`), also run alone in WebKit in CI. Rule:
+  [Browser verification for UI](../../CODING_STANDARDS.md#browser-verification-for-ui).
+- [ ] **Auto-pick stays in reach while deciding.** Its countdown and Wait for
+  me show under the choices in Decisions. _Check:_ `decisions-view.test.tsx`.
 
 ## Settings
 

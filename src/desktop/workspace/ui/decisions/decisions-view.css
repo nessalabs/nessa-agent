@@ -16,7 +16,8 @@
  * are the kit's hairline.
  */
 .decisions-view {
-  --nessa-dialog-aside-width: 26rem;
+  /* The side column gives way on a small window, so the brief keeps room. */
+  --nessa-dialog-aside-width: min(26rem, 42%);
   /* The dialog header's inset, less the aside content's own padding. */
   --decisions-inset: calc(var(--spacing) * 1);
   /* How far a tinted row hangs outside the text edge. */
@@ -367,6 +368,12 @@
  */
 .decisions-view-options {
   width: 100%;
+  /*
+   * Never narrower than the fact column plus a readable column per choice:
+   * on a small window the table scrolls sideways (the kit's edge fade says
+   * so) rather than crushing each choice to a word a line.
+   */
+  min-width: calc(7.5rem + var(--decisions-choices, 2) * 9rem);
   table-layout: fixed;
 }
 

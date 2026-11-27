@@ -487,6 +487,16 @@ jobs:
           mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'menus') console.log('--' + k + '\n0')")
           node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --menus 1 --evidence "$STRESS_EVIDENCE/menu-webkit" 2>&1 | tee "$STRESS_EVIDENCE/menu-webkit.log"
         timeout-minutes: 10
+      # Decisions ships in WKWebView too: one left edge down the side column,
+      # readable choice columns in the brief and Decide inside the window, at
+      # the run's size and at 720x560, then the decision sent by Decide.
+      - name: Run the ask stress step in WebKit
+        shell: bash
+        run: |
+          set -o pipefail
+          mapfile -t zero < <(node --input-type=module -e "import { KNOBS } from './verification/desktop/scripts/lib/stress-plan.mjs'; for (const k of Object.keys(KNOBS)) if (k !== 'seed' && k !== 'asks') console.log('--' + k + '\n0')")
+          node verification/desktop/scripts/conversation-stress.mjs --engine webkit --channel bundled "${zero[@]}" --asks 1 --evidence "$STRESS_EVIDENCE/ask-webkit" 2>&1 | tee "$STRESS_EVIDENCE/ask-webkit.log"
+        timeout-minutes: 10
       # The side rail ships in WKWebView too: the chat's title in the pane's
       # bar stays between where it stood and where it lands, every frame, as
       # the rail toggles, and stands still with the panes alone.

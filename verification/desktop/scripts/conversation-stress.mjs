@@ -8596,6 +8596,17 @@ const steps = {
       failures.push("Decide did not open Decisions on the chat's decision")
       return
     }
+    // Measured, not seen: the side column keeps one left edge, and Decide
+    // stays inside the window at the run's size and at a small one.
+    await measureDecisions(run.page, ask.askId, "at the run's size", failures)
+    const size = run.page.viewportSize()
+    if (size) {
+      await run.page.setViewportSize({ width: 720, height: 560 })
+      await sleep(300)
+      await measureDecisions(run.page, ask.askId, "at 720×560", failures)
+      await run.page.setViewportSize(size)
+      await sleep(300)
+    }
     const marked = decide.locator(
       `[data-decisions-choice="${suggestion}"] [data-decisions-suggested]`,
     )
@@ -14540,6 +14551,67 @@ async function noticePosted(run, conversationId, failures, not = null) {
 }
 
 /** Waits for the host to take `notice` back once its review was `how`. */
+/**
+ * The Decisions view's layout contract, by its rects: the agent's line, the
+ * question and the first choice's radio start at one left edge (within a
+ * pixel), each choice's column in the brief is at least 120px wide, and
+ * Decide is inside the dialog and the window.
+ */
+async function measureDecisions(page, askId, when, failures) {
+  const read = await page.evaluate((id) => {
+    const column = document.querySelector(`[data-decisions-decide="${id}"]`)
+    const panel = column?.closest('[role="dialog"]')
+    const who = column?.querySelector(".decisions-view-who")
+    const question = column?.querySelector(".decisions-view-question")
+    const radio = column?.querySelector('input[type="radio"]')
+    const send = column?.querySelector("[data-decisions-send]")
+    const heads = [
+      ...(panel?.querySelectorAll("[data-decisions-options] thead th") ?? []),
+    ].slice(1)
+    if (!column || !panel || !who || !question || !radio || !send) return null
+    const textLeft = (element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      return range.getBoundingClientRect().left
+    }
+    const box = (element) => element.getBoundingClientRect().toJSON()
+    return {
+      edges: [textLeft(who), textLeft(question), radio.getBoundingClientRect().left],
+      panel: box(panel),
+      send: box(send),
+      choiceWidths: heads.map((each) => each.getBoundingClientRect().width),
+      viewport: { width: innerWidth, height: innerHeight },
+    }
+  }, askId)
+  if (!read) {
+    failures.push(`Decisions ${when}: its decision column could not be measured`)
+    return
+  }
+  const [who, question, radio] = read.edges
+  if (Math.max(who, question, radio) - Math.min(who, question, radio) > 1)
+    failures.push(
+      `Decisions ${when}: the agent's line, question and radios start at ${read.edges.map((each) => each.toFixed(1)).join(", ")}, not one edge`,
+    )
+  // A choice's column in the brief keeps room to read; a small window
+  // scrolls the table sideways instead of crushing it.
+  const narrowest = Math.min(...read.choiceWidths)
+  if (read.choiceWidths.length === 0 || narrowest < 120)
+    failures.push(
+      `Decisions ${when}: the brief's choice columns are ${read.choiceWidths.map((each) => Math.round(each)).join(", ")}px wide, under 120px`,
+    )
+  const { send, panel, viewport } = read
+  if (
+    send.left < panel.left ||
+    send.right > panel.right ||
+    send.top < 0 ||
+    send.bottom > viewport.height ||
+    send.right > viewport.width
+  )
+    failures.push(
+      `Decisions ${when}: Decide is at ${JSON.stringify(send)}, outside the dialog or window (${viewport.width}×${viewport.height})`,
+    )
+}
+
 async function noticeTakenBack(run, notice, how, failures) {
   const gone = await waitFor(async () => {
     const notices = await hostNotices(run.page)

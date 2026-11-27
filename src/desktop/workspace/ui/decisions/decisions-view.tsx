@@ -13,7 +13,14 @@
  * leaves when the chat's row says nothing is asked there any more. An answer
  * is the person's own message in that chat, as typing it would be.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react"
 import { AutoPickLine } from "../chrome/auto-pick"
 import { Button } from "@nessa-ui/react/button"
 import { CheckboxList } from "@nessa-ui/react/checkbox-list"
@@ -528,7 +535,12 @@ function Brief({ decision, now }: { decision: WaitingDecision; now: number }) {
         aria-labelledby={`options-${ask.askId}`}
       >
         <h4 id={`options-${ask.askId}`}>Options</h4>
-        <Table edgeFade className="decisions-view-options" data-decisions-options="">
+        <Table
+          edgeFade
+          className="decisions-view-options"
+          data-decisions-options=""
+          style={{ "--decisions-choices": ask.choices.length } as CSSProperties}
+        >
           <TableHeader>
             <TableRow>
               <TableHead>
