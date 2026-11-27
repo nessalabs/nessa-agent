@@ -184,10 +184,18 @@ function DecisionsSurface({
     </span>
   )
 
+  // The decision in front when a send settles: a reply that comes back
+  // after the person moved on must not move them again.
+  const inFront = useRef<string | undefined>(undefined)
+  inFront.current = decision?.ask.askId
+  // Focus goes to the next decision's choices when the person moved on, not
+  // back to the dialog's top; not on opening, where the dialog takes it.
+  const [moved, setMoved] = useState(false)
   const advance = (from: WaitingDecision) => {
     const at = decisions.findIndex((each) => each.sessionId === from.sessionId)
     const next = decisions[at + 1] ?? decisions.find((each) => each !== from)
     setCurrent(next?.sessionId)
+    setMoved(true)
   }
 
   return (
@@ -266,6 +274,7 @@ function DecisionsSurface({
               <DecideColumn
                 key={decision.ask.askId}
                 decision={decision}
+                takeFocus={moved}
                 draft={drafts[decision.ask.askId]}
                 sending={sending.has(decision.ask.askId)}
                 failure={failures[decision.ask.askId]}
@@ -275,7 +284,9 @@ function DecisionsSurface({
                 onLater={decisions.length > 1 ? () => advance(decision) : undefined}
                 onDecide={(text) => {
                   void send(decision, text).then((sent) => {
-                    if (sent) advance(decision)
+                    // The answered one leaves the queue, and the one after it
+                    // takes its place; only if the person is still on it.
+                    if (sent && inFront.current === decision.ask.askId) advance(decision)
                   })
                 }}
               />
@@ -304,13 +315,19 @@ function DecisionsSurface({
         <AcceptAll
           decisions={decisions}
           sending={sending}
+          failures={failures}
           onSend={(chosen) => {
             void Promise.all(
               chosen.map((each) => {
                 const choice = suggested(each.ask)
                 return choice ? send(each, choice.label) : Promise.resolve(false)
               }),
-            ).then(() => setMode("decide"))
+            ).then((sent) => {
+              // Back to deciding once every answer went, unless the person
+              // already left; any that did not go stay listed with why.
+              if (sent.every(Boolean))
+                setMode((held) => (held === "accept" ? "decide" : held))
+            })
           }}
         />
       ) : decision ? (
@@ -328,6 +345,7 @@ function DecisionsSurface({
  */
 function DecideColumn({
   decision,
+  takeFocus,
   draft,
   sending,
   failure,
@@ -336,6 +354,8 @@ function DecideColumn({
   onDecide,
 }: {
   decision: WaitingDecision
+  /** Whether the person moved here from another decision, so focus follows them. */
+  takeFocus: boolean
   draft: Draft | undefined
   sending: boolean
   failure: string | undefined
@@ -345,6 +365,15 @@ function DecideColumn({
 }) {
   const { ask } = decision
   const ownInput = useRef<HTMLInputElement>(null)
+  const column = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!takeFocus) return
+    const choices = column.current?.querySelectorAll<HTMLInputElement>("input")
+    const target = [...(choices ?? [])].find((input) => input.checked) ?? choices?.[0]
+    target?.focus({ preventScroll: true })
+    // Only as it arrives: a later render keeps focus where the person put it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const picked =
     draft === undefined ? [] : "own" in draft ? [own] : [String(draft.choice)]
   const text = draft ? answerText(ask, draft) : undefined
@@ -358,6 +387,7 @@ function DecideColumn({
   }
   return (
     <Questionnaire
+      ref={column}
       className="decisions-view-decide"
       aria-busy={sending || undefined}
       data-decisions-decide={ask.askId}
@@ -584,17 +614,22 @@ function FactCell({
 function AcceptAll({
   decisions,
   sending,
+  failures,
   onSend,
 }: {
   decisions: readonly WaitingDecision[]
   sending: ReadonlySet<string>
+  failures: Readonly<Record<string, string>>
   onSend: (chosen: readonly WaitingDecision[]) => void
 }) {
+  // Ticks are held by ask, not by chat: a chat whose agent replaced its
+  // question while this was open starts its new one unticked, so nothing
+  // the person has not seen is sent.
   const [ticked, setTicked] = useState<readonly string[]>(() =>
-    decisions.filter(acceptedByDefault).map((each) => each.sessionId),
+    decisions.filter(acceptedByDefault).map((each) => each.ask.askId),
   )
   const busy = decisions.some((each) => sending.has(each.ask.askId))
-  const chosen = decisions.filter((each) => ticked.includes(each.sessionId))
+  const chosen = decisions.filter((each) => ticked.includes(each.ask.askId))
   return (
     <section
       className="decisions-view-accept"
@@ -617,7 +652,7 @@ function AcceptAll({
         options={decisions.map((each) => {
           const choice = suggested(each.ask)
           return {
-            value: each.sessionId,
+            value: each.ask.askId,
             label: each.ask.question,
             description: (
               <span
@@ -631,6 +666,11 @@ function AcceptAll({
                   </span>
                 ) : null}
                 <span className="decisions-view-accept-chat">{each.title}</span>
+                {failures[each.ask.askId] ? (
+                  <span className="decisions-view-failure" data-decisions-failure="">
+                    {failures[each.ask.askId]}
+                  </span>
+                ) : null}
               </span>
             ),
             disabled: !choice,

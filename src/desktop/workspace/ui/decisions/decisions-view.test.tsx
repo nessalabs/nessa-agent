@@ -151,3 +151,41 @@ it("ticks only easy-to-undo suggestions in Accept all, and sends each ticked one
     expect.objectContaining({ sessionId: "a", text: "Yes one" }),
   ])
 })
+
+it("leaves a replaced ask unticked in Accept all, so nothing unseen is sent", async () => {
+  const source = await open()
+  await act(async () =>
+    find<HTMLButtonElement>("[data-decisions-accept-all]", view()).click(),
+  )
+  // Chat a's agent asks something new while the list is open: its
+  // suggestion can't be undone, and the person never ticked it.
+  act(() =>
+    source.emit({
+      kind: "session",
+      session: summary("a", "desktop", 300, "needs-you", {
+        ask: ask("three", "no"),
+        revision: 2,
+      }),
+    }),
+  )
+  await act(async () => settle(10))
+  const boxes = [
+    ...view().querySelectorAll<HTMLInputElement>(
+      '[data-decisions-accept] input[type="checkbox"]',
+    ),
+  ]
+  expect(boxes.map((box) => box.checked)).toEqual([false, false])
+  expect(find<HTMLButtonElement>("[data-decisions-accept-send]", view()).disabled).toBe(
+    true,
+  )
+})
+
+it("moves focus to the next decision's choices after Decide", async () => {
+  await open("a")
+  await act(async () => find('[data-decisions-choice="No one"]', view()).click())
+  await act(async () => find<HTMLButtonElement>("[data-decisions-send]", view()).click())
+  await act(async () => settle(10))
+  const next = find('[data-decisions-decide="two"]', view())
+  expect(next.contains(document.activeElement)).toBe(true)
+  expect(document.activeElement?.tagName).toBe("INPUT")
+})
