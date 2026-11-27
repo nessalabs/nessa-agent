@@ -22,12 +22,13 @@
 //! one only hides it (`desktop_window::on_close`).
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nessa_app_package::{verify_inline_package, InlineAsset, InlinePackage};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use crate::composition::HostDependencies;
 use crate::desktop_window::DESKTOP_WINDOW;
 use crate::host;
 
@@ -144,6 +145,182 @@ pub fn window_label(app_id: &str) -> Option<String> {
         .map(|app| format!("{APP_WINDOW_PREFIX}{}", app.as_str()))
 }
 
+/// Whether a window came up new or was already there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shown {
+    Opened,
+    BroughtForward,
+}
+
+/// The window server and the system's dialogs, as installed apps need them.
+/// Composition gives the native one (`native_app_windows`); tests stand in.
+pub trait AppWindows: Send + Sync {
+    /// Ask the person `question` with Install and Cancel, answering `answer`
+    /// once with whether they chose Install (a dismissal is Cancel).
+    fn ask_to_install(&self, question: String, answer: Box<dyn FnOnce(bool) + Send>);
+    /// Show the app window `label`, titled `title`: open it on the app page,
+    /// or reload and bring forward the one already open.
+    fn show(&self, label: &str, title: &str) -> Result<Shown, String>;
+    /// Close the window `label` for good; nothing when there is none.
+    fn close(&self, label: &str) -> Result<(), String>;
+    /// Tell the desktop page that app windows opened or closed.
+    fn changed(&self);
+}
+
+/// Installed apps' windows on this desktop: what each holds, and the window
+/// server that shows them.
+pub struct InstalledAppWindows {
+    held: HeldApps,
+    windows: Arc<dyn AppWindows>,
+}
+
+impl InstalledAppWindows {
+    pub fn new(windows: Arc<dyn AppWindows>) -> Self {
+        Self {
+            held: HeldApps::default(),
+            windows,
+        }
+    }
+
+    /// The person's Install or Cancel for the package `digest` names.
+    pub async fn confirm(
+        &self,
+        app_id: &str,
+        package_version: &str,
+        digest: &str,
+    ) -> Result<bool, String> {
+        if window_label(app_id).is_none()
+            || digest.len() != 64
+            || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("not an app to install".into());
+        }
+        let short = &digest[..12];
+        let (answer, asked) = tokio::sync::oneshot::channel();
+        self.windows.ask_to_install(
+            format!(
+                "Install {app_id} {package_version}?\n\nPackage {short}… is the one you reviewed. It opens in its own window with no network access."
+            ),
+            Box::new(move |yes| {
+                let _ = answer.send(yes);
+            }),
+        );
+        Ok(asked.await.unwrap_or(false))
+    }
+
+    /// Hold `package` for `app_id`'s window once it verifies as the one
+    /// `digest` names, then show that window. A window that could not open
+    /// holds nothing.
+    pub fn open(&self, app_id: &str, package: HandedPackage, digest: &str) -> Result<(), String> {
+        let label = window_label(app_id).ok_or("not an app identity")?;
+        self.held
+            .hold(app_id, package, digest)
+            .map_err(|refusal| match refusal {
+                OpenRefusal::Invalid => "the package does not verify".to_owned(),
+                OpenRefusal::NotThePackageNamed => "the package is not the one named".to_owned(),
+            })?;
+        match self.windows.show(&label, app_id) {
+            Ok(Shown::Opened) => {
+                self.windows.changed();
+                Ok(())
+            }
+            Ok(Shown::BroughtForward) => Ok(()),
+            Err(error) => {
+                if self.held.release(&label) {
+                    self.windows.changed();
+                }
+                Err(format!("could not open {app_id}: {error}"))
+            }
+        }
+    }
+
+    /// Close `app_id`'s window. What it held goes when the window does
+    /// (`window_went`), so a window that would not close stays running.
+    pub fn stop(&self, app_id: &str) -> Result<(), String> {
+        let label = window_label(app_id).ok_or("not an app identity")?;
+        self.windows
+            .close(&label)
+            .map_err(|error| format!("could not stop {app_id}: {error}"))
+    }
+
+    /// The window `label` went: drop what it held and say so.
+    pub fn window_went(&self, label: &str) {
+        if self.held.release(label) {
+            self.windows.changed();
+        }
+    }
+
+    pub fn running(&self) -> Vec<String> {
+        self.held.running()
+    }
+
+    pub fn page_for(&self, label: &str) -> Option<AppPage> {
+        self.held.page_for(label)
+    }
+}
+
+/// The window server and dialogs Tauri talks to.
+struct NativeAppWindows(AppHandle);
+
+impl AppWindows for NativeAppWindows {
+    fn ask_to_install(&self, question: String, answer: Box<dyn FnOnce(bool) + Send>) {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let dialog = self
+            .0
+            .dialog()
+            .message(question)
+            .title("Install app")
+            .kind(MessageDialogKind::Info)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Install".into(),
+                "Cancel".into(),
+            ));
+        let dialog = match self.0.get_webview_window(DESKTOP_WINDOW) {
+            Some(desktop) => dialog.parent(&desktop),
+            None => dialog,
+        };
+        dialog.show(answer);
+    }
+
+    fn show(&self, label: &str, title: &str) -> Result<Shown, String> {
+        if let Some(open) = self.0.get_webview_window(label) {
+            // Already open: draw the newly held bytes, and come forward.
+            let _ = open.eval("location.reload()");
+            let _ = open.show();
+            let _ = open.set_focus();
+            return Ok(Shown::BroughtForward);
+        }
+        WebviewWindowBuilder::new(&self.0, label, WebviewUrl::App(APP_PAGE.into()))
+            .title(title)
+            .inner_size(900.0, 640.0)
+            .min_inner_size(320.0, 240.0)
+            .center()
+            .build()
+            .map(|_| Shown::Opened)
+            .map_err(|error| error.to_string())
+    }
+
+    fn close(&self, label: &str) -> Result<(), String> {
+        match self.0.get_webview_window(label) {
+            Some(open) => open.destroy().map_err(|error| error.to_string()),
+            None => Ok(()),
+        }
+    }
+
+    fn changed(&self) {
+        let _ = self
+            .0
+            .emit_to(DESKTOP_WINDOW, host::INSTALLED_APPS_CHANGED, ());
+    }
+}
+
+/// The native app windows, for composition.
+pub fn native_app_windows(app: &AppHandle) -> Arc<InstalledAppWindows> {
+    Arc::new(InstalledAppWindows::new(Arc::new(NativeAppWindows(
+        app.clone(),
+    ))))
+}
+
 fn only_desktop(window: &WebviewWindow) -> Result<(), String> {
     if window.label() == DESKTOP_WINDOW {
         Ok(())
@@ -152,48 +329,18 @@ fn only_desktop(window: &WebviewWindow) -> Result<(), String> {
     }
 }
 
-/// An app window went: drop what it held and tell the desktop page.
-pub fn window_destroyed(app: &AppHandle, label: &str) {
-    let Some(held) = app.try_state::<HeldApps>() else {
-        return;
-    };
-    if held.release(label) {
-        let _ = app.emit_to(DESKTOP_WINDOW, host::INSTALLED_APPS_CHANGED, ());
-    }
-}
-
-/// The system's Yes/Cancel for installing the reviewed package. Blocks a
-/// worker thread, never the main one, until the person answers.
+/// The system's Install/Cancel for installing the reviewed package.
 #[tauri::command]
 pub async fn installed_app_confirm(
     window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
     app_id: String,
     package_version: String,
     digest: String,
 ) -> Result<bool, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     only_desktop(&window)?;
-    if window_label(&app_id).is_none() || digest.len() != 64 {
-        return Err("not an app to install".into());
-    }
-    let short = &digest[..12];
-    let (answer, asked) = tokio::sync::oneshot::channel();
-    window
-        .dialog()
-        .message(format!(
-            "Install {app_id} {package_version}?\n\nPackage {short}… is the one you reviewed. It opens in its own window with no network access."
-        ))
-        .title("Install app")
-        .kind(MessageDialogKind::Info)
-        .parent(&window)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Install".into(),
-            "Cancel".into(),
-        ))
-        .show(move |yes| {
-            let _ = answer.send(yes);
-        });
-    Ok(asked.await.unwrap_or(false))
+    let apps = deps.installed_apps.clone();
+    apps.confirm(&app_id, &package_version, &digest).await
 }
 
 /// Open `app_id` in its own window, or bring its window forward, drawing
@@ -201,73 +348,44 @@ pub async fn installed_app_confirm(
 #[tauri::command]
 pub fn installed_app_open(
     window: WebviewWindow,
-    held: State<'_, HeldApps>,
+    deps: State<'_, HostDependencies>,
     app_id: String,
     package: HandedPackage,
     digest: String,
 ) -> Result<(), String> {
     only_desktop(&window)?;
-    let label = window_label(&app_id).ok_or("not an app identity")?;
-    held.hold(&app_id, package, &digest)
-        .map_err(|refusal| match refusal {
-            OpenRefusal::Invalid => "the package does not verify".to_owned(),
-            OpenRefusal::NotThePackageNamed => "the package is not the one named".to_owned(),
-        })?;
-    let app = window.app_handle();
-    if let Some(open) = app.get_webview_window(&label) {
-        // Already open: draw the newly held bytes, and come forward.
-        let _ = open.eval("location.reload()");
-        let _ = open.show();
-        let _ = open.set_focus();
-        return Ok(());
-    }
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(APP_PAGE.into()))
-        .title(&app_id)
-        .inner_size(900.0, 640.0)
-        .min_inner_size(320.0, 240.0)
-        .center()
-        .build();
-    match built {
-        Ok(_) => {
-            let _ = app.emit_to(DESKTOP_WINDOW, host::INSTALLED_APPS_CHANGED, ());
-            Ok(())
-        }
-        Err(error) => {
-            held.release(&label);
-            Err(format!("could not open {app_id}: {error}"))
-        }
-    }
+    deps.installed_apps.open(&app_id, package, &digest)
 }
 
 /// Close `app_id`'s window; nothing when it has none.
 #[tauri::command]
-pub fn installed_app_stop(window: WebviewWindow, app_id: String) -> Result<(), String> {
+pub fn installed_app_stop(
+    window: WebviewWindow,
+    deps: State<'_, HostDependencies>,
+    app_id: String,
+) -> Result<(), String> {
     only_desktop(&window)?;
-    let label = window_label(&app_id).ok_or("not an app identity")?;
-    if let Some(open) = window.app_handle().get_webview_window(&label) {
-        open.destroy()
-            .map_err(|error| format!("could not stop {app_id}: {error}"))?;
-    }
-    Ok(())
+    deps.installed_apps.stop(&app_id)
 }
 
 /// The apps with a window open now.
 #[tauri::command]
 pub fn installed_app_running(
     window: WebviewWindow,
-    held: State<'_, HeldApps>,
+    deps: State<'_, HostDependencies>,
 ) -> Result<Vec<String>, String> {
     only_desktop(&window)?;
-    Ok(held.running())
+    Ok(deps.installed_apps.running())
 }
 
 /// What the calling app window was opened to draw.
 #[tauri::command]
 pub fn installed_app_page(
     window: WebviewWindow,
-    held: State<'_, HeldApps>,
+    deps: State<'_, HostDependencies>,
 ) -> Result<AppPage, String> {
-    held.page_for(window.label())
+    deps.installed_apps
+        .page_for(window.label())
         .ok_or_else(|| "this window holds no app".into())
 }
 
@@ -335,6 +453,106 @@ mod tests {
         assert!(!held.release("app-calendar"));
         assert!(!held.release("desktop"));
         assert_eq!(held.running(), vec!["notes".to_owned()]);
+    }
+
+    /// A window server that does what it is told, or refuses, and counts.
+    #[derive(Default)]
+    struct Windows {
+        open: Mutex<Vec<String>>,
+        refuse_open: Mutex<bool>,
+        changes: Mutex<usize>,
+        answer: Mutex<Option<bool>>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl AppWindows for Windows {
+        fn ask_to_install(&self, question: String, answer: Box<dyn FnOnce(bool) + Send>) {
+            self.asked.lock().unwrap().push(question);
+            // None is the person dismissing the dialog without answering.
+            match *self.answer.lock().unwrap() {
+                Some(yes) => answer(yes),
+                None => drop(answer),
+            }
+        }
+        fn show(&self, label: &str, _title: &str) -> Result<Shown, String> {
+            if *self.refuse_open.lock().unwrap() {
+                return Err("no window server".into());
+            }
+            let mut open = self.open.lock().unwrap();
+            if open.iter().any(|each| each == label) {
+                return Ok(Shown::BroughtForward);
+            }
+            open.push(label.to_owned());
+            Ok(Shown::Opened)
+        }
+        fn close(&self, label: &str) -> Result<(), String> {
+            self.open.lock().unwrap().retain(|each| each != label);
+            Ok(())
+        }
+        fn changed(&self) {
+            *self.changes.lock().unwrap() += 1;
+        }
+    }
+
+    fn host() -> (Arc<Windows>, InstalledAppWindows) {
+        let windows = Arc::new(Windows::default());
+        (windows.clone(), InstalledAppWindows::new(windows))
+    }
+
+    #[test]
+    fn install_is_yes_only_when_the_person_chooses_install() {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(install_is_yes_only_on_install());
+    }
+
+    async fn install_is_yes_only_on_install() {
+        let (windows, apps) = host();
+        let (_, digest) = starter("notes");
+        *windows.answer.lock().unwrap() = Some(true);
+        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(true));
+        assert!(windows.asked.lock().unwrap()[0].contains(&digest[..12]));
+        *windows.answer.lock().unwrap() = Some(false);
+        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(false));
+        // Dismissed, the dialog is a Cancel.
+        *windows.answer.lock().unwrap() = None;
+        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(false));
+        // Nothing is asked about what is not an app and a digest.
+        assert!(apps.confirm("nessa", "1.0.0", &digest).await.is_err());
+        assert!(apps.confirm("notes", "1.0.0", "short").await.is_err());
+        assert_eq!(windows.asked.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn an_app_runs_from_its_window_opening_until_its_window_goes() {
+        let (windows, apps) = host();
+        let (package, digest) = starter("notes");
+        apps.open("notes", package.clone(), &digest).unwrap();
+        assert_eq!(apps.running(), vec!["notes".to_owned()]);
+        assert_eq!(*windows.open.lock().unwrap(), vec!["app-notes".to_owned()]);
+        // Opened again, the same window comes forward: no second window.
+        apps.open("notes", package, &digest).unwrap();
+        assert_eq!(windows.open.lock().unwrap().len(), 1);
+        assert_eq!(*windows.changes.lock().unwrap(), 1);
+
+        apps.stop("notes").unwrap();
+        assert!(windows.open.lock().unwrap().is_empty());
+        // The host hears the window go, and only then is the app stopped.
+        assert_eq!(apps.running(), vec!["notes".to_owned()]);
+        apps.window_went("app-notes");
+        assert!(apps.running().is_empty());
+        assert_eq!(*windows.changes.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_window_that_could_not_open_holds_nothing() {
+        let (windows, apps) = host();
+        let (package, digest) = starter("notes");
+        *windows.refuse_open.lock().unwrap() = true;
+        assert!(apps.open("notes", package, &digest).is_err());
+        assert!(apps.running().is_empty());
+        assert!(apps.page_for("app-notes").is_none());
     }
 
     #[test]

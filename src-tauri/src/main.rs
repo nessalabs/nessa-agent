@@ -122,8 +122,6 @@ fn main() {
                 );
             }
         })
-        // Installed apps' open windows, and what each draws (`installed_apps.rs`).
-        .manage(installed_apps::HeldApps::default())
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
             platform::panel_size,
@@ -407,7 +405,9 @@ fn main() {
                     .label()
                     .starts_with(installed_apps::APP_WINDOW_PREFIX)
             {
-                installed_apps::window_destroyed(window.app_handle(), window.label());
+                if let Some(deps) = window.app_handle().try_state::<HostDependencies>() {
+                    deps.installed_apps.window_went(window.label());
+                }
             }
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
                 panel::setup_window_gone();

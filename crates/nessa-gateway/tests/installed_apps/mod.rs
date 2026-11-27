@@ -129,7 +129,8 @@ async fn the_reviewed_bytes_install_and_read_back_exactly() {
     assert_eq!(first.app_id, "notes");
     assert_eq!(first.caller, owner());
 
-    // A retry of the same install answers the same app and changes nothing.
+    // A retry of the same install answers the same app, recording that it
+    // is installed, and changes nothing else.
     assert_eq!(
         apps.install(
             owner(),
@@ -141,7 +142,13 @@ async fn the_reviewed_bytes_install_and_read_back_exactly() {
         .unwrap(),
         installed
     );
-    assert_eq!(events(&audit).len(), 2);
+    assert_eq!(
+        events(&audit)[2..],
+        [AppsEvent::Installed {
+            digest: starter.review.digest.clone(),
+        }]
+    );
+    assert_eq!(apps.installed().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -265,6 +272,83 @@ async fn a_change_that_cannot_be_recorded_is_not_made_or_not_answered_as_made() 
         Err(AppsError::AuditUnavailable)
     );
     assert_eq!(apps.installed().await.unwrap().len(), 1);
+    // A retry while the audit still refuses is not answered as a success.
+    assert_eq!(
+        apps.install(
+            owner(),
+            "r2".into(),
+            &starter.package,
+            &starter.review.digest
+        )
+        .await,
+        Err(AppsError::AuditUnavailable)
+    );
+    // Once the audit keeps records again, the retry records the outcome.
+    *audit.refuse_from.lock().unwrap() = None;
+    apps.install(
+        owner(),
+        "r2".into(),
+        &starter.package,
+        &starter.review.digest,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        events(&audit).last(),
+        Some(&AppsEvent::Installed {
+            digest: starter.review.digest.clone(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn an_uninstall_and_a_reinstall_at_once_never_remove_what_was_not_named() {
+    let (_folder, apps, audit) = apps();
+    let apps = Arc::new(apps);
+    let one = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let two = apps.starter("notes".into(), "2.0.0".into()).unwrap();
+    apps.install(owner(), "r1".into(), &one.package, &one.review.digest)
+        .await
+        .unwrap();
+    // An uninstall, and an uninstall then reinstall of version 2, at once.
+    let first = {
+        let apps = apps.clone();
+        tokio::spawn(async move { apps.uninstall(owner(), "u1".into(), id("notes")).await })
+    };
+    let second = {
+        let apps = apps.clone();
+        tokio::spawn(async move {
+            let _ = apps.uninstall(owner(), "u2".into(), id("notes")).await;
+            apps.install(owner(), "r2".into(), &two.package, &two.review.digest)
+                .await
+        })
+    };
+    let _ = first.await.unwrap();
+    let _ = second.await.unwrap();
+    // Every removal names the version that was there when it began, and
+    // whatever is left is what the last change left.
+    let records = events(&audit);
+    let mut there: Option<String> = Some("1.0.0".into());
+    for event in &records {
+        match event {
+            AppsEvent::UninstallRequested { package_version } => {
+                assert_eq!(Some(package_version), there.as_ref(), "{records:?}");
+            }
+            AppsEvent::Uninstalled => there = None,
+            AppsEvent::InstallRequested {
+                package_version, ..
+            } => {
+                there = Some(package_version.clone());
+            }
+            _ => {}
+        }
+    }
+    let left = apps.installed().await.unwrap();
+    assert_eq!(
+        left.first().map(|app| app.package_version.clone()),
+        there,
+        "{records:?}"
+    );
 }
 
 #[tokio::test]

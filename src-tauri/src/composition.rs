@@ -173,6 +173,9 @@ pub struct HostDependencies {
     /// small window that shows it while its composer is out of view
     /// (`crate::call_pill`).
     pub call_pill: Arc<crate::call_pill::CallPill>,
+    /// Installed apps' windows, what each draws, and the system's Install
+    /// or Cancel before an install (`crate::installed_apps`).
+    pub installed_apps: Arc<crate::installed_apps::InstalledAppWindows>,
 }
 
 impl HostDependencies {
@@ -388,6 +391,7 @@ impl HostDependencies {
             review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
             tray_geometry: crate::tray::tray_geometry(app),
             call_pill: crate::call_pill::call_pill(app),
+            installed_apps: crate::installed_apps::native_app_windows(app),
         })
     }
 }

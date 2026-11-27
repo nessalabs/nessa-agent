@@ -132,6 +132,9 @@ pub struct InstalledApps {
     /// must see what the last one left.
     store: Arc<Mutex<Box<dyn AppStore>>>,
     audit: Arc<dyn AppsAudit>,
+    /// One install or uninstall at a time, from its first read to its last
+    /// record: what a change read is still there when it changes it.
+    changes: tokio::sync::Mutex<()>,
 }
 
 /// A package and what the verifier found in it.
@@ -145,6 +148,7 @@ impl InstalledApps {
         Self {
             store: Arc::new(Mutex::new(store)),
             audit,
+            changes: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -215,7 +219,9 @@ impl InstalledApps {
     }
 
     /// Install `package`, only if its digest is the one the owner reviewed.
-    /// Retrying the same request after it installed answers the same app.
+    /// Retrying after it installed answers the same app once the outcome is
+    /// recorded: an install whose outcome could not be recorded is recorded
+    /// by the retry, and a retry that cannot record it is refused too.
     pub async fn install(
         &self,
         caller: AppsCaller,
@@ -229,6 +235,7 @@ impl InstalledApps {
             return Err(AppsError::ReviewStale);
         }
         let app = verified.manifest().app_id().clone();
+        let _change = self.changes.lock().await;
         let installed = Installed {
             app_id: review.app_id.clone(),
             package_version: review.package_version.clone(),
@@ -239,7 +246,20 @@ impl InstalledApps {
             self.with_store(move |store| store.load(&app)).await?
         };
         match held {
-            Ok(Some(existing)) if existing.digest() == review.digest => return Ok(installed),
+            Ok(Some(existing)) if existing.digest() == review.digest => {
+                // The bytes match, but only a record says the operation
+                // ended: this retry's own outcome record says so.
+                self.record(
+                    &Uuid::new_v4().to_string(),
+                    &request_id,
+                    &review.app_id,
+                    &caller,
+                    AppsEvent::Installed {
+                        digest: review.digest,
+                    },
+                )?;
+                return Ok(installed);
+            }
             Ok(Some(_)) => return Err(AppsError::AlreadyInstalled),
             Ok(None) => {}
             Err(_) => return Err(AppsError::StorageUnavailable),
@@ -320,6 +340,7 @@ impl InstalledApps {
         app: ExtensionAppId,
     ) -> Result<String, AppsError> {
         let app_id = app.as_str().to_owned();
+        let _change = self.changes.lock().await;
         let held = {
             let app = app.clone();
             self.with_store(move |store| store.load(&app)).await?
