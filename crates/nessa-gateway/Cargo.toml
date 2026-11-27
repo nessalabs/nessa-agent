@@ -45,6 +45,8 @@ nessa-sdk = { path = "../nessa-sdk" }
 nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
 nessa-sync = { workspace = true }
 nessa-images = { path = "../nessa-images" }
+nessa-app-package = { path = "../nessa-app-package", features = ["disposable-store"] }
+nessa-types = { path = "../nessa-types" }
 nessa-local-database = { path = "../nessa-local-database", features = ["encryption"] }
 zeroize = "=1.9.0"
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
@@ -91,6 +93,7 @@ async-trait = "0.1"
 # implementation rather than two.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
+hex = "0.4"
 # A resolved Windows path without the `\\?\` prefix, so a channel's folder is
 # kept, shown and handed to an agent as the person knows it.
 dunce = "1"

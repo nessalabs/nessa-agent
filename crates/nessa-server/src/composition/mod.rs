@@ -53,6 +53,7 @@ mod github_relay;
 #[cfg(unix)]
 mod github_tools;
 mod install_command;
+mod installed_apps;
 #[cfg(unix)]
 mod installed_launch;
 mod local_auth;

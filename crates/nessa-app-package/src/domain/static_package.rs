@@ -168,6 +168,15 @@ impl VerifiedPackage {
         &self.manifest
     }
 
+    /// The lowercase hex SHA-256 of the exact manifest bytes. The manifest
+    /// declares every asset's size and digest, and verification held the
+    /// bytes to them, so this one value names the whole package: two
+    /// packages with the same digest hold the same bytes.
+    pub fn digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(self.manifest.json()))
+    }
+
     /// Look up verified bytes by their exact declared path.
     pub fn asset(&self, path: &str) -> Option<&[u8]> {
         self.assets.get(path).map(Vec::as_slice)

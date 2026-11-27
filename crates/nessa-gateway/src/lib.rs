@@ -20,6 +20,7 @@ pub mod external_events;
 pub mod github;
 pub mod github_relay;
 pub mod health;
+pub mod installed_apps;
 pub mod limits;
 pub mod mcp_servers;
 pub mod product;

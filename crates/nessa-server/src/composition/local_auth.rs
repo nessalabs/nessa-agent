@@ -419,6 +419,7 @@ pub(super) async fn product_state(
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     // Voice calls, with their key in the same vault.
     let voice = super::voice::compose(namespace, vault.vault.clone());
+    let apps = super::installed_apps::compose(namespace);
     // A leftover plaintext sign-in is removed before agents start, whether or
     // not the vault is unlocked. A failed delete stops startup; the file is
     // not left in place and treated as signed out.
@@ -588,6 +589,9 @@ pub(super) async fn product_state(
     }
     if let Some(voice) = voice {
         product = product.with_voice(voice);
+    }
+    if let Some(apps) = apps {
+        product = product.with_apps(apps);
     }
     // Terminals (docs/design/terminals.md): the engine bootstrap prepared
     // before the async runtime, when this build and process have one. With

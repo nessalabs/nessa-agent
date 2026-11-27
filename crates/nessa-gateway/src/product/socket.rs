@@ -2257,6 +2257,14 @@ async fn dispatch_authorized(
         ProductMethod::AppsTrusted | ProductMethod::AppsUntrust => {
             super::trusted_apps::dispatch(state, session, frame).await
         }
+        ProductMethod::AppsStarter
+        | ProductMethod::AppsReview
+        | ProductMethod::AppsInstall
+        | ProductMethod::AppsInstalled
+        | ProductMethod::AppsRead
+        | ProductMethod::AppsUninstall => {
+            super::installed_apps::dispatch(state, session, frame).await
+        }
         // Every other `conversation.` method. On a socket the record reads and
         // the subscriptions are served before this stage and never reach it.
         ProductMethod::ConversationCreate
@@ -3199,6 +3207,9 @@ mod tests {
     }
     mod vault_tests {
         include!("../../tests/product/socket/vault.rs");
+    }
+    mod installed_apps_tests {
+        include!("../../tests/product/socket/installed_apps.rs");
     }
 
     mod voice_tests {

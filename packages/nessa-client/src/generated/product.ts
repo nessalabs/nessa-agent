@@ -1768,6 +1768,106 @@ export interface AppsUntrustResult {
   requestId: string
   applied: boolean
 }
+/** One file of a static app package, as the manifest declares it. */
+export interface AppPackageAsset {
+  /** The file's path inside the package, exactly as the manifest declares it. */
+  path: string
+  /** The file's bytes, standard base64 with padding. */
+  bytes: string
+}
+/** A small static app package held inline: its manifest and every file it declares. Up to 16 KiB of decoded bytes and 8 files. Holding a package grants nothing. */
+export interface AppPackage {
+  /** The manifest's exact JSON bytes, standard base64 with padding. */
+  manifest: string
+  /** Every file the manifest declares, each once. */
+  assets: AppPackageAsset[]
+}
+/** What the gateway's package verifier found in a package: the facts a person reviews before installing it. Not evidence of who made it. */
+export interface AppReview {
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+  /** The version label the package declares. */
+  packageVersion: string
+  /** The HTML file the app opens on. */
+  entrypoint: string
+  /** How many files the package holds. */
+  assetCount: number
+  /** Lowercase hex SHA-256 of the package's exact manifest bytes. The manifest declares every asset's size and digest, so this names the whole package. */
+  digest: string
+}
+/** Make the starter static app package for a new app (apps.starter). Nothing is installed or kept. */
+export interface AppsStarterParams {
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+  /** The version label the package declares. */
+  packageVersion: string
+}
+/** A verified package and its review (apps.starter, apps.read). */
+export interface AppsPackageResult {
+  package: AppPackage
+  review: AppReview
+}
+/** Verify a package and say what it holds (apps.review). Nothing is installed or kept. */
+export interface AppsReviewParams {
+  package: AppPackage
+}
+/** Install a package the owner reviewed and approved (apps.install). The gateway verifies the bytes again and installs only if their digest is the one reviewed. */
+export interface AppsInstallParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  package: AppPackage
+  /** The digest the owner was shown and approved. A package whose digest differs is refused app_review_stale. */
+  reviewedDigest: string
+}
+/** One installed app. */
+export interface InstalledApp {
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+  /** The version label the package declares. */
+  packageVersion: string
+}
+/** The app apps.install installed. */
+export interface AppsInstallResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  app: InstalledApp
+}
+/** Every installed app, in identity order (apps.installed). An empty list means none is installed. */
+export interface AppsInstalledResult {
+  /** The installed apps. */
+  apps: InstalledApp[]
+}
+/** Read one installed app's verified package, to render it (apps.read). */
+export interface AppsReadParams {
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+}
+/** Remove one installed app and every file it holds (apps.uninstall). Other apps are untouched. */
+export interface AppsUninstallParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+}
+/** The app apps.uninstall removed. */
+export interface AppsUninstallResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+}
+/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. */
+export const AppsErrorCode = {
+  AppsNotConfigured: "apps_not_configured",
+  AppPackageInvalid: "app_package_invalid",
+  AppPackageTooLarge: "app_package_too_large",
+  AppReviewStale: "app_review_stale",
+  AppAlreadyInstalled: "app_already_installed",
+  AppNotInstalled: "app_not_installed",
+  AppsStorageUnavailable: "apps_storage_unavailable",
+  AppsAuditUnavailable: "apps_audit_unavailable",
+} as const
+export type AppsErrorCode = (typeof AppsErrorCode)[keyof typeof AppsErrorCode]
 /** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
 export interface McpServersRevokeParams {
   /** The revision the caller last listed. */
@@ -4387,7 +4487,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 148,
+  maxReadyMethods: 154,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4668,6 +4768,12 @@ export const ProductMethod = {
   McpServersRevoke: "mcpServers.revoke",
   AppsTrusted: "apps.trusted",
   AppsUntrust: "apps.untrust",
+  AppsStarter: "apps.starter",
+  AppsReview: "apps.review",
+  AppsInstall: "apps.install",
+  AppsInstalled: "apps.installed",
+  AppsRead: "apps.read",
+  AppsUninstall: "apps.uninstall",
   PhoneEndpoint: "phone.endpoint",
   PhoneAuthorize: "phone.authorize",
   PhoneStatus: "phone.status",
@@ -4834,6 +4940,12 @@ export const productReadyMethods = [
   "mcpServers.revoke",
   "apps.trusted",
   "apps.untrust",
+  "apps.starter",
+  "apps.review",
+  "apps.install",
+  "apps.installed",
+  "apps.read",
+  "apps.uninstall",
   "phone.endpoint",
   "phone.authorize",
   "phone.status",
@@ -4986,6 +5098,12 @@ export const productMethodGrants = {
   "mcpServers.revoke": "credential.manage",
   "apps.trusted": "credential.manage",
   "apps.untrust": "credential.manage",
+  "apps.starter": "credential.manage",
+  "apps.review": "credential.manage",
+  "apps.install": "credential.manage",
+  "apps.installed": "credential.manage",
+  "apps.read": "credential.manage",
+  "apps.uninstall": "credential.manage",
   "phone.endpoint": "server.read",
   "phone.authorize": "credential.manage",
   "phone.status": "credential.manage",

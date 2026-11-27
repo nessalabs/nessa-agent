@@ -9,8 +9,8 @@ pub use domain::static_package::{
     MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
 pub use infrastructure::inline::{
-    scaffold_inline_package, validate_inline_package, InlineAsset, InlinePackage, InlineRefusal,
-    ValidationReceipt,
+    encode_inline_package, scaffold_inline_package, validate_inline_package, verify_inline_package,
+    InlineAsset, InlinePackage, InlineRefusal, ValidationReceipt,
 };
 pub use infrastructure::manifest::{parse_manifest, scaffold_package, verify_package};
 

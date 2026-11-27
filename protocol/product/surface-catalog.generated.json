@@ -91,6 +91,14 @@
     {
       "method": "terminal.forgetSaved",
       "reason": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it."
+    },
+    {
+      "method": "apps.install",
+      "reason": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one."
+    },
+    {
+      "method": "apps.uninstall",
+      "reason": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one."
     }
   ],
   "methods": [
@@ -506,6 +514,34 @@
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": true
+    },
+    {
+      "name": "apps.starter",
+      "params": "AppsStarterParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "apps.review",
+      "params": "AppsReviewParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "apps.installed",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
+      "name": "apps.read",
+      "params": "AppsReadParams",
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
     },
     {
       "name": "phone.endpoint",

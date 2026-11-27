@@ -247,6 +247,14 @@ export {
   type GithubCode,
   type GithubConnection,
 } from "./generated/product.js"
+export { type CheckedAppPackage } from "./presentation/apps-api.js"
+export {
+  AppsErrorCode,
+  type AppPackage,
+  type AppPackageAsset,
+  type AppReview,
+  type InstalledApp,
+} from "./generated/product.js"
 export { type VoiceApi } from "./presentation/voice-api.js"
 export {
   NessaVoiceError,
