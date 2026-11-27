@@ -375,6 +375,7 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
         no_credentials(),
         &HashSet::new(),
         nessa_telemetry::Telemetry::off(),
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     )
     .unwrap();
     // Absent rather than present-and-broken: the conversation service answers a
@@ -412,6 +413,7 @@ fn every_configured_bundled_agent_that_can_be_built_is() {
         no_credentials(),
         &HashSet::new(),
         nessa_telemetry::Telemetry::off(),
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     )
     .unwrap();
     assert_eq!(built.providers.len(), 1);
@@ -452,6 +454,7 @@ async fn claude_is_asked_to_delete_a_session_with_the_credential_read_then() {
         Arc::new(Unreadable),
         &HashSet::new(),
         nessa_telemetry::Telemetry::off(),
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     )
     .unwrap();
     let Ok(ProviderSessionHandler::Ask(eraser)) = built.erasers.handler(Some(AgentId::Claude))
@@ -597,6 +600,7 @@ fn fixed_provider_composition_defers_opencode_without_marking_it_unavailable() {
         no_credentials(),
         &HashSet::new(),
         nessa_telemetry::Telemetry::off(),
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     )
     .unwrap();
     assert!(!built.providers.contains_key(&AgentId::Opencode));
@@ -628,6 +632,7 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
         no_credentials(),
         &HashSet::new(),
         nessa_telemetry::Telemetry::off(),
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     )
     .is_err());
 }

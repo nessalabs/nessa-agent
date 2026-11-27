@@ -717,6 +717,7 @@ fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageIn
 /// is why the agents left out come back in two groups rather than one. See
 /// [`ConfiguredAgents::unavailable`].
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn providers(
     config: &AgentsConfig,
     directory: &Path,
@@ -725,6 +726,7 @@ pub(super) fn providers(
     credentials: Arc<dyn AgentCredentialSource>,
     deferred: &HashSet<AgentId>,
     telemetry: nessa_telemetry::Telemetry,
+    agent_clock: Arc<dyn nessa_sdk::infrastructure::clock::Clock>,
 ) -> Result<ConfiguredAgents, RunError> {
     let configured: HashSet<_> = config
         .agents()
@@ -761,6 +763,7 @@ pub(super) fn providers(
         permission_rules: permission_memory.clone(),
         review_notices: permission_memory.clone(),
         telemetry,
+        agent_clock,
     };
     for (agent, runtime) in config.agents() {
         if agent == AgentId::Opencode || deferred.contains(&agent) {
@@ -1022,6 +1025,11 @@ pub(super) struct ProviderDependencies {
         Arc<dyn nessa_sdk::application::agent_execution::permissions::ReviewNotices>,
     /// Where each agent's written execution audit is also told as turn spans.
     pub(super) telemetry: nessa_telemetry::Telemetry,
+    /// The one clock every agent binding measures on. One, not one per
+    /// binding: a model change hands the new binding the old one's trace
+    /// store, whose telemetry exporter turns span times into wall time with
+    /// the clock it was installed with, so every binding must share it.
+    pub(super) agent_clock: Arc<dyn nessa_sdk::infrastructure::clock::Clock>,
 }
 
 /// Claude and Codex keep the composed rules. OpenCode is given none, so it
@@ -1055,7 +1063,9 @@ pub(super) mod build {
     use crate::agents::application::NativeHooksAgent;
     use crate::conversation::{
         application::ProviderSessionEraser,
-        infrastructure::{BindingSessionEraser, DurableExecutionAudit, ObservedExecutionAudit},
+        infrastructure::{
+            BindingSessionEraser, DurableExecutionAudit, GenAiTelemetry, ObservedExecutionAudit,
+        },
     };
     use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_sdk::domain::agent_execution::leases::SandboxProfiles;
@@ -1399,6 +1409,9 @@ pub(super) mod build {
         let (permission_rules, review_notices) = super::remembered_rules(agent, dependencies);
         acp.permission_rules = permission_rules;
         acp.review_notices = review_notices;
+        // Shared by every binding, so the trace store a model change hands
+        // over keeps measuring on the clock its exporter converts with.
+        acp.clock = dependencies.agent_clock.clone();
         let prompt = system_prompt(config)?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
@@ -1462,6 +1475,21 @@ pub(super) mod build {
                 )
             }
         };
+        // The SDK's tool and model spans, told inside each turn's span. With
+        // telemetry off the store keeps them for views only. A store that
+        // captures content is never forwarded: a captured tool title can be
+        // built from the model's arguments, and it names the span.
+        if dependencies.telemetry.is_on() {
+            if let Some(traces) = provider
+                .traces()
+                .filter(|traces| !traces.capture().enabled())
+            {
+                traces.set_exporter(Arc::new(GenAiTelemetry::new(
+                    dependencies.telemetry.clone(),
+                    dependencies.agent_clock.clone(),
+                )));
+            }
+        }
         Ok(ProviderComposition {
             workspace: published_workspace,
             provider,

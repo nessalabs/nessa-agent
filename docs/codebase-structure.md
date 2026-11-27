@@ -2769,7 +2769,11 @@ for what is told live with what they describe: `nessa-conversation`'s
 `application/service/decision_traces.rs` (the `decision` span), emitted by the
 submission path in `application/service.rs` and by
 `infrastructure/observed_audit.rs`, which wraps each agent's execution audit
-and emits only what was written. Where each send came from is audit, not
+and emits only what was written. `infrastructure/gen_ai_telemetry.rs`
+forwards the SDK's GenAI spans inside each turn's span; `nessa-server`'s
+`composition/agent.rs` installs it per binding through
+`LocalTraceStore::set_exporter` when telemetry is on and the store does not
+capture content. Where each send came from is audit, not
 telemetry: `infrastructure/turn_origin_audit.rs` over the shared
 `infrastructure/evidence_record.rs`. `nessa-server`'s
 `composition/telemetry.rs` turns sinks on from `config.json` and flushes them
