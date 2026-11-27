@@ -10160,12 +10160,6 @@ const steps = {
       await card.waitFor({ timeout: 10_000 })
       return card.getAttribute("data-app-review")
     }
-    const install = async (id, answer) => {
-      const digest = await review(id)
-      await page.evaluate((yes) => window.__fakeHostAppAnswers.push(yes), answer)
-      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
-      return digest
-    }
     await run.exclusive(async () => {
       if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
       await page
@@ -10228,7 +10222,20 @@ const steps = {
       for (const phase of ["requested", "installed"])
         if (!installs.some((record) => record.phase === phase))
           failures.push(`the apps audit has no ${phase} install record`)
-      await install(kept, true)
+      // Its preview drawn before Install, so no sandbox load is cut off.
+      await review(kept)
+      await waitFor(async () => {
+        const proxy = await (await page.$("[data-app-preview] iframe"))?.contentFrame()
+        return (
+          (await proxy
+            ?.childFrames()[0]
+            ?.locator("h1")
+            .count()
+            .catch(() => 0)) === 1
+        )
+      }, 15_000)
+      await page.evaluate(() => window.__fakeHostAppAnswers.push(true))
+      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
       await page
         .locator(`[data-installed-app="${kept}"]`)
         .waitFor({ timeout: 10_000 })

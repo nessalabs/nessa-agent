@@ -374,10 +374,19 @@ function AppPreview({
       setUnshown(true)
       return
     }
-    const frame = mountStaticApp(at, sandbox, html, {
-      title: `Preview of ${checked.review.appId}`,
-    })
-    return () => frame.remove()
+    // Framed on the next task, not now: an effect run only to be undone (a
+    // development double run, or a review replaced at once) then frames
+    // nothing, so no proxy request is started only to be aborted.
+    let frame: { remove(): void } | undefined
+    const later = setTimeout(() => {
+      frame = mountStaticApp(at, sandbox, html, {
+        title: `Preview of ${checked.review.appId}`,
+      })
+    }, 0)
+    return () => {
+      clearTimeout(later)
+      frame?.remove()
+    }
   }, [checked, sandbox])
   if (!sandbox || unshown)
     return (
