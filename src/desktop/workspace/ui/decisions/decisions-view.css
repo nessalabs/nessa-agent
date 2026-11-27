@@ -64,7 +64,6 @@
   color: var(--muted-foreground);
 }
 
-.decisions-view-bar > button:hover,
 .decisions-view-bar > button[aria-expanded="true"],
 .decisions-view-bar > button[aria-pressed="true"] {
   color: var(--foreground);
@@ -114,7 +113,6 @@
   font-family: var(--nessa-font-mono);
 }
 
-.decisions-view-queue .decisions-view-queue-option:hover,
 .decisions-view-queue .decisions-view-queue-option[data-highlighted="true"] {
   background: color-mix(
     in oklab,
@@ -166,14 +164,19 @@
   flex-direction: column;
   gap: 0;
   padding: calc(var(--spacing) * 10) var(--decisions-inset) calc(var(--spacing) * 2);
-  animation: decisions-view-in var(--nessa-motion-duration-normal)
+  animation: decisions-view-in var(--nessa-motion-duration-fast)
     var(--nessa-motion-easing-standard);
 }
 
+/*
+ * The next decision arrives with a short fade and a 2px rise: it is seen on
+ * every Later and Decide, so it only says "this is new" and gets out of the
+ * way. The kit's standard curve is a strong ease-out, so it starts at once.
+ */
 @keyframes decisions-view-in {
   from {
     opacity: 0;
-    translate: 0 4px;
+    translate: 0 2px;
   }
 }
 
@@ -266,8 +269,23 @@
   color: var(--muted-foreground);
 }
 
-.decisions-view-decide [data-decisions-later]:hover {
-  color: var(--foreground);
+/*
+ * Hover only where a pointer hovers: a tap on a touch screen would leave
+ * the ink or tint stuck on.
+ */
+@media (hover: hover) and (pointer: fine) {
+  .decisions-view-bar > button:hover,
+  .decisions-view-decide [data-decisions-later]:hover {
+    color: var(--foreground);
+  }
+
+  .decisions-view-queue .decisions-view-queue-option:hover {
+    background: color-mix(
+      in oklab,
+      var(--foreground) var(--nessa-state-hover),
+      transparent
+    );
+  }
 }
 
 .decisions-view-decide .decisions-view-actions > [data-decisions-send] {
@@ -284,8 +302,9 @@
   gap: calc(var(--spacing) * 9);
   margin: 0 auto;
   padding: calc(var(--spacing) * 0.5) 0 calc(var(--spacing) * 16);
-  animation: decisions-view-in var(--nessa-motion-duration-normal)
-    var(--nessa-motion-easing-standard);
+  /* A beat after the column, so the eye lands on the question first. */
+  animation: decisions-view-in var(--nessa-motion-duration-fast)
+    var(--nessa-motion-easing-standard) 40ms backwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
