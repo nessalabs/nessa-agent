@@ -334,9 +334,11 @@ impl ConversationService {
         let Some(failure) = failure else {
             self.pick_done(&waiting.conversation);
             if let Some(settled) = &pick.settled {
-                self.inner
-                    .decision_traces
-                    .settled(&waiting.conversation, settled);
+                self.inner.decision_traces.settled(
+                    &self.telemetry(),
+                    &waiting.conversation,
+                    settled,
+                );
             }
             return Ok(());
         };

@@ -170,6 +170,9 @@ async fn run_local_conversation_while(root: &Path, hold_discovery: bool) -> Evid
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
+            turn_origin_audit: Arc::new(
+                crate::conversation_test_support::RecordingTurnOriginAudit::default(),
+            ),
             file_link_audit: Arc::new(
                 DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
                     .unwrap(),
@@ -230,6 +233,7 @@ async fn run_local_conversation_while(root: &Path, hold_discovery: bool) -> Evid
             caller("send-1"),
             "turn-1".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "read this".into(),
                 images: Vec::new(),

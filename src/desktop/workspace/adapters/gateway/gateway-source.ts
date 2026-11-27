@@ -1827,6 +1827,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             text,
             attachments,
             ...(uploads.length ? { uploads } : {}),
+            ...(message.spoken ? { spoken: true } : {}),
             mode: "queued",
           })
         } catch (error) {

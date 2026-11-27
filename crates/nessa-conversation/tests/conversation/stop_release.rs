@@ -139,6 +139,9 @@ impl Fixture {
                 metadata: repository.clone(),
                 mode_audit: Arc::new(AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
+                turn_origin_audit: Arc::new(
+                    crate::conversation_test_support::RecordingTurnOriginAudit::default(),
+                ),
                 file_link_audit: Arc::new(
                     crate::conversation_test_support::RecordingFileLinkAudit::default(),
                 ),
@@ -245,6 +248,7 @@ impl Fixture {
                     caller,
                     action,
                     SubmittedMessage {
+                        sent_from: None,
                         uploads: Vec::new(),
                         text: "Afterwards".into(),
                         images: Vec::new(),

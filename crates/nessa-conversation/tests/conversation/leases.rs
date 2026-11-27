@@ -467,6 +467,9 @@ fn harness_working_in(
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
+            turn_origin_audit: Arc::new(
+                crate::conversation_test_support::RecordingTurnOriginAudit::default(),
+            ),
             file_link_audit: Arc::new(
                 DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
                     .unwrap(),
@@ -529,6 +532,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    sent_from: None,
                     uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
@@ -1003,6 +1007,7 @@ async fn l5_l11_a_lease_whose_record_failed_to_save_ends_with_the_opening_it_fai
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
@@ -1045,6 +1050,7 @@ async fn l8_a_turn_running_past_the_cleanup_deadline_settles_and_the_lease_is_ac
             caller("turn-1"),
             "turn-1".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
@@ -1144,6 +1150,7 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
@@ -1517,6 +1524,7 @@ async fn l5_l11_an_opening_whose_lease_cannot_be_saved_holds_nothing_and_opens_a
             caller("turn-2"),
             "turn-2".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "hello".into(),
                 images: Vec::new(),
@@ -1978,6 +1986,7 @@ impl Harness {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    sent_from: None,
                     uploads: Vec::new(),
                     text: "hello".into(),
                     images: Vec::new(),
@@ -2178,6 +2187,7 @@ async fn revoke_drive(store: &LocalConversationStore, id: &ConversationId, recei
 
 fn drive_message() -> SubmittedMessage {
     SubmittedMessage {
+        sent_from: None,
         uploads: Vec::new(),
         text: "hello".into(),
         images: Vec::new(),
@@ -3081,6 +3091,7 @@ async fn a_follower_reads_each_setup_step_while_the_machine_is_made_and_how_long
                     caller("turn-1"),
                     "turn-1".into(),
                     SubmittedMessage {
+                        sent_from: None,
                         uploads: Vec::new(),
                         text: "hello".into(),
                         images: Vec::new(),
@@ -3181,6 +3192,7 @@ async fn a_follower_waiting_behind_a_send_reads_the_first_setup_step_when_it_com
                     caller("turn-1"),
                     "turn-1".into(),
                     SubmittedMessage {
+                        sent_from: None,
                         uploads: Vec::new(),
                         text: "hello".into(),
                         images: Vec::new(),

@@ -142,6 +142,9 @@ impl Fixture {
                 metadata: repository.clone(),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
+                turn_origin_audit: Arc::new(
+                    crate::conversation_test_support::RecordingTurnOriginAudit::default(),
+                ),
                 file_link_audit: audit.clone(),
                 attachments: None,
                 summaries: summaries.clone(),
@@ -202,6 +205,7 @@ impl Fixture {
                     caller(&action),
                     action.clone(),
                     SubmittedMessage {
+                        sent_from: None,
                         uploads: Vec::new(),
                         text,
                         images: Vec::new(),
@@ -768,6 +772,7 @@ async fn desktop_stop_after_reopening(attachment_waits: bool) {
         caller("reopens"),
         "reopens".into(),
         SubmittedMessage {
+            sent_from: None,
             uploads: Vec::new(),
             text: "Reopens".into(),
             images: Vec::new(),

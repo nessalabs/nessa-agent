@@ -331,6 +331,13 @@ import {
  *               its workspace, and the person's message draws both. The
  *               window runs under the packaged app's connect-src, so a read
  *               of the attachments' bytes the app would block fails here too
+ *   telemetry   a typed message from the window: its turn-origin audit record
+ *               says a person sent it through `nessa-panel` (the desktop window), not spoken,
+ *               and the gateway (started with `telemetry.otel` on, naming a
+ *               fake collector) exports its `nessa.turn` span, admitted
+ *               and completed, holding its ids and none of its
+ *               words. The `voice` step checks its spoken turn's record says
+ *               spoken
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -471,6 +478,7 @@ import {
   disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
+import { startFakeOtlp } from "./lib/fake-otlp.mjs"
 import { freePort } from "./lib/server.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -2655,6 +2663,26 @@ async function startedBeside(run, client, step, n, failures) {
     "completed",
     failures,
   )
+}
+
+/**
+ * Every turn-origin audit record the gateway has written
+ * (`turn_origin_audit.rs`): one per attempt at a send.
+ */
+function turnOrigins(run) {
+  const audit = join(
+    run.stack.gateway.directory,
+    "ci",
+    "instances",
+    INSTANCE,
+    "conversations",
+    "audit",
+    "turn-origins",
+  )
+  if (!existsSync(audit)) return []
+  return readdirSync(audit)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => JSON.parse(readFileSync(join(audit, name), "utf8")))
 }
 
 /**
@@ -6161,7 +6189,22 @@ const steps = {
       `Um, please ${STRESS.reply} reply r${step.index} voice s${run.knobs.seed}`,
     )
     run.sent.set(run.main.id, (run.sent.get(run.main.id) ?? 0) + 1)
-    await settled(run, run.main.id, seen, text, "completed", failures)
+    const { turn: spoken } = await settled(
+      run,
+      run.main.id,
+      seen,
+      text,
+      "completed",
+      failures,
+    )
+    // Said aloud through the voice panel: the turn's origin says both.
+    if (spoken) {
+      const origin = turnOrigins(run).find(
+        (record) => record.target?.executionId === spoken.executionId,
+      )
+      if (origin?.sentFrom?.spoken !== true || origin?.sentFrom?.client !== "nessa-panel")
+        failures.push(`the spoken turn's origin record is ${JSON.stringify(origin)}`)
+    }
     await expectShown(run.page, `${SAYS.echo}${text}`, failures)
     const handed = await waitFor(
       () => realtime.told().some((told) => told === `Agent reply:\n${SAYS.echo}${text}`),
@@ -10036,6 +10079,55 @@ const steps = {
       await reloaded.screenshot({
         path: join(run.evidence, `transcript-${run.engine ?? "window"}-detailed.png`),
       })
+  },
+
+  async telemetry(run, step, failures) {
+    const collector = run.stack.collector
+    if (!collector) {
+      failures.push("the stack was started without the fake OpenTelemetry collector")
+      return
+    }
+    const text = prompt(run, STRESS.reply, step, " telemetry")
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // Where it came from is audit: written before the turn was admitted.
+    const origin = turnOrigins(run).find(
+      (record) =>
+        record.target?.conversationId === run.main.id &&
+        record.target?.executionId === turn.executionId,
+    )
+    if (
+      origin?.kind !== "conversation_turn_origin" ||
+      origin.origin?.kind !== "person" ||
+      origin.sentFrom?.client !== "nessa-panel" ||
+      origin.sentFrom?.spoken !== false
+    )
+      failures.push(`the typed turn's origin record is ${JSON.stringify(origin)}`)
+    // What happened to it is telemetry: the turn's span, ended when the agent
+    // finished it, reaches the collector within the exporter's batch delay.
+    // (`nessa.turn.dispatched` is told only for a turn that waited in the
+    // queue; this one ran at once.)
+    const exported = await waitFor(
+      () =>
+        collector.holds(
+          run.main.id,
+          turn.executionId,
+          "nessa.turn",
+          "nessa.turn.admitted",
+          "completed",
+        ),
+      20_000,
+    )
+    if (!exported)
+      failures.push(
+        `the collector got ${collector.exports()} exports, none telling turn ${turn.executionId} admitted and completed`,
+      )
+    if (!collector.holds("nessa.origin.kind", "person", "nessa-panel"))
+      failures.push("no exported turn says it came from a person through nessa-panel")
+    // Ids, kinds and counts only: never what anyone wrote.
+    if (collector.anyHolds(text))
+      failures.push("an export holds the words of the message")
   },
 
   async trace(run, step, failures) {
@@ -14531,6 +14623,9 @@ async function startStack(options) {
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
+  // The `telemetry` step's collector. With it the gateway exports for the
+  // whole run, so every other step also runs with telemetry on.
+  const collector = knobs.telemetries > 0 ? await startFakeOtlp() : null
   const environment = {
     ...(nativeContext ? { CLAUDE_CONFIG_DIR: nativeContext.baseline } : {}),
     ...(realtime
@@ -14588,6 +14683,9 @@ async function startStack(options) {
           : undefined,
       environment,
       servers,
+      telemetry: collector
+        ? { otel: { enabled: true, endpoint: collector.endpoint } }
+        : undefined,
       webhooks:
         knobs.webhooks > 0
           ? [
@@ -14635,6 +14733,7 @@ async function startStack(options) {
     await stack?.close()
     await github?.close()
     await realtime?.close()
+    await collector?.close()
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -14645,6 +14744,7 @@ async function startStack(options) {
     } finally {
       await github?.close()
       await realtime?.close()
+      await collector?.close()
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -14657,6 +14757,7 @@ async function startStack(options) {
     nativeListen,
     github,
     realtime,
+    collector,
     scenario,
     nativeContext,
     // Removed when the stack closes.

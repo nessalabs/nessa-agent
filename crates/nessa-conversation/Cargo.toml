@@ -30,6 +30,7 @@ nessa-protocol = { path = "../nessa-protocol" }
 nessa-sdk = { path = "../nessa-sdk" }
 nessa-sync = { workspace = true }
 nessa-timer = { path = "../nessa-timer", features = ["runtime"] }
+nessa-telemetry = { path = "../nessa-telemetry" }
 nessa-vault = { path = "../nessa-vault" }
 async-trait = "0.1"
 base64 = "0.22"

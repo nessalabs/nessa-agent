@@ -666,6 +666,8 @@ impl CompositionRoot {
             use crate::core::self_restart::RestartEnd;
             tracing::info!("nessa starting again to apply its saved configuration");
             restart.finish(RestartEnd::Exec);
+            // exec replaces the process: what telemetry holds goes first.
+            super::telemetry::flush_at_exit();
             let error = crate::core::self_restart::exec_again();
             restart.finish(RestartEnd::ExecFailed);
             // A serve failure: non-zero, so launchd starts a managed gateway

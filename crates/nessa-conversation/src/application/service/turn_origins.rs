@@ -24,6 +24,8 @@
 //! - The turn's surface is [`EVENT_SURFACE_PREFIX`] and an event source: the
 //!   gateway admitted an external event. A credential is asked first, so a
 //!   credential is never read as an event.
+//! - The turn's surface is [`AUTO_PICK_SURFACE`]: auto-pick sent the
+//!   recommended choice for the owner, who had not answered.
 //! - Otherwise the surface is the credential the person signed in with, and
 //!   the credential registry says what it was issued to: their phone, a token
 //!   on a computer, or another device.
@@ -32,7 +34,7 @@ use nessa_auth::{
     application::pairing::{CredentialDevice, CredentialDeviceSource},
     domain::CredentialId,
 };
-use nessa_protocol::conversation::domain::ConversationId;
+use nessa_protocol::conversation::{domain::ConversationId, view::AUTO_PICK_SURFACE};
 use nessa_sdk::{
     application::agent_execution::sessions::InvocationRecord,
     domain::agent_execution::{executions::Initiator, prompts::MessageSender},
@@ -97,6 +99,9 @@ pub enum TurnOrigin {
     Continued { execution: String },
     /// The gateway admitted it for an external event from this source.
     Event { source: String },
+    /// Auto-pick sent the recommended choice of a decision for the owner,
+    /// who had not answered in the time they set.
+    AutoPick,
     /// An app sent it on the person's behalf, from this tool call.
     App { server: String, tool: String },
     /// The gateway wrote it itself, such as a background command's outcome.
@@ -137,36 +142,49 @@ pub enum ChainEnd {
 
 impl ConversationService {
     /// The id of the question waiting in `thread` that this message answers:
-    /// the one waiting now, when the message is the owner's own, read as
-    /// `read_turn` will read its saved turn. A usage-limit continuation, an
-    /// external event, or someone the thread is shared with does not answer
-    /// it. A read that fails answers nothing and is said in the log, so the
-    /// question stays up rather than the message being refused.
+    /// the one waiting now, when the message is the owner's own, as its
+    /// `origin` was read ([`Self::submission_origin`]). A usage-limit
+    /// continuation, auto-pick, an external event, or someone the thread is
+    /// shared with does not answer it, and nor does a message whose origin
+    /// could not be read (`None`, said in the log where it was read). A
+    /// waiting question that cannot be read answers nothing and is said in
+    /// the log, so the question stays up rather than the message being
+    /// refused.
     pub(super) async fn waiting_ask_answered(
         &self,
         thread: &ConversationId,
-        execution: &str,
-        caller: &ConversationCaller,
-        initiator: &Initiator,
+        origin: Option<&TurnOrigin>,
     ) -> Option<String> {
-        let waiting = match self.inner.summaries.load(thread).await {
-            Ok(summary) => summary?.ask()?.ask_id.clone(),
+        if !matches!(origin, Some(TurnOrigin::Person { .. })) {
+            return None;
+        }
+        match self.inner.summaries.load(thread).await {
+            Ok(summary) => Some(summary?.ask()?.ask_id.clone()),
             Err(error) => {
                 tracing::warn!(%thread, ?error, "the waiting ask could not be read");
-                return None;
-            }
-        };
-        match Origins::new(self)
-            .sent_as_person(thread, execution, &caller.surface_id, initiator)
-            .await
-        {
-            Ok(TurnOrigin::Person { .. }) => Some(waiting),
-            Ok(_) => None,
-            Err(error) => {
-                tracing::warn!(%thread, ?error, "who sent the message could not be read");
                 None
             }
         }
+    }
+
+    /// How a submission about to be saved arrived, read as `read_turn` will
+    /// read its saved turn: the one reading of a turn's origin, asked before
+    /// the turn exists so its origin can be recorded first.
+    ///
+    /// # Errors
+    /// [`ConversationError::Unavailable`] when the credential registry cannot
+    /// be read; the scheduled-message store's own error when it cannot.
+    pub(super) async fn submission_origin(
+        &self,
+        thread: &ConversationId,
+        execution: &str,
+        sender: &MessageSender,
+        surface: &str,
+        initiator: &Initiator,
+    ) -> Result<TurnOrigin, ConversationError> {
+        Origins::new(self)
+            .sent(thread, execution, sender, surface, initiator)
+            .await
     }
 
     /// Read turn `execution` of `thread`, then each turn its input came from,
@@ -296,7 +314,37 @@ impl ConversationService {
     }
 }
 
+impl Device {
+    /// The device's one name, as `read_turn`, the turn-origin audit record
+    /// and telemetry all say it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Phone => "phone",
+            Self::Computer => "computer",
+            Self::PairedDevice => "pairedDevice",
+            Self::Peer => "peer",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 impl TurnOrigin {
+    /// The origin's one name, as `read_turn`, the turn-origin audit record
+    /// and telemetry all say it.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Person { .. } => "person",
+            Self::Grant { .. } => "grant",
+            Self::Agent { .. } => "agent",
+            Self::Resumed { .. } => "resumed",
+            Self::Continued { .. } => "continued",
+            Self::Event { .. } => "event",
+            Self::AutoPick => "autoPick",
+            Self::App { .. } => "app",
+            Self::Internal => "internal",
+        }
+    }
+
     /// A person sent it: the owner, or someone it is shared with.
     pub fn is_a_person(&self) -> bool {
         matches!(self, Self::Person { .. } | Self::Grant { .. })
@@ -333,7 +381,28 @@ impl<'a> Origins<'a> {
                 execution: source.as_str().to_owned(),
             });
         }
-        match record.request.user_message.sender() {
+        self.sent(
+            thread,
+            record.request.execution_id.as_str(),
+            record.request.user_message.sender(),
+            record.actor.surface_id(),
+            record.initiation.initiator(),
+        )
+        .await
+    }
+
+    /// How an input sent by `sender` arrived, from the facts it is saved
+    /// with: the same reading for a saved turn and for a submission about to
+    /// be saved.
+    async fn sent(
+        &mut self,
+        thread: &ConversationId,
+        execution: &str,
+        sender: &MessageSender,
+        surface: &str,
+        initiator: &Initiator,
+    ) -> Result<TurnOrigin, ConversationError> {
+        match sender {
             MessageSender::Agent(source) => {
                 return Ok(TurnOrigin::Agent {
                     thread: source.conversation().to_owned(),
@@ -349,18 +418,13 @@ impl<'a> Origins<'a> {
             MessageSender::Internal => return Ok(TurnOrigin::Internal),
             MessageSender::Person => {}
         }
-        self.sent_as_person(
-            thread,
-            record.request.execution_id.as_str(),
-            record.actor.surface_id(),
-            record.initiation.initiator(),
-        )
-        .await
+        self.sent_as_person(thread, execution, surface, initiator)
+            .await
     }
 
     /// How a turn sent with the person as its sender arrived: a usage-limit
-    /// continuation, an external event, or the person (or a grant) on a
-    /// device. Read from the facts saved at admission, which a submission
+    /// continuation, auto-pick, an external event, or the person (or a
+    /// grant) on a device. Read from the facts saved at admission, which a submission
     /// also has before it is saved.
     async fn sent_as_person(
         &mut self,
@@ -373,6 +437,9 @@ impl<'a> Origins<'a> {
             if let Some(causal) = store.continued_from(&thread.to_string(), execution).await? {
                 return Ok(TurnOrigin::Continued { execution: causal });
             }
+        }
+        if surface == AUTO_PICK_SURFACE {
+            return Ok(TurnOrigin::AutoPick);
         }
         let device = self.device(surface).await?;
         if device == Device::Unknown {

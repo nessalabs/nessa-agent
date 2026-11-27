@@ -1,16 +1,16 @@
 # Telemetry for Nessa: SDK, gateway, desktop
 
-Status: proposed. Research behind
+Status: superseded in part by
+[ADR 1491](../../adr/todo/1491-one-telemetry-dispatcher.md). Research behind
 [ADR 195](../../adr/todo/195-tracing-is-the-telemetry-port.md), argued in
 [#195](https://github.com/nessalabs/nessa-agent/issues/195). The desktop
-startup log in section 2.3 is implemented, and so is a first, narrow OTLP
-export: the gateway sends each decision's `decision` span (target
-`nessa_conversation::decisions`, `decision_traces.rs`) and nothing else,
-only when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
-is set (`nessa-gateway/src/core/logging.rs`); it still reads those through
-the exporter's own lookup until the env seam of slice 2 lands. The rest of this design is not;
-each slice in section 5 is a sub-issue of #195. Paths are relative to the
-repository root. Line numbers were read at `19d42ff1`.
+startup log in section 2.3 is implemented. Export no longer goes through a
+`tracing` layer: the gateway tells turns (`nessa.turn`) and decisions
+(`decision`) as `nessa-telemetry` events, sent to the sinks `config.json`'s
+`telemetry` section turns on (ADR 1491); an `OTEL_EXPORTER_OTLP_*` variable
+alone turns nothing on. The research below still describes the SDK's events
+and the slices not yet built (tool spans, cross-process propagation). Paths
+are relative to the repository root. Line numbers were read at `19d42ff1`.
 
 ## 1. What we want
 
@@ -394,11 +394,10 @@ each hop below says which of the two it delivers.
 
 **nessa-server (gateway)**
 
-- Env seam: no Nessa-invented switch. The standard
+- Env seam (superseded by ADR 1491: `config.json` `telemetry.otel` is the
+  switch, and these names only say where). The standard
   `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_HEADERS` names and
-  `RUST_LOG` are read through `EnvSource` into `Environment`; OTLP export is
-  on exactly when the endpoint is set, which is the OTel convention every
-  operator already knows. The exporter builder gets values and has its own
+  `RUST_LOG` are read through `EnvSource` into `Environment`. The exporter builder gets values and has its own
   env lookup disabled. Interpretation is
   `TelemetryConfig::from_environment(&Environment)`, a pure function with
   tests. `NESSA_RUNTIME_FINGERPRINT` and `NESSA_AGENT_PATH` move behind the
@@ -481,7 +480,7 @@ each hop below says which of the two it delivers.
 
 | Process | Default | Override |
 |---|---|---|
-| gateway | text log + rolling JSON trace files; OTLP off | `OTEL_EXPORTER_OTLP_ENDPOINT` turns OTLP on; `OTEL_EXPORTER_OTLP_HEADERS`, `RUST_LOG` via plist |
+| gateway | text log + rolling JSON trace files; OTLP off | `config.json` `telemetry.otel.enabled` turns OTLP on (ADR 1491); its `endpoint`, else the standard `OTEL_EXPORTER_OTLP_*` names, say where; `RUST_LOG` via plist |
 | desktop host | text `host.log` | none in the first slice |
 | nessa-mcp | stderr, INFO | `--log-level` argv |
 | SDK embedder | nothing installed | whatever subscriber they build |
@@ -623,5 +622,5 @@ timer, and whether any harness forwards `_meta` to tool calls.
 | `RunObserver` port in nessa-mcp | one `info_span!` around the existing bracket | none |
 | `HostTelemetry` port on `HostDependencies` | the subscriber is composition, same as the gateway | none |
 | Shell `Telemetry` port | deferred until a second consumer exists; gateway span covers the request | UI-side polling latency is not measured in the first release |
-| `NESSA_TELEMETRY`, `NESSA_LOG_FORMAT`, `NESSA_TELEMETRY_SAMPLE_RATIO`, `NESSA_OTLP_*` names | the standard `OTEL_EXPORTER_OTLP_*` names only; OTLP is on when an endpoint is set | sampling is always-on until someone needs less; there is no "off" for the bounded local file |
+| `NESSA_TELEMETRY`, `NESSA_LOG_FORMAT`, `NESSA_TELEMETRY_SAMPLE_RATIO`, `NESSA_OTLP_*` names | `config.json` `telemetry.otel` turns OTLP on (ADR 1491); the standard `OTEL_EXPORTER_OTLP_*` names only say where, never whether | sampling is always-on until someone needs less; there is no "off" for the bounded local file |
 | Slices 3a/3b and 5a/5b | one slice each | none |

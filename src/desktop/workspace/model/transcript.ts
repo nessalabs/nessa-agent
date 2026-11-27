@@ -205,6 +205,11 @@ export interface TurnMessage {
   readonly observedInput?: string | null
   readonly delivery?: Delivery
   /**
+   * Set on the person's message when they said it aloud (Talk). Kept so a
+   * resend says the same; the source records it, nothing here shows it.
+   */
+  readonly spoken?: true
+  /**
    * Set on the agent's reply while its turn still runs or waits to, as the
    * source reported the turn. Absent once the turn ended, however it ended:
    * a settled reply folds each run of its steps into one line

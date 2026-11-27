@@ -144,7 +144,7 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             })
         }
         ExecutionAuditRecord::Finished(finish) => {
-            json!({"kind":"execution_finished","sessionId":finish.session_id().as_str(),"executionId":finish.execution_id().as_str(),"before":"active","after":"released","origin":{"kind":"runtime"},"result":match finish.result() { Ok(outcome)=>json!({"outcome":match outcome {ExecutionOutcome::Completed=>"completed",ExecutionOutcome::OutputLimit=>"output_limit",ExecutionOutcome::RequestLimit=>"request_limit",ExecutionOutcome::Refused=>"refused",ExecutionOutcome::Cancelled=>"cancelled"}}),Err(cause)=>json!({"failure":reason(cause)}) }})
+            json!({"kind":"execution_finished","sessionId":finish.session_id().as_str(),"executionId":finish.execution_id().as_str(),"before":"active","after":"released","origin":{"kind":"runtime"},"result":match finish.result() { Ok(outcome)=>json!({"outcome":execution_outcome(outcome)}),Err(cause)=>json!({"failure":reason(cause)}) }})
         }
         ExecutionAuditRecord::SessionClosed(record) => {
             let closure = record.closure();
@@ -312,7 +312,7 @@ fn admission_stage(stage: AdmissionAuditStage) -> &'static str {
         AdmissionAuditStage::Owned => "owned",
     }
 }
-fn invocation_stage(stage: InvocationStage) -> &'static str {
+pub(super) fn invocation_stage(stage: InvocationStage) -> &'static str {
     match stage {
         InvocationStage::Queued => "queued",
         InvocationStage::Running => "running",
@@ -321,7 +321,7 @@ fn invocation_stage(stage: InvocationStage) -> &'static str {
         InvocationStage::Cancelled => "cancelled",
     }
 }
-fn scheduling_cause(cause: SchedulingCause) -> &'static str {
+pub(super) fn scheduling_cause(cause: SchedulingCause) -> &'static str {
     match cause {
         SchedulingCause::Submitted => "submitted",
         SchedulingCause::Dispatched => "dispatched",
@@ -344,7 +344,7 @@ fn steering_stage(stage: SteeringAuditStage) -> &'static str {
         SteeringAuditStage::Injected => "injected",
     }
 }
-fn submission_mode(mode: SubmissionMode) -> &'static str {
+pub(super) fn submission_mode(mode: SubmissionMode) -> &'static str {
     match mode {
         SubmissionMode::Immediate => "immediate",
         SubmissionMode::Queued => "queued",
@@ -504,8 +504,21 @@ fn deadline_basis(deadline: &PermissionReviewDeadline) -> Value {
         "stopsTurn": deadline.stops_turn(),
     })
 }
-fn reason(value: &PermissionCancellationReason) -> Value {
-    let code = match value.view() {
+/// The name of what a finished execution reported.
+pub(super) fn execution_outcome(outcome: &ExecutionOutcome) -> &'static str {
+    match outcome {
+        ExecutionOutcome::Completed => "completed",
+        ExecutionOutcome::OutputLimit => "output_limit",
+        ExecutionOutcome::RequestLimit => "request_limit",
+        ExecutionOutcome::Refused => "refused",
+        ExecutionOutcome::Cancelled => "cancelled",
+    }
+}
+
+/// The code of why an execution was stopped; a host's own reason is told
+/// only as `custom`, never its explanation.
+pub(super) fn cancellation_reason(value: &PermissionCancellationReason) -> &'static str {
+    match value.view() {
         PermissionCancellationReasonView::ProviderWithdrawal => "provider_withdrawal",
         PermissionCancellationReasonView::SessionClosed => "session_closed",
         PermissionCancellationReasonView::SessionFailed => "session_failed",
@@ -515,11 +528,15 @@ fn reason(value: &PermissionCancellationReason) -> Value {
         PermissionCancellationReasonView::EventConsumerDropped => "event_consumer_dropped",
         PermissionCancellationReasonView::SessionHandlesDropped => "session_handles_dropped",
         PermissionCancellationReasonView::PolicyRefusal => "policy_refusal",
-        PermissionCancellationReasonView::Custom(value) => {
-            return json!({"code":value.code(),"explanation":value.explanation()})
-        }
-    };
-    json!({"code":code})
+        PermissionCancellationReasonView::Custom(_) => "custom",
+    }
+}
+
+fn reason(value: &PermissionCancellationReason) -> Value {
+    if let PermissionCancellationReasonView::Custom(value) = value.view() {
+        return json!({"code":value.code(),"explanation":value.explanation()});
+    }
+    json!({"code":cancellation_reason(value)})
 }
 fn decision(value: &PermissionDecision) -> Value {
     let scope = match value.scope().view() {

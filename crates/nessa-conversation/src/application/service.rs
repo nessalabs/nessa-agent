@@ -1,10 +1,9 @@
 mod agent_tools;
 mod auto_picks;
-mod decision_traces;
-pub use decision_traces::DECISION_TARGET;
 mod background_tasks;
 mod channels;
 mod creation;
+mod decision_traces;
 mod model_changes;
 mod mutation;
 mod opening_resources;
@@ -44,10 +43,10 @@ use super::{
     ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
     ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
     ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, ListedConversation,
-    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty, Reader,
-    RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    ConversationRepository, ConversationSummaries, ConversationTurnOriginAudit,
+    ConversationTurnOriginAuditRecord, DeletionFailures, ListedConversation, ObservationCursor,
+    ObservedConversations, OwnerAccess, PairedAccess, PairedParty, Reader, RevisionHold,
+    RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage, UnfinishedDeletions,
 };
 use crate::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
@@ -690,6 +689,63 @@ pub enum SubmissionMode {
     Queue,
     Steer,
 }
+/// A submitted turn's span, still open, that ends as refused when this is
+/// dropped before the agent took the turn: on any early return or failure
+/// between its origin being recorded and the agent's answer.
+struct Unadmitted {
+    telemetry: nessa_telemetry::Telemetry,
+    conversation: String,
+    execution: String,
+    clock: Arc<dyn Clock>,
+    /// Still waiting on the agent's answer.
+    open: bool,
+    /// Set when the span is left for the next offer, so the supervisor ends
+    /// it should none take it.
+    left_open: Arc<AtomicBool>,
+}
+impl Unadmitted {
+    /// What the agent's answer means for the span: open for the execution
+    /// audit, left for the next offer, or ended as refused.
+    fn answered(mut self, delivery: Result<(), &ConversationError>, again: bool) {
+        let after = span_after(delivery, again);
+        self.left_open
+            .store(after == SpanAfter::OfferedAgain, Ordering::SeqCst);
+        self.open = after == SpanAfter::Refused;
+    }
+}
+/// What becomes of a submitted turn's span once the agent answered.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SpanAfter {
+    /// The agent has the turn, or may: the execution audit tells the rest.
+    Open,
+    /// Refused for now and offered again: the next offer carries the span
+    /// on, and `submit_supervised` ends it should no offer be taken.
+    OfferedAgain,
+    /// Refused with nothing taken.
+    Refused,
+}
+pub(super) fn span_after(delivery: Result<(), &ConversationError>, again: bool) -> SpanAfter {
+    match delivery {
+        Ok(()) => SpanAfter::Open,
+        Err(_) if again => SpanAfter::OfferedAgain,
+        Err(error) if Reach::of_asked(error) != Reach::NotTaken => SpanAfter::Open,
+        Err(_) => SpanAfter::Refused,
+    }
+}
+impl Drop for Unadmitted {
+    fn drop(&mut self) {
+        if !self.open {
+            return;
+        }
+        self.telemetry.emit_with(|| {
+            super::turn_telemetry::turn_refused(
+                &self.conversation,
+                &self.execution,
+                self.clock.unix_milliseconds(),
+            )
+        });
+    }
+}
 /// Who writes a submission: the person, or an app of theirs, admitted in an
 /// opening of the conversation for one mount.
 #[derive(Clone)]
@@ -957,6 +1013,7 @@ struct Inner {
     creation_audit: Arc<dyn ConversationCreationAudit>,
     mode_audit: Arc<dyn ConversationModeAudit>,
     file_link_audit: Arc<dyn ConversationFileLinkAudit>,
+    turn_origin_audit: Arc<dyn ConversationTurnOriginAudit>,
     deletion_audit: Arc<dyn ConversationDeletionAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
     summaries: Arc<dyn ConversationSummaries>,
@@ -1003,6 +1060,8 @@ struct Inner {
     channel_switches: tokio::sync::Mutex<()>,
     /// One-shot continuations after a provider usage limit.
     scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// Where telemetry goes. Unbound, or bound off, emits nothing.
+    telemetry: OnceLock<nessa_telemetry::Telemetry>,
     /// What each credential was issued to, for telling which device sent a
     /// turn. Unbound reads every device as unknown.
     credential_devices: OnceLock<Arc<dyn nessa_auth::application::pairing::CredentialDeviceSource>>,
@@ -1287,6 +1346,10 @@ pub struct ConversationDependencies {
     /// Not optional: a message may name a path on any gateway, so there is no
     /// configuration under which that grant goes unrecorded.
     pub file_link_audit: Arc<dyn ConversationFileLinkAudit>,
+    /// Records where each submission came from, before it is admitted. Not
+    /// optional, for the same reason as `file_link_audit`: every gateway
+    /// takes messages.
+    pub turn_origin_audit: Arc<dyn ConversationTurnOriginAudit>,
     /// Records who deleted a conversation, before any of it is erased.
     pub deletion_audit: Arc<dyn ConversationDeletionAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
@@ -1507,6 +1570,7 @@ impl ConversationService {
             creation_audit,
             mode_audit,
             file_link_audit,
+            turn_origin_audit,
             deletion_audit,
             attachments,
             summaries,
@@ -1539,6 +1603,7 @@ impl ConversationService {
                 creation_audit,
                 mode_audit,
                 file_link_audit,
+                turn_origin_audit,
                 deletion_audit,
                 attachments,
                 summaries,
@@ -1567,6 +1632,7 @@ impl ConversationService {
                 channel_switches: tokio::sync::Mutex::new(()),
                 scheduled_messages: OnceLock::new(),
                 credential_devices: OnceLock::new(),
+                telemetry: OnceLock::new(),
                 preference_policy: OnceLock::new(),
                 schedule_wakeup: Arc::new(Notify::new()),
                 auto_pick_wakeup: Notify::new(),
@@ -4039,6 +4105,15 @@ impl ConversationService {
 
     /// Bind the deletion inventory recorded after a tombstone commits. A
     /// second bind is ignored. Unbound, a delete still fences and finishes.
+    /// Send this service's telemetry through `telemetry`. A second bind is
+    /// ignored. Unbound, nothing is emitted.
+    pub fn bind_telemetry(&self, telemetry: nessa_telemetry::Telemetry) {
+        let _ = self.inner.telemetry.set(telemetry);
+    }
+    /// Where this service's telemetry goes: off until bound.
+    pub(crate) fn telemetry(&self) -> nessa_telemetry::Telemetry {
+        self.inner.telemetry.get().cloned().unwrap_or_default()
+    }
     pub fn bind_fence_capture(&self, capture: Arc<dyn FenceCapture>) {
         let _ = self.inner.fence_capture.set(capture);
     }
@@ -4112,6 +4187,9 @@ impl ConversationService {
         // as this goes (row C11).
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
+        // Set while an offer refused for now left its turn's span open for
+        // the next one (`SpanAfter::OfferedAgain`).
+        let span_left_open = Arc::new(AtomicBool::new(false));
         let (asked, outcome) = loop {
             let (asked, submission) = self.submission_future_permitted(
                 id.clone(),
@@ -4124,6 +4202,7 @@ impl ConversationService {
                 carried.clone(),
                 selection.clone(),
                 on_admission.clone(),
+                span_left_open.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -4133,6 +4212,20 @@ impl ConversationService {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         };
         let asked = asked.load(Ordering::SeqCst);
+        // An earlier offer left the turn's span open for a later one, and no
+        // later offer took it over: however the last one ended (refused for
+        // now at the deadline, refused before its span, its task failed),
+        // nothing was taken, and the span ends as refused here.
+        if span_left_open.load(Ordering::SeqCst) {
+            let telemetry = self.telemetry();
+            telemetry.emit_with(|| {
+                super::turn_telemetry::turn_refused(
+                    &id.to_string(),
+                    &execution_id,
+                    self.inner.clock.unix_milliseconds(),
+                )
+            });
+        }
         let failure = match outcome {
             Ok(Ok(receipt)) => return Ok(receipt),
             // Only before anything is asked: admission, and the resolve.
@@ -4174,6 +4267,7 @@ impl ConversationService {
             carried,
             None,
             None,
+            Arc::new(AtomicBool::new(false)),
         )
     }
 
@@ -4190,6 +4284,7 @@ impl ConversationService {
         carried: Carried,
         selection: Option<Arc<SubmissionPermit>>,
         on_admission: Option<Arc<dyn AdmissionNotice>>,
+        span_left_open: Arc<AtomicBool>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -4218,6 +4313,7 @@ impl ConversationService {
             service.recover_model_change(&id, &caller).await?;
             service.refuse_pending_model_change(&id, &caller).await?;
             let actor = caller.actor()?;
+            let sent_from = message.sent_from.clone();
             let (execution, message) = Self::canonical_user_message(
                 service.inner.limits.max_input_bytes,
                 &execution_id,
@@ -4300,6 +4396,13 @@ impl ConversationService {
                     });
                 let (original, saved_initiation) = original.unzip();
                 let known = original.is_some();
+                // A submission the agent already has shares the span its
+                // first offer opened, and that turn is running: an earlier
+                // pass of this attempt that was offered again must not end
+                // it as refused.
+                if known {
+                    span_left_open.store(false, Ordering::SeqCst);
+                }
                 // A thread its agent closed is open again for new work. A
                 // retry of a message the agent already has is not new work:
                 // the turn that closed the thread may be that very message.
@@ -4498,6 +4601,78 @@ impl ConversationService {
                     .await
                     .map_err(|_| ConversationError::Audit)?;
             }
+            // Where this attempt came from is recorded before it is
+            // admitted, for the same reason as a naming above, and only for
+            // a submission the agent has not already seen: a retry the agent
+            // settles from what it saved was recorded when it was first sent.
+            // Read as `read_turn` will read the saved turn, so the record and
+            // a later read cannot disagree. A reading that fails is recorded
+            // as unread rather than refusing the message: the facts it would
+            // have been read from are recorded beside it, and an unread
+            // record is kept apart from a read one, so a retry that reads
+            // where an earlier attempt could not is no contradiction.
+            let origin = if known {
+                None
+            } else {
+                let origin = match service
+                    .submission_origin(
+                        &id,
+                        &execution_id,
+                        &writer.sender(),
+                        &caller.surface_id,
+                        initiation.initiator(),
+                    )
+                    .await
+                {
+                    Ok(origin) => Some(origin),
+                    Err(error) => {
+                        tracing::warn!(%id, ?error, "who sent the message could not be read");
+                        None
+                    }
+                };
+                service
+                    .inner
+                    .turn_origin_audit
+                    .record(ConversationTurnOriginAuditRecord {
+                        conversation_id: id.clone(),
+                        organization_id: caller.organization_id.clone(),
+                        execution_id: execution_id.clone(),
+                        request_id: caller.action_id.clone(),
+                        origin: origin.clone(),
+                        sent_from: sent_from.clone(),
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        observed_at_ms: service.inner.clock.unix_milliseconds(),
+                    })
+                    .await
+                    .map_err(|_| ConversationError::Audit)?;
+                Some(origin)
+            };
+            // The turn's span starts once its origin is on record, and ends
+            // as refused unless the agent takes the turn (`Unadmitted`).
+            let mut unadmitted = origin.as_ref().map(|origin| {
+                let telemetry = service.telemetry();
+                let conversation = id.to_string();
+                telemetry.emit_with(|| {
+                    super::turn_telemetry::turn_submitted(
+                        &conversation,
+                        &execution_id,
+                        origin.as_ref(),
+                        sent_from.as_ref(),
+                        service.inner.clock.unix_milliseconds(),
+                    )
+                });
+                // This offer's guard answers for the span from here.
+                span_left_open.store(false, Ordering::SeqCst);
+                Unadmitted {
+                    telemetry,
+                    conversation,
+                    execution: execution_id.clone(),
+                    clock: service.inner.clock.clone(),
+                    open: true,
+                    left_open: span_left_open.clone(),
+                }
+            });
             // A saved request owns its admission budget after model changes.
             // The incoming message is replaced below so SDK recovery still
             // checks content, actor, initiation and operation conflicts.
@@ -4677,17 +4852,11 @@ impl ConversationService {
             let auto = caller.surface_id == AUTO_PICK_SURFACE;
             // Held until the message's summary is written, below.
             let _writing = (!auto && writer.is_person()).then(|| service.person_writing(&id));
-            let answered = if !known && !auto && writer.is_person() {
-                service
-                    .waiting_ask_answered(
-                        &id,
-                        &execution_id,
-                        &caller,
-                        writer.initiation().initiator(),
-                    )
-                    .await
-            } else {
-                None
+            let answered = match &origin {
+                Some(origin) if !auto && writer.is_person() => {
+                    service.waiting_ask_answered(&id, origin.as_ref()).await
+                }
+                _ => None,
             };
             let delivery = match (mode, notes) {
                 (SubmissionMode::Queue, Some(candidates)) => live
@@ -4751,6 +4920,9 @@ impl ConversationService {
                     | ConversationError::Agent(AgentError::Closed))
             ) && !writer.is_app()
                 && !owner.stopping.load(Ordering::SeqCst);
+            if let Some(unadmitted) = unadmitted.take() {
+                unadmitted.answered(delivery.as_ref().map(|_| ()), again);
+            }
             if let (Err(error), Some(mut took)) = (&delivery, taken) {
                 if Reach::of_asked(error) == Reach::NotTaken {
                     took.handed_back();
@@ -5278,7 +5450,9 @@ impl ConversationService {
             return;
         }
         if let Some(settled) = settled {
-            self.inner.decision_traces.settled(id, &settled);
+            self.inner
+                .decision_traces
+                .settled(&self.telemetry(), id, &settled);
         }
         // A view shows the summary's title.
         self.inner.live_changes.publish(id);
@@ -6482,7 +6656,11 @@ impl ConversationService {
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
             }
-            self.inner.decision_traces.erased(&id);
+            self.inner.decision_traces.erased(
+                &self.telemetry(),
+                &id,
+                self.inner.clock.unix_milliseconds(),
+            );
             // Where it ran goes with its history; failing to forget it is
             // the summary's kind of failure, retried with the erasure.
             if let Err(error) = self.inner.environment.erase(&id).await {

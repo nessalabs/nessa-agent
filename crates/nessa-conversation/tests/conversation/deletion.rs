@@ -8,7 +8,8 @@ use crate::application::{
 use crate::conversation_test_support::{
     claude_erasers, only, AcceptingCreationAudit, MemoryAttachments, MemoryListing,
     MemoryRepository, MemorySummaries, ObservedPolicy, Provider, ProviderFactory,
-    RecordingDeletionAudit, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+    RecordingDeletionAudit, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, Unlisted,
+    DELETION_BUDGETS,
 };
 use crate::domain::{
     Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
@@ -196,6 +197,7 @@ fn service_admitted_by(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: audit,
             attachments: Some(attachments),
             summaries: summaries.clone(),
@@ -912,6 +914,7 @@ fn service_with(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
@@ -1581,6 +1584,7 @@ async fn a_history_that_cannot_be_opened_at_all_is_left_not_carried_on() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
@@ -2317,6 +2321,7 @@ async fn a_create_racing_a_delete_cannot_republish_it() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
             attachments: None,
             summaries: summaries.clone(),
@@ -2464,6 +2469,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             creation_audit: Arc::new(
                 DurableConversationCreationAudit::new(root.join("audit").join("creation")).unwrap(),
             ),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             file_link_audit: Arc::new(
                 DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
                     .unwrap(),
@@ -2515,6 +2521,7 @@ async fn deleting_on_the_local_stores_erases_what_it_owns_and_leaves_every_audit
             caller("send-1"),
             "turn-1".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "read this".into(),
                 images: Vec::new(),
@@ -3163,6 +3170,7 @@ async fn a_history_that_names_another_session_is_refused_and_nothing_is_erased()
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: audit.clone(),
             attachments: None,
             summaries: summaries.clone(),
@@ -3314,6 +3322,7 @@ async fn deleting_a_conversation_that_never_opened_creates_no_history_lock() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: Arc::new(
                 DurableConversationDeletionAudit::new(root.join("deletion"), clock.clone())
                     .unwrap(),
@@ -3421,6 +3430,7 @@ async fn an_unmarked_chat_cannot_be_read_and_can_be_deleted() {
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: Arc::new(RecordingDeletionAudit::default()),
             attachments: None,
             summaries: metadata.clone(),
@@ -3614,6 +3624,7 @@ async fn a_turn_saved_with_its_grants_role_closes_only_its_own_chat() {
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 deletion_audit: Arc::new(RecordingDeletionAudit::default()),
                 attachments: None,
                 summaries: metadata.clone(),
@@ -3716,6 +3727,7 @@ async fn an_unreadable_chat_stays_until_its_deletion_is_recorded() {
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: audit.clone(),
             attachments: None,
             summaries: metadata.clone(),
@@ -4148,6 +4160,7 @@ async fn a_reopen_racing_a_delete_is_not_recorded_after_the_deletion() {
 
             creation_audit: audit.clone(),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: deletions.clone(),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
@@ -4298,6 +4311,7 @@ async fn a_delete_spends_the_stop_and_lease_budgets_it_is_given() {
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),
@@ -4377,6 +4391,7 @@ fn over_with(
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             deletion_audit: fixture.audit.clone(),
             attachments: Some(fixture.attachments.clone()),
             summaries: fixture.summaries.clone(),

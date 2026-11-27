@@ -3844,6 +3844,7 @@ dependencies = [
  "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
+ "nessa-telemetry",
  "nessa-timer",
  "nessa-types",
  "nessa-vault",
@@ -3958,9 +3959,6 @@ dependencies = [
  "nessa-timer",
  "nessa-vault",
  "nessa-webhooks",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "pty-runtime",
  "pty-runtime-infrastructure",
  "rcgen",
@@ -3985,7 +3983,6 @@ dependencies = [
  "toml_edit 0.25.13+spec-1.1.0",
  "tower",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "tungstenite",
  "url",
@@ -4199,6 +4196,7 @@ dependencies = [
  "nessa-protocol",
  "nessa-sdk",
  "nessa-sync",
+ "nessa-telemetry",
  "nessa-timer",
  "nessa-vault",
  "nessa-webhooks",
@@ -4225,6 +4223,17 @@ name = "nessa-sync"
 version = "0.1.0"
 source = "git+https://github.com/nessalabs/sync-engine?rev=341c9b844257403bb297f27d7ed9aecbe93e4406#341c9b844257403bb297f27d7ed9aecbe93e4406"
 dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "nessa-telemetry"
+version = "0.1.0"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rustls",
  "sha2",
 ]
 
@@ -7605,22 +7614,6 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a904802a1b902f43638b677ff2a650847e3b4404101b6c586d648e8c1e3e8fe"
-dependencies = [
- "js-sys",
- "opentelemetry",
- "smallvec",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
- "web-time",
 ]
 
 [[package]]

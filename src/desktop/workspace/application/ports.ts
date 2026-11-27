@@ -79,6 +79,8 @@ export interface OutgoingMessage {
    * one the conversation already holds is not sent twice.
    */
   readonly images?: readonly DraftImage[]
+  /** The person said it aloud; the source records the claim with the turn. */
+  readonly spoken?: true
   /** The model the turn runs on, chosen in the composer. */
   readonly model: ModelRef
   /**

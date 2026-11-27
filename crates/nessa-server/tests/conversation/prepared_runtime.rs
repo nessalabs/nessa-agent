@@ -15,7 +15,8 @@ use crate::conversation::application::{
 };
 use crate::conversation_test_support::{
     fixture, AcceptingCreationAudit, AcceptingDeletionAudit, MemorySummaries, Provider,
-    ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+    ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, Unlisted,
+    DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
@@ -125,6 +126,7 @@ async fn a_failed_warm_up_releases_readiness_without_becoming_conversation_failu
 
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
             listing: Arc::new(Unlisted),

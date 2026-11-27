@@ -7,7 +7,7 @@ use crate::application::{
 use crate::conversation_test_support::{
     only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, MemoryAttachments,
     MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
-    RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_sdk::{
     domain::common::value_objects::{MediaType, Sha256Digest},
@@ -66,6 +66,7 @@ impl Fixture {
                 metadata: repository.clone(),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 mode_audit: Arc::new(AcceptingModeAudit),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 file_link_audit: audit.clone(),
                 deletion_audit: Arc::new(AcceptingDeletionAudit),
                 attachments: Some(attachments.clone()),
@@ -149,6 +150,7 @@ impl Fixture {
                 caller(execution),
                 execution.into(),
                 SubmittedMessage {
+                    sent_from: None,
                     text: String::new(),
                     images: vec![],
                     files: vec![],

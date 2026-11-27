@@ -1285,6 +1285,23 @@ it("sends an image-only message, and steers with images the same way", async () 
     ["conversation.steer", { ...command, text: "  ", attachments: [image] }],
   ])
 })
+it("says a spoken message was spoken, and says nothing of a typed one", async () => {
+  const request = queued()
+  const api = createConversationApi({ request }, () => "id")
+  await api.submit(api.prepare(conversationId, "said aloud", [], [], { spoken: true }))
+  await api.submit(api.prepare(conversationId, "typed", [], [], { spoken: false }))
+  const command = {
+    conversationId,
+    executionId: "id",
+    requestId: "id",
+    attachments: [],
+    files: [],
+  }
+  expect(request.mock.calls).toEqual([
+    ["conversation.send", { ...command, text: "said aloud", spoken: true }],
+    ["conversation.send", { ...command, text: "typed" }],
+  ])
+})
 it("sends a message that only points at files, and refuses a path it could not carry", () => {
   const request = queued()
   const api = createConversationApi({ request }, () => "id")

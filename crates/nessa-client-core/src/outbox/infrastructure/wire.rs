@@ -19,6 +19,7 @@ pub fn send_params(intent: &PhoneIntent) -> ConversationSendParams {
         text: intent.text().to_owned(),
         attachments: attachments(intent),
         files: Vec::new(),
+        spoken: None,
     }
 }
 

@@ -50,6 +50,8 @@ pub(super) struct RuntimeConfig {
     /// (`native_linking`).
     #[serde(deserialize_with = "native_section")]
     pub native: Option<NativeConfig>,
+    /// Which telemetry sinks are on; absent, all off (`telemetry.rs`).
+    pub telemetry: super::telemetry::TelemetryConfig,
     /// Retired by ADR 1417: every gateway runs only its own agents, so
     /// `sshHosts`, `defaultEnvironment`, `envServe`, `environmentTools` and
     /// `pool` name nothing this build uses. A file an older build wrote is

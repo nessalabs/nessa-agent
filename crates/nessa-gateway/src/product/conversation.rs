@@ -9,8 +9,9 @@ use crate::conversation::application::{
     binding_of, error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
     ConversationService, ListedPermissionRule, PermissionRuleCatalog, PreferenceUpdate,
     QuestionChoiceInput, ReadOpening, Reader, RequestedAgent, RequestedConversation,
-    RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage,
-    SubmittedMessage, SubmittedUpload, UsageLimitPreferenceFacts, UsageLimitPreferenceGrant,
+    RuleCatalogError, RuleChange, RulePrincipal, SentFrom, SubmissionMode, SubmittedFile,
+    SubmittedImage, SubmittedMessage, SubmittedUpload, UsageLimitPreferenceFacts,
+    UsageLimitPreferenceGrant,
 };
 use base64::Engine as _;
 use nessa_auth::application::ports::{AccessError, AccessSnapshot};
@@ -76,17 +77,31 @@ use nessa_sdk::domain::agent_execution::executions::{Initiation, Initiator};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-/// `initiation` is who a turn this request starts is saved as started by,
-/// as the request was admitted (`read_access::admit_request`).
+/// [`dispatch_from`] a connection whose client is not said: its tests.
+#[cfg(test)]
 pub async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    dispatch_from(state, session, frame, initiation, None).await
+}
+
+/// Answer one conversation request from a connection whose handshake named
+/// `client`, which a send keeps on its turn's origin record. `initiation` is
+/// who a turn this request starts is saved as started by, as the request was
+/// admitted (`read_access::admit_request`).
+pub async fn dispatch_from(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    initiation: Initiation,
+    client: Option<&str>,
+) -> OutgoingMessage {
     let method = frame.method.clone();
     let request_id = frame.id.clone();
-    match answer(state, session, frame, initiation).await {
+    match answer(state, session, frame, initiation, client).await {
         Ok(response) => response,
         Err(error) => {
             trace_refusal_causes(&method, &error);
@@ -107,6 +122,7 @@ async fn answer(
     session: &AuthenticatedSession,
     frame: RequestFrame,
     initiation: Initiation,
+    client: Option<&str>,
 ) -> Result<OutgoingMessage, ConversationError> {
     if matches!(
         frame.method.as_str(),
@@ -569,7 +585,7 @@ async fn answer(
                         initiation,
                         offers_remember,
                         execution_id.clone(),
-                        submitted_message(&params),
+                        submitted_message(&params, client),
                         mode,
                         on_admission,
                     )
@@ -1558,8 +1574,14 @@ fn approval_mode(mode: WireApprovalMode) -> ConversationApprovalMode {
         WireApprovalMode::Full => ConversationApprovalMode::Full,
     }
 }
-fn submitted_message(params: &ConversationSendParams) -> SubmittedMessage {
+/// What `params` asks to send, with where it says it came from: `client`,
+/// the connection's handshake client id, and whether it was spoken.
+fn submitted_message(params: &ConversationSendParams, client: Option<&str>) -> SubmittedMessage {
     SubmittedMessage {
+        sent_from: client.map(|client| SentFrom {
+            client: client.to_owned(),
+            spoken: params.spoken.unwrap_or(false),
+        }),
         uploads: params
             .uploads
             .as_deref()
@@ -1606,6 +1628,7 @@ fn submitted_message_from_receipt(
         return Err(ConversationError::InvalidInput);
     }
     Ok(SubmittedMessage {
+        sent_from: None,
         uploads: params
             .uploads
             .as_deref()
@@ -2265,3 +2288,40 @@ mod wire_list;
 #[cfg(test)]
 #[path = "../../tests/conversation/wire_model_changes.rs"]
 mod wire_model_changes;
+#[cfg(test)]
+mod sent_from {
+    use super::submitted_message;
+    use nessa_protocol::product::generated::ConversationSendParams;
+
+    fn params(spoken: Option<bool>) -> ConversationSendParams {
+        serde_json::from_value(serde_json::json!({
+            "conversationId": "00000000-0000-4000-8000-000000000001",
+            "requestId": "r",
+            "executionId": "e",
+            "text": "hello",
+            "attachments": [],
+            "files": [],
+            "spoken": spoken,
+        }))
+        .unwrap()
+    }
+
+    /// A send keeps the client its connection named and whether it was
+    /// spoken; a send with no connection's client keeps neither.
+    #[test]
+    fn a_send_keeps_its_client_and_whether_it_was_spoken() {
+        let spoken = submitted_message(&params(Some(true)), Some("nessa-browser"))
+            .sent_from
+            .unwrap();
+        assert_eq!(spoken.client, "nessa-browser");
+        assert!(spoken.spoken);
+        let typed = submitted_message(&params(None), Some("nessa-cli"))
+            .sent_from
+            .unwrap();
+        assert_eq!(typed.client, "nessa-cli");
+        assert!(!typed.spoken);
+        assert!(submitted_message(&params(Some(true)), None)
+            .sent_from
+            .is_none());
+    }
+}

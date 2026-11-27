@@ -1066,6 +1066,8 @@ pub struct ConversationSendParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploads: Option<Vec<UploadedFileAttachment>>,
     pub files: Vec<LinkedFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spoken: Option<bool>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

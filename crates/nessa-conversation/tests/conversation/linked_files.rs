@@ -9,7 +9,8 @@ use super::{
 use crate::{
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, MemoryRepository, MemorySummaries,
-        Provider, ProviderFactory, RecordingFileLinkAudit, TestClock, Unlisted, DELETION_BUDGETS,
+        Provider, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
+        Unlisted, DELETION_BUDGETS,
     },
     infrastructure::DurableConversationFileLinkAudit,
 };
@@ -62,6 +63,7 @@ async fn conversation() -> (
             mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
 
             creation_audit: Arc::new(AcceptingCreationAudit),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             file_link_audit: audit.clone(),
             attachments: None,
             summaries: Arc::new(MemorySummaries::default()),
@@ -120,6 +122,7 @@ async fn attempt(
             caller("panel", action),
             execution.into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: text.into(),
                 images: Vec::new(),
@@ -490,6 +493,7 @@ async fn a_second_attempt_at_one_submission_is_not_evidence_against_the_first() 
             creation_audit: Arc::new(AcceptingCreationAudit),
             // The real sink: reconciling a repeat is its rule, and an
             // in-memory recorder would accept anything at all.
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             file_link_audit: Arc::new(
                 DurableConversationFileLinkAudit::new(directory.clone()).unwrap(),
             ),

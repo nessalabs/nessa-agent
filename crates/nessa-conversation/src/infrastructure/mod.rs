@@ -183,8 +183,11 @@ pub use trusted_apps::DurableTrustedApps;
 mod context_drops;
 pub use context_drops::audit_context_drops;
 
+mod evidence_record;
 mod file_link_audit;
 pub use file_link_audit::DurableConversationFileLinkAudit;
+mod turn_origin_audit;
+pub use turn_origin_audit::DurableConversationTurnOriginAudit;
 
 mod access_policy;
 pub use access_policy::CedarConversationAccessPolicy;
@@ -204,6 +207,8 @@ mod audit;
 mod audit_diagnostics;
 mod audit_mapping;
 pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
+mod observed_audit;
+pub use observed_audit::ObservedExecutionAudit;
 
 #[cfg(test)]
 #[path = "../../tests/conversation/store.rs"]

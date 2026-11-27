@@ -8,8 +8,8 @@ use crate::application::{
 };
 use crate::conversation_test_support::{
     only, AcceptingDeletionAudit, AcceptingModeAudit, MemoryListing, MemoryRepository,
-    MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
-    DELETION_BUDGETS,
+    MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit,
+    TestClock, DELETION_BUDGETS,
 };
 use crate::domain::Conversation;
 use nessa_auth::application::ports::Clock;
@@ -55,6 +55,7 @@ impl Fixture {
                 mode_audit: Arc::new(AcceptingModeAudit),
                 creation_audit: audit.clone(),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {

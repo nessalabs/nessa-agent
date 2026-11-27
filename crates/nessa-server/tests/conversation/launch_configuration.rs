@@ -667,6 +667,7 @@ fn provider_dependencies(root: &Path) -> super::ProviderDependencies {
         review_notices: Arc::new(
             nessa_sdk::application::agent_execution::permissions::IdleReviewNotices,
         ),
+        telemetry: nessa_telemetry::Telemetry::off(),
     }
 }
 

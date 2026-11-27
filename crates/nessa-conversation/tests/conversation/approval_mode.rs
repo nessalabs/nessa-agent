@@ -2219,6 +2219,7 @@ async fn two_waiting_reviews(
             caller(),
             "reviews".into(),
             SubmittedMessage {
+                sent_from: None,
                 uploads: Vec::new(),
                 text: "change files".into(),
                 images: Vec::new(),

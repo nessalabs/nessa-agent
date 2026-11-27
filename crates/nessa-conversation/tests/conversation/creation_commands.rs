@@ -4,7 +4,8 @@ use super::*;
 use crate::{
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
+        DELETION_BUDGETS,
     },
     {
         application::{
@@ -97,6 +98,7 @@ fn fixture_with_agents(
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries: metadata.clone(),
             listing: metadata.clone(),

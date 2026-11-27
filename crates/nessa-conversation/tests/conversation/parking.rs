@@ -8,7 +8,7 @@ use crate::application::SubmittedMessage;
 use crate::conversation_test_support::{
     access_policy, claude_erasers, only, AcceptingCreationAudit, AcceptingDeletionAudit,
     MemoryAttachments, MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
-    RecordingFileLinkAudit, DELETION_BUDGETS,
+    RecordingFileLinkAudit, RecordingTurnOriginAudit, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
@@ -233,6 +233,7 @@ impl Fixture {
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: images.then(|| Arc::new(MemoryAttachments::default()) as Arc<_>),
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {

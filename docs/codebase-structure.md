@@ -2757,6 +2757,25 @@ source. The phone publication lease, catalogue presence and held-file fetch are
 the retained repository this package exports. A product iOS application is not
 in this repository, and physical-device execution remains unverified.
 
+## Telemetry and turn origins
+
+[ADR 1491](adr/todo/1491-one-telemetry-dispatcher.md). `crates/nessa-telemetry/`
+knows nothing about Nessa: `domain/event.rs` is the generic `Event` (name,
+time, attributes, shape), `application/telemetry.rs` the one `Telemetry`
+dispatcher and `application/sink.rs` the `Sink` port, and
+`infrastructure/otel.rs` (feature `otel`) the OTLP/HTTP sink. Nessa's names
+for what is told live with what they describe: `nessa-conversation`'s
+`application/turn_telemetry.rs` (the `nessa.turn` span) and
+`application/service/decision_traces.rs` (the `decision` span), emitted by the
+submission path in `application/service.rs` and by
+`infrastructure/observed_audit.rs`, which wraps each agent's execution audit
+and emits only what was written. Where each send came from is audit, not
+telemetry: `infrastructure/turn_origin_audit.rs` over the shared
+`infrastructure/evidence_record.rs`. `nessa-server`'s
+`composition/telemetry.rs` turns sinks on from `config.json` and flushes them
+at exit; the gateway socket passes its handshake client id to each send
+(`product/socket.rs` `Places::client`).
+
 ## Agent thread tools
 
 `crates/nessa-conversation/src/mcp_servers/conversation_tools.rs` adapts five MCP tools to the

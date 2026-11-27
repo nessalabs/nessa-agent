@@ -12,7 +12,7 @@ use crate::conversation_test_support::channel_lookup::ChannelLookup;
 use crate::conversation_test_support::{absolute, unrooted};
 use crate::conversation_test_support::{
     AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider, ProviderFactory,
-    RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, DELETION_BUDGETS,
 };
 use crate::domain::{
     ChannelDefaults, ChannelName, ChannelNotes, ChannelRefusal, ProviderSessionErasure,
@@ -262,6 +262,7 @@ impl Fixture {
                 mode_audit: Arc::new(AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: metadata.clone(),
                 listing: metadata.clone(),

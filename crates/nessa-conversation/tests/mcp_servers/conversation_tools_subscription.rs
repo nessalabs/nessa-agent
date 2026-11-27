@@ -7,7 +7,7 @@ use crate::application::{
 use crate::conversation_test_support::{
     self as support, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit,
     MemoryRepository, MemorySummaries, Provider, ProviderFactory, RecordingFileLinkAudit,
-    TestClock, Unlisted, DELETION_BUDGETS,
+    RecordingTurnOriginAudit, TestClock, Unlisted, DELETION_BUDGETS,
 };
 use crate::domain::Conversation;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -176,6 +176,7 @@ fn observing_service(
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
             attachments: None,
             summaries,
             listing: Arc::new(Unlisted),

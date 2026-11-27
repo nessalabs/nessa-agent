@@ -1,8 +1,10 @@
 //! What the durable file-link record holds, and what it refuses to overwrite.
 use super::*;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_local_storage::{open, OpenMode};
 use nessa_protocol::conversation::domain::ConversationId;
 use serde_json::Value;
+use std::{io::Write, path::Path};
 
 fn linked(paths: &[&str], observed_at_ms: u64) -> ConversationFileLinkAuditRecord {
     ConversationFileLinkAuditRecord {
@@ -184,7 +186,7 @@ fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
     // lost publish refuses, because the record it lost to has gone.
     let missing = directory.join("missing.json");
     assert!(matches!(
-        stored_evidence(&missing, &value, "r"),
+        stored_evidence(&missing, &value, "r", MAX_RECORD_BYTES),
         Ok(Stored::Absent)
     ));
 
@@ -195,7 +197,7 @@ fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
     later["observedAtMs"] = serde_json::json!(999);
     put(&same, &serde_json::to_vec(&later).unwrap());
     assert!(matches!(
-        stored_evidence(&same, &value, "r"),
+        stored_evidence(&same, &value, "r", MAX_RECORD_BYTES),
         Ok(Stored::Agrees)
     ));
 
@@ -205,7 +207,7 @@ fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
     different["target"]["paths"] = serde_json::json!(["/tmp/b.pdf"]);
     put(&other, &serde_json::to_vec(&different).unwrap());
     assert!(matches!(
-        stored_evidence(&other, &value, "r"),
+        stored_evidence(&other, &value, "r", MAX_RECORD_BYTES),
         Err(ConversationError::Audit)
     ));
 
@@ -215,13 +217,13 @@ fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
     let junk = directory.join("junk.json");
     put(&junk, b"not json at all");
     assert!(matches!(
-        stored_evidence(&junk, &value, "r"),
+        stored_evidence(&junk, &value, "r", MAX_RECORD_BYTES),
         Err(ConversationError::Audit)
     ));
     let huge = directory.join("huge.json");
     put(&huge, &[b'x'; MAX_RECORD_BYTES + 1]);
     assert!(matches!(
-        stored_evidence(&huge, &value, "r"),
+        stored_evidence(&huge, &value, "r", MAX_RECORD_BYTES),
         Err(ConversationError::Audit)
     ));
 
@@ -230,7 +232,7 @@ fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
     let folder = directory.join("folder.json");
     std::fs::create_dir(&folder).unwrap();
     assert!(matches!(
-        stored_evidence(&folder, &value, "r"),
+        stored_evidence(&folder, &value, "r", MAX_RECORD_BYTES),
         Err(ConversationError::Audit)
     ));
 }

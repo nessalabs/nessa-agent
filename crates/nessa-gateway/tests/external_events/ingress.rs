@@ -12,7 +12,8 @@ use crate::{
     conversation::{application::*, infrastructure::LocalConversationStore},
     conversation_test_support::{
         only, AcceptingCreationAudit, AcceptingDeletionAudit, AcceptingModeAudit, Provider,
-        ProviderFactory, RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+        ProviderFactory, RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock,
+        DELETION_BUDGETS,
     },
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -328,6 +329,7 @@ impl Fixture {
                 mode_audit: Arc::new(AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: metadata.clone(),
                 listing: metadata,

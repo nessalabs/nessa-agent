@@ -7,7 +7,7 @@ use crate::application::{
 use crate::conversation_test_support::{
     access_policy, claude_erasers, only, AcceptingCreationAudit, AcceptingDeletionAudit,
     MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
-    RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    RecordingFileLinkAudit, RecordingTurnOriginAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::ConversationMessageStatus;
@@ -109,6 +109,7 @@ impl Durable {
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
                 file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+                turn_origin_audit: Arc::new(RecordingTurnOriginAudit::default()),
                 attachments: None,
                 summaries: summaries.clone(),
                 listing: Arc::new(MemoryListing {

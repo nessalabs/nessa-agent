@@ -209,6 +209,7 @@ impl ConversationService {
                 continue;
             }
             let message = SubmittedMessage {
+                sent_from: None,
                 text: record.request.user_message.text_str().into(),
                 images: record
                     .request
