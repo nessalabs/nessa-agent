@@ -8,7 +8,7 @@ import {
 } from "react"
 import { NessaBoatError, type BoatStatus } from "@nessa/client"
 import type { BoatGateway } from "../adapters/boat-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 const BoatContext = createContext<BoatGateway | undefined>(undefined)
@@ -72,6 +72,8 @@ export function useBoatConnection(
 ): BoatConnection {
   const gateway = useContext(BoatContext)
   const ensure = useVaultUnlock()
+  // An unlock from any dialog (another row's, the page's) reads again.
+  const settled = useVaultSettled()
   const reads = useRef(0)
   const [status, setStatus] = useState<BoatStatus>()
   const [busy, setBusy] = useState(false)
@@ -107,7 +109,7 @@ export function useBoatConnection(
     return () => {
       current = false
     }
-  }, [gateway, round, seen])
+  }, [gateway, round, seen, settled])
   useEffect(() => {
     if (!gateway || !waiting) return
     const again = () => setRound((value) => value + 1)

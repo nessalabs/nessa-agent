@@ -6,7 +6,7 @@
 //! public: the app is registered without a secret (`boat app create
 //! --no-secret`), as Boat asks of desktop apps, and every exchange proves
 //! itself with PKCE instead. An empty client id means this build offers no
-//! Sign in with Boat, only a pasted token. Composition may read another
+//! Sign in with Boat. Composition may read another
 //! file in its place (`NESSA_BOAT_APP`) to point a check at a fake Boat.
 //!
 //! What Boat's answers mean is decided by the pure functions below
@@ -335,6 +335,7 @@ mod tests {
         let app = BoatApp::released();
         assert_eq!(app.web_url.as_str(), "https://boat.dev/");
         assert_eq!(app.api_base(), "https://boat.dev/api/v1");
+        assert!(app.client_id.starts_with("boatapp_"));
     }
 
     #[test]

@@ -17,7 +17,7 @@ an `http://localhost` one, so the app is registered with
 
 | Fact | Owner | Kept in |
 | --- | --- | --- |
-| Which Boat app, and where Boat is | `workspaces/infrastructure/boat_oauth.rs` (`BoatApp`) | `protocol/defaults/boat-app.json`, or the file `NESSA_BOAT_APP` names (the stress check's fake Boat). An empty `clientId` means this build offers no sign-in (`signInAvailable: false`) |
+| Which Boat app, and where Boat is | `workspaces/infrastructure/boat_oauth.rs` (`BoatApp`) | `protocol/defaults/boat-app.json`, or the file `NESSA_BOAT_APP` names (the stress check's fake Boat). Released with Nessa's app, `boatapp_EykQMCwgQazcrGDdL3zh0YNC`; an empty `clientId` would mean a build offers no sign-in (`signInAvailable: false`) |
 | The one sign-in in progress: its state, verifier and listener | `BoatSignIn` (`workspaces/application/boat_sign_in.rs`) | memory only; a gateway restart ends it |
 | Where the browser comes back to | `LoopbackCallbacks` (`boat_callback.rs`) | a listener on 127.0.0.1 (and ::1 when present), one port per sign-in, answering only `GET /boat/callback` |
 | The access token, the refresh token, when the access token ends, and whose account | `RenewedBoatSettings` over `VaultSettings` | the `boat.connection` vault entry, with a `grant` beside the token |

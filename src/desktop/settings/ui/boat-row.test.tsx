@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { NessaBoatError, type BoatStatus } from "@nessa/client"
 import type { BoatGateway } from "../adapters/boat-gateway"
+import { VaultProvider, useVaultUnlock, type VaultSource } from "../../../vault"
 import { BoatProvider, BoatRow } from "./boat-row"
 
 let root: Root
@@ -157,4 +158,40 @@ it("offers nothing to click on a build with no Boat app", async () => {
 it("rests without a connected gateway", async () => {
   await act(async () => root.render(<BoatRow />))
   expect(button("Sign in with Boat")?.hasAttribute("disabled")).toBe(true)
+})
+
+it("reads again when a vault dialog elsewhere on the page closes", async () => {
+  const { gateway, calls } = fixture([])
+  const source: VaultSource = {
+    status: async () => "locked",
+    setup: async () => "unlocked",
+    unlock: async () => "unlocked",
+    lock: async () => "locked",
+    changePassphrase: async () => "locked",
+  }
+  function Elsewhere() {
+    const ensure = useVaultUnlock()
+    return (
+      <button type="button" onClick={() => void ensure()}>
+        Elsewhere
+      </button>
+    )
+  }
+  await act(async () =>
+    root.render(
+      <VaultProvider source={source}>
+        <BoatProvider gateway={gateway}>
+          <BoatRow />
+          <Elsewhere />
+        </BoatProvider>
+      </VaultProvider>,
+    ),
+  )
+  const reads = () => calls.filter((call) => call === "read").length
+  const before = reads()
+  await act(async () => button("Elsewhere")?.click())
+  expect(document.querySelector("[data-vault-dialog]")).not.toBeNull()
+  // Later: the dialog closes without an unlock, and the row reads again.
+  await act(async () => button("Later")?.click())
+  expect(reads()).toBeGreaterThan(before)
 })
