@@ -795,15 +795,16 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   cursor: default;
   transition:
     background-color var(--desktop-fast) ease,
-    transform var(--desktop-fast) ease;
+    transform var(--desktop-medium) var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
 }
 
 .settings-button:hover:not(:disabled) {
   background: color-mix(in oklab, var(--foreground) 11%, transparent);
 }
 
+/* Pressed, it gives a little under the finger: the press was heard. */
 .settings-button:active:not(:disabled) {
-  transform: translateY(0.5px);
+  transform: scale(0.97);
 }
 
 .settings-button:disabled {
