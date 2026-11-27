@@ -7,6 +7,8 @@ import { ClockProvider } from "../../../../clock"
 import { followWorkspace, loadWorkspace } from "../../adapters/store/commands"
 import type { OwnerAsk } from "../../model/workspace-index"
 import { fakeSource, settle, summary, testIndex, testStore } from "../../testing"
+import type { DecisionSource } from "../../application/ports"
+import { DecisionsProvider } from "../chrome/decisions-source"
 import { DecisionsHost } from "./decisions-view"
 
 let root: Root
@@ -36,7 +38,7 @@ const ask = (askId: string, undo: "easy" | "no"): OwnerAsk => ({
   reason: `Why yes on ${askId}.`,
 })
 
-async function open(on?: string) {
+async function open(on?: string, decisions?: DecisionSource) {
   const index = testIndex()
   const source = fakeSource({
     ...index,
@@ -56,7 +58,9 @@ async function open(on?: string) {
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1_000} elapsed={() => 1_000}>
-          <DecisionsHost open on={on} onClose={() => {}} />
+          <DecisionsProvider source={decisions}>
+            <DecisionsHost open on={on} onClose={() => {}} />
+          </DecisionsProvider>
         </ClockProvider>
       </Provider>,
     ),
@@ -188,4 +192,31 @@ it("moves focus to the next decision's choices after Decide", async () => {
   const next = find('[data-decisions-decide="two"]', view())
   expect(next.contains(document.activeElement)).toBe(true)
   expect(document.activeElement?.tagName).toBe("INPUT")
+})
+
+it("shows auto-pick's countdown and Wait for me beside the choices", async () => {
+  const pauses: [string, string, boolean][] = []
+  const decisions: DecisionSource = {
+    decisions: async () => [
+      {
+        ask: ask("one", "easy"),
+        askedAtMs: 0,
+        outcome: { state: "waiting" },
+        autoPick: { state: "due", atMs: 1_000 + 65_000 },
+      },
+    ],
+    pauseAutoPick: async (sessionId, askId, paused) => {
+      pauses.push([sessionId, askId, paused])
+      return true
+    },
+  }
+  await open("a", decisions)
+  await act(async () => settle(10))
+  const line = find("[data-decisions-decide] [data-auto-pick-line]", view())
+  expect(line.getAttribute("data-auto-pick-line")).toBe("due")
+  await act(async () =>
+    find<HTMLButtonElement>('[data-auto-pick-hold="pause"]', line).click(),
+  )
+  await act(async () => settle(10))
+  expect(pauses).toEqual([["a", "one", true]])
 })

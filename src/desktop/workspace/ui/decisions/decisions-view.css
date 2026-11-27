@@ -232,6 +232,16 @@
   font-size: var(--decisions-body);
 }
 
+.decisions-view-auto-pick:empty {
+  display: none;
+}
+
+.decisions-view-auto-pick {
+  margin-top: calc(var(--spacing) * 3);
+  color: var(--muted-foreground);
+  font-size: var(--decisions-small);
+}
+
 .decisions-view-failure {
   margin: calc(var(--spacing) * 3) 0 0;
   color: var(--destructive);
@@ -435,4 +445,8 @@
 
 .decisions-view-empty {
   margin: auto;
+}
+
+.decisions-view-auto-pick .auto-pick {
+  font-size: var(--decisions-small);
 }

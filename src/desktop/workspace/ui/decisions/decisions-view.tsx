@@ -14,6 +14,7 @@
  * is the person's own message in that chat, as typing it would be.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AutoPickLine } from "../chrome/auto-pick"
 import { Button } from "@nessa-ui/react/button"
 import { CheckboxList } from "@nessa-ui/react/checkbox-list"
 import { Dialog } from "@nessa-ui/react/dialog"
@@ -454,6 +455,11 @@ function DecideColumn({
           />
         ) : null}
       </QuestionnaireItem>
+      {/* Auto-pick keeps counting while the person reads the brief, so its
+          countdown and "Wait for me" are here, not only in the chat. */}
+      <div className="decisions-view-auto-pick">
+        <AutoPickLine sessionId={decision.sessionId} askId={ask.askId} />
+      </div>
       {failure ? (
         <p role="status" className="decisions-view-failure" data-decisions-failure="">
           {failure}
