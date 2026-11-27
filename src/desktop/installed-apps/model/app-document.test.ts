@@ -37,6 +37,33 @@ describe("packageDocument", () => {
     expect(page.querySelector("a")?.getAttribute("href")).toBe("other.html")
   })
 
+  it("resolves a stylesheet's url()s against the stylesheet, and the page's against the page", () => {
+    const html = packageDocument(
+      "index.html",
+      [
+        {
+          path: "index.html",
+          bytes: b64(
+            '<html><head><link rel="stylesheet" href="css/style.css"><style>p { background: url(img/dot.png) }</style></head><body></body></html>',
+          ),
+        },
+        {
+          path: "css/style.css",
+          bytes: b64(
+            "body { background: url('../img/dot.png') } h1 { background: url(https://example.com/x.png) }",
+          ),
+        },
+        { path: "img/dot.png", bytes: "iVBORw0K" },
+      ],
+      parse,
+    )
+    const [sheet, own] = Array.from(parse(html).querySelectorAll("style"))
+    expect(sheet?.textContent).toContain('url("data:image/png;base64,iVBORw0K")')
+    // Outside the package: left, and the sandbox's policy refuses it.
+    expect(sheet?.textContent).toContain("url(https://example.com/x.png)")
+    expect(own?.textContent).toContain('url("data:image/png;base64,iVBORw0K")')
+  })
+
   it("leaves a reference to a file outside the package as it is", () => {
     const html = packageDocument(
       "index.html",

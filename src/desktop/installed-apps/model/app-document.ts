@@ -67,6 +67,28 @@ function resolved(reference: string, entrypoint: string): string | undefined {
 }
 
 /**
+ * `css` with each `url(...)` that names a packaged file put inside it as a
+ * `data:` URI, resolved against `from`, the stylesheet's own package path,
+ * as a browser resolves it. A URL naming nothing in the package is left.
+ */
+function inlineCssUrls(
+  css: string,
+  from: string,
+  held: ReadonlyMap<string, string>,
+): string {
+  return css.replace(
+    /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
+    (whole, _quote: string, reference: string) => {
+      const path = resolved(reference.trim(), from)
+      const bytes = path === undefined ? undefined : held.get(path)
+      return bytes === undefined || path === undefined
+        ? whole
+        : `url("data:${mediaType(path)};base64,${bytes}")`
+    },
+  )
+}
+
+/**
  * The entrypoint with every file it names put inside it. `parse` is the
  * page's own HTML parser (`DOMParser`), passed in so a test can use its own.
  */
@@ -92,11 +114,23 @@ export function packageDocument(
     script.textContent = text(bytes).replace(/<\/(script)/gi, "<\\/$1")
   }
   for (const link of Array.from(page.querySelectorAll('link[rel~="stylesheet"][href]'))) {
-    const bytes = find(link.getAttribute("href"))
-    if (bytes === undefined) continue
+    const href = link.getAttribute("href")
+    const bytes = find(href)
+    if (bytes === undefined || href === null) continue
     const style = page.createElement("style")
-    style.textContent = text(bytes).replace(/<\/(style)/gi, "<\\/$1")
+    style.dataset.inlined = ""
+    // Its own url(...)s are relative to the stylesheet, not the page.
+    const from = resolved(href, entrypoint) ?? entrypoint
+    style.textContent = inlineCssUrls(text(bytes), from, held).replace(
+      /<\/(style)/gi,
+      "<\\/$1",
+    )
     link.replaceWith(style)
+  }
+  // A page's own <style> blocks resolve against the page.
+  for (const style of Array.from(page.querySelectorAll("style"))) {
+    if (style.dataset.inlined !== undefined) continue
+    style.textContent = inlineCssUrls(style.textContent ?? "", entrypoint, held)
   }
   for (const attribute of ["src", "href"]) {
     for (const element of Array.from(page.querySelectorAll(`[${attribute}]`))) {
