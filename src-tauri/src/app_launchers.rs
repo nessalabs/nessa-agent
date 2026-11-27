@@ -145,7 +145,7 @@ impl AppLaunchers {
     fn launcher(&self, app: &str) -> PathBuf {
         match self.layout {
             Layout::Bundle => self.root.join(format!("{app}.app")),
-            Layout::Folder => self.root.join(app),
+            Layout::Folder => self.root.join(file_stem(app, cfg!(windows))),
         }
     }
 
@@ -164,9 +164,11 @@ impl AppLaunchers {
     fn executable(&self, app: &str) -> PathBuf {
         match self.layout {
             Layout::Bundle => self.launcher(app).join("Contents").join("MacOS").join(app),
-            Layout::Folder => self
-                .launcher(app)
-                .join(format!("{app}{}", std::env::consts::EXE_SUFFIX)),
+            Layout::Folder => self.launcher(app).join(format!(
+                "{}{}",
+                file_stem(app, cfg!(windows)),
+                std::env::consts::EXE_SUFFIX
+            )),
         }
     }
 
@@ -220,7 +222,7 @@ impl AppLaunchers {
             .filter(|name| !name.starts_with('.'))
             .filter_map(|name| match self.layout {
                 Layout::Bundle => name.strip_suffix(".app").map(str::to_owned),
-                Layout::Folder => Some(name),
+                Layout::Folder => Some(app_of_stem(&name).to_owned()),
             })
             .collect();
         names.sort();
@@ -329,7 +331,11 @@ impl AppLaunchers {
                 }
                 (
                     staging.to_owned(),
-                    staging.join(format!("{app}{}", std::env::consts::EXE_SUFFIX)),
+                    staging.join(format!(
+                        "{}{}",
+                        file_stem(app, cfg!(windows)),
+                        std::env::consts::EXE_SUFFIX
+                    )),
                 )
             }
         };
@@ -608,6 +614,27 @@ fn end_process(pid: u32) -> io::Result<()> {
     } else {
         Err(io::Error::other(format!("taskkill ended {status}")))
     }
+}
+
+/// The name `app`'s folder and executable take. Windows keeps device names
+/// such as `con`, `nul` or `com1` for itself, whatever follows them, so
+/// there such an app's files are named `_<app>`: no app id starts with `_`,
+/// so the name still reads back as exactly one app.
+fn file_stem(app: &str, windows: bool) -> String {
+    let reserved = matches!(app, "con" | "prn" | "aux" | "nul")
+        || ((app.starts_with("com") || app.starts_with("lpt"))
+            && app.len() == 4
+            && app.as_bytes()[3].is_ascii_digit());
+    if windows && reserved {
+        format!("_{app}")
+    } else {
+        app.to_owned()
+    }
+}
+
+/// The app a launcher folder named `stem` is for.
+fn app_of_stem(stem: &str) -> &str {
+    stem.strip_prefix('_').unwrap_or(stem)
 }
 
 /// Put `staging` where `launcher` is, keeping the old one until the new one
@@ -990,6 +1017,18 @@ mod tests {
         assert!(icns_from_png(&png(512, 256)).is_none());
         assert!(icns_from_png(&png(300, 300)).is_none());
         assert!(icns_from_png(b"GIF89a").is_none());
+    }
+
+    #[test]
+    fn a_windows_device_name_is_never_a_launcher_name() {
+        for app in ["con", "nul", "aux", "prn", "com1", "lpt9"] {
+            assert_eq!(file_stem(app, true), format!("_{app}"));
+            assert_eq!(file_stem(app, false), app);
+            assert_eq!(app_of_stem(&file_stem(app, true)), app);
+        }
+        for app in ["notes", "console", "com", "com10", "nullable"] {
+            assert_eq!(file_stem(app, true), app);
+        }
     }
 
     #[test]
