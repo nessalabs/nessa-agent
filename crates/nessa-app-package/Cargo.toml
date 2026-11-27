@@ -10,6 +10,7 @@ description = "Headless verification of static extension app package assets"
 disposable-store = ["dep:nessa-local-database"]
 
 [dependencies]
+base64 = "0.22"
 nessa-local-database = { path = "../nessa-local-database", optional = true }
 nessa-types = { path = "../nessa-types" }
 sha2 = "0.10"
