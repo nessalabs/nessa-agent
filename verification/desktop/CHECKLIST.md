@@ -1130,6 +1130,22 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   not an image is refused with why, in that pane's header (issue #320).
   _Check:_ `responsive.mjs --only header-picture`, and `safe-area.mjs`.
 
+## Decisions
+
+- [ ] **A chat only points at its decision; Decisions is where it is
+  decided.** The chat says who waits, the question and what the agent
+  suggests, and Decide opens Decisions on it. Picking a choice sends
+  nothing; Decide sends the label as the person's message, and Decisions
+  moves to the next and never offers the answered one again. Escape closes
+  it. _Check:_ `conversation-stress.mjs` step `ask`.
+- [ ] **The brief shows only what the agent gave.** Situation only with a
+  summary; options compared on the facts some choice has; Undo only when it
+  differs; what the agent would do after the options. _Check:_
+  `decisions-view.test.tsx`, `waiting-decisions.test.ts`.
+- [ ] **Accept all ticks only easy-to-undo suggestions.** A costly or
+  can't-undo one is shown in the attention colour and left for the person.
+  _Check:_ `decisions-view.test.tsx`.
+
 ## Settings
 
 - [ ] **Live GitHub events are opt-in on the existing account.**

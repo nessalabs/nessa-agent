@@ -192,8 +192,8 @@ body {
   --desktop-focus-ring: color-mix(in oklab, var(--desktop-light-edge) 42%, transparent);
   /* The one outline recipe; a surface says only its `outline-offset`. (Two inset box-shadow rings remain: the picture band's adjust state and the Agents peek story.) */
   --desktop-focus-outline: 1.5px solid var(--desktop-focus-ring);
-  /* What waits on the person, and what is running. */
-  --desktop-needs: oklch(0.82 0.13 78);
+  /* What waits on the person (the kit's attention colour, its one owner), and what is running. */
+  --desktop-needs: var(--nessa-attention);
   --desktop-run: var(--desktop-light-edge);
 }
 
@@ -201,7 +201,6 @@ body {
 html:not(.dark) [data-surface] {
   --desktop-rim: color-mix(in oklab, var(--foreground) 9%, transparent);
   --desktop-focus-ring: color-mix(in oklab, var(--foreground) 24%, transparent);
-  --desktop-needs: oklch(0.62 0.15 60);
   --desktop-run: color-mix(in oklab, var(--desktop-light-edge) 45%, oklch(0.45 0.08 250));
 }
 

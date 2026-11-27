@@ -1,0 +1,353 @@
+/*
+ * Decisions fills the window (the kit's Dialog, size "full"): the decision in
+ * front down a wide side column, its brief beside it in a column no wider
+ * than reads well. Everything is set in the mono face, as the design is; the
+ * one warm colour is the kit's attention ink, for what waits on the person.
+ * Lines between things are the kit's hairline.
+ */
+.decisions-view {
+  --nessa-dialog-aside-width: 26rem;
+}
+
+.decisions-view,
+.decisions-view :where(*) {
+  font-family: var(--nessa-font-mono);
+}
+
+/* "N of M decided" under the title, and its meter. */
+.decisions-view-progress {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 3);
+  font-size: var(--nessa-font-size-2);
+}
+
+.decisions-view-progress b {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.decisions-view-meter {
+  flex: 1 1 auto;
+  max-width: 8rem;
+}
+
+.decisions-view-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(var(--spacing) * 2);
+  margin: 0 calc(var(--spacing) * -1) calc(var(--spacing) * 4);
+}
+
+.decisions-view-chevron {
+  transition: rotate var(--nessa-motion-duration-fast) var(--nessa-motion-easing-standard);
+}
+
+.decisions-view-chevron[data-open] {
+  rotate: 180deg;
+}
+
+/* The queue: one row per waiting decision, under its agent. */
+.decisions-view-queue {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.decisions-view-queue-row {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.decisions-view-queue-question {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--nessa-font-size-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decisions-view-queue-line {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--nessa-font-size-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The decision in front, centred in the column's height when it fits and
+ * scrolled with the column when it does not (`safe`): the question is never
+ * cut off above.
+ */
+.decisions-view-decide {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  justify-content: safe center;
+  gap: calc(var(--spacing) * 5);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2) calc(var(--spacing) * 6);
+  animation: decisions-view-in var(--nessa-motion-duration-normal)
+    var(--nessa-motion-easing-standard);
+}
+
+@keyframes decisions-view-in {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decisions-view-decide {
+    animation: none;
+  }
+}
+
+.decisions-view-who {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 2);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--nessa-font-size-3);
+  line-height: var(--nessa-line-height-3);
+}
+
+.decisions-view-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--nessa-attention);
+  translate: 0 -1px;
+}
+
+.decisions-view-question {
+  margin-bottom: calc(var(--spacing) * 4);
+  font-size: var(--nessa-font-size-7);
+  font-weight: 500;
+  line-height: var(--nessa-line-height-7);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.decisions-view-choice {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: calc(var(--spacing) * 2);
+}
+
+.decisions-view-suggested {
+  color: var(--nessa-attention);
+  font-size: var(--nessa-font-size-2);
+}
+
+.decisions-view-choice-line {
+  margin-top: 2px;
+  font-size: var(--nessa-font-size-2);
+}
+
+/* "Something else" is quieter than the agent's choices until it is picked. */
+.decisions-view-own:not(:has(:checked)) .decisions-view-choice {
+  color: var(--muted-foreground);
+}
+
+.decisions-view-failure {
+  margin: 0;
+  color: var(--destructive);
+  font-size: var(--nessa-font-size-2);
+}
+
+.decisions-view-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(var(--spacing) * 2);
+}
+
+.decisions-view-decide .decisions-view-actions {
+  justify-content: space-between;
+}
+
+.decisions-view-decide .decisions-view-actions > [data-decisions-send] {
+  margin-inline-start: auto;
+  min-width: 7rem;
+}
+
+/* The brief: a reading column with sections the agent gave something for. */
+.decisions-view-brief,
+.decisions-view-accept {
+  display: flex;
+  max-width: 46rem;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 10);
+  margin: 0 auto;
+  padding: calc(var(--spacing) * 10) 0 calc(var(--spacing) * 16);
+  animation: decisions-view-in var(--nessa-motion-duration-normal)
+    var(--nessa-motion-easing-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decisions-view-brief,
+  .decisions-view-accept {
+    animation: none;
+  }
+}
+
+.decisions-view-brief-head {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+}
+
+.decisions-view-headline {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--nessa-font-size-7);
+  font-weight: 500;
+  line-height: var(--nessa-line-height-7);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.decisions-view-meta {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--nessa-font-size-3);
+}
+
+.decisions-view-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+}
+
+.decisions-view-section h4 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--nessa-font-size-2);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.decisions-view-prose {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--nessa-font-size-4);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+.decisions-view-prose b {
+  font-weight: 500;
+}
+
+/*
+ * The options side by side: facts down the start, a column per choice, each
+ * the same width and wrapping, so the person reads across a row to compare.
+ */
+.decisions-view-options {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.decisions-view-options th,
+.decisions-view-options td {
+  height: auto;
+  padding: calc(var(--spacing) * 3) calc(var(--spacing) * 3) calc(var(--spacing) * 3) 0;
+  font-size: var(--nessa-font-size-3);
+  line-height: var(--nessa-line-height-3);
+  text-wrap: pretty;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.decisions-view-options thead th {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.decisions-view-options thead th[data-suggested]::after {
+  content: "Suggested";
+  display: block;
+  color: var(--nessa-attention);
+  font-size: var(--nessa-font-size-2);
+  font-weight: 400;
+}
+
+.decisions-view-fact,
+.decisions-view-options thead th:first-child {
+  width: 7.5rem;
+}
+
+.decisions-view-fact {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.decisions-view-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A sign hangs in the margin, so a wrapped line starts under the words. */
+.decisions-view-lines > li {
+  position: relative;
+  padding-inline-start: 2ch;
+}
+
+.decisions-view-lines > li::before {
+  position: absolute;
+  inset-inline-start: 0;
+  color: var(--muted-foreground);
+}
+
+.decisions-view-lines[data-sign="+"] > li::before {
+  content: "+";
+}
+
+.decisions-view-lines[data-sign="-"] > li::before {
+  content: "−";
+}
+
+/* What can't be taken back, or only at a cost, is what the person must not miss. */
+.decisions-view-options td[data-undo="no"],
+.decisions-view-options td[data-undo="costly"] {
+  color: var(--nessa-attention);
+}
+
+.decisions-view-none {
+  color: var(--muted-foreground);
+}
+
+/* Accept all. */
+.decisions-view-accept-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spacing) * 1) calc(var(--spacing) * 2);
+}
+
+.decisions-view-accept-line > * + *::before {
+  content: "·";
+  margin-inline-end: calc(var(--spacing) * 2);
+  color: var(--muted-foreground);
+}
+
+.decisions-view-undo {
+  color: var(--nessa-attention);
+}
+
+.decisions-view-accept-chat {
+  color: var(--muted-foreground);
+}
+
+.decisions-view-empty {
+  margin: auto;
+}

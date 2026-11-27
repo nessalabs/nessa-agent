@@ -8578,22 +8578,50 @@ const steps = {
       failures.push("opening the ask's notice did not bring up its card")
       return
     }
-    const recommended = card.locator(
-      `[data-owner-ask-choice="${ASK.choices[ASK.recommended].label}"] [data-owner-ask-recommended]`,
+    // The chat only says a decision waits: the question and what the agent
+    // suggests. Deciding happens in Decisions, which Decide opens on it.
+    const suggestion = ASK.choices[ASK.recommended].label
+    if (!(await card.getByText(ASK.question).count()))
+      failures.push("the chat's decision pointer does not say the question")
+    if (!(await card.getByText(`suggests ${suggestion}`, { exact: false }).count()))
+      failures.push("the chat's decision pointer does not say what the agent suggests")
+    await card.locator("[data-owner-ask-decide]").click()
+    const view = run.page.locator(`[data-decisions-view]`)
+    const decide = view.locator(`[data-decisions-decide="${ask.askId}"]`)
+    const opened = await decide
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!opened) {
+      failures.push("Decide did not open Decisions on the chat's decision")
+      return
+    }
+    const marked = decide.locator(
+      `[data-decisions-choice="${suggestion}"] [data-decisions-suggested]`,
     )
     if (
-      (await card.locator("[data-owner-ask-recommended]").count()) !== 1 ||
-      !(await recommended.count())
+      (await decide.locator("[data-decisions-suggested]").count()) !== 1 ||
+      !(await marked.count())
     )
-      failures.push("the card does not mark the one recommended choice")
-    if (!(await card.getByText(ASK.reason, { exact: false }).count()))
-      failures.push("the card does not say why that choice is recommended")
+      failures.push("Decisions does not mark the one suggested choice")
+    const brief = view.locator(`[data-decisions-brief="${ask.askId}"]`)
+    if (
+      !(await brief
+        .locator("[data-decisions-reason]")
+        .getByText(ASK.reason, { exact: false })
+        .count())
+    )
+      failures.push("the brief does not say why the agent suggests its choice")
     for (const choice of ASK.choices)
-      if (!(await card.getByText(choice.consequence).count()))
-        failures.push(`the card does not say what ${JSON.stringify(choice.label)} does`)
-    // The person picks the other choice: its label goes as their message.
+      if (!(await decide.getByText(choice.consequence).count()))
+        failures.push(`Decisions does not say what ${JSON.stringify(choice.label)} does`)
+    // The person picks the other choice; nothing goes until Decide.
     const other = ASK.choices.find((_, index) => index !== ASK.recommended).label
-    await card.locator(`[data-owner-ask-choice="${other}"]`).click()
+    await decide.locator(`[data-decisions-choice="${other}"]`).click()
+    await sleep(300)
+    if ((await rowAsk())?.askId !== ask.askId)
+      failures.push("picking a choice in Decisions answered before Decide")
+    await decide.locator("[data-decisions-send]").click()
     await settled(
       run,
       conversationId,
@@ -8608,6 +8636,18 @@ const steps = {
       .then(() => true)
       .catch(() => false)
     if (!gone) failures.push("the ask's card stayed after the person answered")
+    // Decisions moves past what was answered: nothing of it is offered again.
+    const offeredAgain = await view
+      .locator(`[data-decisions-decide="${ask.askId}"]`)
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .then(() => false)
+      .catch(() => true)
+    if (offeredAgain)
+      failures.push("Decisions still offers the decision the person answered")
+    await run.page.keyboard.press("Escape")
+    await view.waitFor({ state: "detached", timeout: 15_000 }).catch(() => {
+      failures.push("Escape did not close Decisions")
+    })
     if (
       await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
         (cleared) => !cleared,

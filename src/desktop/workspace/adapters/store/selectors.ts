@@ -9,6 +9,7 @@
  * window for every change.
  */
 import type { ChatPanel } from "../../model/chat-panel"
+import { waitingDecisions } from "../../model/waiting-decisions"
 import type { DraftImage } from "../../model/draft-images"
 import { canChange, formHeld, waitingOn } from "../../application/usecases/sharing"
 import { createSelector } from "@reduxjs/toolkit"
@@ -272,6 +273,9 @@ export const selectChannel = (state: Root, channelId: string): Channel | undefin
   channelOf(state.workspace, channelId)
 
 const listed = createSelector([selectSessions], (sessions) => Object.values(sessions))
+
+/** Every decision waiting on the person, across chats: the Decisions view's queue. */
+export const selectWaitingDecisions = createSelector([listed], waitingDecisions)
 
 const channelIdsBySection = createSelector([selectChannels], (channels) => {
   const bySection = new Map<string, string[]>()

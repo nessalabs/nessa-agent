@@ -1,0 +1,28 @@
+/*
+ * A decision waiting in the chat (`owner-ask.tsx`): only who waits, the
+ * question and a line about it; deciding happens in Decisions.
+ */
+.decision-pointer-head {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+}
+
+.decision-pointer-who {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 2);
+  margin: 0 0 calc(var(--spacing) * 1);
+  color: var(--muted-foreground);
+  font-size: var(--nessa-font-size-2);
+}
+
+.decision-pointer-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--desktop-needs);
+  translate: 0 -1px;
+}
