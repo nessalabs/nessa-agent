@@ -135,10 +135,7 @@ function DecisionPointer({
     >
       <QuestionnaireHeader>
         <div className="decision-pointer-head">
-          <p className="decision-pointer-who">
-            <span className="decision-pointer-dot" aria-hidden="true" />
-            {agent} is waiting on you
-          </p>
+          <p className="decision-pointer-who">{agent} is waiting on you</p>
           <QuestionnaireTitle>{ask.question}</QuestionnaireTitle>
           <QuestionnaireDescription data-owner-ask-line="">
             {line}

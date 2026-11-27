@@ -10,19 +10,7 @@
 }
 
 .decision-pointer-who {
-  display: flex;
-  align-items: baseline;
-  gap: calc(var(--spacing) * 2);
   margin: 0 0 calc(var(--spacing) * 1);
   color: var(--muted-foreground);
   font-size: var(--nessa-font-size-2);
-}
-
-.decision-pointer-dot {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--desktop-needs);
-  translate: 0 -1px;
 }

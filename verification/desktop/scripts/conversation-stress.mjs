@@ -8613,8 +8613,8 @@ const steps = {
     )
       failures.push("the brief does not say why the agent suggests its choice")
     for (const choice of ASK.choices)
-      if (!(await decide.getByText(choice.consequence).count()))
-        failures.push(`Decisions does not say what ${JSON.stringify(choice.label)} does`)
+      if (!(await brief.getByText(choice.consequence).count()))
+        failures.push(`the brief does not say what ${JSON.stringify(choice.label)} does`)
     // The person picks the other choice; nothing goes until Decide.
     const other = ASK.choices.find((_, index) => index !== ASK.recommended).label
     await decide.locator(`[data-decisions-choice="${other}"]`).click()

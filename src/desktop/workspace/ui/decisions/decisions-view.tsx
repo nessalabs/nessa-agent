@@ -23,7 +23,6 @@ import {
   Questionnaire,
   QuestionnaireChoice,
   QuestionnaireChoices,
-  QuestionnaireDescription,
   QuestionnaireInput,
   QuestionnaireItem,
   QuestionnaireTitle,
@@ -250,6 +249,8 @@ function DecisionsSurface({
                     items: held,
                   }),
                 )}
+                sectionLabelClassName="decisions-view-queue-agent"
+                optionClassName="decisions-view-queue-option"
                 getItemId={(each) => each.sessionId}
                 value={decision?.sessionId}
                 onValueChange={(sessionId) => {
@@ -393,11 +394,8 @@ function DecideColumn({
       data-decisions-decide={ask.askId}
     >
       <p className="decisions-view-who">
-        <span className="decisions-view-dot" aria-hidden="true" />
-        <span>
-          {decision.agent}
-          {decision.doing ? ` · ${decision.doing}` : " is waiting on you"}
-        </span>
+        {decision.agent}
+        {decision.doing ? ` · ${decision.doing}` : " is waiting on you"}
       </p>
       <QuestionnaireItem name={`decide-${ask.askId}`}>
         <QuestionnaireTitle className="decisions-view-question">
@@ -427,9 +425,6 @@ function DecideColumn({
                   </span>
                 ) : null}
               </span>
-              <QuestionnaireDescription className="decisions-view-choice-line">
-                {choice.consequence}
-              </QuestionnaireDescription>
             </QuestionnaireChoice>
           ))}
           <QuestionnaireChoice
@@ -470,7 +465,12 @@ function DecideColumn({
             Later
           </Button>
         ) : null}
-        <Button disabled={!text || sending} data-decisions-send="" onClick={decide}>
+        <Button
+          variant={text ? "default" : "secondary"}
+          disabled={!text || sending}
+          data-decisions-send=""
+          onClick={decide}
+        >
           {sending ? "Sending" : "Decide"}
         </Button>
       </div>
