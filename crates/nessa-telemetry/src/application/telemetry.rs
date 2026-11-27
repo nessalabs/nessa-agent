@@ -22,7 +22,7 @@ use std::{
         Arc, Mutex,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Events held while the worker catches up, by default.
@@ -124,12 +124,28 @@ impl Telemetry {
         let Some(dispatcher) = &self.dispatcher else {
             return true;
         };
+        // One deadline for both finding room in the queue and the worker
+        // getting to the flush: a sink that never returns cannot hold the
+        // caller past `wait` (`a_flush_behind_a_stuck_sink_keeps_its_deadline`).
+        let deadline = Instant::now() + wait;
         let (done, flushed) = mpsc::channel();
-        // Waits for room: a flush is the caller asking to wait.
-        if dispatcher.queue.send(Work::Flush(done)).is_err() {
-            return false;
+        let mut flush = Work::Flush(done);
+        loop {
+            match dispatcher.queue.try_send(flush) {
+                Ok(()) => break,
+                Err(TrySendError::Disconnected(_)) => return false,
+                Err(TrySendError::Full(again)) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    flush = again;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
         }
-        flushed.recv_timeout(wait).is_ok()
+        flushed
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .is_ok()
     }
 
     /// Flush (see [`Self::flush`]), then stop the worker once every clone is
@@ -287,6 +303,27 @@ mod tests {
             telemetry.emit(point("p"));
         }
         assert!(telemetry.dropped() >= 8, "{}", telemetry.dropped());
+        drop(held);
+        assert!(telemetry.flush(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_flush_behind_a_stuck_sink_keeps_its_deadline() {
+        let gate = Arc::new(Mutex::new(()));
+        let held = gate.lock().unwrap();
+        let telemetry = Telemetry::new(vec![Box::new(Blocking(gate.clone()))], 1).unwrap();
+        // The worker is stuck on one event and the queue is full behind it.
+        telemetry.emit(point("p"));
+        telemetry.emit(point("p"));
+        telemetry.emit(point("p"));
+        let started = Instant::now();
+        assert!(!telemetry.flush(Duration::from_millis(20)));
+        assert!(!telemetry.shutdown(Duration::from_millis(20)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
         drop(held);
         assert!(telemetry.flush(Duration::from_secs(5)));
     }

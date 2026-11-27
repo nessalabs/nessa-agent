@@ -99,7 +99,9 @@ gateways (one file per attempt, like file-link evidence).
 | Admitted and run | Point `nessa.turn.admitted`, then the span ends when the provider's `Finished` record is written, with its outcome (`completed`, `output_limit`, `request_limit`, `refused`, `cancelled`) or `failed` and the cause's code. |
 | Admitted, waited in the queue, then run | As above, with point `nessa.turn.dispatched` when it leaves the queue. |
 | Settled, cancelled or injected before it ran | The span ends with the queue's stage and cause. |
-| Any of the above | Told only after its audit record was written. A turn's span is named by its execution id, the one id every record of it carries (`Finished` names the provider's session, not the conversation). |
+| Any of the above | Told only after its audit record was written. A turn's span is named by its conversation and execution id. `Finished` names the provider's session, so the audit wrapper matches it to the conversation that admitted that execution. |
+| Two conversations running the same execution id at once | Neither span is ended by `Finished` rather than the wrong one; each is later ended as abandoned when the sink is full. |
+| A flush or shutdown behind a stuck sink | Returns false once its time is up, whether still waiting for room in the queue or for the worker. |
 | A turn resumed after a restart or failure | The successor's span starts linked to the one it continues. |
 | A decision asked, paused, settled, or its conversation erased | Span start, a point, then an end with outcome and timing, or an end with no outcome. One settled after a restart is told as one whole span marked `decision.reopened`. |
 | The queue is full | The event is dropped and counted; the count is logged at exit. |

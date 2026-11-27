@@ -2,10 +2,11 @@
 //! generic shape `nessa-telemetry` carries.
 //!
 //! A turn is one span, `nessa.turn`, in a trace of its own named by its
-//! execution id, so any part of the gateway can name it without holding it.
-//! The execution id is the one name every record of the turn carries: the
-//! SDK's `Finished` record names the provider's session, not the
-//! conversation.
+//! conversation and execution, so any part of the gateway can name it
+//! without holding it. Execution ids are the caller's, unique only within a
+//! conversation, so both are needed. The SDK's `Finished` record names the
+//! provider's session, not the conversation: `ObservedExecutionAudit` finds
+//! the conversation from the turn's admission.
 //!
 //! ```text
 //! submit (fresh) ──turn_submitted──▶ span starts, with the origin
@@ -37,9 +38,9 @@ pub fn at(unix_ms: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_millis(unix_ms)
 }
 
-/// The span of turn `execution`.
-pub fn turn_span(execution: &str) -> SpanRef {
-    SpanRef::new(format!("turn/{execution}"), "turn")
+/// The span of turn `execution` in `conversation`.
+pub fn turn_span(conversation: &str, execution: &str) -> SpanRef {
+    SpanRef::new(format!("{conversation}/{execution}"), "turn")
 }
 
 /// Turn `execution` was submitted, from `origin` (`None`: it could not be
@@ -51,7 +52,7 @@ pub fn turn_submitted(
     sent_from: Option<&SentFrom>,
     unix_ms: u64,
 ) -> Event {
-    let mut event = Event::span_start(TURN_SPAN, turn_span(execution), at(unix_ms))
+    let mut event = Event::span_start(TURN_SPAN, turn_span(conversation, execution), at(unix_ms))
         .attr("nessa.conversation.id", conversation.to_owned())
         .attr("nessa.turn.execution_id", execution.to_owned())
         .attr(
@@ -64,11 +65,9 @@ pub fn turn_submitted(
             TurnOrigin::Grant { grant, device } => event
                 .attr("nessa.origin.grant", grant.clone())
                 .attr("nessa.origin.device", device.name()),
-            TurnOrigin::Agent { thread, execution } => event
-                .attr("nessa.origin.thread", thread.clone())
-                .link(turn_span(execution)),
+            TurnOrigin::Agent { thread, execution } => event.link(turn_span(thread, execution)),
             TurnOrigin::Resumed { execution } | TurnOrigin::Continued { execution } => {
-                event.link(turn_span(execution))
+                event.link(turn_span(conversation, execution))
             }
             TurnOrigin::Event { source } => event.attr("nessa.origin.event_source", source.clone()),
             TurnOrigin::App { server, tool } => event
@@ -86,26 +85,27 @@ pub fn turn_submitted(
 }
 
 /// Turn `execution` was refused before the agent took it.
-pub fn turn_refused(execution: &str, unix_ms: u64) -> Event {
-    Event::span_end(TURN_SPAN, turn_span(execution), at(unix_ms))
+pub fn turn_refused(conversation: &str, execution: &str, unix_ms: u64) -> Event {
+    Event::span_end(TURN_SPAN, turn_span(conversation, execution), at(unix_ms))
         .attr("nessa.turn.outcome", "refused")
 }
 
 /// Something happened to turn `execution`, named `name`, with nothing else
 /// to say yet; the caller adds attributes.
-pub fn turn_point(execution: &str, name: &'static str, unix_ms: u64) -> Event {
-    Event::point(name, at(unix_ms)).within(turn_span(execution))
+pub fn turn_point(conversation: &str, execution: &str, name: &'static str, unix_ms: u64) -> Event {
+    Event::point(name, at(unix_ms)).within(turn_span(conversation, execution))
 }
 
 /// Turn `execution` ended at `stage` because of `cause` (the execution
 /// audit's own names for both).
 pub fn turn_ended(
+    conversation: &str,
     execution: &str,
     stage: &'static str,
     cause: &'static str,
     unix_ms: u64,
 ) -> Event {
-    Event::span_end(TURN_SPAN, turn_span(execution), at(unix_ms))
+    Event::span_end(TURN_SPAN, turn_span(conversation, execution), at(unix_ms))
         .attr("nessa.turn.outcome", stage)
         .attr("nessa.turn.cause", cause)
 }
@@ -118,8 +118,8 @@ pub fn turn_resumed(
     cause: &'static str,
     unix_ms: u64,
 ) -> Event {
-    Event::span_start(TURN_SPAN, turn_span(successor), at(unix_ms))
-        .link(turn_span(source))
+    Event::span_start(TURN_SPAN, turn_span(conversation, successor), at(unix_ms))
+        .link(turn_span(conversation, source))
         .attr("nessa.conversation.id", conversation.to_owned())
         .attr("nessa.turn.execution_id", successor.to_owned())
         .attr("nessa.origin.kind", "resumed")
@@ -155,9 +155,9 @@ mod tests {
         assert_eq!(
             relayed.shape(),
             &Shape::SpanStart {
-                span: turn_span("7"),
+                span: turn_span("c", "7"),
                 parent: None,
-                links: vec![turn_span("3")],
+                links: vec![turn_span("p", "3")],
             }
         );
         assert_eq!(
@@ -201,7 +201,7 @@ mod tests {
         let Shape::SpanStart { span, links, .. } = event.shape() else {
             panic!("a successor starts a span")
         };
-        assert_eq!(span, &turn_span("1-r1"));
-        assert_eq!(links, &vec![turn_span("1")]);
+        assert_eq!(span, &turn_span("c", "1-r1"));
+        assert_eq!(links, &vec![turn_span("c", "1")]);
     }
 }

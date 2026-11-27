@@ -236,9 +236,10 @@ async fn a_turn_that_runs_is_one_span_from_its_send_to_the_agent_finishing_it() 
         .send("panel", "request-1", "e1", None)
         .await
         .unwrap();
-    // The SDK's own `Finished` record ends it: it names the provider's
-    // session, not the conversation, so the span is named by the turn alone.
-    let span = turn_span("e1");
+    // The SDK's own `Finished` record ends it. It names the provider's
+    // session, not the conversation, which the audit found from the turn's
+    // admission.
+    let span = turn_span(&fixture.id.to_string(), "e1");
     let mut told = Vec::new();
     for _ in 0..100 {
         told = fixture.told();

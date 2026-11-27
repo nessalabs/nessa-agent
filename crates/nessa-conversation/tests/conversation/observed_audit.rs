@@ -97,7 +97,10 @@ async fn a_written_admission_and_settlement_are_told_inside_the_turn() {
         .unwrap();
     assert!(telemetry.flush(Duration::from_secs(5)));
     let events = kept.0.lock().unwrap().clone();
-    let span = crate::application::turn_telemetry::turn_span("turn-1");
+    let span = crate::application::turn_telemetry::turn_span(
+        "00000000-0000-4000-8000-000000000001",
+        "turn-1",
+    );
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].name(), "nessa.turn.admitted");
     assert_eq!(
@@ -132,4 +135,42 @@ async fn a_failed_write_emits_nothing() {
     ));
     assert!(telemetry.flush(Duration::from_secs(5)));
     assert!(kept.0.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_finished_turn_ends_the_span_of_the_one_conversation_that_admitted_it() {
+    let mut admitted = Admitted::default();
+    admitted.remember("a", "turn-1");
+    assert_eq!(admitted.finished("turn-1").as_deref(), Some("a"));
+    // Told once: a second Finished for it ends nothing.
+    assert_eq!(admitted.finished("turn-1"), None);
+    // Never admitted here (say, before a restart): nothing to end.
+    assert_eq!(admitted.finished("turn-2"), None);
+}
+
+#[test]
+fn two_conversations_running_one_execution_id_end_neither_span_rather_than_the_wrong_one() {
+    let mut admitted = Admitted::default();
+    admitted.remember("a", "same");
+    admitted.remember("b", "same");
+    assert_eq!(admitted.finished("same"), None);
+    // Once one has ended by its own queue record, the other is told apart.
+    admitted.forget("a", "same");
+    assert_eq!(admitted.finished("same").as_deref(), Some("b"));
+}
+
+#[test]
+fn past_its_bound_the_oldest_admission_is_forgotten() {
+    let mut admitted = Admitted::default();
+    for turn in 0..=MOST_REMEMBERED {
+        admitted.remember("a", &format!("turn-{turn}"));
+    }
+    assert_eq!(admitted.finished("turn-0"), None);
+    assert_eq!(
+        admitted
+            .finished(&format!("turn-{MOST_REMEMBERED}"))
+            .as_deref(),
+        Some("a")
+    );
+    assert!(admitted.order.len() <= MOST_REMEMBERED);
 }

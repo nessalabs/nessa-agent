@@ -694,6 +694,7 @@ pub enum SubmissionMode {
 /// between its origin being recorded and the agent's answer.
 struct Unadmitted {
     telemetry: nessa_telemetry::Telemetry,
+    conversation: String,
     execution: String,
     clock: Arc<dyn Clock>,
     /// Still waiting on the agent's answer.
@@ -737,7 +738,11 @@ impl Drop for Unadmitted {
             return;
         }
         self.telemetry.emit_with(|| {
-            super::turn_telemetry::turn_refused(&self.execution, self.clock.unix_milliseconds())
+            super::turn_telemetry::turn_refused(
+                &self.conversation,
+                &self.execution,
+                self.clock.unix_milliseconds(),
+            )
         });
     }
 }
@@ -4215,6 +4220,7 @@ impl ConversationService {
             let telemetry = self.telemetry();
             telemetry.emit_with(|| {
                 super::turn_telemetry::turn_refused(
+                    &id.to_string(),
                     &execution_id,
                     self.inner.clock.unix_milliseconds(),
                 )
@@ -4660,6 +4666,7 @@ impl ConversationService {
                 span_left_open.store(false, Ordering::SeqCst);
                 Unadmitted {
                     telemetry,
+                    conversation,
                     execution: execution_id.clone(),
                     clock: service.inner.clock.clone(),
                     open: true,
