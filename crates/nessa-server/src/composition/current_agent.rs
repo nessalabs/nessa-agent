@@ -112,6 +112,8 @@ pub(super) struct CurrentAgentResolverInput {
     pub(super) warm_up: CurrentOpenCodeWarmUp,
     /// Where OpenCode's execution audit is also told as turn spans.
     pub(super) telemetry: nessa_telemetry::Telemetry,
+    /// The clock every agent binding measures on (`ProviderDependencies`).
+    pub(super) agent_clock: Arc<dyn nessa_sdk::infrastructure::clock::Clock>,
 }
 
 struct Observation {
@@ -141,6 +143,7 @@ impl CurrentAgentResolver {
                 permission_rules: input.permission_memory.clone(),
                 review_notices: input.permission_memory,
                 telemetry: input.telemetry,
+                agent_clock: input.agent_clock,
             },
             warm_up: input.warm_up,
             warm_up_resolving: Arc::new(AtomicUsize::new(0)),

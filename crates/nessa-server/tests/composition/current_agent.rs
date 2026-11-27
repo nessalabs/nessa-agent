@@ -334,6 +334,7 @@ fn resolver_from(root: &Path, input: ResolverTestInput) -> CurrentAgentResolver 
             Arc::new(SystemClock),
         ),
         telemetry: nessa_telemetry::Telemetry::off(),
+        agent_clock: Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     })
 }
 

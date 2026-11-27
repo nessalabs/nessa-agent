@@ -668,6 +668,7 @@ fn provider_dependencies(root: &Path) -> super::ProviderDependencies {
             nessa_sdk::application::agent_execution::permissions::IdleReviewNotices,
         ),
         telemetry: nessa_telemetry::Telemetry::off(),
+        agent_clock: Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
     }
 }
 

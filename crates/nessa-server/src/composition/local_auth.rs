@@ -1385,6 +1385,10 @@ async fn conversations(
     if packaged_agents {
         deferred.extend([AgentId::Claude, AgentId::Codex]);
     }
+    // One clock for every agent binding this server composes, including the
+    // ones a later model change switches to (`ProviderDependencies`).
+    let agent_clock: Arc<dyn nessa_sdk::infrastructure::clock::Clock> =
+        Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new());
     let mut built = super::agent::providers(
         agents,
         &root,
@@ -1393,6 +1397,7 @@ async fn conversations(
         credentials.clone(),
         &deferred,
         telemetry.clone(),
+        agent_clock.clone(),
     )?;
     let permission_memory = built.permission_memory.clone();
     // One warm-up per configured agent, because each runs its own runtime
@@ -1526,6 +1531,7 @@ async fn conversations(
         permission_memory: permission_memory.clone(),
         warm_up: CurrentOpenCodeWarmUp::new(records.clone(), warm_up_audit.clone(), clock.clone()),
         telemetry: telemetry.clone(),
+        agent_clock,
     }));
     let selected = resolver.default_agent()?;
     // The one registry of how each agent deletes its own record of a session:

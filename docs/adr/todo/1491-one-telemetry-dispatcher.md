@@ -77,9 +77,11 @@ Harder: `OTEL_EXPORTER_OTLP_ENDPOINT` alone no longer exports anything, which
 changes behaviour for anyone who relied on it for decision spans; they add
 `"telemetry": {"otel": {"enabled": true}}`. Every send writes one more small
 file before admission. The SDK's GenAI spans (agent, model call, tool call)
-are forwarded by `GenAiTelemetry`, the store's one extra exporter, installed
-per binding with that binding's own clock, because their times are measured
-from that clock's origin rather than as wall time.
+are forwarded by `GenAiTelemetry`, the store's one extra exporter. Their
+times are measured from the binding clock's origin rather than as wall time,
+and a model change hands the new binding the old one's store, so every agent
+binding a server composes shares one clock (`ProviderDependencies::agent_clock`)
+and the exporter converts with it.
 
 Watch for: the dropped-event count logged at exit growing (the queue is too
 small or a sink is slow), and the turn-origin directory's size on very busy
