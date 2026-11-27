@@ -425,9 +425,11 @@ export function inMemorySource(
       message.text,
       channelName(message.sessionId, message.start?.channelId),
     )
+    // The person wrote in it, so nothing it asked waits on them any more,
+    // as the gateway lets an ask go on the person's next message.
     const session: SessionSummary = existing
       ? {
-          ...existing,
+          ...unasked(existing),
           status: "running",
           preview: message.text,
           now: reply.now.thinking,
@@ -830,4 +832,9 @@ function run<T>(work: () => T): Promise<T> {
       }
     })
   })
+}
+
+/** A chat's summary with no ask held in it. */
+function unasked({ ask: _answered, ...summary }: SessionSummary): SessionSummary {
+  return summary
 }

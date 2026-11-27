@@ -13,6 +13,7 @@ import type {
 import type { Activity, Message, Transcript } from "../../model/transcript"
 import { labsSamples } from "./sample-labs"
 import { starredSamples } from "./sample-starred"
+import { sampleAsks } from "./sample-asks"
 
 const minute = 60_000
 const samples = [...starredSamples, ...labsSamples]
@@ -54,11 +55,13 @@ export function sampleWorkspace(now: number): {
     channelId: sample.channelId,
     title: sample.title,
     model: sample.model,
-    status: sample.status ?? "idle",
+    // A chat whose agent asked the person waits on them.
+    status: sampleAsks[sample.id] ? "needs-you" : (sample.status ?? "idle"),
     startedAt: ago(sample.started ?? sample.messages[0]?.[1] ?? sample.updated),
     updatedAt: ago(sample.updated),
     preview: sample.preview,
     ...(sample.now === undefined ? {} : { now: sample.now }),
+    ...(sampleAsks[sample.id] ? { ask: sampleAsks[sample.id] } : {}),
     pinned: sample.pinned ?? false,
     unread: sample.unread ?? false,
     revision: 1,

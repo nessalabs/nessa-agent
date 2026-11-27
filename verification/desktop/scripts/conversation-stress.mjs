@@ -8578,22 +8578,61 @@ const steps = {
       failures.push("opening the ask's notice did not bring up its card")
       return
     }
-    const recommended = card.locator(
-      `[data-owner-ask-choice="${ASK.choices[ASK.recommended].label}"] [data-owner-ask-recommended]`,
+    // The chat only says a decision waits: the question and what the agent
+    // suggests. Deciding happens in Decisions, which Decide opens on it.
+    const suggestion = ASK.choices[ASK.recommended].label
+    if (!(await card.getByText(ASK.question).count()))
+      failures.push("the chat's decision pointer does not say the question")
+    if (!(await card.getByText(`suggests ${suggestion}`, { exact: false }).count()))
+      failures.push("the chat's decision pointer does not say what the agent suggests")
+    await card.locator("[data-owner-ask-decide]").click()
+    const view = run.page.locator(`[data-decisions-view]`)
+    const decide = view.locator(`[data-decisions-decide="${ask.askId}"]`)
+    const opened = await decide
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!opened) {
+      failures.push("Decide did not open Decisions on the chat's decision")
+      return
+    }
+    // Measured, not seen: the side column keeps one left edge, and Decide
+    // stays inside the window at the run's size and at a small one.
+    await measureDecisions(run.page, ask.askId, "at the run's size", failures)
+    const size = run.page.viewportSize()
+    if (size) {
+      await run.page.setViewportSize({ width: 720, height: 560 })
+      await sleep(300)
+      await measureDecisions(run.page, ask.askId, "at 720×560", failures)
+      await run.page.setViewportSize(size)
+      await sleep(300)
+    }
+    const marked = decide.locator(
+      `[data-decisions-choice="${suggestion}"] [data-decisions-suggested]`,
     )
     if (
-      (await card.locator("[data-owner-ask-recommended]").count()) !== 1 ||
-      !(await recommended.count())
+      (await decide.locator("[data-decisions-suggested]").count()) !== 1 ||
+      !(await marked.count())
     )
-      failures.push("the card does not mark the one recommended choice")
-    if (!(await card.getByText(ASK.reason, { exact: false }).count()))
-      failures.push("the card does not say why that choice is recommended")
+      failures.push("Decisions does not mark the one suggested choice")
+    const brief = view.locator(`[data-decisions-brief="${ask.askId}"]`)
+    if (
+      !(await brief
+        .locator("[data-decisions-reason]")
+        .getByText(ASK.reason, { exact: false })
+        .count())
+    )
+      failures.push("the brief does not say why the agent suggests its choice")
     for (const choice of ASK.choices)
-      if (!(await card.getByText(choice.consequence).count()))
-        failures.push(`the card does not say what ${JSON.stringify(choice.label)} does`)
-    // The person picks the other choice: its label goes as their message.
+      if (!(await brief.getByText(choice.consequence).count()))
+        failures.push(`the brief does not say what ${JSON.stringify(choice.label)} does`)
+    // The person picks the other choice; nothing goes until Decide.
     const other = ASK.choices.find((_, index) => index !== ASK.recommended).label
-    await card.locator(`[data-owner-ask-choice="${other}"]`).click()
+    await decide.locator(`[data-decisions-choice="${other}"]`).click()
+    await sleep(300)
+    if ((await rowAsk())?.askId !== ask.askId)
+      failures.push("picking a choice in Decisions answered before Decide")
+    await decide.locator("[data-decisions-send]").click()
     await settled(
       run,
       conversationId,
@@ -8608,6 +8647,18 @@ const steps = {
       .then(() => true)
       .catch(() => false)
     if (!gone) failures.push("the ask's card stayed after the person answered")
+    // Decisions moves past what was answered: nothing of it is offered again.
+    const offeredAgain = await view
+      .locator(`[data-decisions-decide="${ask.askId}"]`)
+      .waitFor({ state: "detached", timeout: 15_000 })
+      .then(() => false)
+      .catch(() => true)
+    if (offeredAgain)
+      failures.push("Decisions still offers the decision the person answered")
+    await run.page.keyboard.press("Escape")
+    await view.waitFor({ state: "detached", timeout: 15_000 }).catch(() => {
+      failures.push("Escape did not close Decisions")
+    })
     if (
       await waitFor(async () => (await rowAsk()) === undefined, 15_000).then(
         (cleared) => !cleared,
@@ -14519,6 +14570,67 @@ async function noticePosted(run, conversationId, failures, not = null) {
 }
 
 /** Waits for the host to take `notice` back once its review was `how`. */
+/**
+ * The Decisions view's layout contract, by its rects: the agent's line, the
+ * question and the first choice's radio start at one left edge (within a
+ * pixel), each choice's column in the brief is at least 120px wide, and
+ * Decide is inside the dialog and the window.
+ */
+async function measureDecisions(page, askId, when, failures) {
+  const read = await page.evaluate((id) => {
+    const column = document.querySelector(`[data-decisions-decide="${id}"]`)
+    const panel = column?.closest('[role="dialog"]')
+    const who = column?.querySelector(".decisions-view-who")
+    const question = column?.querySelector(".decisions-view-question")
+    const radio = column?.querySelector('input[type="radio"]')
+    const send = column?.querySelector("[data-decisions-send]")
+    const heads = [
+      ...(panel?.querySelectorAll("[data-decisions-options] thead th") ?? []),
+    ].slice(1)
+    if (!column || !panel || !who || !question || !radio || !send) return null
+    const textLeft = (element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      return range.getBoundingClientRect().left
+    }
+    const box = (element) => element.getBoundingClientRect().toJSON()
+    return {
+      edges: [textLeft(who), textLeft(question), radio.getBoundingClientRect().left],
+      panel: box(panel),
+      send: box(send),
+      choiceWidths: heads.map((each) => each.getBoundingClientRect().width),
+      viewport: { width: innerWidth, height: innerHeight },
+    }
+  }, askId)
+  if (!read) {
+    failures.push(`Decisions ${when}: its decision column could not be measured`)
+    return
+  }
+  const [who, question, radio] = read.edges
+  if (Math.max(who, question, radio) - Math.min(who, question, radio) > 1)
+    failures.push(
+      `Decisions ${when}: the agent's line, question and radios start at ${read.edges.map((each) => each.toFixed(1)).join(", ")}, not one edge`,
+    )
+  // A choice's column in the brief keeps room to read; a small window
+  // scrolls the table sideways instead of crushing it.
+  const narrowest = Math.min(...read.choiceWidths)
+  if (read.choiceWidths.length === 0 || narrowest < 120)
+    failures.push(
+      `Decisions ${when}: the brief's choice columns are ${read.choiceWidths.map((each) => Math.round(each)).join(", ")}px wide, under 120px`,
+    )
+  const { send, panel, viewport } = read
+  if (
+    send.left < panel.left ||
+    send.right > panel.right ||
+    send.top < 0 ||
+    send.bottom > viewport.height ||
+    send.right > viewport.width
+  )
+    failures.push(
+      `Decisions ${when}: Decide is at ${JSON.stringify(send)}, outside the dialog or window (${viewport.width}×${viewport.height})`,
+    )
+}
+
 async function noticeTakenBack(run, notice, how, failures) {
   const gone = await waitFor(async () => {
     const notices = await hostNotices(run.page)

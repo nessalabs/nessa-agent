@@ -64,6 +64,11 @@
  * without a renderer.
  */
 export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
+export {
+  DecisionsHost,
+  openDecisions,
+  useDecisionsOpening,
+} from "./ui/decisions/decisions-view"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { RailContentProvider } from "./ui/chrome/side-rail"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"

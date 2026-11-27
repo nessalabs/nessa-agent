@@ -7,7 +7,13 @@ import { useDriftInEffect } from "../adapters/window-preferences"
 import { useWorkspaceLayoutPreference } from "../adapters/workspace-layout-preference"
 import { SettingsHost, useSettingsOpening } from "../settings"
 import { DevicesView } from "../devices"
-import { RailContentProvider, SessionsInSidebar, ThreeColumns } from "../workspace"
+import {
+  DecisionsHost,
+  RailContentProvider,
+  SessionsInSidebar,
+  ThreeColumns,
+  useDecisionsOpening,
+} from "../workspace"
 import { useWorkspaceSelector } from "../workspace/adapters/store/hooks"
 import { selectFailure } from "../workspace/adapters/store/selectors"
 import { startupFailureCode } from "../workspace/ui/startup-failure"
@@ -19,7 +25,8 @@ const railViews = { devices: <DevicesView /> }
 
 /**
  * The window: the workspace in the layout chosen in Settings › Workspace ›
- * Layout — three columns, or sessions in the sidebar — and Settings, which opens over whichever it is.
+ * Layout — three columns, or sessions in the sidebar — and Settings and
+ * Decisions, which open over whichever it is.
  *
  * `inspectable` is a development build: the webview's own right-click menu,
  * kept off the window otherwise, stays on ⌥-right-click for Inspect Element.
@@ -43,16 +50,19 @@ export function DesktopWindow({
   useMotionInEffect()
   useDriftInEffect()
   const settings = useSettingsOpening()
+  const decisions = useDecisionsOpening()
   const startup = startupFailureCode(useWorkspaceSelector(selectFailure))
   const connecting = useConnecting()
   return (
     <>
-      {/* Settings is modal: the window under it takes no focus or pointer while it is open.
+      {/* Settings and Decisions are modal: the window under them takes no focus or pointer while one is open.
           A startup screen, or the splash while the gateway connects, covers
           both and takes the pointer itself. */}
       <div
         className="desktop-window-under"
-        inert={settings.open || startup !== null || connecting || undefined}
+        inert={
+          settings.open || decisions.open || startup !== null || connecting || undefined
+        }
       >
         <RailContentProvider views={railViews}>
           {layout === "sidebar" ? (
@@ -67,6 +77,11 @@ export function DesktopWindow({
         open={settings.open && startup === null && !connecting}
         tab={settings.tab}
         onClose={settings.close}
+      />
+      <DecisionsHost
+        open={decisions.open && !settings.open && startup === null && !connecting}
+        on={decisions.on}
+        onClose={decisions.close}
       />
       <ConnectingSplash connecting={connecting} />
       <StartupFallback />

@@ -34,6 +34,7 @@ import {
   type DecisionsFilter,
 } from "../../model/decisions"
 import { agentName, agentOf } from "../../model/workspace-index"
+import { answerText } from "../../model/waiting-decisions"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectSession } from "../../adapters/store/selectors"
 import { undoLabels } from "../../../../conversation"
@@ -205,11 +206,9 @@ function DecisionsDialog({
     return () => window.removeEventListener("keydown", onKey)
   }, [choices, sending])
   const answer = () => {
-    const choice = live && picked !== null ? live.ask.choices[picked] : undefined
-    if (!choice || sending) return
-    const said = note.trim()
-    // The label, then ". " and the note: the gateway reads it as that choice.
-    const text = said ? `${choice.label}. ${said}` : choice.label
+    const text =
+      live && picked !== null ? answerText(live.ask, { choice: picked, note }) : undefined
+    if (!text || sending) return
     setSending(true)
     setFailure(null)
     void dispatch(sendMessage({ sessionId, text, initiator: "person" })).then(

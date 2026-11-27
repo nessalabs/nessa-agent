@@ -20,11 +20,22 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* A reset, so it carries no weight: any component's own class outranks it. */
+/*
+ * A reset, so it carries no weight: any component's own class outranks it.
+ * The face and size stay unlayered, as the workspace's buttons were drawn
+ * with them. The ink is in the base layer: `:where` only zeroes specificity,
+ * and unlayered it beat every kit utility (all layered), so a kit Button's
+ * own ink lost to it (white words on the primary fill).
+ */
 :where(.workspace-window, .workspace) button {
   font: inherit;
-  color: inherit;
   cursor: default;
+}
+
+@layer base {
+  :where(.workspace-window, .workspace) button {
+    color: inherit;
+  }
 }
 
 /*

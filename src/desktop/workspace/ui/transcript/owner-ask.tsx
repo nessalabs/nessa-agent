@@ -1,18 +1,32 @@
-import { useEffect, useState } from "react"
-import { AccessRequestHost, OwnerAskCard } from "../../../../conversation"
+import { Button } from "@nessa-ui/react/button"
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireDescription,
+  QuestionnaireHeader,
+  QuestionnaireTitle,
+} from "@nessa-ui/react/questionnaire"
+import { AccessRequestHost } from "../../../../conversation"
 import { chooseAccess, sendMessage } from "../../adapters/store/commands"
 import { modelChanging } from "../../adapters/store/model-commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
-import { selectAtWork, selectSession } from "../../adapters/store/selectors"
+import {
+  selectAtWork,
+  selectSession,
+  selectWaitingDecisions,
+} from "../../adapters/store/selectors"
+import { agentName, agentOf, type OwnerAsk as Ask } from "../../model/workspace-index"
+import { openDecisions } from "../decisions/decisions-view"
+import "./owner-ask.css"
 import { entry } from "../../application/workspace-state"
 import { AutoPickLine } from "../chrome/auto-pick"
 
 /**
  * The decision an agent in this session asked the person, while the session's
- * list row says it is still asked. A tapped choice is sent as the person's
- * own message, the same as typing it; the gateway then says nothing is asked
- * and the card leaves. A choice that was not sent stays in the outbox to send
- * again, and the card offers every choice again.
+ * list row says it is still asked. The chat only says it waits: Decide opens
+ * Decisions on it, the one place the person decides, where the brief sits
+ * beside the choices. Typing an answer here still answers it; either way the
+ * gateway then says nothing is asked and the pointer leaves.
  *
  * An agent's request for more access is the red card, whose round is
  * `AccessRequestHost`'s, the same as the panel's: Approve raises the
@@ -49,18 +63,15 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
   const revision = useWorkspaceSelector(
     (state) => entry(state.workspace.transcripts, sessionId)?.revision,
   )
-  const [sending, setSending] = useState<{ askId: string; label: string } | null>(null)
-  const [failure, setFailure] = useState<string | null>(null)
-  // A new ask starts with nothing on its way.
-  const askId = ask?.askId
-  useEffect(() => {
-    setSending(null)
-    setFailure(null)
-  }, [askId])
   const answer = (text: string) =>
     dispatch(sendMessage({ sessionId, text, initiator: "person" })).then(
       (outcome) => outcome === "sent",
     )
+  // How many other chats wait on the person too, for the pointer's line.
+  const others = useWorkspaceSelector(
+    (state) =>
+      selectWaitingDecisions(state).filter((each) => each.sessionId !== sessionId).length,
+  )
   return (
     <>
       <AccessRequestHost
@@ -86,28 +97,57 @@ export function OwnerAsk({ sessionId }: { sessionId: string }) {
         answer={answer}
       />
       {ask && !ask.access ? (
-        <OwnerAskCard
-          ask={ask}
-          sending={sending?.askId === ask.askId ? sending.label : null}
-          failure={failure}
-          aside={<AutoPickLine sessionId={sessionId} askId={ask.askId} />}
-          onChoose={(label) => {
-            setSending({ askId: ask.askId, label })
-            setFailure(null)
-            void dispatch(
-              sendMessage({ sessionId, text: label, initiator: "person" }),
-            ).then((outcome) => {
-              if (outcome === "sent") return
-              setSending(null)
-              setFailure(
-                outcome === "not-asked"
-                  ? "This choice could not be sent here. Write your answer instead."
-                  : "This choice was not sent. Pick it again, or write your answer.",
-              )
-            })
-          }}
-        />
+        <DecisionPointer sessionId={sessionId} ask={ask} others={others} />
       ) : null}
     </>
+  )
+}
+
+/**
+ * A decision waiting in this chat, as the chat says it: who waits, the
+ * question, how many choices and which the agent suggests, how many more
+ * wait elsewhere, and Decide, which opens Decisions on it.
+ */
+function DecisionPointer({
+  sessionId,
+  ask,
+  others,
+}: {
+  sessionId: string
+  ask: Ask
+  others: number
+}) {
+  const model = useWorkspaceSelector((state) => selectSession(state, sessionId)?.model)
+  const agent = model ? agentName(agentOf(model)) : "The agent"
+  const suggestion = ask.choices[ask.recommended]?.label
+  const line = [
+    `${ask.choices.length} choices`,
+    suggestion ? `suggests ${suggestion}` : undefined,
+    others ? `${others} more waiting` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+  return (
+    <Questionnaire
+      aria-label={ask.question}
+      className="decision-pointer"
+      data-owner-ask={ask.askId}
+    >
+      <QuestionnaireHeader>
+        <div className="decision-pointer-head">
+          <p className="decision-pointer-who">{agent} is waiting on you</p>
+          <QuestionnaireTitle>{ask.question}</QuestionnaireTitle>
+          <QuestionnaireDescription data-owner-ask-line="">
+            {line}
+          </QuestionnaireDescription>
+        </div>
+      </QuestionnaireHeader>
+      <AutoPickLine sessionId={sessionId} askId={ask.askId} />
+      <QuestionnaireActions>
+        <Button data-owner-ask-decide="" onClick={() => openDecisions(sessionId)}>
+          Decide
+        </Button>
+      </QuestionnaireActions>
+    </Questionnaire>
   )
 }
