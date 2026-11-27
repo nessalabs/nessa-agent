@@ -12,6 +12,7 @@ const host = vi.hoisted(() => ({
   openInstalledApp: vi.fn(async (..._args: unknown[]) => undefined),
   placeInstalledApp: vi.fn(async (..._args: unknown[]) => undefined),
   removeInstalledApp: vi.fn(async (_appId: string) => undefined),
+  keepOnlyInstalledApps: vi.fn(async (_appIds: readonly string[]) => [] as string[]),
   stopInstalledApp: vi.fn(async (_appId: string) => undefined),
   runningInstalledApps: vi.fn(async () => [] as string[]),
   onInstalledAppsChanged: vi.fn(async (_handler: () => void) => () => undefined),
@@ -31,6 +32,7 @@ beforeEach(() => {
   host.openInstalledApp.mockReset().mockResolvedValue(undefined)
   host.placeInstalledApp.mockReset().mockResolvedValue(undefined)
   host.removeInstalledApp.mockReset().mockResolvedValue(undefined)
+  host.keepOnlyInstalledApps.mockReset().mockResolvedValue([])
   host.stopInstalledApp.mockReset().mockResolvedValue(undefined)
   host.runningInstalledApps.mockReset().mockResolvedValue([])
 })
@@ -163,6 +165,35 @@ it("installs the reviewed digest on Yes, then opens, stops and uninstalls it", a
     host.removeInstalledApp.mock.invocationCallOrder[0] ?? 0,
   )
   expect(container.querySelector('[data-installed-app="notes"]')).toBeNull()
+})
+
+it("keeps only the launchers of apps the gateway lists after each read", async () => {
+  const gateway = keeping()
+  await gateway.install(checked("notes", "1.0.0").package, "a".repeat(64))
+  draw(gateway)
+  await settle()
+  expect(host.keepOnlyInstalledApps).toHaveBeenLastCalledWith(["notes"])
+
+  await press('[data-installed-app-uninstall="notes"]')
+  expect(host.keepOnlyInstalledApps).toHaveBeenLastCalledWith([])
+
+  // While a read is out nothing can change: no row and no Create to press.
+  let answer: (apps: InstalledApp[]) => void = () => undefined
+  gateway.installed.mockImplementationOnce(
+    () => new Promise<InstalledApp[]>((resolve) => (answer = resolve)),
+  )
+  act(() => root.unmount())
+  root = createRoot(container)
+  draw(gateway)
+  await settle()
+  expect(
+    container.querySelector<HTMLInputElement>("[data-create-app-id]")?.disabled,
+  ).toBe(true)
+  answer([])
+  await settle()
+  expect(
+    container.querySelector<HTMLInputElement>("[data-create-app-id]")?.disabled,
+  ).toBe(false)
 })
 
 it("says why the gateway refused a new app", async () => {

@@ -60,6 +60,8 @@ export function refusalWords(cause: unknown): string {
       return "The app changed after you reviewed it. Review it again."
     case "app_already_installed":
       return "An app with this id is already installed. Uninstall it first."
+    case "apps_limit_reached":
+      return "You have as many apps as Nessa keeps. Uninstall one first."
     case "app_not_installed":
       return "This app isn’t installed any more."
     case "apps_not_configured":

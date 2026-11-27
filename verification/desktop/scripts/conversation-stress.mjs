@@ -10287,12 +10287,26 @@ const steps = {
         )
       )
         failures.push("the apps audit has no uninstalled record")
-      // The other app goes too, for the steps after.
-      await page.locator(`[data-installed-app-uninstall="${kept}"]`).click()
+      // The other app is uninstalled from another client: its launcher goes
+      // the next time Settings reads the list.
+      await closeSettings(page)
+      await run.client.apps.uninstall(kept, randomUUID())
+      await page.keyboard.press(keys.settings)
+      await page
+        .locator(css.settingsCategory, { hasText: names.workspaceSettings })
+        .click()
+      await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
       await page
         .locator(`[data-installed-app="${kept}"]`)
         .waitFor({ state: "detached", timeout: 10_000 })
-        .catch(() => failures.push("the second app could not be uninstalled"))
+        .catch(() => failures.push("the app uninstalled elsewhere is still listed"))
+      const orphan = await waitFor(
+        () =>
+          page.evaluate((id) => window.__fakeHostAppRemoved.includes(id) || null, kept),
+        10_000,
+      )
+      if (!orphan)
+        failures.push("the launcher of an app uninstalled elsewhere was never removed")
       await closeSettings(page)
     })
   },

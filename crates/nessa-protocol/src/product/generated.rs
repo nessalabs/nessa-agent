@@ -1916,6 +1916,8 @@ pub enum AppsErrorCode {
     AppReviewStale,
     #[serde(rename = "app_already_installed")]
     AppAlreadyInstalled,
+    #[serde(rename = "apps_limit_reached")]
+    AppsLimitReached,
     #[serde(rename = "app_not_installed")]
     AppNotInstalled,
     #[serde(rename = "apps_storage_unavailable")]
@@ -1931,6 +1933,7 @@ impl AppsErrorCode {
             Self::AppPackageTooLarge => "app_package_too_large",
             Self::AppReviewStale => "app_review_stale",
             Self::AppAlreadyInstalled => "app_already_installed",
+            Self::AppsLimitReached => "apps_limit_reached",
             Self::AppNotInstalled => "app_not_installed",
             Self::AppsStorageUnavailable => "apps_storage_unavailable",
             Self::AppsAuditUnavailable => "apps_audit_unavailable",

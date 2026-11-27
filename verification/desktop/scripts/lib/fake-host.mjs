@@ -90,7 +90,9 @@ export const STARTING = {
  * until `installed_app_stop`, and each open is kept in
  * `window.__fakeHostAppOpens`. Removing a launcher (`installed_app_remove`)
  * is refused while the app runs, as the host refuses it, and is kept in
- * `window.__fakeHostAppRemoved`. Opening or stopping tells the desktop window
+ * `window.__fakeHostAppRemoved`. Keeping only the gateway's apps
+ * (`installed_app_keep_only`) stops and removes every other launcher, kept in
+ * `window.__fakeHostAppRemoved` too. Opening or stopping tells the desktop window
  * `nessa://installed-apps-changed`. The fake does not verify the bytes or run
  * an app; the real host does, its unit tests hold the launchers, and the
  * Linux native smoke runs `nessa-app-host` itself.
@@ -285,6 +287,18 @@ export function gatewayHost({
         launchers.delete(args.appId)
         window.__fakeHostAppRemoved.push(args.appId)
         return Promise.resolve(null)
+      }
+      if (command === "installed_app_keep_only") {
+        const removed = [...launchers.keys()]
+          .filter((appId) => !args.appIds.includes(appId))
+          .sort()
+        for (const appId of removed) {
+          runningApps.delete(appId)
+          launchers.delete(appId)
+          window.__fakeHostAppRemoved.push(appId)
+        }
+        if (removed.length > 0) appsChanged()
+        return Promise.resolve(removed)
       }
       if (command === "installed_app_running")
         return Promise.resolve([...runningApps].sort())

@@ -176,6 +176,7 @@ fn main() {
             installed_apps::installed_app_stop,
             installed_apps::installed_app_remove,
             installed_apps::installed_app_running,
+            installed_apps::installed_app_keep_only,
         ])
         .setup(move |app| {
             if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {

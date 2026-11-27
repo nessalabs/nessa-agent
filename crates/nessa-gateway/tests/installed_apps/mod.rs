@@ -373,3 +373,48 @@ async fn a_package_outside_the_inline_limits_is_too_large() {
     let big = edited(&starter.package, &vec![b'a'; 17 * 1024]);
     assert_eq!(apps.review(&big), Err(AppsError::PackageTooLarge));
 }
+
+#[tokio::test]
+async fn no_more_apps_install_than_the_list_can_hold() {
+    let (_folder, apps, audit) = apps();
+    for index in 0..super::application::MAX_INSTALLED_APPS {
+        let starter = apps
+            .starter(format!("app-{index}"), "1.0.0".into())
+            .unwrap();
+        apps.install(
+            owner(),
+            format!("r{index}"),
+            &starter.package,
+            &starter.review.digest,
+        )
+        .await
+        .unwrap();
+    }
+    let recorded = events(&audit).len();
+    let one_more = apps.starter("one-more".into(), "1.0.0".into()).unwrap();
+    assert_eq!(
+        apps.install(
+            owner(),
+            "past".into(),
+            &one_more.package,
+            &one_more.review.digest
+        )
+        .await,
+        Err(AppsError::LimitReached)
+    );
+    assert_eq!(
+        events(&audit).len(),
+        recorded,
+        "nothing was asked of the store"
+    );
+    assert_eq!(
+        apps.installed().await.unwrap().len(),
+        super::application::MAX_INSTALLED_APPS
+    );
+    // A retry of an installed app's own bytes is still answered.
+    let first = apps.starter("app-0".into(), "1.0.0".into()).unwrap();
+    assert!(apps
+        .install(owner(), "r0".into(), &first.package, &first.review.digest)
+        .await
+        .is_ok());
+}

@@ -53,7 +53,7 @@ mod host {
         LAUNCHER_RECORD, MAX_LAUNCHER_RECORD_BYTES, RUNNING_LOCK, RUNNING_PID,
     };
     use tauri::http::{header, Method, Request, Response, StatusCode};
-    use tauri::webview::PageLoadEvent;
+    use tauri::webview::{NewWindowResponse, PageLoadEvent};
     use tauri::{Builder, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 
     const SCHEME: &str = "nessa-app";
@@ -61,8 +61,8 @@ mod host {
 
     /// Set to a URL by the Linux native smoke: once the page has loaded, the
     /// host reports what it drew, whether the page could read its own file,
-    /// and whether a request to that URL got out, then quits. It reads the
-    /// page and nothing else.
+    /// whether it has WebRTC or could open a window, and whether a request
+    /// to that URL got out, then quits. It reads the page and nothing else.
     const PROBE: &str = "NESSA_APP_HOST_PROBE";
 
     /// How long a launch waits for the lock before deciding the app is
@@ -70,6 +70,26 @@ mod host {
     /// launch must not lose to that probe.
     const LOCK_TRIES: u32 = 40;
     const LOCK_WAIT: Duration = Duration::from_millis(25);
+
+    /// Run before the page's own scripts, in every frame: WebRTC reaches
+    /// peers and STUN servers that no content security policy names, so the
+    /// app gets none of it, and cannot put it back.
+    const NO_PEER_CONNECTIONS: &str = r#"(() => {
+        for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel",
+            "RTCSessionDescription", "RTCIceCandidate", "RTCRtpSender", "RTCRtpReceiver"]) {
+            try { delete window[name] } catch (_) {}
+            try {
+                Object.defineProperty(window, name, { value: undefined, writable: false, configurable: false })
+            } catch (_) {}
+        }
+    })()"#;
+
+    /// WebView2's own switches: wry's defaults, then no WebRTC over UDP
+    /// that no proxy carries, and no DNS lookups ahead of a link.
+    #[cfg(windows)]
+    const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+        --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
+        --webrtc-ip-handling-policy=disable_non_proxied_udp --dns-prefetch-disable";
 
     pub fn run() -> Result<(), String> {
         let folder = launcher_folder()?;
@@ -125,7 +145,12 @@ mod host {
                 .center()
                 .incognito(true)
                 .data_directory(webview_data.clone())
-                .on_navigation(move |next| same_origin(next, &allowed));
+                .initialization_script_for_all_frames(NO_PEER_CONNECTIONS)
+                .on_navigation(move |next| same_origin(next, &allowed))
+                // `window.open` and target=_blank open nothing.
+                .on_new_window(|_, _| NewWindowResponse::Deny);
+                #[cfg(windows)]
+                let window = window.additional_browser_args(BROWSER_ARGS);
                 let window = match icon
                     .as_deref()
                     .and_then(|png| tauri::image::Image::from_bytes(png).ok())
@@ -175,7 +200,8 @@ mod host {
     }
 
     /// Hold the running lock, writing this process's id beside it. None when
-    /// another process holds it: the app is already open.
+    /// another process holds it: the app is already open. The id is written
+    /// whole and swapped in, so Stop never reads half of it.
     fn hold_running(folder: &Path) -> Result<Option<File>, String> {
         let lock = File::options()
             .create(true)
@@ -184,11 +210,13 @@ mod host {
             .open(folder.join(RUNNING_LOCK))
             .map_err(|error| format!("running lock: {error}"))?;
         for _ in 0..LOCK_TRIES {
-            match lock.try_lock_exclusive() {
+            match FileExt::try_lock_exclusive(&lock) {
                 Ok(()) => {
-                    let mut pid = File::create(folder.join(RUNNING_PID))
-                        .map_err(|error| format!("running pid: {error}"))?;
-                    write!(pid, "{}", std::process::id())
+                    let id = std::process::id();
+                    let written = folder.join(format!(".{RUNNING_PID}.{id}"));
+                    File::create(&written)
+                        .and_then(|mut pid| write!(pid, "{id}"))
+                        .and_then(|()| std::fs::rename(&written, folder.join(RUNNING_PID)))
                         .map_err(|error| format!("running pid: {error}"))?;
                     return Ok(Some(lock));
                 }
@@ -270,8 +298,14 @@ mod host {
                     request.send()
                     own = request.status === 200
                 }} catch (_) {{}}
+                const image = new Image()
+                image.src = {target} + "?image"
+                const rtc = typeof RTCPeerConnection !== "undefined"
+                    || typeof webkitRTCPeerConnection !== "undefined"
+                let opened = null
+                try {{ opened = window.open({target}) }} catch (_) {{}}
                 const heading = document.querySelector("h1")
-                return {{ title: document.title, heading: heading && heading.textContent, reached, own }}
+                return {{ title: document.title, heading: heading && heading.textContent, reached, own, rtc, opened: !!opened }}
             }})()"#
         );
         let app = webview.app_handle().clone();

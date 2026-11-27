@@ -11,6 +11,7 @@ import {
 import type { InstalledApp } from "@nessa/client"
 import {
   confirmAppInstall,
+  keepOnlyInstalledApps,
   onInstalledAppsChanged,
   openInstalledApp,
   placeInstalledApp,
@@ -35,6 +36,7 @@ import {
  *         ──▶ host places its launcher (an app of its own, with its icon)
  * Open ── apps.read ──▶ host verifies again, places, runs it (own process, no network)
  * Stop ── host ends it      Uninstall ── Stop, apps.uninstall, launcher removed
+ * each list read ── host keeps only the listed apps' launchers
  * ```
  *
  * The gateway is the one authority on what is installed; the host on which
@@ -87,14 +89,23 @@ export function InstalledAppsTab() {
   const [draft, setDraft] = useState("")
   const saidId = useId()
   const revision = useRef(0)
+  // Changes started here, so a list read before one started is never used
+  // to remove launchers. A read a change starts comes after its gateway step.
+  const changes = useRef(0)
 
   useEffect(() => {
     if (!gateway) return
     const current = ++revision.current
+    const since = changes.current
     setListing({ kind: "reading" })
     gateway.installed().then(
       (apps) => {
-        if (current === revision.current) setListing({ kind: "ready", apps })
+        if (current !== revision.current) return
+        setListing({ kind: "ready", apps })
+        // A launcher the gateway no longer lists goes: an uninstall that
+        // failed halfway, or one made from another client.
+        if (since === changes.current)
+          void keepOnlyInstalledApps(apps.map((app) => app.appId)).catch(() => undefined)
       },
       () => {
         if (current === revision.current) setListing({ kind: "unread" })
@@ -124,6 +135,7 @@ export function InstalledAppsTab() {
     if (busy) return
     setBusy(key)
     setSaid(undefined)
+    changes.current += 1
     try {
       await work()
     } catch (cause) {

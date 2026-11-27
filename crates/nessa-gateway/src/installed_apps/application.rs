@@ -24,10 +24,17 @@ pub enum AppsError {
     PackageTooLarge,
     ReviewStale,
     AlreadyInstalled,
+    /// As many apps are installed as `apps.installed` can list.
+    LimitReached,
     NotInstalled,
     StorageUnavailable,
     AuditUnavailable,
 }
+
+/// The most apps one gateway keeps: as many as `apps.installed` answers
+/// (`maxItems` in the protocol). An install past it is refused, so the list
+/// always fits.
+pub const MAX_INSTALLED_APPS: usize = 256;
 
 impl From<InlineRefusal> for AppsError {
     fn from(refusal: InlineRefusal) -> Self {
@@ -264,6 +271,15 @@ impl InstalledApps {
             Ok(None) => {}
             Err(_) => return Err(AppsError::StorageUnavailable),
         }
+        // Counted under the change lock, so two installs cannot both pass.
+        let count = self
+            .with_store(|store| store.inventory())
+            .await?
+            .map_err(|_| AppsError::StorageUnavailable)?
+            .len();
+        if count >= MAX_INSTALLED_APPS {
+            return Err(AppsError::LimitReached);
+        }
         let operation_id = Uuid::new_v4().to_string();
         self.record(
             &operation_id,
@@ -398,6 +414,7 @@ fn reason(error: AppsError) -> &'static str {
         AppsError::PackageTooLarge => "package_too_large",
         AppsError::ReviewStale => "review_stale",
         AppsError::AlreadyInstalled => "already_installed",
+        AppsError::LimitReached => "limit_reached",
         AppsError::NotInstalled => "not_installed",
         AppsError::StorageUnavailable => "storage_unavailable",
         AppsError::AuditUnavailable => "audit_unavailable",

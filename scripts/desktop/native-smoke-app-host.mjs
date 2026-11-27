@@ -3,7 +3,8 @@
  * its own, on Linux WebKitGTK under a virtual display:
  *
  * - it draws the package's own files and its page may read them, while a
- *   request to a local server never leaves (the server sees nothing);
+ *   request, an image or a window to a local server never leaves (the server
+ *   sees nothing), and the page has no WebRTC;
  * - while it runs it holds the launcher's running lock and names its process;
  *   a second launch leaves at once, and SIGTERM (Stop) ends it and frees the
  *   lock;
@@ -144,6 +145,8 @@ export async function runAppHostSmoke(root) {
       heading: HEADING,
       reached: false,
       own: true,
+      rtc: false,
+      opened: false,
     })
     assert.equal(hits, 0, "a request from the app reached the local server")
     assert.equal(held(join(folder, "running.lock")), false, "the lock outlived the app")

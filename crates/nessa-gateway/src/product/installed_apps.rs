@@ -198,6 +198,7 @@ fn code(error: AppsError) -> AppsErrorCode {
         AppsError::PackageTooLarge => AppsErrorCode::AppPackageTooLarge,
         AppsError::ReviewStale => AppsErrorCode::AppReviewStale,
         AppsError::AlreadyInstalled => AppsErrorCode::AppAlreadyInstalled,
+        AppsError::LimitReached => AppsErrorCode::AppsLimitReached,
         AppsError::NotInstalled => AppsErrorCode::AppNotInstalled,
         AppsError::StorageUnavailable => AppsErrorCode::AppsStorageUnavailable,
         AppsError::AuditUnavailable => AppsErrorCode::AppsAuditUnavailable,

@@ -1547,6 +1547,23 @@ export async function removeInstalledApp(appId: string): Promise<void> {
   await invoke("installed_app_remove", { appId })
 }
 
+/**
+ * Stops and removes every launcher whose app is not in `appIds`, the
+ * gateway's list read after the last change, so an uninstall that failed
+ * halfway or one made from another client leaves no app behind. Answers the
+ * apps removed. Only the desktop window may ask.
+ */
+export async function keepOnlyInstalledApps(
+  appIds: readonly string[],
+): Promise<readonly string[]> {
+  if (!inTauri) return []
+  const { invoke } = await import("@tauri-apps/api/core")
+  const answer = await invoke<unknown>("installed_app_keep_only", { appIds })
+  return Array.isArray(answer) && answer.every((id) => typeof id === "string")
+    ? (answer as string[])
+    : []
+}
+
 /** The apps running now, by id. */
 export async function runningInstalledApps(): Promise<readonly string[]> {
   if (!inTauri) return []

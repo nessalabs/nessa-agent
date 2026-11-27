@@ -1856,13 +1856,14 @@ export interface AppsUninstallResult {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
   appId: string
 }
-/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. */
+/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. */
 export const AppsErrorCode = {
   AppsNotConfigured: "apps_not_configured",
   AppPackageInvalid: "app_package_invalid",
   AppPackageTooLarge: "app_package_too_large",
   AppReviewStale: "app_review_stale",
   AppAlreadyInstalled: "app_already_installed",
+  AppsLimitReached: "apps_limit_reached",
   AppNotInstalled: "app_not_installed",
   AppsStorageUnavailable: "apps_storage_unavailable",
   AppsAuditUnavailable: "apps_audit_unavailable",
