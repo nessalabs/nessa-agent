@@ -208,10 +208,11 @@ pub fn installed_app_open(
 ) -> Result<(), String> {
     only_desktop(&window)?;
     let label = window_label(&app_id).ok_or("not an app identity")?;
-    held.hold(&app_id, package, &digest).map_err(|refusal| match refusal {
-        OpenRefusal::Invalid => "the package does not verify".to_owned(),
-        OpenRefusal::NotThePackageNamed => "the package is not the one named".to_owned(),
-    })?;
+    held.hold(&app_id, package, &digest)
+        .map_err(|refusal| match refusal {
+            OpenRefusal::Invalid => "the package does not verify".to_owned(),
+            OpenRefusal::NotThePackageNamed => "the package is not the one named".to_owned(),
+        })?;
     let app = window.app_handle();
     if let Some(open) = app.get_webview_window(&label) {
         // Already open: draw the newly held bytes, and come forward.
@@ -308,7 +309,10 @@ mod tests {
         );
         let mut tampered = package.clone();
         tampered.assets[0].bytes = "PHA+dGFtcGVyZWQ8L3A+".into();
-        assert_eq!(held.hold("notes", tampered, &digest), Err(OpenRefusal::Invalid));
+        assert_eq!(
+            held.hold("notes", tampered, &digest),
+            Err(OpenRefusal::Invalid)
+        );
         assert!(held.running().is_empty());
 
         held.hold("notes", package.clone(), &digest).unwrap();

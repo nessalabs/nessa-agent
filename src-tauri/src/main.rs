@@ -403,7 +403,9 @@ fn main() {
             // ways setup can go that nothing coordinates — a dismissal, a
             // crashed webview — and is idempotent with the handoff's own close.
             if matches!(event, WindowEvent::Destroyed)
-                && window.label().starts_with(installed_apps::APP_WINDOW_PREFIX)
+                && window
+                    .label()
+                    .starts_with(installed_apps::APP_WINDOW_PREFIX)
             {
                 installed_apps::window_destroyed(window.app_handle(), window.label());
             }

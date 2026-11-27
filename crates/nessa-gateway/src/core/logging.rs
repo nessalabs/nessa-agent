@@ -30,11 +30,11 @@ pub const DEFAULT_FILTER: &str = concat!(
     "nessa_webhooks=info,",
     "nessa_sdk=warn,nessa_sdk::timing=info,nessa_gateway_endpoint=error,",
     // Libraries it uses, quiet unless RUST_LOG asks for them.
-    "nessa_agent_credentials=off,nessa_auth=off,nessa_client_core=off,",
+    "nessa_agent_credentials=off,nessa_app_package=off,nessa_auth=off,nessa_client_core=off,",
     "nessa_device_client=off,nessa_images=off,nessa_local_database=off,",
     "nessa_local_storage=off,nessa_projection=off,nessa_protocol=off,",
     "nessa_telemetry=warn,",
-    "nessa_timer=off,nessa_vault=off",
+    "nessa_timer=off,nessa_types=off,nessa_vault=off",
 );
 
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
