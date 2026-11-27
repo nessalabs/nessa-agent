@@ -69,17 +69,32 @@ fn id(text: &str) -> ExtensionAppId {
 
 /// The same app with its HTML changed and its manifest updated to match: a
 /// package that verifies, but is not the one reviewed.
+/// `package` with its `index.html` replaced by `html`, declared to match.
 fn edited(package: &InlinePackage, html: &[u8]) -> InlinePackage {
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&STANDARD.decode(&package.manifest_base64).unwrap()).unwrap();
-    manifest["assets"][0]["sizeBytes"] = html.len().into();
-    manifest["assets"][0]["sha256"] = hex::encode(Sha256::digest(html)).into();
+    let declared = manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|asset| asset["path"] == "index.html")
+        .unwrap();
+    declared["sizeBytes"] = html.len().into();
+    declared["sha256"] = hex::encode(Sha256::digest(html)).into();
     InlinePackage {
         manifest_base64: STANDARD.encode(serde_json::to_vec(&manifest).unwrap()),
-        assets: vec![InlineAsset {
-            path: package.assets[0].path.clone(),
-            bytes_base64: STANDARD.encode(html),
-        }],
+        assets: package
+            .assets
+            .iter()
+            .map(|asset| InlineAsset {
+                path: asset.path.clone(),
+                bytes_base64: if asset.path == "index.html" {
+                    STANDARD.encode(html)
+                } else {
+                    asset.bytes_base64.clone()
+                },
+            })
+            .collect(),
     }
 }
 

@@ -212,6 +212,24 @@ function checkServer() {
       "  cargo build -p nessa-server",
     )
   }
+  // `tauri dev` builds Nessa's own binary only. Installed apps run in their
+  // own copy of nessa-app-host, which Nessa looks for beside itself. Same
+  // features as `tauri dev`'s build, so nothing is compiled twice.
+  say("building the app host, so installed apps can open")
+  try {
+    execFileSync(
+      "cargo",
+      ["build", "-p", "nessa-app", "--no-default-features", "--bin", "nessa-app-host"],
+      { stdio: "inherit", cwd: root },
+    )
+  } catch {
+    fail(
+      "The app host could not be built, so installed apps could not open.",
+      "The compiler's own output is above.",
+      "",
+      "  cargo build -p nessa-app --no-default-features --bin nessa-app-host",
+    )
+  }
 }
 
 function main() {

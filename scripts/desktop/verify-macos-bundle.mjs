@@ -24,6 +24,10 @@ const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json"
 
 const runtime = resolve(app, "Contents/Resources/runtime")
 verifyRuntimeFingerprint(runtime)
+// Each installed app's bundle holds a copy of this (`app_launchers.rs`), and
+// the bundler signs it with everything else in Contents/MacOS.
+if (!existsSync(resolve(app, "Contents/MacOS/nessa-app-host")))
+  throw new Error(`${app} does not hold Contents/MacOS/nessa-app-host`)
 
 execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], {
   stdio: "inherit",

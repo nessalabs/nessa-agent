@@ -81,20 +81,19 @@ export const STARTING = {
  * panel's size (`panel_size`) with the page's own, and says setup chose no
  * agent (`chosen_agent`).
  *
- * Every page's host keeps installed apps' windows as
- * `src-tauri/src/installed_apps.rs` does. The system's Install/Cancel dialog
- * (`installed_app_confirm`) answers from `window.__fakeHostAppAnswers`, each
- * taken once, in order, Cancel when none is queued; each ask is kept in
- * `window.__fakeHostAppConfirms`. An app opened (`installed_app_open`) is
- * held, with its digest, in local storage, which every tab of the context
- * shares, and is running until `installed_app_stop`; each open is kept in
- * `window.__fakeHostAppOpens`. Opening or stopping tells the desktop window
- * `nessa://installed-apps-changed`. Given `appWindow` (an app id), the page
- * is that app's own window (`installed-app.html`): `installed_app_page`
- * answers with what is held for it, as the host answers by window label,
- * and a stop marks the page `data-fake-host-app-stopped` for the step to
- * close it, as the host destroys the window. The fake does not verify the
- * bytes; the real host does, and its unit tests hold that.
+ * Every page's host keeps installed apps as `src-tauri/src/installed_apps.rs`
+ * does. The system's Install/Cancel dialog (`installed_app_confirm`) answers
+ * from `window.__fakeHostAppAnswers`, each taken once, in order, Cancel when
+ * none is queued; each ask is kept in `window.__fakeHostAppConfirms`. Placing
+ * a launcher (`installed_app_place`, and `installed_app_open` before it runs
+ * the app) is kept in `window.__fakeHostAppPlaced`; an app opened is running
+ * until `installed_app_stop`, and each open is kept in
+ * `window.__fakeHostAppOpens`. Removing a launcher (`installed_app_remove`)
+ * is refused while the app runs, as the host refuses it, and is kept in
+ * `window.__fakeHostAppRemoved`. Opening or stopping tells the desktop window
+ * `nessa://installed-apps-changed`. The fake does not verify the bytes or run
+ * an app; the real host does, its unit tests hold the launchers, and the
+ * Linux native smoke runs `nessa-app-host` itself.
  */
 export function gatewayHost({
   endpoint,
@@ -103,26 +102,20 @@ export function gatewayHost({
   starting = null,
   setup = false,
   panel = false,
-  appWindow = null,
 }) {
   // Setup and the panel both wait for the host to say it is up.
   const started = setup || panel
   // The host's events for files and folders dragged onto the window. Here,
   // not beside the function: the page runs this function's text alone.
   const APPS_CHANGED = "nessa://installed-apps-changed"
-  const APPS_KEY = "nessa-fake-host-apps"
-  const heldApps = () => {
-    try {
-      return JSON.parse(localStorage.getItem(APPS_KEY) ?? "{}")
-    } catch {
-      return {}
-    }
-  }
-  const holdApps = (apps) => localStorage.setItem(APPS_KEY, JSON.stringify(apps))
-  const appsWire = new BroadcastChannel("nessa-fake-host-apps")
+  // Placed launchers by app, and the apps running now.
+  const launchers = new Map()
+  const runningApps = new Set()
   window.__fakeHostAppAnswers = []
   window.__fakeHostAppConfirms = []
   window.__fakeHostAppOpens = []
+  window.__fakeHostAppPlaced = []
+  window.__fakeHostAppRemoved = []
   const DRAGGED_EVENTS = new Set([
     APPS_CHANGED,
     "nessa://paths-dragging",
@@ -197,14 +190,13 @@ export function gatewayHost({
       pillWire.postMessage({ kind: "picture", picture: pillPicture })
   })
   pillWire.postMessage({ kind: "read" })
-  appsWire.addEventListener("message", ({ data }) => {
-    if (data.kind === "changed") window.__fakeHostEmit(APPS_CHANGED, null)
-    if (data.kind === "stopped" && data.appId === appWindow)
-      document.documentElement.dataset.fakeHostAppStopped = ""
-  })
-  const appsChanged = () => {
-    window.__fakeHostEmit(APPS_CHANGED, null)
-    appsWire.postMessage({ kind: "changed" })
+  const appsChanged = () => window.__fakeHostEmit(APPS_CHANGED, null)
+  const placeApp = (args) => {
+    const manifest = JSON.parse(atob(args.package.manifest))
+    if (manifest.appId !== args.appId) return false
+    launchers.set(args.appId, args.digest)
+    window.__fakeHostAppPlaced.push({ appId: args.appId, digest: args.digest })
+    return true
   }
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
@@ -272,41 +264,30 @@ export function gatewayHost({
         window.__fakeHostAppConfirms.push(args)
         return Promise.resolve(window.__fakeHostAppAnswers.shift() ?? false)
       }
+      if (command === "installed_app_place")
+        return placeApp(args)
+          ? Promise.resolve(null)
+          : Promise.reject("the package is not the one named")
       if (command === "installed_app_open") {
-        const manifest = JSON.parse(atob(args.package.manifest))
-        if (manifest.appId !== args.appId)
-          return Promise.reject("the package is not the one named")
+        if (!placeApp(args)) return Promise.reject("the package is not the one named")
         window.__fakeHostAppOpens.push({ appId: args.appId, digest: args.digest })
-        holdApps({
-          ...heldApps(),
-          [args.appId]: {
-            appId: args.appId,
-            entrypoint: manifest.entrypoint,
-            assets: args.package.assets,
-            digest: args.digest,
-          },
-        })
+        runningApps.add(args.appId)
         appsChanged()
         return Promise.resolve(null)
       }
       if (command === "installed_app_stop") {
-        const apps = heldApps()
-        if (apps[args.appId]) {
-          delete apps[args.appId]
-          holdApps(apps)
-          appsWire.postMessage({ kind: "stopped", appId: args.appId })
-          appsChanged()
-        }
+        if (runningApps.delete(args.appId)) appsChanged()
+        return Promise.resolve(null)
+      }
+      if (command === "installed_app_remove") {
+        if (runningApps.has(args.appId))
+          return Promise.reject(`${args.appId} is still open`)
+        launchers.delete(args.appId)
+        window.__fakeHostAppRemoved.push(args.appId)
         return Promise.resolve(null)
       }
       if (command === "installed_app_running")
-        return Promise.resolve(Object.keys(heldApps()).sort())
-      if (command === "installed_app_page") {
-        const held = appWindow ? heldApps()[appWindow] : undefined
-        if (!held) return Promise.reject("this window holds no app")
-        const { appId, entrypoint, assets } = held
-        return Promise.resolve({ appId, entrypoint, assets })
-      }
+        return Promise.resolve([...runningApps].sort())
       if (started && command === "host_startup")
         return Promise.resolve({ state: "ready" })
       // The gateway it manages is up: the stack's gateway is already running,

@@ -25,13 +25,13 @@ export {
 } from "./call-pill"
 export {
   confirmAppInstall,
-  installedAppPage,
   onInstalledAppsChanged,
   openInstalledApp,
+  placeInstalledApp,
+  removeInstalledApp,
   runningInstalledApps,
   stopInstalledApp,
   type HostAppPackage,
-  type InstalledAppPage,
 } from "./window"
 export {
   dragCallPill,

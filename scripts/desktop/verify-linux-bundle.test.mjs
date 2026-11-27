@@ -166,10 +166,14 @@ test("the verifier checks only what a build told it it made", () => {
 
 /** A stand-in for `dpkg-deb`: answers `--field` with `depends`, and
  * `--extract` with a runtime tree whose manifest does or does not match. */
-function fakeDpkgDeb({ depends, matching = true, calls = [] }) {
+function fakeDpkgDeb({ depends, matching = true, host = true, calls = [] }) {
   return (command, args) => {
     calls.push([command, ...args])
     if (args[0] === "--field") return `${depends}\n`
+    if (host) {
+      mkdirSync(join(args[2], "usr/bin"), { recursive: true })
+      writeFileSync(join(args[2], "usr/bin/nessa-app-host"), "app host")
+    }
     const runtime = join(args[2], "usr/lib/Nessa/runtime")
     mkdirSync(runtime, { recursive: true })
     writeFileSync(join(runtime, "nessa"), "gateway")
@@ -209,6 +213,14 @@ test("a .deb is verified through dpkg-deb: its declarations, then its runtime", 
         run: fakeDpkgDeb({ depends, matching: false }),
       }),
     /does not match its manifest/,
+  )
+  assert.throws(
+    () =>
+      verifyDeb("/out/Nessa_0.1.0_amd64.deb", {
+        productName: "Nessa",
+        run: fakeDpkgDeb({ depends, host: false }),
+      }),
+    /does not hold usr\/bin\/nessa-app-host/,
   )
   assert.throws(
     () =>

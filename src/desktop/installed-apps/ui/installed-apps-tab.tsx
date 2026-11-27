@@ -13,6 +13,8 @@ import {
   confirmAppInstall,
   onInstalledAppsChanged,
   openInstalledApp,
+  placeInstalledApp,
+  removeInstalledApp,
   runningInstalledApps,
   stopInstalledApp,
 } from "../../../host"
@@ -30,12 +32,13 @@ import {
  * New app {id} ── apps.starter ──▶ native Install/Cancel (host, names the digest)
  *     Cancel ──▶ nothing is sent, nothing kept
  *     Install ──▶ apps.install {package, reviewedDigest} ── gateway verifies again
- * Open ── apps.read ──▶ host verifies the bytes again ──▶ the app's own window (no network)
- * Stop ── host closes the window        Uninstall ── Stop, then apps.uninstall
+ *         ──▶ host places its launcher (an app of its own, with its icon)
+ * Open ── apps.read ──▶ host verifies again, places, runs it (own process, no network)
+ * Stop ── host ends it      Uninstall ── Stop, apps.uninstall, launcher removed
  * ```
  *
  * The gateway is the one authority on what is installed; the host on which
- * app windows are open. This tab only asks them and shows their answers.
+ * apps are running. This tab only asks them and shows their answers.
  */
 interface InstalledAppsContextValue {
   readonly gateway: InstalledAppsGateway | undefined
@@ -143,6 +146,8 @@ export function InstalledAppsTab() {
         reread()
       }
       setDraft("")
+      // Its launcher: an app of its own in Applications or the menu.
+      await placeInstalledApp(review.appId, pkg, review.digest)
     })
 
   const open = (appId: string) =>
@@ -160,13 +165,15 @@ export function InstalledAppsTab() {
   const uninstall = (appId: string) =>
     run(`uninstall:${appId}`, async () => {
       if (!gateway) return
-      // The window goes first, so no app runs from bytes the gateway removed.
+      // The app stops first, so none runs from bytes the gateway removed,
+      // and its launcher goes once the gateway has removed it.
       await stopInstalledApp(appId)
       try {
         await gateway.uninstall(appId, requestId())
       } finally {
         reread()
       }
+      await removeInstalledApp(appId)
     })
 
   const ready = !!gateway && listing.kind === "ready"

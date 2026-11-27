@@ -49,9 +49,17 @@ import { nativeSmokeFixture } from "./native-smoke-fixture.mjs"
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const args = process.argv.slice(2)
 if (args.length > 0) {
-  assert.deepEqual(args, ["--app-package"], "expected --app-package or no arguments")
-  const { runAppPackageSmoke } = await import("./native-smoke-app-package.mjs")
-  await runAppPackageSmoke(root)
+  assert.ok(
+    args.length === 1 && ["--app-package", "--app-host"].includes(args[0]),
+    "expected --app-package, --app-host or no arguments",
+  )
+  if (args[0] === "--app-host") {
+    const { runAppHostSmoke } = await import("./native-smoke-app-host.mjs")
+    await runAppHostSmoke(root)
+  } else {
+    const { runAppPackageSmoke } = await import("./native-smoke-app-package.mjs")
+    await runAppPackageSmoke(root)
+  }
   process.exit(0)
 }
 

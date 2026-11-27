@@ -9,7 +9,14 @@
  * staged.
  */
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -21,6 +28,9 @@ import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
  * `webkit2gtk-4.1`), without which it cannot open a window, and the indicator
  * library the tray loads with `dlopen`, without which it cannot make a tray. */
 export const REQUIRED_DEB_PACKAGES = ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
+
+/** The binary each installed app runs in, beside Nessa's own. */
+export const APP_HOST = "nessa-app-host"
 
 /** The package names a `Depends` field requires, alternatives included.
  *
@@ -127,6 +137,9 @@ export function verifyDeb(path, { productName, run = execFileSync }) {
   withScratch((scratch) => {
     dpkgDeb(run, ["--extract", path, scratch], { stdio: "inherit" })
     verifyRuntimeFingerprint(join(scratch, "usr/lib", productName, "runtime"))
+    // Each installed app runs in its own copy of this (`app_launchers.rs`).
+    if (!existsSync(join(scratch, "usr/bin", APP_HOST)))
+      throw new Error(`${path} does not hold usr/bin/${APP_HOST}`)
   })
   console.error(`  verified ${path}`)
 }

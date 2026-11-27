@@ -220,10 +220,14 @@ mod tests {
             checked.manifest().json(),
             STANDARD.decode(&input.manifest_base64).unwrap()
         );
-        assert_eq!(
-            checked.asset("index.html").unwrap(),
-            STANDARD.decode(&input.assets[0].bytes_base64).unwrap()
-        );
+        for asset in &input.assets {
+            assert_eq!(
+                checked.asset(&asset.path).unwrap(),
+                STANDARD.decode(&asset.bytes_base64).unwrap()
+            );
+        }
+        assert_eq!(checked.manifest().icon(), Some("icon.png"));
+        assert!(checked.asset("icon.png").unwrap().starts_with(b"\x89PNG"));
         assert!(checked.manifest().requested_capabilities().is_empty());
         assert_eq!(
             validate_inline_package(&input),
@@ -231,7 +235,7 @@ mod tests {
                 app_id: "sample-app".to_owned(),
                 package_version: "preview + 1".to_owned(),
                 entrypoint: "index.html".to_owned(),
-                asset_count: 1,
+                asset_count: 2,
             })
         );
 

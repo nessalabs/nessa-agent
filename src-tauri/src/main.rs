@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_credentials;
+mod app_launchers;
 mod app_sandbox;
 mod attachments;
 mod call_pill;
@@ -170,10 +171,11 @@ fn main() {
             call_pill::call_pill_press,
             call_pill::call_pill_drag,
             installed_apps::installed_app_confirm,
+            installed_apps::installed_app_place,
             installed_apps::installed_app_open,
             installed_apps::installed_app_stop,
+            installed_apps::installed_app_remove,
             installed_apps::installed_app_running,
-            installed_apps::installed_app_page,
         ])
         .setup(move |app| {
             if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {
@@ -400,15 +402,6 @@ fn main() {
             // owns the finishing order and closes setup itself. This catches the
             // ways setup can go that nothing coordinates — a dismissal, a
             // crashed webview — and is idempotent with the handoff's own close.
-            if matches!(event, WindowEvent::Destroyed)
-                && window
-                    .label()
-                    .starts_with(installed_apps::APP_WINDOW_PREFIX)
-            {
-                if let Some(deps) = window.app_handle().try_state::<HostDependencies>() {
-                    deps.installed_apps.window_went(window.label());
-                }
-            }
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
                 panel::setup_window_gone();
                 if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {

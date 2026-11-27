@@ -343,10 +343,12 @@ import {
  *               the system's Install dialog, which names the package's
  *               digest. Cancel installs nothing and writes no audit record;
  *               Install keeps exactly that package (the gateway reads back
- *               the digest the dialog was shown). Open hands the host the
- *               read-back package; the app's own window (installed-app.html,
- *               another tab) draws it in the sandbox with no network, Stop
- *               ends it, and Uninstall removes it while a second app stays
+ *               the digest the dialog was shown) and the host is asked to
+ *               place its launcher with that digest. Open hands the host the
+ *               read-back package and the row says it is running; Stop ends
+ *               it, and Uninstall removes it and its launcher while a second
+ *               app stays. The app's own process is nessa-app-host, which the
+ *               Linux native smoke runs
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -10213,6 +10215,17 @@ const steps = {
       for (const phase of ["requested", "installed"])
         if (!installs.some((record) => record.phase === phase))
           failures.push(`the apps audit has no ${phase} install record`)
+      // Installed, it is an app of its own: the host places its launcher.
+      const placed = await waitFor(
+        () =>
+          page.evaluate(
+            (id) => window.__fakeHostAppPlaced.find((each) => each.appId === id),
+            appId,
+          ),
+        10_000,
+      )
+      if (placed?.digest !== digest)
+        failures.push(`the host was asked to place ${JSON.stringify(placed)}`)
       await create(kept, true)
       await page
         .locator(`[data-installed-app="${kept}"]`)
@@ -10236,58 +10249,14 @@ const steps = {
         .waitFor({ timeout: 10_000 })
         .catch(() => failures.push("the open app's row never said it was running"))
 
-      // Its own window: drawn in the sandbox, with no network.
-      const window_ = await page.context().newPage()
-      try {
-        await window_.addInitScript(gatewayHost, {
-          endpoint: null,
-          credential: null,
-          appWindow: appId,
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `apps-${run.engine}-running.png`),
         })
-        await window_.goto(`${new URL(page.url()).origin}/installed-app.html`)
-        const frame = await waitFor(async () => {
-          const proxy = await (await window_.$("#app iframe"))?.contentFrame()
-          const app = proxy?.childFrames()[0]
-          const title =
-            app &&
-            (await app
-              .locator("h1")
-              .textContent()
-              .catch(() => null))
-          return title === "Nessa app" ? app : null
-        }, 15_000)
-        if (!frame) failures.push("the app's own window never drew the app")
-        else {
-          const reached = await frame
-            .evaluate(
-              (url) =>
-                fetch(url).then(
-                  () => true,
-                  () => false,
-                ),
-              page.url(),
-            )
-            .catch(() => false)
-          if (reached) failures.push("the installed app reached the network")
-        }
-        if (run.evidence)
-          await window_.screenshot({
-            path: join(run.evidence, `apps-${run.engine}-window.png`),
-          })
 
-        // Stop ends it, as the host destroys its window.
-        await page.locator(`[data-installed-app-stop="${appId}"]`).click()
-        const stopped = await waitFor(
-          () =>
-            window_.evaluate(
-              () => document.documentElement.dataset.fakeHostAppStopped !== undefined,
-            ),
-          10_000,
-        )
-        if (!stopped) failures.push("Stop did not end the app's window")
-      } finally {
-        await window_.close()
-      }
+      // Stop ends it. Its own process is the host's: the Linux native smoke
+      // runs nessa-app-host itself.
+      await page.locator(`[data-installed-app-stop="${appId}"]`).click()
       await page
         .locator(`[data-installed-app-open="${appId}"]`)
         .waitFor({ timeout: 10_000 })
@@ -10303,6 +10272,12 @@ const steps = {
       if (left.includes(appId))
         failures.push("the gateway still holds the uninstalled app")
       if (!left.includes(kept)) failures.push("uninstalling one app removed the other")
+      const removed = await waitFor(
+        () =>
+          page.evaluate((id) => window.__fakeHostAppRemoved.includes(id) || null, appId),
+        10_000,
+      )
+      if (!removed) failures.push("the uninstalled app's launcher was never removed")
       if (
         !audit().some(
           (record) =>

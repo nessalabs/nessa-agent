@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Nessa — a floating agent composer"
 authors = ["Nessa Labs"]
 edition = "2021"
+# Two binaries: Nessa itself, and the host each installed app runs in as an
+# app of its own (`src/bin/nessa-app-host.rs`).
+default-run = "nessa-app"
 # The lockfile pulls crates that need edition 2024 (icu_normalizer_data 2.x).
 # Packaged rustc 1.83 cannot build it; rustup's stable can.
 rust-version = "1.85"
@@ -60,6 +63,9 @@ tauri-plugin-dialog = "2"
 # Installed apps: the host verifies a package again before an app window draws it.
 nessa-app-package = { path = "../crates/nessa-app-package" }
 nessa-types = { path = "../crates/nessa-types" }
+# An installed app's host holds its running lock (`app_launchers.rs`). Already
+# in the tree for the gateway's own locks; std's file locks need Rust 1.89.
+fs2 = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

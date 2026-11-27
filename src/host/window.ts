@@ -1483,13 +1483,6 @@ export interface HostAppPackage {
   readonly assets: readonly { readonly path: string; readonly bytes: string }[]
 }
 
-/** What an app's own window is given to draw: its entrypoint and every file. */
-export interface InstalledAppPage {
-  readonly appId: string
-  readonly entrypoint: string
-  readonly assets: readonly { readonly path: string; readonly bytes: string }[]
-}
-
 /**
  * Asks the person, in the system's own dialog, whether to install the app
  * whose package digest they were shown. Answers false for Cancel, for a
@@ -1512,9 +1505,23 @@ export async function confirmAppInstall(review: {
 }
 
 /**
- * Opens `appId` in its own window, or brings its window forward. The host
- * verifies `pkg` again and refuses one whose digest is not `digest`. Only the
- * desktop window may ask.
+ * Writes `appId`'s launcher, so it is an app of its own in Applications or the
+ * menu. The host verifies `pkg` again and refuses one whose digest is not
+ * `digest`. Only the desktop window may ask.
+ */
+export async function placeInstalledApp(
+  appId: string,
+  pkg: HostAppPackage,
+  digest: string,
+): Promise<void> {
+  if (!inTauri) throw new Error("Apps install only in the desktop app")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("installed_app_place", { appId, package: pkg, digest })
+}
+
+/**
+ * Opens `appId` as an app of its own, or brings it forward, placing its
+ * launcher first as `placeInstalledApp` does. Only the desktop window may ask.
  */
 export async function openInstalledApp(
   appId: string,
@@ -1526,14 +1533,21 @@ export async function openInstalledApp(
   await invoke("installed_app_open", { appId, package: pkg, digest })
 }
 
-/** Closes `appId`'s window, if it has one. Only the desktop window may ask. */
+/** Ends `appId`, if it is running. Only the desktop window may ask. */
 export async function stopInstalledApp(appId: string): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("installed_app_stop", { appId })
 }
 
-/** The apps with a window open now, by id. */
+/** Removes `appId`'s launcher once it has stopped. Only the desktop window may ask. */
+export async function removeInstalledApp(appId: string): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("installed_app_remove", { appId })
+}
+
+/** The apps running now, by id. */
 export async function runningInstalledApps(): Promise<readonly string[]> {
   if (!inTauri) return []
   const { invoke } = await import("@tauri-apps/api/core")
@@ -1543,27 +1557,11 @@ export async function runningInstalledApps(): Promise<readonly string[]> {
     : []
 }
 
-/** Calls `handler` whenever an app's window opens or closes. */
+/** Calls `handler` whenever an app starts or stops. */
 export async function onInstalledAppsChanged(handler: () => void): Promise<() => void> {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
   return listen(HOST_EVENTS.installedAppsChanged, () => handler(), {
     target: { kind: "WebviewWindow", label: "desktop" },
   })
-}
-
-/** What this app window was opened to draw. Only an app's own window may ask. */
-export async function installedAppPage(): Promise<InstalledAppPage> {
-  if (!inTauri) throw new Error("An app window needs the desktop app")
-  const { invoke } = await import("@tauri-apps/api/core")
-  const answer = await invoke<unknown>("installed_app_page")
-  if (
-    typeof answer !== "object" ||
-    answer === null ||
-    typeof (answer as Record<string, unknown>).appId !== "string" ||
-    typeof (answer as Record<string, unknown>).entrypoint !== "string" ||
-    !Array.isArray((answer as Record<string, unknown>).assets)
-  )
-    throw new Error("The host answered no app")
-  return answer as InstalledAppPage
 }

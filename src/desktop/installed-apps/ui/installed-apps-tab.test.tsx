@@ -10,6 +10,8 @@ import { InstalledAppsProvider, InstalledAppsTab } from "./installed-apps-tab"
 const host = vi.hoisted(() => ({
   confirmAppInstall: vi.fn(async (_review: unknown) => false),
   openInstalledApp: vi.fn(async (..._args: unknown[]) => undefined),
+  placeInstalledApp: vi.fn(async (..._args: unknown[]) => undefined),
+  removeInstalledApp: vi.fn(async (_appId: string) => undefined),
   stopInstalledApp: vi.fn(async (_appId: string) => undefined),
   runningInstalledApps: vi.fn(async () => [] as string[]),
   onInstalledAppsChanged: vi.fn(async (_handler: () => void) => () => undefined),
@@ -27,6 +29,8 @@ beforeEach(() => {
   root = createRoot(container)
   host.confirmAppInstall.mockReset().mockResolvedValue(false)
   host.openInstalledApp.mockReset().mockResolvedValue(undefined)
+  host.placeInstalledApp.mockReset().mockResolvedValue(undefined)
+  host.removeInstalledApp.mockReset().mockResolvedValue(undefined)
   host.stopInstalledApp.mockReset().mockResolvedValue(undefined)
   host.runningInstalledApps.mockReset().mockResolvedValue([])
 })
@@ -119,6 +123,7 @@ it("installs nothing when the person cancels the system's dialog", async () => {
     expect.objectContaining({ appId: "notes", digest: "a".repeat(64) }),
   )
   expect(gateway.install).not.toHaveBeenCalled()
+  expect(host.placeInstalledApp).not.toHaveBeenCalled()
   expect(container.querySelector("[data-installed-app]")).toBeNull()
   // Settings draws no app: the dialog is the review.
   expect(container.querySelector("iframe")).toBeNull()
@@ -132,6 +137,12 @@ it("installs the reviewed digest on Yes, then opens, stops and uninstalls it", a
   type("[data-create-app-id]", "notes")
   await press("[data-create-app]")
   expect(gateway.install).toHaveBeenCalledTimes(1)
+  // Installed, it is an app of its own: the host places its launcher.
+  expect(host.placeInstalledApp).toHaveBeenCalledWith(
+    "notes",
+    checked("notes", "1.0.0").package,
+    "a".repeat(64),
+  )
   expect(container.querySelector('[data-installed-app="notes"]')).not.toBeNull()
   expect(container.querySelector<HTMLInputElement>("[data-create-app-id]")?.value).toBe(
     "",
@@ -147,6 +158,10 @@ it("installs the reviewed digest on Yes, then opens, stops and uninstalls it", a
   await press('[data-installed-app-uninstall="notes"]')
   expect(host.stopInstalledApp).toHaveBeenCalledWith("notes")
   expect(gateway.uninstall).toHaveBeenCalledWith("notes", "req")
+  expect(host.removeInstalledApp).toHaveBeenCalledWith("notes")
+  expect(host.stopInstalledApp.mock.invocationCallOrder[0]).toBeLessThan(
+    host.removeInstalledApp.mock.invocationCallOrder[0] ?? 0,
+  )
   expect(container.querySelector('[data-installed-app="notes"]')).toBeNull()
 })
 

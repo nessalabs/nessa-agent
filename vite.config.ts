@@ -224,7 +224,6 @@ export default defineConfig({
         panel: resolve("index.html"),
         desktop: resolve("desktop.html"),
         call: resolve("call.html"),
-        installedApp: resolve("installed-app.html"),
       },
       treeshake: {
         // The package's own package.json declares that only its stylesheets
