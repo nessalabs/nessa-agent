@@ -592,6 +592,16 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "boat.signIn": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "boat.cancelSignIn": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "boat.disconnect": {
       "params": null,
       "grant": "credential.manage",

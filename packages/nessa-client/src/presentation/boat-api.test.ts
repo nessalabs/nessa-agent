@@ -8,10 +8,14 @@ describe("Boat connection", () => {
     const boat = createBoatApi({ request })
     await boat.save({ token: "fixture-token" })
     await boat.status()
+    await boat.signIn()
+    await boat.cancelSignIn()
     await boat.disconnect()
     expect(request.mock.calls).toEqual([
       ["boat.save", { token: "fixture-token" }],
       ["boat.status", {}],
+      ["boat.signIn", {}],
+      ["boat.cancelSignIn", {}],
       ["boat.disconnect", {}],
     ])
   })
@@ -30,6 +34,53 @@ describe("Boat connection", () => {
       { state: "connected", environment: "nessa", image: null },
     ])
       expect(() => boatStatus(value)).toThrow(TypeError)
+    for (const value of [
+      { state: "disconnected", login: "octo" },
+      {
+        state: "connected",
+        environment: "nessa",
+        image: "i",
+        via: "token",
+        login: "octo",
+      },
+      { state: "connected", environment: "nessa", image: "i", via: "password" },
+      { state: "disconnected", signIn: { state: "waiting", url: "javascript:alert(1)" } },
+      {
+        state: "disconnected",
+        signIn: { state: "waiting", url: "https://boat.dev", code: "x" },
+      },
+      { state: "disconnected", signInAvailable: "yes" },
+    ])
+      expect(() => boatStatus(value)).toThrow(TypeError)
+    expect(
+      boatStatus({
+        state: "connected",
+        environment: "nessa",
+        image: "i",
+        via: "signIn",
+        login: "octo",
+        signInAvailable: true,
+      }),
+    ).toEqual({
+      state: "connected",
+      environment: "nessa",
+      image: "i",
+      via: "signIn",
+      login: "octo",
+      signInAvailable: true,
+    })
+    expect(
+      boatStatus({
+        state: "disconnected",
+        signIn: {
+          state: "waiting",
+          url: "https://boat.dev/api/boat/oauth2/authorize?x=1",
+        },
+      }),
+    ).toEqual({
+      state: "disconnected",
+      signIn: { state: "waiting", url: "https://boat.dev/api/boat/oauth2/authorize?x=1" },
+    })
     expect(boatStatus({ state: "locked" })).toEqual({ state: "locked" })
     expect(boatStatus({ state: "disconnected" })).toEqual({ state: "disconnected" })
   })

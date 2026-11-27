@@ -851,6 +851,20 @@
       "destructive": false
     },
     {
+      "name": "boat.signIn",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.cancelSignIn",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
       "name": "boat.disconnect",
       "params": null,
       "grant": "credential.manage",

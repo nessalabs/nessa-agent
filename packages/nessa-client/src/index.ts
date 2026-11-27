@@ -559,6 +559,7 @@ export type { BoatApi } from "./presentation/boat-api.js"
 export {
   BoatErrorCode,
   type BoatStatus,
+  type BoatSignInState,
   type Agent37Status,
   type Agent37SaveParams,
   type Cloud,

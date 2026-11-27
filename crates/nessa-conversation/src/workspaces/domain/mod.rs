@@ -12,6 +12,6 @@ pub use environment::{
     AdmissionRefusal, AdmissionRejection, Admitted, EnvironmentIdentity, ObservedEnvironment,
 };
 pub use workspace::{
-    Assignment, BoatAccount, BoatConnection, ClaudeSignIn, CleanupOutcome, Cloud, CloudAccount,
-    CloudConnection, Failure, OpenFailure, RefusalDisposition, VmSpec,
+    Assignment, BoatAccount, BoatConnection, BoatGrant, ClaudeSignIn, CleanupOutcome, Cloud,
+    CloudAccount, CloudConnection, Failure, OpenFailure, RefusalDisposition, VmSpec,
 };

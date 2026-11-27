@@ -4224,6 +4224,8 @@ pub enum BoatErrorCode {
     BoatProvisioningUncertain,
     #[serde(rename = "boat_cleanup_uncertain")]
     BoatCleanupUncertain,
+    #[serde(rename = "boat_sign_in_unavailable")]
+    BoatSignInUnavailable,
 }
 impl BoatErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -4238,6 +4240,7 @@ impl BoatErrorCode {
             Self::BoatEnvironmentBlocksCredentials => "boat_environment_blocks_credentials",
             Self::BoatProvisioningUncertain => "boat_provisioning_uncertain",
             Self::BoatCleanupUncertain => "boat_cleanup_uncertain",
+            Self::BoatSignInUnavailable => "boat_sign_in_unavailable",
         }
     }
 }
@@ -4249,6 +4252,23 @@ pub struct BoatStatus {
     pub environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_available: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<BoatSignInState>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatSignInState {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -5076,6 +5096,8 @@ pub mod product_method {
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_SIGN_IN: &str = "boat.signIn";
+    pub const BOAT_CANCEL_SIGN_IN: &str = "boat.cancelSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
     pub const AGENT37_STATUS: &str = "agent37.status";
     pub const AGENT37_SAVE: &str = "agent37.save";
@@ -5302,7 +5324,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 148
+                items.len() <= 150
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5444,6 +5466,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.lock",
     "boat.status",
     "boat.save",
+    "boat.signIn",
+    "boat.cancelSignIn",
     "boat.disconnect",
     "agent37.status",
     "agent37.save",
@@ -5775,6 +5799,10 @@ pub enum ProductMethod {
     BoatStatus,
     /// `boat.save`
     BoatSave,
+    /// `boat.signIn`
+    BoatSignIn,
+    /// `boat.cancelSignIn`
+    BoatCancelSignIn,
     /// `boat.disconnect`
     BoatDisconnect,
     /// `agent37.status`
@@ -5960,6 +5988,8 @@ impl ProductMethod {
         ProductMethod::VaultLock,
         ProductMethod::BoatStatus,
         ProductMethod::BoatSave,
+        ProductMethod::BoatSignIn,
+        ProductMethod::BoatCancelSignIn,
         ProductMethod::BoatDisconnect,
         ProductMethod::Agent37Status,
         ProductMethod::Agent37Save,
@@ -6121,6 +6151,8 @@ impl ProductMethod {
             "vault.lock" => Some(ProductMethod::VaultLock),
             "boat.status" => Some(ProductMethod::BoatStatus),
             "boat.save" => Some(ProductMethod::BoatSave),
+            "boat.signIn" => Some(ProductMethod::BoatSignIn),
+            "boat.cancelSignIn" => Some(ProductMethod::BoatCancelSignIn),
             "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
             "agent37.status" => Some(ProductMethod::Agent37Status),
             "agent37.save" => Some(ProductMethod::Agent37Save),
@@ -6279,6 +6311,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => "vault.lock",
             ProductMethod::BoatStatus => "boat.status",
             ProductMethod::BoatSave => "boat.save",
+            ProductMethod::BoatSignIn => "boat.signIn",
+            ProductMethod::BoatCancelSignIn => "boat.cancelSignIn",
             ProductMethod::BoatDisconnect => "boat.disconnect",
             ProductMethod::Agent37Status => "agent37.status",
             ProductMethod::Agent37Save => "agent37.save",
@@ -6435,6 +6469,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => Some("credential.manage"),
             ProductMethod::BoatStatus => Some("credential.manage"),
             ProductMethod::BoatSave => Some("credential.manage"),
+            ProductMethod::BoatSignIn => Some("credential.manage"),
+            ProductMethod::BoatCancelSignIn => Some("credential.manage"),
             ProductMethod::BoatDisconnect => Some("credential.manage"),
             ProductMethod::Agent37Status => Some("credential.manage"),
             ProductMethod::Agent37Save => Some("credential.manage"),
@@ -6590,6 +6626,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => ProductLane::Requests,
             ProductMethod::BoatStatus => ProductLane::Requests,
             ProductMethod::BoatSave => ProductLane::Requests,
+            ProductMethod::BoatSignIn => ProductLane::Requests,
+            ProductMethod::BoatCancelSignIn => ProductLane::Requests,
             ProductMethod::BoatDisconnect => ProductLane::Requests,
             ProductMethod::Agent37Status => ProductLane::Requests,
             ProductMethod::Agent37Save => ProductLane::Requests,
@@ -7022,6 +7060,14 @@ impl ProductMethod {
             ProductMethod::BoatSave => {
                 ProductParams::BoatSave(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
+            ProductMethod::BoatSignIn => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatSignIn,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::BoatCancelSignIn => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatCancelSignIn,
+                _ => return Err(ParamsRefused),
+            },
             ProductMethod::BoatDisconnect => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
                 _ => return Err(ParamsRefused),
@@ -7252,6 +7298,8 @@ pub enum ProductParams {
     VaultLock,
     BoatStatus,
     BoatSave(BoatSaveParams),
+    BoatSignIn,
+    BoatCancelSignIn,
     BoatDisconnect,
     Agent37Status,
     Agent37Save(Agent37SaveParams),
@@ -7431,6 +7479,8 @@ impl ProductParams {
             ProductParams::VaultLock => ProductMethod::VaultLock,
             ProductParams::BoatStatus => ProductMethod::BoatStatus,
             ProductParams::BoatSave(_) => ProductMethod::BoatSave,
+            ProductParams::BoatSignIn => ProductMethod::BoatSignIn,
+            ProductParams::BoatCancelSignIn => ProductMethod::BoatCancelSignIn,
             ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
             ProductParams::Agent37Status => ProductMethod::Agent37Status,
             ProductParams::Agent37Save(_) => ProductMethod::Agent37Save,

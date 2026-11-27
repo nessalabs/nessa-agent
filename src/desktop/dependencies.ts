@@ -1,5 +1,9 @@
 import { agent37Gateway, type Agent37Gateway } from "./settings/adapters/agent37-gateway"
-import { boatGateway, type BoatGateway } from "./settings/adapters/boat-gateway"
+import {
+  boatGateway,
+  openInBrowser,
+  type BoatGateway,
+} from "./settings/adapters/boat-gateway"
 import {
   replyStyleGateway,
   type ReplyStyleGateway,
@@ -254,6 +258,8 @@ export function createDesktopDependencies(
     reviewNotices?: HostNotices
     /** The system's pickers for a new channel's paths, where the host has them (`main.tsx`). */
     paths?: WorkspaceDependencies["paths"]
+    /** Opens a page, such as Sign in with Boat's, in the person's own browser (`main.tsx`). */
+    openInBrowser?: (url: string) => void
     /** Where channels are made, beside a given `workspace`; the gateway's own and the sample's are composed here. */
     channels?: WorkspaceDependencies["channels"]
     /** Injectable storage for persisted remote gateways (tests). */
@@ -396,7 +402,12 @@ export function createDesktopDependencies(
       ? permissionRulesGateway({ connected: () => source.connected() })
       : undefined,
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
-    boat: source ? boatGateway(() => source.connected()) : undefined,
+    boat: source
+      ? boatGateway(
+          () => source.connected(),
+          options.openInBrowser ?? openInBrowser(false),
+        )
+      : undefined,
     replyStyle: source ? replyStyleGateway(() => source.connected()) : undefined,
     agent37: source ? agent37Gateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,

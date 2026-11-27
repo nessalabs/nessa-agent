@@ -4,6 +4,8 @@
 mod agent37;
 mod agent37_settings;
 mod boat;
+mod boat_callback;
+mod boat_oauth;
 mod cloud_boxes;
 mod cloud_choice;
 mod runtime;
@@ -12,6 +14,8 @@ mod ssh;
 pub use agent37::{Agent37Provider, SdkAgent37Enrollment};
 pub use agent37_settings::Agent37VaultSettings;
 pub use boat::BoatProvider;
+pub use boat_callback::LoopbackCallbacks;
+pub use boat_oauth::{BoatApp, BoatAppProblem, BoatOAuthHttps};
 pub use cloud_boxes::{
     FileCloudBoxAudit, FileCloudBoxStore, ProviderActiveWorkChecker, WorkspaceCloudBoxProvider,
 };

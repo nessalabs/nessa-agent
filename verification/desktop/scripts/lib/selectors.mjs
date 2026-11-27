@@ -324,6 +324,7 @@ export const css = {
   // Settings › Connections › Linked devices (src/desktop/settings/ui/linked-devices-tab.tsx)
   githubLive: "[data-github-live]",
   githubLiveHelp: "[data-github-live] button[popovertarget]",
+  boat: '[data-setting="boat"]', // Settings › Accounts' Boat row; data-boat-state: reading | unread | locked | disconnected | connected; data-boat-sign-in="waiting" while the browser is out
   github: '[data-setting="github"]', // Settings › Accounts' GitHub row; data-github-state: absent | reading | unread | signed-out | connecting | connected
   githubAvatar: '[data-setting="github"] [data-slot="contact-avatar"]', // the signed-in account's picture (an img once composed), or its initial
   githubStatus: ".settings-github-status", // "Connected", where the actions show under the pointer or focus
@@ -626,6 +627,8 @@ export const names = {
   linkedDevices: "Linked devices",
   /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
   accounts: "Accounts",
+  boatSignIn: "Sign in with Boat",
+  boatDisconnect: "Disconnect",
   githubConnect: "Connect…",
   githubDisconnect: "Disconnect",
   /** Settings' category and tab holding remembered rules and the apps always allowed. */

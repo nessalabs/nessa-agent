@@ -3802,7 +3802,7 @@ export interface BoatSaveParams {
   /** Boat infrastructure token. Never returned or logged. */
   token: string
 }
-/** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
+/** Typed Boat connection refusals. boat_sign_in_unavailable: this build names no Boat OAuth app, so boat.signIn is not offered; a pasted token still is. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
 export const BoatErrorCode = {
   VaultLocked: "vault_locked",
   BoatNotConfigured: "boat_not_configured",
@@ -3814,6 +3814,7 @@ export const BoatErrorCode = {
   BoatEnvironmentBlocksCredentials: "boat_environment_blocks_credentials",
   BoatProvisioningUncertain: "boat_provisioning_uncertain",
   BoatCleanupUncertain: "boat_cleanup_uncertain",
+  BoatSignInUnavailable: "boat_sign_in_unavailable",
 } as const
 export type BoatErrorCode = (typeof BoatErrorCode)[keyof typeof BoatErrorCode]
 /** Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs. */
@@ -3824,6 +3825,22 @@ export interface BoatStatus {
   environment?: string
   /** The release-owned shared worker image saved with this connection; present only while connected. */
   image?: string
+  /** How the saved connection was made: Sign in with Boat, whose access token the gateway renews itself, or a pasted API token. Present only while connected. */
+  via?: "signIn" | "token"
+  /** The Boat account Sign in with Boat signed in as; present only while connected via signIn. */
+  login?: string
+  /** Whether boat.signIn is offered: this build names a Boat OAuth app. */
+  signInAvailable?: boolean
+  signIn?: BoatSignInState
+}
+/** Where the gateway's Sign in with Boat stands. boat.signIn starts one (ending any earlier one): the gateway listens on this machine's loopback for Boat's redirect, exchanges the code with PKCE, reads the account, validates and saves the connection like boat.save, and renews the one-hour access token itself from then on. boat.cancelSignIn stops waiting. */
+export interface BoatSignInState {
+  /** Waiting for the browser to come back from Boat, or the last sign-in ended without a connection. Absent (no signIn) when no sign-in is running and none failed. */
+  state: "waiting" | "failed"
+  /** While waiting: the Boat page where the person approves Nessa. Holds no secret: the code it leads to is useless without the verifier the gateway keeps. */
+  url?: string
+  /** When failed: denied (the person chose Cancel on Boat), expired (no answer in 10 minutes), rejected (the redirect was not Boat's), boat_unreachable (Boat refused or did not answer the code exchange), or a BoatErrorCode from saving the connection. */
+  cause?: string
 }
 /** Connect a user-owned Agent37 workspace. The gateway makes this install's SSH key, registers it with the workspace, checks the release's pinned runtime template, then encrypts the key, the SSH key and the template in the unlocked vault. */
 export interface Agent37SaveParams {
@@ -4387,7 +4404,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 148,
+  maxReadyMethods: 150,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4724,6 +4741,8 @@ export const ProductMethod = {
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
+  BoatSignIn: "boat.signIn",
+  BoatCancelSignIn: "boat.cancelSignIn",
   BoatDisconnect: "boat.disconnect",
   Agent37Status: "agent37.status",
   Agent37Save: "agent37.save",
@@ -4890,6 +4909,8 @@ export const productReadyMethods = [
   "vault.lock",
   "boat.status",
   "boat.save",
+  "boat.signIn",
+  "boat.cancelSignIn",
   "boat.disconnect",
   "agent37.status",
   "agent37.save",
@@ -5042,6 +5063,8 @@ export const productMethodGrants = {
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
+  "boat.signIn": "credential.manage",
+  "boat.cancelSignIn": "credential.manage",
   "boat.disconnect": "credential.manage",
   "agent37.status": "credential.manage",
   "agent37.save": "credential.manage",
