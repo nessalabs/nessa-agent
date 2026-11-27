@@ -228,7 +228,7 @@ export function InstalledAppsTab() {
                     onClick={() => void stop(app.appId)}
                     data-installed-app-stop={app.appId}
                   >
-                    Stop
+                    {busy === `stop:${app.appId}` ? "Stopping…" : "Stop"}
                   </RowAction>
                 ) : (
                   <RowAction
@@ -236,7 +236,7 @@ export function InstalledAppsTab() {
                     onClick={() => void open(app.appId)}
                     data-installed-app-open={app.appId}
                   >
-                    Open
+                    {busy === `open:${app.appId}` ? "Opening…" : "Open"}
                   </RowAction>
                 )}
                 <RowAction
@@ -278,7 +278,7 @@ export function InstalledAppsTab() {
             onClick={() => void create()}
             data-create-app=""
           >
-            Create
+            {busy === "create" ? "Creating…" : "Create"}
           </RowAction>
         }
       />
