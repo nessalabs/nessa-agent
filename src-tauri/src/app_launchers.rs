@@ -852,7 +852,13 @@ mod tests {
         fs::write(dir.path().join("nessa-app-host"), b"host build two").unwrap();
         launchers.place(&package).unwrap();
         assert_eq!(
-            fs::read(dir.path().join("apps").join("notes").join("notes")).unwrap(),
+            fs::read(
+                dir.path()
+                    .join("apps")
+                    .join("notes")
+                    .join(format!("notes{}", std::env::consts::EXE_SUFFIX))
+            )
+            .unwrap(),
             b"host build two"
         );
         // Nothing is left half-written beside it.
