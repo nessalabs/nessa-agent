@@ -188,6 +188,8 @@ export async function startFakeBoat({ clientId = CLIENT_ID, expiresIn = 3600 } =
   const base = `http://127.0.0.1:${server.address().port}`
   return {
     calls,
+    /** Where the fake answers: Boat's web and API origin. */
+    base,
     /** Every token handed out, to look for in logs and pages. */
     issued,
     /** The query of the last authorize visit. */

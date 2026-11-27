@@ -5784,22 +5784,46 @@ const steps = {
             .catch(() => {})
         : undefined
     // One click on Sign in with Boat, and Boat's page in the browser.
+    // One click on Sign in with Boat, and Boat's page in the browser. The
+    // window here stands in for the app, whose link to Boat is a navigation
+    // the host hands to the system browser (src-tauri/src/links.rs): that
+    // hand-off is played here by taking the link's click, and the page is
+    // opened in a page of its own, as that browser would.
     const signIn = async () => {
-      const popup = run.page.context().waitForEvent("page", { timeout: 30_000 })
-      await row.getByRole("button", { name: names.boatSignIn }).click()
-      await unlockVault(run.page)
-      const page = await popup
-      await page.waitForLoadState("domcontentloaded").catch(() => {})
-      await page
-        .locator("h1")
-        .waitFor({ timeout: 30_000 })
-        .catch(() => {})
-      const said = await page
-        .locator("h1")
-        .textContent()
-        .catch(() => "")
-      await page.close().catch(() => {})
-      return said
+      await run.page.evaluate((base) => {
+        window.__boatHanded = null
+        const click = HTMLAnchorElement.prototype.click
+        window.__boatClick = click
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.href.startsWith(base)) window.__boatHanded = this.href
+          else click.call(this)
+        }
+      }, boat.base)
+      try {
+        await row.getByRole("button", { name: names.boatSignIn }).click()
+        await unlockVault(run.page)
+        let url = null
+        await waitFor(
+          async () => (url = await run.page.evaluate(() => window.__boatHanded)),
+          30_000,
+        )
+        if (!url) return "no page was opened"
+        const page = await run.page.context().newPage()
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 })
+          return await page.locator("h1").textContent({ timeout: 30_000 })
+        } catch (error) {
+          return `the browser failed: ${error.message}`
+        } finally {
+          await page.close().catch(() => {})
+        }
+      } finally {
+        await run.page
+          .evaluate(() => {
+            HTMLAnchorElement.prototype.click = window.__boatClick
+          })
+          .catch(() => {})
+      }
     }
     await run.exclusive(async () => {
       const needsUnlock = (await run.client.vault.status()).state === "locked"

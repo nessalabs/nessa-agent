@@ -499,7 +499,7 @@ fn random_text(bytes: usize) -> Result<String, Failure> {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
+    crate::timer::clock::wall_now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
