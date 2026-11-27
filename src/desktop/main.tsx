@@ -184,7 +184,6 @@ const channelPaths: PathPicker | undefined =
         },
       }
     : undefined
-const appSandbox = sandboxFor(host.kind, document, sandboxSchemeRegistered())
 const dependencies = createDesktopDependencies({
   vault: hasNativeHost() ? nativeVault : undefined,
   signInToProvider,
@@ -197,7 +196,7 @@ const dependencies = createDesktopDependencies({
   workspace: seeded?.workspace,
   now: seeded?.now,
   apps: {
-    sandbox: appSandbox,
+    sandbox: sandboxFor(host.kind, document, sandboxSchemeRegistered()),
     platform: platformFor(host.kind),
   },
 })
@@ -354,7 +353,6 @@ function DesktopRoot() {
                                                 >
                                                   <InstalledAppsProvider
                                                     gateway={dependencies.installedApps}
-                                                    sandbox={appSandbox}
                                                   >
                                                     <Agent37Provider
                                                       gateway={dependencies.agent37}

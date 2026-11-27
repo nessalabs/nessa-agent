@@ -85,11 +85,7 @@ async function settle() {
 function draw(gateway: InstalledAppsGateway) {
   act(() =>
     root.render(
-      <InstalledAppsProvider
-        gateway={gateway}
-        sandbox={undefined}
-        requestId={() => "req"}
-      >
+      <InstalledAppsProvider gateway={gateway} requestId={() => "req"}>
         <InstalledAppsTab />
       </InstalledAppsProvider>,
     ),
@@ -118,15 +114,14 @@ it("installs nothing when the person cancels the system's dialog", async () => {
   draw(gateway)
   await settle()
   type("[data-create-app-id]", "notes")
-  await press("[data-create-app-review]")
-  expect(container.querySelector("[data-app-review]")?.textContent).toContain("notes")
-  await press("[data-app-review-install]")
+  await press("[data-create-app]")
   expect(host.confirmAppInstall).toHaveBeenCalledWith(
     expect.objectContaining({ appId: "notes", digest: "a".repeat(64) }),
   )
   expect(gateway.install).not.toHaveBeenCalled()
   expect(container.querySelector("[data-installed-app]")).toBeNull()
-  expect(container.textContent).toContain("notes wasn’t installed.")
+  // Settings draws no app: the dialog is the review.
+  expect(container.querySelector("iframe")).toBeNull()
 })
 
 it("installs the reviewed digest on Yes, then opens, stops and uninstalls it", async () => {
@@ -135,11 +130,12 @@ it("installs the reviewed digest on Yes, then opens, stops and uninstalls it", a
   draw(gateway)
   await settle()
   type("[data-create-app-id]", "notes")
-  await press("[data-create-app-review]")
-  await press("[data-app-review-install]")
+  await press("[data-create-app]")
   expect(gateway.install).toHaveBeenCalledTimes(1)
   expect(container.querySelector('[data-installed-app="notes"]')).not.toBeNull()
-  expect(container.querySelector("[data-app-review]")).toBeNull()
+  expect(container.querySelector<HTMLInputElement>("[data-create-app-id]")?.value).toBe(
+    "",
+  )
 
   await press('[data-installed-app-open="notes"]')
   expect(host.openInstalledApp).toHaveBeenCalledWith(
@@ -159,7 +155,7 @@ it("says why the gateway refused a new app", async () => {
   draw(gateway)
   await settle()
   type("[data-create-app-id]", "Nope")
-  await press("[data-create-app-review]")
+  await press("[data-create-app]")
   expect(
     container.querySelector('[data-installed-apps-said="problem"]')?.textContent,
   ).toContain("isn’t a valid app id")

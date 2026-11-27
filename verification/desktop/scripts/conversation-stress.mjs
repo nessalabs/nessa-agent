@@ -339,10 +339,10 @@ import {
  *               words. The `voice` step checks its spoken turn's record says
  *               spoken
  *   apps        a static app made in Settings › Workspace › Apps from the
- *               gateway's starter: its review names the package's digest and
- *               draws a preview in the sandbox. Cancel in the system's
- *               dialog installs nothing and writes no audit record; Install
- *               keeps exactly the reviewed package (the gateway reads back
+ *               gateway's starter, drawing no app in Settings: Create asks
+ *               the system's Install dialog, which names the package's
+ *               digest. Cancel installs nothing and writes no audit record;
+ *               Install keeps exactly that package (the gateway reads back
  *               the digest the dialog was shown). Open hands the host the
  *               read-back package; the app's own window (installed-app.html,
  *               another tab) draws it in the sandbox with no network, Stop
@@ -10151,14 +10151,20 @@ const steps = {
     const installedIds = async () =>
       (await run.client.apps.installed()).map((app) => app.appId)
     const page = run.page
-    const said = (tone) => page.locator(`[data-installed-apps-said="${tone}"]`)
-    // Create and review one app; answers the digest the review shows.
-    const review = async (id) => {
+    // Create one app, answering the system's Install dialog with `answer`;
+    // gives the digest that dialog named.
+    const create = async (id, answer) => {
+      const asked = await page.evaluate(() => window.__fakeHostAppConfirms.length)
+      await page.evaluate((yes) => window.__fakeHostAppAnswers.push(yes), answer)
       await page.locator("[data-create-app-id]").fill(id)
-      await page.locator("[data-create-app-review]").click({ timeout: 10_000 })
-      const card = page.locator("[data-app-review]")
-      await card.waitFor({ timeout: 10_000 })
-      return card.getAttribute("data-app-review")
+      await page.locator("[data-create-app]").click({ timeout: 10_000 })
+      const confirm = await waitFor(
+        () => page.evaluate((from) => window.__fakeHostAppConfirms[from] ?? null, asked),
+        10_000,
+      )
+      if (confirm?.appId !== id)
+        failures.push(`the system's dialog was asked ${JSON.stringify(confirm)}`)
+      return confirm?.digest
     }
     await run.exclusive(async () => {
       if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
@@ -10168,45 +10174,30 @@ const steps = {
       await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
       await page.locator("[data-create-app-id]:enabled").waitFor({ timeout: 10_000 })
 
-      // The review draws the package as it will run, in the sandbox.
-      const digest = await review(appId)
+      // Cancel: the dialog names the package, and nothing is installed or
+      // written. Settings draws no app.
+      const before = audit().length
+      const digest = await create(appId, false)
       if (!/^[0-9a-f]{64}$/.test(digest ?? ""))
-        failures.push(`the review names no package digest: ${digest}`)
-      const preview = await waitFor(async () => {
-        const proxy = await (await page.$("[data-app-preview] iframe"))?.contentFrame()
-        const app = proxy?.childFrames()[0]
-        return (
-          app &&
-          (await app
-            .locator("h1")
-            .textContent()
-            .catch(() => null))
-        )
-      }, 15_000)
-      if (preview !== "Nessa app")
-        failures.push(`the review's preview drew ${JSON.stringify(preview)}`)
+        failures.push(`the system's dialog names no package digest: ${digest}`)
+      await page
+        .locator("[data-create-app]:enabled")
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("Create never came back after Cancel"))
+      if ((await page.locator(`${css.settings} iframe`).count()) > 0)
+        failures.push("Settings draws the app it installs")
       if (run.evidence)
         await page.screenshot({
-          path: join(run.evidence, `apps-${run.engine}-review.png`),
+          path: join(run.evidence, `apps-${run.engine}-settings.png`),
         })
-
-      // Cancel: nothing installed, nothing written.
-      const before = audit().length
-      await page.evaluate(() => window.__fakeHostAppAnswers.push(false))
-      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
-      await said("note").waitFor({ timeout: 10_000 })
-      const confirms = await page.evaluate(() => window.__fakeHostAppConfirms)
-      const asked = confirms.at(-1)
-      if (asked?.appId !== appId || asked?.digest !== digest)
-        failures.push(`the system's dialog was asked ${JSON.stringify(asked)}`)
       if ((await installedIds()).includes(appId))
         failures.push("Cancel in the system's dialog still installed the app")
       if (audit().length !== before)
         failures.push("Cancel in the system's dialog wrote an apps audit record")
 
-      // Install: exactly the reviewed package is kept.
-      await page.evaluate(() => window.__fakeHostAppAnswers.push(true))
-      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
+      // Install: exactly the package the dialog named is kept.
+      if ((await create(appId, true)) !== digest)
+        failures.push("the starter's digest changed between two asks")
       await page
         .locator(`[data-installed-app="${appId}"]`)
         .waitFor({ timeout: 10_000 })
@@ -10222,20 +10213,7 @@ const steps = {
       for (const phase of ["requested", "installed"])
         if (!installs.some((record) => record.phase === phase))
           failures.push(`the apps audit has no ${phase} install record`)
-      // Its preview drawn before Install, so no sandbox load is cut off.
-      await review(kept)
-      await waitFor(async () => {
-        const proxy = await (await page.$("[data-app-preview] iframe"))?.contentFrame()
-        return (
-          (await proxy
-            ?.childFrames()[0]
-            ?.locator("h1")
-            .count()
-            .catch(() => 0)) === 1
-        )
-      }, 15_000)
-      await page.evaluate(() => window.__fakeHostAppAnswers.push(true))
-      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
+      await create(kept, true)
       await page
         .locator(`[data-installed-app="${kept}"]`)
         .waitFor({ timeout: 10_000 })

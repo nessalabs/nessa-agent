@@ -1723,20 +1723,22 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   line-height: 1.4;
 }
 
-/* Apps: an app row's buttons side by side, and a reviewed app's preview. */
+/* Apps: an app row's buttons side by side. */
 .settings-installed-app-actions {
   display: inline-flex;
   gap: 6px;
 }
-.settings-installed-app-preview {
-  margin-block-start: 8px;
-  block-size: 240px;
-  border-radius: var(--radius, 8px);
-  overflow: hidden;
+.settings-app-tile {
+  display: grid;
+  place-items: center;
+  inline-size: 28px;
+  block-size: 28px;
+  border-radius: 7px;
   background: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
 }
-.settings-installed-app-preview iframe {
+.settings-new-app-field {
   inline-size: 100%;
-  block-size: 100%;
-  border: 0;
+  max-inline-size: 280px;
 }

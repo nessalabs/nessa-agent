@@ -363,17 +363,15 @@ export const settingsEntries = [
     id: "installed-apps",
     tab: "installed-apps",
     label: "Installed apps",
-    detail:
-      "Apps you installed on this computer. Each opens in its own window, with no network and nothing of Nessa's it can reach.",
+    detail: "Open, stop or uninstall your apps.",
     keywords: "app apps installed open stop uninstall remove window",
   },
   {
     id: "create-app",
     tab: "installed-apps",
     label: "Create an app",
-    detail:
-      "Start from the starter app, review what it holds, then install it. Nothing is installed until you say Yes.",
-    keywords: "app create new starter review install",
+    detail: "Make a new app. It installs once you choose Install.",
+    keywords: "app create new starter install",
   },
   {
     id: "trusted-apps",
