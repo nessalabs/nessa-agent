@@ -46,6 +46,7 @@ const settingsParts = {
   agent37: {} as import("@nessa/client").Agent37Api,
   cloud: {} as import("@nessa/client").CloudApi,
   replyStyle: {} as import("@nessa/client").ReplyStyleApi,
+  apps: {} as import("@nessa/client").AppsApi,
   // Read back only for a file a view names; none here does.
   attachments: {} as AttachmentApi,
   agents: {} as AgentsApi,

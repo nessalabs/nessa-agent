@@ -1,4 +1,5 @@
 import { Agent37Row } from "./agent37-row"
+import { InstalledAppsTab } from "../../installed-apps/ui/installed-apps-tab"
 import { BoatRow } from "./boat-row"
 import { DefaultCloudRow } from "../../clouds/ui/default-cloud-row"
 import { VaultPassphraseControl, useVaultTouchId } from "../../../vault"
@@ -83,6 +84,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   keyboard: KeyboardTab,
   decisions: DecisionSettingsRows,
   "terminal-resume": TerminalResumeRows,
+  "installed-apps": InstalledAppsTab,
   accounts: AccountsTab,
   integrations: IntegrationsTab,
   devices: LinkedDevicesTab,

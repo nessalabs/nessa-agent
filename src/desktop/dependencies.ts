@@ -4,6 +4,10 @@ import {
   replyStyleGateway,
   type ReplyStyleGateway,
 } from "./settings/adapters/reply-style-gateway"
+import {
+  installedAppsGateway,
+  type InstalledAppsGateway,
+} from "./installed-apps/adapters/installed-apps-gateway"
 import { devicesGateway, type DevicesClient, type DevicesGateway } from "./devices"
 import { gatewayVault, type VaultSource } from "../vault"
 import type {
@@ -12,6 +16,7 @@ import type {
   VaultApi,
   BoatApi,
   ReplyStyleApi,
+  AppsApi,
 } from "@nessa/client"
 /**
  * The desktop window's composition: every outside thing it talks to — the
@@ -181,6 +186,8 @@ export interface DesktopDependencies extends WorkspaceDependencies {
   readonly boat: BoatGateway | undefined
   /** How agents talk, at the Nessa level and per channel; absent without a gateway. Provided by `main.tsx`. */
   readonly replyStyle: ReplyStyleGateway | undefined
+  /** The apps installed on this computer, for Settings › Apps; absent without a gateway. Provided by `main.tsx`. */
+  readonly installedApps: InstalledAppsGateway | undefined
   readonly agent37: Agent37Gateway | undefined
   readonly github: GithubGateway | undefined
   /** The gateway's side of a voice call; absent without a gateway. Provided by `main.tsx`. */
@@ -398,6 +405,7 @@ export function createDesktopDependencies(
     vault: options.vault ?? (source ? gatewayVault(() => source.connected()) : undefined),
     boat: source ? boatGateway(() => source.connected()) : undefined,
     replyStyle: source ? replyStyleGateway(() => source.connected()) : undefined,
+    installedApps: source ? installedAppsGateway(() => source.connected()) : undefined,
     agent37: source ? agent37Gateway(() => source.connected()) : undefined,
     github: source ? githubGateway({ connected: () => source.connected() }) : undefined,
     voice: source ? voiceGateway(() => source.connected()) : undefined,
@@ -471,6 +479,7 @@ type WindowGatewayClient = GatewayClient &
     readonly agent37: Agent37Api
     readonly cloud: CloudApi
     readonly replyStyle: ReplyStyleApi
+    readonly apps: AppsApi
   } & McpServersClient &
   LinkedDevicesClient &
   NativeHooksClient &

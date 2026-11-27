@@ -15,6 +15,7 @@ mod gateway_endpoint;
 mod host;
 mod host_log;
 mod host_refusal;
+mod installed_apps;
 mod launch;
 mod linger;
 mod links;
@@ -121,6 +122,8 @@ fn main() {
                 );
             }
         })
+        // Installed apps' open windows, and what each draws (`installed_apps.rs`).
+        .manage(installed_apps::HeldApps::default())
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
             platform::panel_size,
@@ -168,6 +171,11 @@ fn main() {
             call_pill::call_pill_read,
             call_pill::call_pill_press,
             call_pill::call_pill_drag,
+            installed_apps::installed_app_confirm,
+            installed_apps::installed_app_open,
+            installed_apps::installed_app_stop,
+            installed_apps::installed_app_running,
+            installed_apps::installed_app_page,
         ])
         .setup(move |app| {
             if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {
@@ -394,6 +402,11 @@ fn main() {
             // owns the finishing order and closes setup itself. This catches the
             // ways setup can go that nothing coordinates — a dismissal, a
             // crashed webview — and is idempotent with the handoff's own close.
+            if matches!(event, WindowEvent::Destroyed)
+                && window.label().starts_with(installed_apps::APP_WINDOW_PREFIX)
+            {
+                installed_apps::window_destroyed(window.app_handle(), window.label());
+            }
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
                 panel::setup_window_gone();
                 if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {

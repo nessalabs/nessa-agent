@@ -35,6 +35,11 @@ export const settingsCategories = [
       { id: "layout", label: "Layout", keywords: "columns sidebar panes split" },
       { id: "sessions", label: "Sessions", keywords: "history archive conversations" },
       { id: "keyboard", label: "Keyboard", keywords: "shortcuts keys hotkeys" },
+      {
+        id: "installed-apps",
+        label: "Apps",
+        keywords: "app apps install static create review open stop uninstall remove",
+      },
     ],
   },
   {
@@ -353,6 +358,22 @@ export const settingsEntries = [
     detail:
       "A tool you always allow or always deny in one project. Revoke one to be asked again.",
     keywords: "allow deny permission rule revoke project",
+  },
+  {
+    id: "installed-apps",
+    tab: "installed-apps",
+    label: "Installed apps",
+    detail:
+      "Apps you installed on this computer. Each opens in its own window, with no network and nothing of Nessa's it can reach.",
+    keywords: "app apps installed open stop uninstall remove window",
+  },
+  {
+    id: "create-app",
+    tab: "installed-apps",
+    label: "Create an app",
+    detail:
+      "Start from the starter app, review what it holds, then install it. Nothing is installed until you say Yes.",
+    keywords: "app create new starter review install",
   },
   {
     id: "trusted-apps",

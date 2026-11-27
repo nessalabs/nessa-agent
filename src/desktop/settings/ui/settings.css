@@ -1722,3 +1722,21 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   font-weight: 500;
   line-height: 1.4;
 }
+
+/* Apps: an app row's buttons side by side, and a reviewed app's preview. */
+.settings-installed-app-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.settings-installed-app-preview {
+  margin-block-start: 8px;
+  block-size: 240px;
+  border-radius: var(--radius, 8px);
+  overflow: hidden;
+  background: var(--secondary);
+}
+.settings-installed-app-preview iframe {
+  inline-size: 100%;
+  block-size: 100%;
+  border: 0;
+}

@@ -116,6 +116,10 @@ pub enum RuntimeCopyState {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub const REVIEW_NOTICE_OPENED: &str = "nessa://review-notice-opened";
 
+/// An installed app's window opened or closed. Sent to the desktop window,
+/// whose Settings › Apps shows which apps are running.
+pub const INSTALLED_APPS_CHANGED: &str = "nessa://installed-apps-changed";
+
 /// Whether the host could put itself together at launch (ADR 221). Asked by
 /// the page before anything else; `Refused` means no other command that needs
 /// the host's dependencies will answer, and the page shows only the refusal.

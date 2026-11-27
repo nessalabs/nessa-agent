@@ -338,6 +338,15 @@ import {
  *               and completed, holding its ids and none of its
  *               words. The `voice` step checks its spoken turn's record says
  *               spoken
+ *   apps        a static app made in Settings › Workspace › Apps from the
+ *               gateway's starter: its review names the package's digest and
+ *               draws a preview in the sandbox. Cancel in the system's
+ *               dialog installs nothing and writes no audit record; Install
+ *               keeps exactly the reviewed package (the gateway reads back
+ *               the digest the dialog was shown). Open hands the host the
+ *               read-back package; the app's own window (installed-app.html,
+ *               another tab) draws it in the sandbox with no network, Stop
+ *               ends it, and Uninstall removes it while a second app stays
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -10128,6 +10137,204 @@ const steps = {
     // Ids, kinds and counts only: never what anyone wrote.
     if (collector.anyHolds(text))
       failures.push("an export holds the words of the message")
+  },
+
+  async apps(run, step, failures) {
+    const appId = `stress-r${step.index}-s${run.knobs.seed}`
+    const kept = `${appId}-kept`
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const auditDir = join(namespace, "conversations", "audit", "apps")
+    const audit = () =>
+      (existsSync(auditDir) ? readdirSync(auditDir) : []).map((name) =>
+        JSON.parse(readFileSync(join(auditDir, name), "utf8")),
+      )
+    const installedIds = async () =>
+      (await run.client.apps.installed()).map((app) => app.appId)
+    const page = run.page
+    const said = (tone) => page.locator(`[data-installed-apps-said="${tone}"]`)
+    // Create and review one app; answers the digest the review shows.
+    const review = async (id) => {
+      await page.locator("[data-create-app-id]").fill(id)
+      await page.locator("[data-create-app-review]").click({ timeout: 10_000 })
+      const card = page.locator("[data-app-review]")
+      await card.waitFor({ timeout: 10_000 })
+      return card.getAttribute("data-app-review")
+    }
+    const install = async (id, answer) => {
+      const digest = await review(id)
+      await page.evaluate((yes) => window.__fakeHostAppAnswers.push(yes), answer)
+      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
+      return digest
+    }
+    await run.exclusive(async () => {
+      if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+      await page
+        .locator(css.settingsCategory, { hasText: names.workspaceSettings })
+        .click()
+      await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
+      await page.locator("[data-create-app-id]:enabled").waitFor({ timeout: 10_000 })
+
+      // The review draws the package as it will run, in the sandbox.
+      const digest = await review(appId)
+      if (!/^[0-9a-f]{64}$/.test(digest ?? ""))
+        failures.push(`the review names no package digest: ${digest}`)
+      const preview = await waitFor(async () => {
+        const proxy = await (await page.$("[data-app-preview] iframe"))?.contentFrame()
+        const app = proxy?.childFrames()[0]
+        return (
+          app &&
+          (await app
+            .locator("h1")
+            .textContent()
+            .catch(() => null))
+        )
+      }, 15_000)
+      if (preview !== "Nessa app")
+        failures.push(`the review's preview drew ${JSON.stringify(preview)}`)
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `apps-${run.engine}-review.png`),
+        })
+
+      // Cancel: nothing installed, nothing written.
+      const before = audit().length
+      await page.evaluate(() => window.__fakeHostAppAnswers.push(false))
+      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
+      await said("note").waitFor({ timeout: 10_000 })
+      const confirms = await page.evaluate(() => window.__fakeHostAppConfirms)
+      const asked = confirms.at(-1)
+      if (asked?.appId !== appId || asked?.digest !== digest)
+        failures.push(`the system's dialog was asked ${JSON.stringify(asked)}`)
+      if ((await installedIds()).includes(appId))
+        failures.push("Cancel in the system's dialog still installed the app")
+      if (audit().length !== before)
+        failures.push("Cancel in the system's dialog wrote an apps audit record")
+
+      // Install: exactly the reviewed package is kept.
+      await page.evaluate(() => window.__fakeHostAppAnswers.push(true))
+      await page.locator("[data-app-review-install]").click({ timeout: 10_000 })
+      await page
+        .locator(`[data-installed-app="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the installed app was never listed"))
+      const read = await run.client.apps.read(appId).catch(() => undefined)
+      if (read?.review.digest !== digest)
+        failures.push(
+          `the gateway kept ${read?.review.digest}, not the reviewed ${digest}`,
+        )
+      const installs = audit().filter(
+        (record) => record.kind === "app_install" && record.appId === appId,
+      )
+      for (const phase of ["requested", "installed"])
+        if (!installs.some((record) => record.phase === phase))
+          failures.push(`the apps audit has no ${phase} install record`)
+      await install(kept, true)
+      await page
+        .locator(`[data-installed-app="${kept}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the second installed app was never listed"))
+
+      // Open: the host is handed the package the gateway read back.
+      await page.locator(`[data-installed-app-open="${appId}"]`).click()
+      const opened = await waitFor(
+        () =>
+          page.evaluate(
+            (id) => window.__fakeHostAppOpens.find((each) => each.appId === id),
+            appId,
+          ),
+        10_000,
+      )
+      if (opened?.digest !== digest)
+        failures.push(`the host was asked to open ${JSON.stringify(opened)}`)
+      await page
+        .locator(`[data-installed-app-running][data-installed-app="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the open app's row never said it was running"))
+
+      // Its own window: drawn in the sandbox, with no network.
+      const window_ = await page.context().newPage()
+      try {
+        await window_.addInitScript(gatewayHost, {
+          endpoint: null,
+          credential: null,
+          appWindow: appId,
+        })
+        await window_.goto(`${new URL(page.url()).origin}/installed-app.html`)
+        const frame = await waitFor(async () => {
+          const proxy = await (await window_.$("#app iframe"))?.contentFrame()
+          const app = proxy?.childFrames()[0]
+          const title =
+            app &&
+            (await app
+              .locator("h1")
+              .textContent()
+              .catch(() => null))
+          return title === "Nessa app" ? app : null
+        }, 15_000)
+        if (!frame) failures.push("the app's own window never drew the app")
+        else {
+          const reached = await frame
+            .evaluate(
+              (url) =>
+                fetch(url).then(
+                  () => true,
+                  () => false,
+                ),
+              page.url(),
+            )
+            .catch(() => false)
+          if (reached) failures.push("the installed app reached the network")
+        }
+        if (run.evidence)
+          await window_.screenshot({
+            path: join(run.evidence, `apps-${run.engine}-window.png`),
+          })
+
+        // Stop ends it, as the host destroys its window.
+        await page.locator(`[data-installed-app-stop="${appId}"]`).click()
+        const stopped = await waitFor(
+          () =>
+            window_.evaluate(
+              () => document.documentElement.dataset.fakeHostAppStopped !== undefined,
+            ),
+          10_000,
+        )
+        if (!stopped) failures.push("Stop did not end the app's window")
+      } finally {
+        await window_.close()
+      }
+      await page
+        .locator(`[data-installed-app-open="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the stopped app's row still says it is running"))
+
+      // Uninstall removes it, and only it.
+      await page.locator(`[data-installed-app-uninstall="${appId}"]`).click()
+      await page
+        .locator(`[data-installed-app="${appId}"]`)
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => failures.push("the uninstalled app is still listed"))
+      const left = await installedIds()
+      if (left.includes(appId))
+        failures.push("the gateway still holds the uninstalled app")
+      if (!left.includes(kept)) failures.push("uninstalling one app removed the other")
+      if (
+        !audit().some(
+          (record) =>
+            record.kind === "app_uninstall" &&
+            record.appId === appId &&
+            record.phase === "uninstalled",
+        )
+      )
+        failures.push("the apps audit has no uninstalled record")
+      // The other app goes too, for the steps after.
+      await page.locator(`[data-installed-app-uninstall="${kept}"]`).click()
+      await page
+        .locator(`[data-installed-app="${kept}"]`)
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => failures.push("the second app could not be uninstalled"))
+      await closeSettings(page)
+    })
   },
 
   async trace(run, step, failures) {
