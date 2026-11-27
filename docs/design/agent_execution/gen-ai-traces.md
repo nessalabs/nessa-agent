@@ -19,9 +19,13 @@ more than one remains; the last finished span stays, and open-turn children
 are dropped after that. A span whose own text exceeds that budget is stored
 without the oversized text.
 
-`SpanExporter` is the plug for a later user-chosen OTLP endpoint.
-`LocalTraceStore::set_exporter` installs it. No endpoint is read now, and the
-store must not be installed as its own exporter.
+`SpanExporter` is the plug for one extra receiver of each finished span.
+`LocalTraceStore::set_exporter` installs it, and the store must not be
+installed as its own exporter. When `config.json` turns telemetry on, the
+gateway installs `GenAiTelemetry` (nessa-conversation) there: it tells each
+span through the telemetry dispatcher inside the turn's `nessa.turn` span,
+converts its times with the binding's clock, and leaves content attributes
+off (ADR 1491).
 
 Message text, tool arguments, and tool results stay off a span unless the
 store is built with content capture on. Thought text is never stored.

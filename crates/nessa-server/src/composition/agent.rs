@@ -1055,7 +1055,9 @@ pub(super) mod build {
     use crate::agents::application::NativeHooksAgent;
     use crate::conversation::{
         application::ProviderSessionEraser,
-        infrastructure::{BindingSessionEraser, DurableExecutionAudit, ObservedExecutionAudit},
+        infrastructure::{
+            BindingSessionEraser, DurableExecutionAudit, GenAiTelemetry, ObservedExecutionAudit,
+        },
     };
     use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
     use nessa_sdk::domain::agent_execution::leases::SandboxProfiles;
@@ -1399,6 +1401,8 @@ pub(super) mod build {
         let (permission_rules, review_notices) = super::remembered_rules(agent, dependencies);
         acp.permission_rules = permission_rules;
         acp.review_notices = review_notices;
+        // The binding measures its GenAI spans on this clock.
+        let trace_clock = acp.clock.clone();
         let prompt = system_prompt(config)?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         // One entry per agent: its provider, and the same binding as the way
@@ -1462,6 +1466,21 @@ pub(super) mod build {
                 )
             }
         };
+        // The SDK's tool and model spans, told inside each turn's span. With
+        // telemetry off the store keeps them for views only. A store that
+        // captures content is never forwarded: a captured tool title can be
+        // built from the model's arguments, and it names the span.
+        if dependencies.telemetry.is_on() {
+            if let Some(traces) = provider
+                .traces()
+                .filter(|traces| !traces.capture().enabled())
+            {
+                traces.set_exporter(Arc::new(GenAiTelemetry::new(
+                    dependencies.telemetry.clone(),
+                    trace_clock,
+                )));
+            }
+        }
         Ok(ProviderComposition {
             workspace: published_workspace,
             provider,

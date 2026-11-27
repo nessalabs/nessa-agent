@@ -76,9 +76,10 @@ viewer.
 Harder: `OTEL_EXPORTER_OTLP_ENDPOINT` alone no longer exports anything, which
 changes behaviour for anyone who relied on it for decision spans; they add
 `"telemetry": {"otel": {"enabled": true}}`. Every send writes one more small
-file before admission. Tool and model spans from the SDK's GenAI trace store
-are not forwarded yet; that is a follow-up, since those stores are per binding
-and time from a monotonic origin.
+file before admission. The SDK's GenAI spans (agent, model call, tool call)
+are forwarded by `GenAiTelemetry`, the store's one extra exporter, installed
+per binding with that binding's own clock, because their times are measured
+from that clock's origin rather than as wall time.
 
 Watch for: the dropped-event count logged at exit growing (the queue is too
 small or a sink is slow), and the turn-origin directory's size on very busy
@@ -102,6 +103,8 @@ gateways (one file per attempt, like file-link evidence).
 | Any of the above | Told only after its audit record was written. A turn's span is named by its conversation and execution id. `Finished` names the provider's session, so the audit wrapper matches it to the conversation that admitted that execution. |
 | Two conversations running the same execution id at once | Neither span is ended by `Finished` rather than the wrong one; each is later ended as abandoned when the sink is full. |
 | A flush or shutdown behind a stuck sink | Returns false once its time is up, whether still waiting for room in the queue or for the worker. |
+| The SDK finishes a GenAI span (telemetry on) | Told as a whole span in the turn's trace: `invoke_agent` under `nessa.turn`, each `chat` and `execute_tool` under its `invoke_agent`, at the wall time the binding's clock gives. Message text, tool arguments and tool results are left off. A store that captures content is not forwarded at all, since a captured tool title can carry the model's arguments. |
+| The SDK finishes a GenAI span (telemetry off) | No exporter is installed; the store keeps it for views as before. |
 | A turn resumed after a restart or failure | The successor's span starts linked to the one it continues. |
 | A decision asked, paused, settled, or its conversation erased | Span start, a point, then an end with outcome and timing, or an end with no outcome. One settled after a restart is told as one whole span marked `decision.reopened`. |
 | The queue is full | The event is dropped and counted; the count is logged at exit. |

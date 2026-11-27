@@ -7,7 +7,7 @@
 //!                               TraceRecorder --> SpanExporter
 //!                                      |              |
 //!                                      |              +--> LocalTraceStore (read API)
-//!                                      |              +--> a later exporter, unset
+//!                                      |              +--> the application's exporter, if set
 //!                                      v
 //!                               finished GenAiSpan
 //! ```
@@ -15,7 +15,7 @@
 //! Arrows are calls. The recorder does not watch the harness. It folds the
 //! turn, model, tool, permission, and usage facts the ACP worker already
 //! decoded. [`LocalTraceStore`] keeps the finished spans and is what a view
-//! reads. [`SpanExporter`] is the only plug for a later OTLP sender; this
+//! reads. [`SpanExporter`] is the only plug for the application's sender; this
 //! module does not open a network connection.
 //!
 //! Message text, tool arguments, and tool results stay off a span unless

@@ -207,7 +207,9 @@ mod audit;
 mod audit_diagnostics;
 mod audit_mapping;
 pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
+mod gen_ai_telemetry;
 mod observed_audit;
+pub use gen_ai_telemetry::GenAiTelemetry;
 pub use observed_audit::ObservedExecutionAudit;
 
 #[cfg(test)]

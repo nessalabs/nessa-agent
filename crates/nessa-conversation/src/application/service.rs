@@ -692,25 +692,89 @@ pub enum SubmissionMode {
 /// A submitted turn's span, still open, that ends as refused when this is
 /// dropped before the agent took the turn: on any early return or failure
 /// between its origin being recorded and the agent's answer.
-struct Unadmitted {
+pub(super) struct Unadmitted {
     telemetry: nessa_telemetry::Telemetry,
     conversation: String,
     execution: String,
     clock: Arc<dyn Clock>,
     /// Still waiting on the agent's answer.
     open: bool,
-    /// Set when the span is left for the next offer, so the supervisor ends
-    /// it should none take it.
-    left_open: Arc<AtomicBool>,
+    hand_off: SpanHandOff,
 }
 impl Unadmitted {
+    /// This offer answers for the span of `execution` in `conversation`,
+    /// whose start it has just told, from here.
+    pub(super) fn opened(
+        telemetry: nessa_telemetry::Telemetry,
+        conversation: String,
+        execution: String,
+        clock: Arc<dyn Clock>,
+        hand_off: SpanHandOff,
+    ) -> Self {
+        hand_off.taken_over();
+        Self {
+            telemetry,
+            conversation,
+            execution,
+            clock,
+            open: true,
+            hand_off,
+        }
+    }
     /// What the agent's answer means for the span: open for the execution
     /// audit, left for the next offer, or ended as refused.
-    fn answered(mut self, delivery: Result<(), &ConversationError>, again: bool) {
+    pub(super) fn answered(mut self, delivery: Result<(), &ConversationError>, again: bool) {
         let after = span_after(delivery, again);
-        self.left_open
-            .store(after == SpanAfter::OfferedAgain, Ordering::SeqCst);
+        self.hand_off.answered(&after);
         self.open = after == SpanAfter::Refused;
+    }
+}
+/// Who answers for a turn's span between the offers of one send
+/// (`submit_supervised`). Each offer's [`Unadmitted`] answers for it while
+/// it waits on the agent; an offer refused for now leaves it for the next
+/// one; an offer that finds the agent already has the turn hands it to the
+/// execution audit. Whatever is left once the last offer is done, nothing
+/// was taken, and [`Self::finish`] ends it as refused, once.
+///
+/// ```text
+/// offer ─opened─▶ guard ─answered(OfferedAgain)─▶ left open ─▶ next offer
+///                   │                                 │ none takes it
+///                   ├─answered(Open): audit's         └─▶ finish: refused
+///                   └─answered(Refused)/drop: refused here
+/// offer that finds the turn known ─taken_over─▶ audit's
+/// ```
+#[derive(Clone, Default)]
+pub(super) struct SpanHandOff(Arc<AtomicBool>);
+impl SpanHandOff {
+    /// An offer took the span over: its own guard answers for it, or the
+    /// agent already has the turn and its audit does.
+    pub(super) fn taken_over(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+    fn answered(&self, after: &SpanAfter) {
+        self.0
+            .store(*after == SpanAfter::OfferedAgain, Ordering::SeqCst);
+    }
+    /// After the last offer: end the span as refused if one was left open
+    /// and no later offer took it over, whatever that last offer ended as
+    /// (refused for now at the deadline, refused before its span, its task
+    /// failed).
+    pub(super) fn finish(
+        &self,
+        telemetry: &nessa_telemetry::Telemetry,
+        conversation: &str,
+        execution: &str,
+        clock: &dyn Clock,
+    ) {
+        if self.0.swap(false, Ordering::SeqCst) {
+            telemetry.emit_with(|| {
+                super::turn_telemetry::turn_refused(
+                    conversation,
+                    execution,
+                    clock.unix_milliseconds(),
+                )
+            });
+        }
     }
 }
 /// What becomes of a submitted turn's span once the agent answered.
@@ -4187,9 +4251,8 @@ impl ConversationService {
         // as this goes (row C11).
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
         let carried = Carried::default();
-        // Set while an offer refused for now left its turn's span open for
-        // the next one (`SpanAfter::OfferedAgain`).
-        let span_left_open = Arc::new(AtomicBool::new(false));
+        // Who answers for the turn's span between offers.
+        let hand_off = SpanHandOff::default();
         let (asked, outcome) = loop {
             let (asked, submission) = self.submission_future_permitted(
                 id.clone(),
@@ -4202,7 +4265,7 @@ impl ConversationService {
                 carried.clone(),
                 selection.clone(),
                 on_admission.clone(),
-                span_left_open.clone(),
+                hand_off.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -4212,20 +4275,12 @@ impl ConversationService {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         };
         let asked = asked.load(Ordering::SeqCst);
-        // An earlier offer left the turn's span open for a later one, and no
-        // later offer took it over: however the last one ended (refused for
-        // now at the deadline, refused before its span, its task failed),
-        // nothing was taken, and the span ends as refused here.
-        if span_left_open.load(Ordering::SeqCst) {
-            let telemetry = self.telemetry();
-            telemetry.emit_with(|| {
-                super::turn_telemetry::turn_refused(
-                    &id.to_string(),
-                    &execution_id,
-                    self.inner.clock.unix_milliseconds(),
-                )
-            });
-        }
+        hand_off.finish(
+            &self.telemetry(),
+            &id.to_string(),
+            &execution_id,
+            self.inner.clock.as_ref(),
+        );
         let failure = match outcome {
             Ok(Ok(receipt)) => return Ok(receipt),
             // Only before anything is asked: admission, and the resolve.
@@ -4267,7 +4322,7 @@ impl ConversationService {
             carried,
             None,
             None,
-            Arc::new(AtomicBool::new(false)),
+            SpanHandOff::default(),
         )
     }
 
@@ -4284,7 +4339,7 @@ impl ConversationService {
         carried: Carried,
         selection: Option<Arc<SubmissionPermit>>,
         on_admission: Option<Arc<dyn AdmissionNotice>>,
-        span_left_open: Arc<AtomicBool>,
+        hand_off: SpanHandOff,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -4401,7 +4456,7 @@ impl ConversationService {
                 // pass of this attempt that was offered again must not end
                 // it as refused.
                 if known {
-                    span_left_open.store(false, Ordering::SeqCst);
+                    hand_off.taken_over();
                 }
                 // A thread its agent closed is open again for new work. A
                 // retry of a message the agent already has is not new work:
@@ -4662,16 +4717,13 @@ impl ConversationService {
                         service.inner.clock.unix_milliseconds(),
                     )
                 });
-                // This offer's guard answers for the span from here.
-                span_left_open.store(false, Ordering::SeqCst);
-                Unadmitted {
+                Unadmitted::opened(
                     telemetry,
                     conversation,
-                    execution: execution_id.clone(),
-                    clock: service.inner.clock.clone(),
-                    open: true,
-                    left_open: span_left_open.clone(),
-                }
+                    execution_id.clone(),
+                    service.inner.clock.clone(),
+                    hand_off.clone(),
+                )
             });
             // A saved request owns its admission budget after model changes.
             // The incoming message is replaced below so SDK recovery still

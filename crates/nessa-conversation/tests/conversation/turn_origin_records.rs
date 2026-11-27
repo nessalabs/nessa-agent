@@ -354,3 +354,109 @@ fn a_span_ends_as_refused_only_when_nothing_was_taken() {
         assert_eq!(span_after(Err(&saved), false), SpanAfter::Open, "{saved:?}");
     }
 }
+
+/// One send's offers, each as what became of it, and what the turn's span
+/// is told across them: the guard each offer opens, the hand-off between
+/// offers, and the end the supervisor tells once they are done.
+#[derive(Clone, Copy, Debug)]
+enum Offer {
+    /// Its span was told and the agent answered: taken (`Ok`), refused for
+    /// now and offered again, refused with nothing taken, or refused after
+    /// it may have been taken.
+    Answered(Result<(), Refusal>, bool),
+    /// It failed before its span was told (say, the origin read refused).
+    FailedBeforeItsSpan,
+    /// Its span was told, then it failed before the agent answered.
+    OpenedThenFailed,
+    /// It found the agent already has the turn: the agent's audit answers.
+    Known,
+}
+#[derive(Clone, Copy, Debug)]
+enum Refusal {
+    NothingTaken,
+    MayBeTaken,
+}
+
+fn refused_ends(offers: &[Offer]) -> usize {
+    use super::service::{SpanHandOff, Unadmitted};
+    use nessa_sdk::application::agent_execution::agents::AgentError;
+    let told = Recording::default();
+    let telemetry = Telemetry::new(vec![Box::new(told.clone())], 64).unwrap();
+    let clock: Arc<dyn nessa_auth::application::ports::Clock> = Arc::new(TestClock);
+    let hand_off = SpanHandOff::default();
+    for offer in offers {
+        match *offer {
+            Offer::Answered(answer, again) => {
+                let guard = Unadmitted::opened(
+                    telemetry.clone(),
+                    "c".into(),
+                    "e".into(),
+                    clock.clone(),
+                    hand_off.clone(),
+                );
+                let error = match answer {
+                    Ok(()) => None,
+                    Err(Refusal::NothingTaken) => {
+                        Some(ConversationError::Agent(AgentError::Closed))
+                    }
+                    Err(Refusal::MayBeTaken) => {
+                        Some(ConversationError::Agent(AgentError::SubmissionUnresolved))
+                    }
+                };
+                guard.answered(error.as_ref().map_or(Ok(()), Err), again);
+            }
+            Offer::FailedBeforeItsSpan => {}
+            Offer::OpenedThenFailed => drop(Unadmitted::opened(
+                telemetry.clone(),
+                "c".into(),
+                "e".into(),
+                clock.clone(),
+                hand_off.clone(),
+            )),
+            Offer::Known => hand_off.taken_over(),
+        }
+    }
+    hand_off.finish(&telemetry, "c", "e", clock.as_ref());
+    assert!(telemetry.flush(Duration::from_secs(5)));
+    let events = told.0.lock().unwrap().clone();
+    events
+        .iter()
+        .filter(|event| attribute(event, "nessa.turn.outcome") == Some(&"refused".into()))
+        .count()
+}
+
+/// Across the offers of one send, the span ends as refused exactly when no
+/// offer was taken, and once (`SpanHandOff`).
+#[test]
+fn a_span_offered_again_ends_as_refused_once_and_only_when_no_offer_was_taken() {
+    use Offer::*;
+    let again = Answered(Err(Refusal::NothingTaken), true);
+    let cases: &[(&[Offer], usize)] = &[
+        // Taken at once, or on a later offer: the audit ends it.
+        (&[Answered(Ok(()), false)], 0),
+        (&[again, again, Answered(Ok(()), false)], 0),
+        // Refused with nothing taken: its own guard ends it, once.
+        (&[Answered(Err(Refusal::NothingTaken), false)], 1),
+        (&[again, Answered(Err(Refusal::NothingTaken), false)], 1),
+        // Refused for now until the deadline: the supervisor ends it.
+        (&[again], 1),
+        (&[again, again, again], 1),
+        // A later offer failed before it told the span: still ended.
+        (&[again, FailedBeforeItsSpan], 1),
+        // Refused after it may have been taken: left to the audit.
+        (&[again, Answered(Err(Refusal::MayBeTaken), false)], 0),
+        // A later offer found the agent already has it (another
+        // submission of the same message took the shared span): running,
+        // never ended as refused.
+        (&[again, Known], 0),
+        (&[again, Known, FailedBeforeItsSpan], 0),
+        // Failed before any span: nothing to end.
+        (&[FailedBeforeItsSpan], 0),
+        // Told its span, then failed before an answer: its guard ends it.
+        (&[OpenedThenFailed], 1),
+        (&[again, OpenedThenFailed], 1),
+    ];
+    for (offers, refused) in cases {
+        assert_eq!(refused_ends(offers), *refused, "{offers:?}");
+    }
+}

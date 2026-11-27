@@ -60,8 +60,9 @@ impl ContentCapture {
 
 /// Receives a finished span. Implementations must not fail the turn.
 ///
-/// A later OTLP sender implements this and is installed with
-/// [`LocalTraceStore::set_exporter`]. Nothing in this module opens a connection.
+/// The embedding application's sender (such as a telemetry forwarder)
+/// implements this and is installed with [`LocalTraceStore::set_exporter`].
+/// Nothing in this module opens a connection.
 pub trait SpanExporter: Send + Sync {
     /// Accept one finished span. Losing it is acceptable; failing the turn is not.
     ///
@@ -146,7 +147,7 @@ struct Inner {
 }
 
 /// Finished spans for the conversations this process has run, and the place a
-/// later exporter is attached.
+/// one extra exporter is attached.
 ///
 /// The store keeps the most recent 2048 finished spans, and the same number of
 /// child spans from turns that have not closed. Older spans are dropped one at
@@ -332,8 +333,8 @@ impl LocalTraceStore {
     /// Install the exporter that receives each span after this store has
     /// finished it.
     ///
-    /// This is the plug for a later user-chosen OTLP endpoint: the sender
-    /// implements [`SpanExporter`] and is set here. No endpoint is read now.
+    /// This is the plug for the application's own sender: it implements
+    /// [`SpanExporter`] and is set here. This module reads no endpoint.
     /// The store must not be set as its own exporter.
     pub fn set_exporter(&self, exporter: Arc<dyn SpanExporter>) {
         self.lock().extra = Some(exporter);

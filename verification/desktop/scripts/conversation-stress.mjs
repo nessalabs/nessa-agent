@@ -335,8 +335,8 @@ import {
  *               says a person sent it through `nessa-panel` (the desktop window), not spoken,
  *               and the gateway (started with `telemetry.otel` on, naming a
  *               fake collector) exports its `nessa.turn` span, admitted
- *               and completed, holding its ids and none of its
- *               words. The `voice` step checks its spoken turn's record says
+ *               and completed, and the SDK's `invoke_agent` span inside it,
+ *               holding its ids and none of its words. The `voice` step checks its spoken turn's record says
  *               spoken
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
@@ -478,7 +478,7 @@ import {
   disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
-import { startFakeOtlp } from "./lib/fake-otlp.mjs"
+import { otelIds, startFakeOtlp } from "./lib/fake-otlp.mjs"
 import { freePort } from "./lib/server.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
@@ -10122,6 +10122,25 @@ const steps = {
     if (!exported)
       failures.push(
         `the collector got ${collector.exports()} exports, none telling turn ${turn.executionId} admitted and completed`,
+      )
+    // The SDK's own span of the agent's turn, told inside the turn's span:
+    // in its trace, with the turn's span as its parent.
+    const turnIds = otelIds(`${run.main.id}/${turn.executionId}`, "turn")
+    const agentSpan = await waitFor(
+      () =>
+        collector
+          .spans()
+          .some(
+            (span) =>
+              span.name.startsWith("invoke_agent") &&
+              span.traceId === turnIds.traceId &&
+              span.parentSpanId === turnIds.spanId,
+          ),
+      20_000,
+    )
+    if (!agentSpan)
+      failures.push(
+        `no exported invoke_agent span sits under turn ${turn.executionId}'s span`,
       )
     if (!collector.holds("nessa.origin.kind", "person", "nessa-panel"))
       failures.push("no exported turn says it came from a person through nessa-panel")
