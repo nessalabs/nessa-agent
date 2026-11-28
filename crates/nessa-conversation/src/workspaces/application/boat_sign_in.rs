@@ -127,7 +127,10 @@ pub enum SignInState {
 struct Attempt {
     id: u64,
     state: SignInState,
+    /// Absent once the attempt is saving: past that point it is never
+    /// aborted, so a save that started always finishes and is reported.
     task: Option<tokio::task::AbortHandle>,
+    saving: bool,
 }
 
 /// The one sign-in at a time this gateway runs.
@@ -154,6 +157,7 @@ impl BoatSignIn {
                 id: 0,
                 state: SignInState::Idle,
                 task: None,
+                saving: false,
             })),
         }
     }
@@ -172,9 +176,13 @@ impl BoatSignIn {
         lock(&self.attempt).state.clone()
     }
     /// Stop waiting for the browser. A sign-in already exchanging its code
-    /// is stopped too; nothing is saved.
+    /// is stopped too; nothing is saved. One already saving is past
+    /// stopping: it finishes, and its outcome is what the state says.
     pub fn cancel(&self) {
         let mut attempt = lock(&self.attempt);
+        if attempt.saving {
+            return;
+        }
         if let Some(task) = attempt.task.take() {
             task.abort();
         }
@@ -212,12 +220,25 @@ impl BoatSignIn {
             task.abort();
         }
         attempt.id += 1;
+        attempt.saving = false;
         let id = attempt.id;
         attempt.state = SignInState::Waiting { url: url.clone() };
         let shared = self.attempt.clone();
         let oauth = self.oauth.clone();
         let workspaces = self.workspaces.clone();
         let deadline = self.deadline;
+        let commit = {
+            let shared = shared.clone();
+            move || {
+                let mut attempt = lock(&shared);
+                if attempt.id != id {
+                    return false;
+                }
+                attempt.task = None;
+                attempt.saving = true;
+                true
+            }
+        };
         let task = tokio::spawn(async move {
             let outcome = match tokio::time::timeout(
                 deadline,
@@ -228,6 +249,7 @@ impl BoatSignIn {
                     &redirect,
                     &state,
                     &verifier,
+                    &commit,
                 ),
             )
             .await
@@ -238,6 +260,7 @@ impl BoatSignIn {
             let mut attempt = lock(&shared);
             if attempt.id == id {
                 attempt.task = None;
+                attempt.saving = false;
                 attempt.state = match outcome {
                     Ok(()) => SignInState::Idle,
                     Err(failure) => SignInState::Failed(failure),
@@ -259,6 +282,7 @@ async fn wait(
     redirect: &str,
     state: &str,
     verifier: &str,
+    commit: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<(), SignInFailure> {
     loop {
         let Some((query, page)) = pending.arrived().await else {
@@ -268,7 +292,7 @@ async fn wait(
             let _ = page.send(CallbackPage::Failed);
             continue;
         }
-        let outcome = finish(query, oauth, workspaces, redirect, verifier).await;
+        let outcome = finish(query, oauth, workspaces, redirect, verifier, commit).await;
         let _ = page.send(if outcome.is_ok() {
             CallbackPage::Connected
         } else {
@@ -284,6 +308,7 @@ async fn finish(
     workspaces: &Workspaces,
     redirect: &str,
     verifier: &str,
+    commit: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<(), SignInFailure> {
     // RFC 9207: a redirect that names another issuer is not this sign-in.
     if query.iss.as_deref() != Some(oauth.issuer().as_str()) {
@@ -301,6 +326,11 @@ async fn finish(
                     .login(&tokens.access)
                     .await
                     .map_err(|_| SignInFailure::Unreachable)?;
+                // The point of no return: cancelled or replaced before it,
+                // nothing is saved; past it, the save always finishes.
+                if !commit() {
+                    return Err(SignInFailure::Expired);
+                }
                 workspaces
                     .save_signed_in(&tokens, login, now_ms())
                     .await
@@ -355,7 +385,7 @@ impl RenewedBoatSettings {
     /// token the moment it issues the new one.
     async fn current(&self) -> Result<CloudConnection, Failure> {
         let mut unsaved = self.renewing.lock().await;
-        let generation = self.inner.generation()?;
+        let mut generation = self.inner.generation()?;
         let stored = self.inner.read().await?;
         let CloudConnection::Boat(stored) = stored else {
             return Ok(stored);
@@ -365,19 +395,26 @@ impl RenewedBoatSettings {
             return Ok(CloudConnection::Boat(stored));
         };
         // The refresh token the vault holds: an unsaved renewal answers it.
-        let in_vault = Zeroizing::new(grant.refresh.as_slice().to_vec());
+        let mut in_vault = Zeroizing::new(grant.refresh.as_slice().to_vec());
         // A renewal the vault did not take is the newest grant there is.
         let mut current = stored;
         if let Some(held) = unsaved.take() {
             if held.replaced.as_slice() == grant.refresh.as_slice() {
                 current = held.connection.clone();
-                if self
+                match self
                     .inner
                     .save(generation, CloudConnection::Boat(current.clone()))
                     .await
-                    .is_err()
                 {
-                    *unsaved = Some(held);
+                    // The vault now holds the held grant: a renewal of it
+                    // below replaces that one, at the vault's new generation.
+                    Ok(()) => {
+                        generation = self.inner.generation()?;
+                        if let Some(saved) = current.grant.as_ref() {
+                            in_vault = Zeroizing::new(saved.refresh.as_slice().to_vec());
+                        }
+                    }
+                    Err(_) => *unsaved = Some(held),
                 }
             }
         }

@@ -129,7 +129,9 @@ never renewed. Signing in replaces it.
 - The browser must run on the machine the gateway runs on: the redirect goes
   to `localhost`. That is the desktop app's own gateway. A gateway on another
   machine cannot be signed in from a browser elsewhere.
-- One sign-in at a time per gateway; starting another ends the first.
+- One sign-in at a time per gateway; starting another ends the first. Cancel
+  or a new sign-in stops one only before it starts saving; a save that has
+  started always finishes and is reported.
 
 ## Checks
 

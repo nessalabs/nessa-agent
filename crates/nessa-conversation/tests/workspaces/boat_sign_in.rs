@@ -31,6 +31,11 @@ struct Memory {
     locked: std::sync::atomic::AtomicBool,
     failing_saves: AtomicU64,
     saves: AtomicU64,
+    /// Outcomes for the next saves in order, `false` refusing one; past
+    /// them, `failing_saves` decides.
+    script: Mutex<std::collections::VecDeque<bool>>,
+    /// How long a save takes before it lands.
+    save_delay_ms: AtomicU64,
 }
 #[async_trait]
 impl Settings for Memory {
@@ -52,7 +57,15 @@ impl Settings for Memory {
         }
     }
     async fn save(&self, _generation: u64, connection: CloudConnection) -> Result<(), Failure> {
-        if self.failing_saves.load(Ordering::SeqCst) > 0 {
+        tokio::time::sleep(Duration::from_millis(
+            self.save_delay_ms.load(Ordering::SeqCst),
+        ))
+        .await;
+        if let Some(ok) = self.script.lock().unwrap().pop_front() {
+            if !ok {
+                return Err(Failure::Storage);
+            }
+        } else if self.failing_saves.load(Ordering::SeqCst) > 0 {
             self.failing_saves.fetch_sub(1, Ordering::SeqCst);
             return Err(Failure::Storage);
         }
@@ -472,6 +485,53 @@ async fn a_renewal_the_vault_refused_is_kept_and_saved_later_not_spent_again() {
         panic!()
     };
     assert_eq!(saved.grant.unwrap().refresh.as_slice(), b"boatrt_1");
+}
+
+#[tokio::test]
+async fn a_held_renewal_saved_then_renewed_again_unsaved_names_the_grant_it_replaced() {
+    let boat = Arc::new(FakeBoat::new());
+    let vault = Arc::new(Memory::default());
+    *vault.saved.lock().unwrap() = Some(signed_in("boatrt_0", HOUR_MS));
+    let now = Arc::new(AtomicU64::new(HOUR_MS));
+    let settings = renewing(&boat, &vault, now.clone());
+    // 1: renewed to boatrt_1, which the vault refuses; it is held.
+    vault.script.lock().unwrap().extend([false]);
+    assert_eq!(token(&settings.read().await.unwrap()), "boat_1");
+    // 2: the held grant is due too. Saving it succeeds, its renewal to
+    // boatrt_2 is refused: the held renewal replaces boatrt_1 now.
+    now.store(3 * HOUR_MS, Ordering::SeqCst);
+    vault.script.lock().unwrap().extend([true, false]);
+    assert_eq!(token(&settings.read().await.unwrap()), "boat_2");
+    // 3: the vault holds boatrt_1, so the held boatrt_2 is used and saved,
+    // and the spent boatrt_1 is never sent to Boat again.
+    assert_eq!(token(&settings.read().await.unwrap()), "boat_2");
+    assert_eq!(boat.refreshes.load(Ordering::SeqCst), 2);
+    let Some(CloudConnection::Boat(saved)) = vault.saved.lock().unwrap().clone() else {
+        panic!("signed out")
+    };
+    assert_eq!(saved.grant.unwrap().refresh.as_slice(), b"boatrt_2");
+}
+
+#[tokio::test]
+async fn cancel_while_the_sign_in_is_saving_lets_the_save_finish_and_report() {
+    let rig = rig(FakeBoat::new());
+    rig.vault.save_delay_ms.store(200, Ordering::SeqCst);
+    let url = rig.sign_in.start().await.unwrap();
+    let query = CallbackQuery {
+        code: Some("code-1".into()),
+        state: Some(query_of(&url, "state")),
+        iss: Some("https://boat.test".into()),
+        error: None,
+    };
+    let (reply, page) = oneshot::channel();
+    rig.visits.send((query, reply)).await.unwrap();
+    // The save is under way: Cancel can no longer stop it.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    rig.sign_in.cancel();
+    assert_eq!(page.await.unwrap(), CallbackPage::Connected);
+    assert_eq!(settled(&rig.sign_in).await, SignInState::Idle);
+    assert!(rig.vault.saved.lock().unwrap().is_some());
+    assert!(rig.boat.revoked.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
