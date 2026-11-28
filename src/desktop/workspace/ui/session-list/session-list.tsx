@@ -7,6 +7,7 @@ import { DesktopIcon } from "../../../ui/icons"
 import {
   archiveSession,
   newSession,
+  openChannel,
   searchList,
   openSession,
 } from "../../adapters/store/commands"
@@ -40,7 +41,7 @@ import { StatusGlyph } from "../chrome/status-glyph"
 import { ColumnHeader } from "../../../ui/column-header"
 import { IconButton } from "../../../ui/icon-button"
 import { ListRow } from "../../../ui/list-row"
-import { SessionMenuItems, useOpenFromRow } from "../session-actions"
+import { SessionMenuItems, useBesideKey, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
 import { TerminalRows } from "../terminals/terminal-rows"
@@ -84,13 +85,19 @@ export const SessionList = memo(function SessionList() {
     (state) => !query && selectChannelShells(state, view.channelId).length > 0,
   )
   const listRef = useRef<HTMLDivElement>(null)
-  useRowFocusKept(listRef, "[data-session-row]")
+  // The coordinator's row not yet begun is one of the rows: focus goes to it
+  // when the last session beside it leaves.
+  useRowFocusKept(listRef, "[data-session-row], [data-coordinator-start]")
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
+  // A coordinator not yet begun is a row of its own: the list is not empty,
+  // and the keys walk it with the sessions, first.
+  const start = groups.find((group) => group.start !== undefined)?.start
+  const walked = start === undefined ? ordered : [start, ...ordered]
   // One row takes Tab: the open one, or the first when none here is open.
   // The frame after the boxes, so the fold does not render this list.
   const focusedId = usePaintedWithPanes(selectFocusedSessionId, listPaintFrame)
-  const tabStop = focusedId && ordered.includes(focusedId) ? focusedId : ordered[0]
+  const tabStop = focusedId && walked.includes(focusedId) ? focusedId : walked[0]
 
   // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it
   // goes; the context-menu key opens the focused row's menu.
@@ -99,25 +106,29 @@ export const SessionList = memo(function SessionList() {
     // anyway: only keys pressed on a row walk the list.
     if (!event.currentTarget.contains(event.target as Node)) return
     if (event.defaultPrevented) return
-    if (!(event.target instanceof Element) || !event.target.closest("[data-session-row]"))
+    if (
+      !(event.target instanceof Element) ||
+      !event.target.closest("[data-session-row], [data-coordinator-start]")
+    )
       return
     if (contextMenuFromKey(event)) return
     const walk: Record<string, (at: number) => number> = {
       ArrowDown: (at) => at + 1,
       ArrowUp: (at) => at - 1,
       Home: () => 0,
-      End: () => ordered.length - 1,
+      End: () => walked.length - 1,
     }
     if (!Object.hasOwn(walk, event.key)) return
     event.preventDefault()
     const focused = selectFocusedSessionId(store.getState())
-    const at = ordered.findIndex((id) => id === focused)
-    const next = ordered[Math.min(Math.max(walk[event.key](at), 0), ordered.length - 1)]
+    const at = walked.findIndex((id) => id === focused)
+    const next = walked[Math.min(Math.max(walk[event.key](at), 0), walked.length - 1)]
     if (!next) return
-    dispatch(openSession({ sessionId: next }))
-    listRef.current
-      ?.querySelector<HTMLElement>(`[data-session-row="${CSS.escape(next)}"]`)
-      ?.focus()
+    const row = next === start ? "data-coordinator-start" : "data-session-row"
+    if (next !== start) dispatch(openSession({ sessionId: next }))
+    else if (view.channelId !== undefined)
+      dispatch(openChannel({ channelId: view.channelId }))
+    listRef.current?.querySelector<HTMLElement>(`[${row}="${CSS.escape(next)}"]`)?.focus()
   }
 
   const shortcut = frame.shortcut("search")
@@ -168,7 +179,7 @@ export const SessionList = memo(function SessionList() {
           aria-label="Sessions"
           onKeyDown={onKeyDown}
         >
-          {ordered.length === 0 && !hasTerminals ? (
+          {walked.length === 0 && !hasTerminals ? (
             <EmptyState
               className="workspace-list-empty desktop-pill-ink"
               variant="compact"
@@ -182,7 +193,11 @@ export const SessionList = memo(function SessionList() {
               key={group.id}
               role="listbox"
               data-list-group={group.id}
-              aria-label={`${group.label} ${group.ids.length}`}
+              aria-label={
+                group.start === undefined
+                  ? `${group.label} ${group.ids.length}`
+                  : group.label
+              }
             >
               {/* The kit caption is a heading. Hidden here, so the group
                   exposes its rows; its name keeps the count the heading
@@ -195,8 +210,15 @@ export const SessionList = memo(function SessionList() {
                 size="dense"
                 tone="quiet"
                 label={group.label}
-                count={group.ids.length}
+                count={group.start === undefined ? group.ids.length : undefined}
               />
+              {group.start !== undefined && view.channelId !== undefined ? (
+                <CoordinatorStart
+                  channelId={view.channelId}
+                  conversationId={group.start}
+                  tabStop={tabStop === group.start}
+                />
+              ) : null}
               {group.ids.map((sessionId) => (
                 <SessionRow
                   key={sessionId}
@@ -310,6 +332,55 @@ const SessionRow = memo(function SessionRow({
     </ContextMenu>
   )
 })
+
+/**
+ * The channel's coordinator before its chat has begun, where its row will
+ * be: always at the top, so the channel has one place to say what it needs.
+ * Opening it opens that chat's first message; the row becomes the chat's own
+ * with what is said there.
+ */
+function CoordinatorStart({
+  channelId,
+  conversationId,
+  tabStop,
+}: {
+  channelId: string
+  conversationId: string
+  /** Whether the row is the list's one Tab stop. */
+  tabStop: boolean
+}) {
+  const dispatch = useWorkspaceDispatch()
+  const model = useWorkspaceSelector(
+    (state) => selectChannel(state, channelId)?.defaults?.model,
+  )
+  const selected = usePaintedWithPanes(
+    (state) => selectFocusedSessionId(state) === conversationId,
+    listPaintFrame,
+  )
+  const besideKey = useBesideKey()
+  // ⌘ with it opens beside, as it does on every other row.
+  const open = (event: { metaKey: boolean; ctrlKey: boolean }) =>
+    dispatch(openChannel({ channelId, beside: besideKey.asks(event) }))
+  return (
+    <ListRow
+      role="option"
+      tabIndex={tabStop ? 0 : -1}
+      aria-selected={selected}
+      data-coordinator-start={conversationId}
+      className="workspace-session"
+      selected={selected}
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return
+        event.preventDefault()
+        open(event)
+      }}
+      leading={model ? <AgentTile model={model} size={22} /> : undefined}
+      title="Coordinator"
+      description="Starts with your first message."
+    />
+  )
+}
 
 /**
  * What a row shows under the pointer, in its time's place: Archive, and "More",
