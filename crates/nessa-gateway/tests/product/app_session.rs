@@ -39,52 +39,67 @@ fn an_app_is_routed_only_conversation_methods() {
     }
 }
 
+/// A request's asks are named for policy (`app_call.shape`, which refuses
+/// each of them, is tested in `nessa-auth`); only decoding and the `auto`
+/// default are decided here.
 #[test]
-fn a_new_conversation_runs_in_auto_and_never_in_full() {
+fn a_new_conversation_runs_in_auto_and_names_what_else_it_asks_for() {
     let mut asked = frame(
         "conversation.create",
         json!({ "conversationId": "c", "requestId": "r" }),
     );
-    assert_eq!(admit_shape(&mut asked), Ok(()));
+    assert_eq!(asks(&mut asked), Ok(vec![]));
     assert_eq!(asked.params["approvalMode"], "auto");
 
     let mut ask = frame(
         "conversation.create",
         json!({ "conversationId": "c", "requestId": "r", "approvalMode": "ask" }),
     );
-    assert_eq!(admit_shape(&mut ask), Ok(()));
+    assert_eq!(asks(&mut ask), Ok(vec![]));
     assert_eq!(ask.params["approvalMode"], "ask");
 
-    for refused in [
-        json!({ "conversationId": "c", "requestId": "r", "approvalMode": "full" }),
-        json!({ "conversationId": "c", "requestId": "r", "channelId": "owner-channel" }),
-        json!({ "conversationId": "c", "requestId": "r", "environment": "box" }),
+    for (params, named) in [
+        (
+            json!({ "conversationId": "c", "requestId": "r", "approvalMode": "full" }),
+            vec![AppCallAsk::FullAccess],
+        ),
+        (
+            json!({ "conversationId": "c", "requestId": "r", "channelId": "owner-channel" }),
+            vec![AppCallAsk::Channel],
+        ),
+        (
+            json!({ "conversationId": "c", "requestId": "r", "environment": "box" }),
+            vec![AppCallAsk::Environment],
+        ),
     ] {
-        let mut asked = frame("conversation.create", refused.clone());
-        assert_eq!(admit_shape(&mut asked), Err("forbidden"), "{refused}");
+        let mut asked = frame("conversation.create", params.clone());
+        assert_eq!(asks(&mut asked), Ok(named), "{params}");
     }
+    // Params that do not decode are not the policy's to judge.
+    let mut broken = frame("conversation.create", json!({ "approvalMode": 7 }));
+    assert_eq!(asks(&mut broken), Err("invalid_request"));
 }
 
 #[test]
-fn a_message_links_no_file_on_this_computer() {
+fn a_message_that_links_files_says_so() {
     let base = json!({
         "conversationId": "c", "requestId": "r", "executionId": "e",
         "text": "hi", "attachments": [], "files": [],
     });
     assert_eq!(
-        admit_shape(&mut frame("conversation.send", base.clone())),
-        Ok(())
+        asks(&mut frame("conversation.send", base.clone())),
+        Ok(vec![])
     );
     let mut linked = base.clone();
     linked["files"] = json!([{ "path": "/etc/passwd" }]);
     assert_eq!(
-        admit_shape(&mut frame("conversation.send", linked)),
-        Err("forbidden")
+        asks(&mut frame("conversation.send", linked)),
+        Ok(vec![AppCallAsk::LinkedFiles])
     );
     let mut uploaded = base;
     uploaded["uploads"] = json!([{ "uploadId": "u" }]);
     assert_eq!(
-        admit_shape(&mut frame("conversation.steer", uploaded)),
-        Err("forbidden")
+        asks(&mut frame("conversation.steer", uploaded)),
+        Ok(vec![AppCallAsk::LinkedFiles])
     );
 }

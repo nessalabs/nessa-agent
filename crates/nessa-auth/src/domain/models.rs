@@ -157,6 +157,9 @@ pub struct Resource {
 pub(crate) struct AppCall {
     pub(crate) method: String,
     pub(crate) capabilities: Vec<String>,
+    /// What the request itself asks for, beyond the method, as policy
+    /// spells it (`fullAccess`, `channel`, `environment`, `linkedFiles`).
+    pub(crate) asks: Vec<String>,
 }
 
 impl Resource {

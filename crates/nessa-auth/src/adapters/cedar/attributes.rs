@@ -151,6 +151,14 @@ impl ResourceAttributes<'_> {
                         .map(|capability| RestrictedExpression::new_string(capability.clone())),
                 ),
             );
+            attrs.insert(
+                "appAsks".to_owned(),
+                RestrictedExpression::new_set(
+                    call.asks
+                        .iter()
+                        .map(|ask| RestrictedExpression::new_string(ask.clone())),
+                ),
+            );
         }
         attrs
     }

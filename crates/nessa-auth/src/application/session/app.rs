@@ -129,10 +129,36 @@ impl ReadCurrentAppSession<'_> {
     }
 }
 
+/// Something a request asks for beyond its method, which policy decides
+/// apart from the operations the owner approved (`app_call.shape`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppCallAsk {
+    /// A new conversation in `full` approval mode.
+    FullAccess,
+    /// A new conversation in one of the owner's channels.
+    Channel,
+    /// A new conversation in a named environment.
+    Environment,
+    /// A message linking files or uploads from this computer.
+    LinkedFiles,
+}
+
+impl AppCallAsk {
+    /// The ask as policy spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FullAccess => "fullAccess",
+            Self::Channel => "channel",
+            Self::Environment => "environment",
+            Self::LinkedFiles => "linkedFiles",
+        }
+    }
+}
+
 /// Whether an app session may call `method` now: its credential is still
-/// current, and policy admits the method for the operations its owner
-/// approved. `Denied` is a refusal of this one call; any other error ends the
-/// session.
+/// current, and policy admits the method, with what the request `asks`, for
+/// the operations its owner approved. `Denied` is a refusal of this one
+/// call; any other error ends the session.
 pub struct AdmitAppCall<'a> {
     pub credentials: &'a dyn AppCredentials,
     pub clock: &'a dyn Clock,
@@ -144,6 +170,7 @@ impl AdmitAppCall<'_> {
         &self,
         session: &ScopedAppSession,
         method: &str,
+        asks: &[AppCallAsk],
     ) -> Result<AppCredentialBinding, AccessError> {
         let AppCredentialSnapshot { access, binding } = self
             .credentials
@@ -166,6 +193,7 @@ impl AdmitAppCall<'_> {
                 .iter()
                 .map(|capability| capability.as_str().to_owned())
                 .collect(),
+            asks: asks.iter().map(|ask| ask.as_str().to_owned()).collect(),
         });
         match self
             .policy

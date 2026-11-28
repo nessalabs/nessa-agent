@@ -86,6 +86,13 @@
                 "type": "String"
               },
               "required": false
+            },
+            "appAsks": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": false
             }
           },
           "additionalAttributes": false

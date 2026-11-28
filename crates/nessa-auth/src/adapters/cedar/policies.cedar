@@ -235,6 +235,23 @@ when {
     principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId })
 };
 
+// What an app may never ask, even of its own conversations, whatever
+// operations its owner approved. `fullAccess`: a conversation in `full`
+// runs any tool unasked, and an app cannot answer a review. `channel`,
+// `environment`: they are the owner's. `linkedFiles`: a file or upload
+// from this computer. The gateway names each one a request asks for.
+@id("app_call.shape")
+forbid (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+// A call that names no asks at all is refused too.
+unless {
+    resource has appAsks &&
+    !resource.appAsks.containsAny(["fullAccess", "channel", "environment", "linkedFiles"])
+};
+
 // What an app session may call. The owner approved the app's operations at
 // install; each one admits these methods and nothing else, and only for a
 // registry-proven app at its own audience. Whose conversation it is stays

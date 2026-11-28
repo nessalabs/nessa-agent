@@ -7,10 +7,12 @@
 //!
 //! ```text
 //! request ──▶ a method the app dispatcher routes at all? ────────── no ──▶ forbidden
+//!         ──▶ its params decode? ─────────────────────────────────── no ──▶ invalid_request
 //!         ──▶ AdmitAppCall: credential still current? ──────────── no ──▶ close
-//!             Cedar `appCredential.call` admits the method for
-//!             the operations the owner approved? ─────────────── no ──▶ forbidden
-//!         ──▶ shape an app may ask for? ───────────────────────── no ──▶ forbidden
+//!             Cedar `appCredential.call` admits the method, with
+//!             what the request asks for (`full`, a channel, an
+//!             environment, linked files), for the operations
+//!             the owner approved? ─────────────────────────────── no ──▶ forbidden
 //!         ──▶ conversation handler, as the app's own principal
 //! ```
 //!
@@ -27,7 +29,7 @@ use futures_util::{Sink, Stream, StreamExt};
 use nessa_auth::application::app_credential::AppCredentialBinding;
 use nessa_auth::application::ports::{AccessError, CredentialEvidence};
 use nessa_auth::application::session::{
-    AdmitAppCall, AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession,
+    AdmitAppCall, AppCallAsk, AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession,
 };
 use nessa_protocol::product::generated::{ApprovalMode, ConversationCreateParams};
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
@@ -100,12 +102,13 @@ async fn current(
     .map_err(|_| AccessError::Unavailable)?
 }
 
-/// Whether the app may call `method` now: `Ok(true)` admitted, `Ok(false)`
-/// refused by policy, `Err` when the session must end.
+/// Whether the app may call `method`, asking for `asks`, now: `Ok(true)`
+/// admitted, `Ok(false)` refused by policy, `Err` when the session must end.
 async fn admit(
     state: &ProductRouteState,
     session: &ScopedAppSession,
     method: &str,
+    asks: &[AppCallAsk],
 ) -> Result<bool, AccessError> {
     let Some(credentials) = state
         .accounts
@@ -123,7 +126,7 @@ async fn admit(
             clock: state.clock.as_ref(),
             policy: state.policy.as_ref(),
         }
-        .execute(session, method),
+        .execute(session, method, asks),
     )
     .await
     .map_err(|_| AccessError::Unavailable)?;
@@ -149,7 +152,7 @@ pub(super) async fn serve<S>(
     // The methods it is offered are the ones policy admits now.
     let mut methods = Vec::new();
     for method in APP_METHODS {
-        match admit(&state, &session, method).await {
+        match admit(&state, &session, method, &[]).await {
             Ok(true) => methods.push(method.to_owned()),
             Ok(false) => {}
             Err(error) => {
@@ -213,7 +216,7 @@ pub(super) async fn serve<S>(
         if text.len() > MAX_PAYLOAD_BYTES as usize {
             break None;
         }
-        let Ok(frame) = RequestFrame::decode(&text) else {
+        let Ok(mut frame) = RequestFrame::decode(&text) else {
             continue;
         };
         // Every request asks the credential store and policy again: a
@@ -225,18 +228,17 @@ pub(super) async fn serve<S>(
             }
             continue;
         }
-        let admitted = if APP_METHODS.contains(&frame.method.as_str()) {
-            match admit(&state, &session, &frame.method).await {
-                Ok(admitted) => admitted,
-                Err(error) => break Some(close_reason(error)),
-            }
-        } else {
-            false
-        };
-        let response = if admitted {
-            answer(&state, &session, frame, &client).await
-        } else {
+        let response = if !APP_METHODS.contains(&frame.method.as_str()) {
             failure(&frame.id, "forbidden")
+        } else {
+            match asks(&mut frame) {
+                Err(code) => failure(&frame.id, code),
+                Ok(asks) => match admit(&state, &session, &frame.method, &asks).await {
+                    Ok(true) => answer(&state, &session, frame, &client).await,
+                    Ok(false) => failure(&frame.id, "forbidden"),
+                    Err(error) => break Some(close_reason(error)),
+                },
+            }
         };
         if send(write_timeout, &mut socket, response).await.is_err() {
             break None;
@@ -251,12 +253,9 @@ pub(super) async fn serve<S>(
 async fn answer(
     state: &ProductRouteState,
     session: &ScopedAppSession,
-    mut frame: RequestFrame,
+    frame: RequestFrame,
     client: &str,
 ) -> OutgoingMessage {
-    if let Err(code) = admit_shape(&mut frame) {
-        return failure(&frame.id, code);
-    }
     super::conversation::dispatch_from(
         state,
         session.app_identity(),
@@ -267,12 +266,12 @@ async fn answer(
     .await
 }
 
-/// Refuse what an app may not ask even of its own conversations, and fill
-/// in what it may not choose. A new conversation runs in `auto`: an app
-/// cannot answer a permission review, and `full` would let it run any
-/// tool unasked. It names no channel or environment of the owner's. A
-/// message links no file on this computer.
-fn admit_shape(frame: &mut RequestFrame) -> Result<(), &'static str> {
+/// What `frame` asks for beyond its method, for policy to decide
+/// (`app_call.shape`), or `invalid_request` when its params do not decode.
+/// A new conversation that names no approval mode is given `auto`, never
+/// the gateway's default: an app cannot answer a review.
+fn asks(frame: &mut RequestFrame) -> Result<Vec<AppCallAsk>, &'static str> {
+    let mut asks = Vec::new();
     match frame.method.as_str() {
         "conversation.create" => {
             let Ok(params) =
@@ -280,12 +279,15 @@ fn admit_shape(frame: &mut RequestFrame) -> Result<(), &'static str> {
             else {
                 return Err("invalid_request");
             };
-            if params.channel_id.is_some() || params.environment.is_some() {
-                return Err("forbidden");
+            if params.channel_id.is_some() {
+                asks.push(AppCallAsk::Channel);
+            }
+            if params.environment.is_some() {
+                asks.push(AppCallAsk::Environment);
             }
             match params.approval_mode {
-                Some(ApprovalMode::Full) => Err("forbidden"),
-                Some(_) => Ok(()),
+                Some(ApprovalMode::Full) => asks.push(AppCallAsk::FullAccess),
+                Some(_) => {}
                 None => {
                     if let Value::Object(fields) = &mut frame.params {
                         fields.insert(
@@ -293,29 +295,24 @@ fn admit_shape(frame: &mut RequestFrame) -> Result<(), &'static str> {
                             Value::String(ApprovalMode::Auto.as_str().into()),
                         );
                     }
-                    Ok(())
                 }
             }
         }
         "conversation.send" | "conversation.steer" => {
-            let links_files = frame
-                .params
-                .get("files")
-                .and_then(Value::as_array)
-                .is_some_and(|files| !files.is_empty())
-                || frame
+            let links = |key: &str| {
+                frame
                     .params
-                    .get("uploads")
+                    .get(key)
                     .and_then(Value::as_array)
-                    .is_some_and(|uploads| !uploads.is_empty());
-            if links_files {
-                Err("forbidden")
-            } else {
-                Ok(())
+                    .is_some_and(|linked| !linked.is_empty())
+            };
+            if links("files") || links("uploads") {
+                asks.push(AppCallAsk::LinkedFiles);
             }
         }
-        _ => Ok(()),
+        _ => {}
     }
+    Ok(asks)
 }
 
 #[cfg(test)]

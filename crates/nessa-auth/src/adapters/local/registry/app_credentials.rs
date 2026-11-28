@@ -464,8 +464,8 @@ mod tests {
     use crate::application::{
         ports::{PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential},
         session::{
-            AdmitAppCall, AuthenticateAppSession, AuthenticateSession, ReadCurrentAppSession,
-            ResumeSession,
+            AdmitAppCall, AppCallAsk, AuthenticateAppSession, AuthenticateSession,
+            ReadCurrentAppSession, ResumeSession,
         },
     };
     use crate::{
@@ -817,7 +817,10 @@ mod tests {
             "conversation.send",
             "conversation.steer",
         ] {
-            assert!(ready(admit.execute(&session, method)).is_ok(), "{method}");
+            assert!(
+                ready(admit.execute(&session, method, &[])).is_ok(),
+                "{method}"
+            );
         }
         for method in [
             "conversation.create",
@@ -829,10 +832,27 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    ready(admit.execute(&session, method)),
+                    ready(admit.execute(&session, method, &[])),
                     Err(AccessError::Denied)
                 ),
                 "{method}"
+            );
+        }
+        // What a request asks for is policy's too: an app approved to send
+        // still may not link files, nor one approved to create ask for `full`.
+        for (method, ask) in [
+            ("conversation.send", AppCallAsk::LinkedFiles),
+            ("conversation.steer", AppCallAsk::LinkedFiles),
+            ("conversation.list", AppCallAsk::FullAccess),
+            ("conversation.send", AppCallAsk::Channel),
+            ("conversation.send", AppCallAsk::Environment),
+        ] {
+            assert!(
+                matches!(
+                    ready(admit.execute(&session, method, &[ask])),
+                    Err(AccessError::Denied)
+                ),
+                "{method} {ask:?}"
             );
         }
         store
@@ -844,7 +864,7 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(
-            ready(admit.execute(&session, "conversation.list")),
+            ready(admit.execute(&session, "conversation.list", &[])),
             Err(AccessError::CredentialRevoked)
         ));
     }
