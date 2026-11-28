@@ -8295,12 +8295,12 @@ const steps = {
     await unfolded(failures)
     await channelShowsList(run.page, failures)
     if (failures.length) return
-    // Conversations opens at its coordinator, so the main chat is opened again.
+    // Conversations opens at its coordinator, so the main chat is opened
+    // again, by its id: the row beside it quotes the window, the main
+    // conversation's title with it. Asked from the main conversation's
+    // composer: it is the whole window now, the session list shown again by
+    // the channel.
     await openStressConversation(run.page, run.main.id, run.main.title)
-    // The main conversation is the pane left. Not opened from its row: the
-    // row beside it quotes the window, the main conversation's title with it.
-    // Asked from the main conversation's composer: it is the whole window now,
-    // the session list shown again by the channel.
     await windowRead(
       run,
       run.main.id,

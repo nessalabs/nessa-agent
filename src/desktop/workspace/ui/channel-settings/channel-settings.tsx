@@ -124,7 +124,11 @@ export function ChannelSettingsButton({
           }}
           size="md"
           title={`#${name} settings`}
-          description={scope === undefined ? "The default for every channel." : undefined}
+          description={
+            scope === undefined
+              ? "Its coordinator, and how agents talk in every channel."
+              : undefined
+          }
         >
           {/* Every agent runs on this gateway's own machine (ADR 1417), so a
           channel has no place to choose: only whether it has a coordinator.
