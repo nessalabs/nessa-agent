@@ -564,7 +564,7 @@ function MoreMenu({
               side: "above",
             })}
           >
-            <DesktopIcon name="attach" />
+            <DesktopIcon name="add" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" sideOffset={6}>

@@ -2922,10 +2922,13 @@ function otherAgent(agent) {
  * settings as another window would.
  */
 async function restoreAdvanced(page, failures) {
-  // Escape only for what is open: in the workspace it means something else.
-  for (const open of [css.modelPicker, '[role="menu"]'])
-    if (await page.locator(open).count())
-      await page.keyboard.press(keys.escape).catch(() => {})
+  // Escape only while something is open: in the workspace it means something
+  // else. The picker's first Escape may only clear its search.
+  const open = () => page.locator(`${css.modelPicker}, [role="menu"]`).count()
+  for (let presses = 0; presses < 4 && (await open()); presses++) {
+    await page.keyboard.press(keys.escape).catch(() => {})
+    await waitFor(async () => (await open()) === 0, 1_000)
+  }
   await leaveTerminalSettings(page).catch(() => {})
   await page
     .evaluate((key) => {
@@ -2934,7 +2937,9 @@ async function restoreAdvanced(page, failures) {
     }, storage.appMode)
     .catch(() => {})
   const back = await waitFor(
-    async () => (await dock(page).locator(`${css.modelChip}:visible`).count()) === 1,
+    async () =>
+      (await page.locator(css.modelPicker).count()) === 0 &&
+      (await dock(page).locator(`${css.modelChip}:visible`).count()) === 1,
     5_000,
   )
   if (!back) failures.push("after the appMode step the model chip is not back in the row")

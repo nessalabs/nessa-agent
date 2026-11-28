@@ -223,7 +223,7 @@ describe("searchSettings", () => {
     expect(searchSettings("version")[0]).toMatchObject({ tab: "about", trail: "About" })
   })
 
-  it("finds Advanced › Experimental by its name and by what people call it", () => {
+  it("finds Advanced, its Mode, and Experimental by their names and by what people call them", () => {
     expect(searchSettings("advanced")[0]).toEqual({
       category: "advanced",
       tab: "mode",
