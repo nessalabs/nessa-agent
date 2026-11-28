@@ -278,6 +278,7 @@ export function ComposerTray({
     >
       <ChatComposerAction
         ref={trigger}
+        data-composer-tray-trigger=""
         className="nessa-composer-control"
         aria-label={label}
         title={label}

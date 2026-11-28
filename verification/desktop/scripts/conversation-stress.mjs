@@ -12898,6 +12898,8 @@ async function panelComposerControls(page, failures) {
     ))
   ) {
     failures.push("+ opened no tray")
+    // Whatever opened instead must not cover the panel for the steps after.
+    await page.keyboard.press("Escape")
     return
   }
   // Once its entrance has played, where it grew from: the origin as the

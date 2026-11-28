@@ -176,7 +176,7 @@ export const css = {
   panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
   panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
   panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
-  panelPlus: '.nessa-panel button[aria-haspopup="dialog"][aria-expanded]', // the composer's +, opening its tray
+  panelPlus: ".nessa-panel [data-composer-tray-trigger]", // the composer's +, opening its tray
   panelTray: '.nessa-panel .nessa-composer-tray[role="dialog"]', // the + tray while open (a closed one leaves unnamed)
   panelModelMark: ".nessa-panel .nessa-model-hint button", // the composer's model mark, the picker's trigger
   panelModelName: '.nessa-panel [data-slot="model-hint"]', // the model's name drawn above its mark after a wait
