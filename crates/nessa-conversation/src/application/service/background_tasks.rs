@@ -56,6 +56,11 @@ impl BackgroundTasks {
     pub(super) fn running_for(&self, conversation: &ConversationId) -> bool {
         self.owners().keys().any(|(owner, _)| owner == conversation)
     }
+    /// How many background commands are running now, for every
+    /// conversation on this gateway.
+    pub(super) fn running_count(&self) -> usize {
+        self.owners().len()
+    }
     fn owners(&self) -> std::sync::MutexGuard<'_, HashMap<Key, Owner>> {
         self.owners.lock().unwrap_or_else(PoisonError::into_inner)
     }

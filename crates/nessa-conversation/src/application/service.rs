@@ -8369,6 +8369,7 @@ fn awaits_uploaded_input(snapshot: Option<&SessionSnapshot>) -> bool {
     })
 }
 
+mod activity;
 mod event_read;
 mod handoffs;
 mod notes;
@@ -8376,6 +8377,7 @@ mod parking;
 mod raised_access;
 use parking::ParkWhen;
 mod resumption;
+pub use activity::GatewayActivity;
 pub use event_read::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,

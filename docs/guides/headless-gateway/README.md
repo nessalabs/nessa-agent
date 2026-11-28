@@ -87,3 +87,35 @@ NESSA_STAGE=prod NESSA_DATA_DIR=/var/lib/nessa nessa call pairing.create \
 Use the reported `wss://` tunnel address and pairing code to pair Phone or
 Desktop. Native ⌘J shells and Run blocks run directly inside this VM via
 in-process `pty-runtime` + Ghostty and keep running when clients disconnect.
+
+## 5. Cloud Box image
+
+A Cloud Box is a VM made from a Boat image that runs this gateway for one
+person, created from Desktop's Settings › Gateways. The gateway that creates
+it runs `/opt/nessa/bin/nessa-gateway-bootstrap` in the box:
+
+| Command | Prints |
+| --- | --- |
+| `create` | Starts the gateway (`nessa server --provision-local`, with the runtime's agents) and an app tunnel, then `{"url":"wss://…","credential":"…"}`: the tunnel address Desktop connects to and the box's desktop credential |
+| `status` | `{"url":"wss://…"}`, starting either process again if it ended |
+| `busy` | `{"busy":false}` only when `server.activity` says plainly that nothing runs |
+
+To make the image, start a VM from Nessa's Boat image, check this repository
+out in it, prepare the Linux desktop runtime with terminals, and install:
+
+```bash
+eval "$(scripts/terminal/ghostty.sh)"
+node scripts/desktop/prepare-linux.mjs
+sudo docs/guides/headless-gateway/install-cloud-box src-tauri/runtime
+```
+
+`install-cloud-box` puts the runtime in `/opt/nessa/runtime`, the pinned
+`cloudflared` (checked against `tunnel-releases.json`) and the helper in
+`/opt/nessa/bin`, and [`gateway.env`](./gateway.env) in `/etc/nessa`. It
+starts nothing and leaves no secret, so every box made from the snapshot makes
+its own vault passphrase, owner token and desktop credential on its first
+`create`. Snapshot the VM and pin the image's code in
+`crates/nessa-conversation/src/workspaces/infrastructure/release.rs`.
+
+The quick tunnel's address changes when the box wakes; Desktop takes the new
+one from the wake.

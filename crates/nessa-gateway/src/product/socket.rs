@@ -2216,6 +2216,32 @@ impl From<nessa_protocol::product::generated::NativeHooksAgent>
     }
 }
 
+/// What runs on this gateway now, whoever started it (`server.activity`).
+/// A gateway that keeps no conversations, or serves no terminals, has none
+/// of them running.
+async fn server_activity(
+    state: &ProductRouteState,
+) -> nessa_protocol::product::generated::ServerActivityResult {
+    let conversations = match state.conversation.service.as_ref() {
+        Some(service) => service.activity().await,
+        None => crate::conversation::application::GatewayActivity {
+            running_conversations: 0,
+            background_commands: 0,
+        },
+    };
+    let open_terminals = state
+        .terminals
+        .hub
+        .as_ref()
+        .map_or(0, |hub| hub.open_count());
+    nessa_protocol::product::generated::ServerActivityResult {
+        busy: conversations.busy() || open_terminals > 0,
+        running_conversations: conversations.running_conversations as u64,
+        background_commands: conversations.background_commands as u64,
+        open_terminals: open_terminals as u64,
+    }
+}
+
 async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
@@ -2422,6 +2448,12 @@ async fn dispatch_authorized(
                     tunnel: tunnel.map(String::from),
                 },
             )
+        }
+        ProductMethod::ServerActivity => {
+            if frame.params != json!({}) {
+                return failure(&frame.id, "invalid_request");
+            }
+            success(&frame.id, &server_activity(state).await)
         }
         ProductMethod::ReplyStyleRead | ProductMethod::ReplyStyleSet => {
             super::reply_style::dispatch(state, session, frame).await
@@ -5000,6 +5032,57 @@ mod tests {
         );
         status.send_replace(TunnelStatus::Failed(TunnelFailure::NotReady));
         assert_eq!(reach(&state).await, json!({ "tunnel": null }));
+    }
+
+    /// `server.activity` answers for the whole gateway, so it is the owner's
+    /// alone: a member holding `credential.manage` is refused by Cedar, and
+    /// an administrator on a gateway that keeps no conversations and serves
+    /// no terminals hears that nothing runs.
+    #[tokio::test]
+    async fn activity_is_the_administrators_and_counts_the_whole_gateway() {
+        assert_eq!(
+            action_for_method("server.activity"),
+            Some("credential.manage")
+        );
+        let (state, authority) = fixture(MembershipRole::Member);
+        *authority
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot_with(
+            MembershipRole::Member,
+            MembershipStatus::Active,
+            &["server.read", "credential.manage"],
+        );
+        let session = authenticate(&state).await;
+        let (ok, answer) = mcp_servers_call(&state, &session, "server.activity", json!({})).await;
+        assert!(!ok);
+        assert_eq!(answer["code"], "forbidden");
+
+        let (state, authority) = fixture(MembershipRole::Admin);
+        *authority
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot_with(
+            MembershipRole::Admin,
+            MembershipStatus::Active,
+            &["server.read", "credential.manage"],
+        );
+        let session = authenticate(&state).await;
+        let (ok, answer) = mcp_servers_call(&state, &session, "server.activity", json!({})).await;
+        assert!(ok, "{answer}");
+        assert_eq!(
+            answer,
+            json!({
+                "busy": false,
+                "runningConversations": 0,
+                "backgroundCommands": 0,
+                "openTerminals": 0
+            })
+        );
+        let (ok, answer) =
+            mcp_servers_call(&state, &session, "server.activity", json!({"all": true})).await;
+        assert!(!ok);
+        assert_eq!(answer["code"], "invalid_request");
     }
 
     /// `devices.list` answers the hub's machine, in the protocol's words,

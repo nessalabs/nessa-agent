@@ -237,6 +237,10 @@ export const KNOBS = {
     default: 1,
     what: "times Boat is connected by Sign in with Boat through a fake Boat (no token field): a Cancel on Boat's page said on the row, then a sign-in whose browser comes back to the gateway, the account named, its one-minute access token renewed on later reads, no token in the page or log, and Disconnect revoking it",
   },
+  cloudBoxes: {
+    default: 1,
+    what: "Cloud Boxes made from Settings › Gateways on a stand-in cloud on this machine: the first answer lost and the same box asked for again, the box's own gateway connected over its app tunnel, Sleep refused while a terminal runs there, Sleep once idle, Wake at the tunnel's new address, and Delete VM",
+  },
   voices: {
     default: 1,
     what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, and away from the window the floating pill: its mute and speaker switches, gone when the window is back in front, and End on it",
@@ -410,6 +414,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
   add(knobs.boatSignIns, () => ({ kind: "boatSignIn" }))
+  add(knobs.cloudBoxes, () => ({ kind: "cloudbox" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))

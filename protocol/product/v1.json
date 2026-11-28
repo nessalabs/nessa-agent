@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 158,
+          "maxItems": 159,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -7373,6 +7373,33 @@
           "description": "Where this gateway's native listener, which paired devices dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it."
         }
       }
+    },
+    "ServerActivityResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of server.activity: what runs on this gateway now, whoever started it. Every other list is scoped to the caller's own conversations and terminals; this one counts all of them, so a cloud box is never put to sleep under work another credential started.",
+      "properties": {
+        "busy": {
+          "type": "boolean",
+          "description": "True while any count below is above zero."
+        },
+        "runningConversations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Conversations opening, or open with a turn running, queued, or waiting on a review."
+        },
+        "backgroundCommands": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Background commands an agent started that have not ended."
+        },
+        "openTerminals": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Terminals open, or still starting, whose program has not ended."
+        }
+      },
+      "required": ["busy", "runningConversations", "backgroundCommands", "openTerminals"]
     },
     "ServerReachResult": {
       "type": "object",

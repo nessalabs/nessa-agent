@@ -9,14 +9,15 @@ use crate::{
     },
     workspaces::{
         application::{
-            BoatAuthorization, BoatSignIn, CloudBoxBackend, CloudBoxes, RenewedBoatSettings,
-            Settings, Workspaces,
+            BoatAuthorization, BoatSignIn, CloudBoxBackend, CloudBoxes, Provider,
+            RenewedBoatSettings, Settings, Workspaces,
         },
         domain::Cloud,
         infrastructure::{
-            agent37_template, boat_image, Agent37Provider, Agent37VaultSettings, BoatApp,
-            BoatOAuthHttps, BoatProvider, FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice,
-            LoopbackCallbacks, ProviderActiveWorkChecker, SdkAgent37Enrollment, VaultSettings,
+            agent37_template, boat_cloud_box_image, boat_image, Agent37Provider,
+            Agent37VaultSettings, BoatApp, BoatOAuthHttps, BoatProvider, FileCloudBoxAudit,
+            FileCloudBoxStore, FileCloudChoice, LocalBoxHost, LocalBoxSettings, LoopbackCallbacks,
+            ProviderActiveWorkChecker, SdkAgent37Enrollment, VaultSettings,
             WorkspaceCloudBoxProvider,
         },
     },
@@ -322,14 +323,21 @@ pub(super) async fn product_state(
             }
             None => workspaces,
         };
+        // Boat's machines make a Cloud Box's VM, unless a check stands in
+        // for them on this machine (`cloud_box_host`).
+        let (box_settings, box_provider): (Arc<dyn Settings>, Arc<dyn Provider>) =
+            match cloud_box_host() {
+                Some(host) => (Arc::new(LocalBoxSettings), Arc::new(host)),
+                None => (boat_settings.clone(), boat_provider.clone()),
+            };
         let cloud_boxes = Arc::new(CloudBoxes::new(
             vec![
                 CloudBoxBackend {
                     cloud: Cloud::Boat,
-                    settings: boat_settings,
+                    settings: box_settings,
                     provider: Arc::new(WorkspaceCloudBoxProvider::new(
-                        boat_provider.clone(),
-                        boat_image(),
+                        box_provider.clone(),
+                        boat_cloud_box_image(),
                     )),
                 },
                 CloudBoxBackend {
@@ -343,7 +351,7 @@ pub(super) async fn product_state(
             ],
             Arc::new(FileCloudBoxStore::new(namespace.join("cloud-boxes"))),
             Arc::new(ProviderActiveWorkChecker::new(vec![
-                (Cloud::Boat, boat_provider, boat_image()),
+                (Cloud::Boat, box_provider, boat_cloud_box_image()),
                 (Cloud::Agent37, agent37_provider, agent37_template()),
             ])),
             audit,
@@ -1989,6 +1997,17 @@ mod tests;
 #[cfg(unix)]
 fn child_program() -> io::Result<PathBuf> {
     std::env::current_exe()
+}
+
+/// The stand-in cloud a debug build makes Cloud Boxes in when
+/// `NESSA_CLOUD_BOX_HOST` names its directory: how the stress check's
+/// `cloudbox` step runs a box on this machine. A release build never reads it.
+#[cfg(unix)]
+fn cloud_box_host() -> Option<LocalBoxHost> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var_os("NESSA_CLOUD_BOX_HOST").map(|root| LocalBoxHost::new(root.into()))
 }
 
 /// The Boat OAuth app this run signs in through: the released one, or the

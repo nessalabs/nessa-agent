@@ -11,6 +11,10 @@
     "readOnly": true,
     "destructive": false
   },
+  "server.activity": {
+    "readOnly": true,
+    "destructive": false
+  },
   "credential.issue": {
     "readOnly": false,
     "destructive": false

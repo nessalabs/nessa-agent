@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use nessa_agent_install::domain::AgentName;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local] [--vault-passphrase-file PATH]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa call METHOD --params JSON [--credential-file PATH]\n  nessa mcp [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner, panel, and nessa-mcp credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\n`server --vault-passphrase-file PATH` unlocks (or initializes on first boot) the\nnamespace's encrypted vault from an absolute, non-symlink file before listening,\nfor headless Linux servers and containers.\n`call` sends one manifest method on the signed-in gateway session and prints the\nhandler's JSON on stdout. `mcp` serves those same methods as MCP tools, using the\nnessa-mcp credential and only the grants that credential holds. Cedar on the gateway\ndecides both. A method the surface catalog excludes is not a call and not a tool.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local] [--vault-passphrase-file PATH] [--runtime DIR]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa call METHOD --params JSON [--credential-file PATH]\n  nessa mcp [--credential-file PATH]\n  nessa install-agent NAME\n  nessa github connect OWNER/REPO --passphrase-stdin [--accept-gap]\n  nessa github events OWNER/REPO --passphrase-stdin\n  nessa github disconnect OWNER/REPO --passphrase-stdin\n  nessa limits [--json]\n  nessa relay serve --listen HOST:PORT\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\n`relay serve` runs a relay at HOST:PORT that a gateway and its paired readers\nboth connect out to, so a reader that cannot reach the gateway directly is\njoined to it there. The relay copies their bytes and cannot read them: what\ncrosses is the same TLS a direct connection carries. It keeps nothing and runs\nuntil stopped.\n\n`limits` and `limits --json` print the effective operational limits as JSON\non stdout. A missing config file prints the defaults. An unusable config\nfile prints nothing and fails.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner, panel, and nessa-mcp credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\n`server --vault-passphrase-file PATH` unlocks (or initializes on first boot) the\nnamespace's encrypted vault from an absolute, non-symlink file before listening,\nfor headless Linux servers and containers.\n`server --runtime DIR` runs the agents a prepared desktop runtime at DIR carries\n(its Node, agent adapters and model catalog), as the desktop app does.\n`call` sends one manifest method on the signed-in gateway session and prints the\nhandler's JSON on stdout. `mcp` serves those same methods as MCP tools, using the\nnessa-mcp credential and only the grants that credential holds. Cedar on the gateway\ndecides both. A method the surface catalog excludes is not a call and not a tool.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -26,6 +26,11 @@ pub struct ServerOptions {
     /// Optional absolute path to a passphrase file used to initialize or unlock
     /// the encrypted vault on headless startup before binding listeners.
     pub vault_passphrase_file: Option<PathBuf>,
+    /// Optional absolute path to a prepared desktop runtime (the bundled
+    /// Node, agent adapters and model catalog `scripts/desktop/prepare-*.mjs`
+    /// make): with it the server runs the agents the desktop app runs, as a
+    /// Cloud Box does (#1427), without the desktop host's launch.
+    pub runtime: Option<PathBuf>,
 }
 
 impl ServerOptions {
@@ -33,6 +38,7 @@ impl ServerOptions {
         Self {
             provisioning,
             vault_passphrase_file: None,
+            runtime: None,
         }
     }
 }
@@ -348,9 +354,13 @@ fn duration_seconds(text: &str) -> Option<u64> {
         .filter(|seconds| *seconds > 0)
 }
 
+const SERVER_USAGE: &str =
+    "server takes [--provision-local] [--vault-passphrase-file PATH] [--runtime DIR]";
+
 fn parse_server(args: &[String]) -> Result<ServerOptions, String> {
     let mut provisioning = None;
     let mut vault_passphrase_file = None;
+    let mut runtime = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -375,15 +385,28 @@ fn parse_server(args: &[String]) -> Result<ServerOptions, String> {
                 vault_passphrase_file = Some(path);
                 index += 2;
             }
+            "--runtime" => {
+                if runtime.is_some() {
+                    return Err("server takes --runtime at most once".into());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "server --runtime takes an absolute path".to_owned())?;
+                let path = PathBuf::from(value);
+                if value.is_empty() || value.contains('\0') || !path.is_absolute() {
+                    return Err("server --runtime takes an absolute path".into());
+                }
+                runtime = Some(path);
+                index += 2;
+            }
             _ => {
-                return Err(
-                    "server takes [--provision-local] [--vault-passphrase-file PATH]".into(),
-                );
+                return Err(SERVER_USAGE.into());
             }
         }
     }
     Ok(ServerOptions {
         provisioning: provisioning.unwrap_or(LocalProvisioning::Manual),
         vault_passphrase_file,
+        runtime,
     })
 }

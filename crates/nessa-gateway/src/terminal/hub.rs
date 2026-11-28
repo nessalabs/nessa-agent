@@ -257,6 +257,17 @@ impl TerminalHub {
             .collect()
     }
 
+    /// How many terminals are open on this gateway, whoever opened them:
+    /// one still starting counts, one whose program ended does not. Read by
+    /// `server.activity`, which answers for the whole gateway.
+    pub fn open_count(&self) -> usize {
+        self.lock()
+            .terminals
+            .iter()
+            .filter(|live| live.entry.ended.is_none())
+            .count()
+    }
+
     fn reserve(
         &self,
         request: &OpenRequest,

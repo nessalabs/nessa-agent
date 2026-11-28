@@ -1,42 +1,71 @@
 #!/usr/bin/env bash
-# Reference bootstrap helper installed at /opt/nessa/bin/nessa-gateway-bootstrap
-# inside persistent cloud gateway VM images (ADR 1417 / #1420).
-#
-# Every fact it prints comes from the VM's own running nessa-server, asked
-# through `nessa call` with the owner credential; it keeps no files of its own.
+# Bootstrap helper installed at /opt/nessa/bin/nessa-gateway-bootstrap inside
+# Cloud Box gateway VM images (ADR 1417, #1420, #1427). The gateway that made
+# the box runs it over the VM's own connection; it prints one JSON line.
 #
 #   nessa-gateway-bootstrap create
-#     Starts nessa-server if it is not running and prints one JSON line:
-#     {"url":"wss://<host>","credential":"<token>"}
-#     url is the web tunnel `server.reach` reports. credential is a new token
-#     the server issues (`nessa auth token`), never the owner token itself.
-#     Run again on the same VM, it issues another one.
+#     Starts nessa-server (with the agents of the desktop runtime at
+#     NESSA_RUNTIME_DIR, when the image has one) and the app tunnel if they
+#     are not running, and
+#     prints {"url":"wss://<host>","credential":"<token>"}.
+#     url is the app tunnel's address: the box's product socket (`/session`),
+#     the one a Desktop app connects to any gateway with. credential is the
+#     box's own desktop surface credential (`nessa-panel`), which the server
+#     provisions on first start with the grants the local Desktop holds; never
+#     the owner token. Run again on the same VM, it prints the same credential.
 #
 #   nessa-gateway-bootstrap status
-#     Starts nessa-server after a wake and prints {"url":"wss://<host>"}.
+#     Starts both again after a wake and prints {"url":"wss://<host>"}. A quick
+#     tunnel gets a new address each time cloudflared starts, so this is what
+#     the box answers after every wake.
 #
 #   nessa-gateway-bootstrap busy
-#     Prints {"busy":true|false}: true while any conversation is running or any
-#     terminal is open. A list the server cannot give in full, or any failure
-#     to ask, is busy (fail closed, G5). A server that is not running is idle
-#     only where systemd says its unit is stopped.
+#     Prints {"busy":true|false} from the server's `server.activity`, which
+#     counts every running conversation, background command and open terminal
+#     on the gateway, whoever started it. Any failure to ask is busy (fail
+#     closed, G5). A server this helper never started, or one that has exited,
+#     has nothing running: idle.
+#
+# The helper starts both processes itself, detached, so it needs neither root
+# nor any init system: a box that woke from an archive has neither running
+# until the gateway's next `status` or `create` starts them.
 #
 # The gateway's identity is not printed: whoever connects learns it from the
 # gateway's own handshake.
 set -euo pipefail
 
-cmd="${1:-status}"
-nessa="${NESSA_BIN:-$(command -v nessa || printf '/opt/nessa/bin/nessa')}"
-export NESSA_STAGE="${NESSA_STAGE:-prod}"
-export NESSA_DATA_DIR="${NESSA_DATA_DIR:-/var/lib/nessa}"
-host="${NESSA_HOST:-127.0.0.1}"
-port="${NESSA_PORT:-18789}"
-owner_token="${NESSA_OWNER_TOKEN_FILE:-${NESSA_DATA_DIR}/owner.token}"
-wait_seconds="${NESSA_BOOTSTRAP_WAIT_SECONDS:-90}"
-unit="nessa-server.service"
+if [[ -r /etc/nessa/gateway.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /etc/nessa/gateway.env
+  set +a
+fi
 
-has_systemd() {
-  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+cmd="${1:-status}"
+runtime="${NESSA_RUNTIME_DIR:-}"
+nessa="${NESSA_BIN:-${runtime:-/opt/nessa/bin}/nessa}"
+cloudflared="${NESSA_CLOUDFLARED_BIN:-/opt/nessa/bin/cloudflared}"
+box="${NESSA_BOX_DIR:-${HOME}/.nessa-box}"
+export NESSA_STAGE="${NESSA_STAGE:-prod}"
+export NESSA_DATA_DIR="${NESSA_DATA_DIR:-${box}/gateway}"
+host="${NESSA_HOST:-127.0.0.1}"
+port="${NESSA_PORT:-7420}"
+export NESSA_HOST="${host}" NESSA_PORT="${port}"
+metrics="${NESSA_APP_TUNNEL_METRICS:-127.0.0.1:20241}"
+wait_seconds="${NESSA_BOOTSTRAP_WAIT_SECONDS:-90}"
+# The stage's own directory: the data directory itself for prod, a
+# directory named for the stage inside it otherwise.
+namespace="${NESSA_DATA_DIR}"
+[[ "${NESSA_STAGE}" == prod ]] || namespace="${NESSA_DATA_DIR}/${NESSA_STAGE}"
+owner_token="${namespace}/owner.token"
+desktop_token="${namespace}/auth/surfaces/nessa-panel.token"
+passphrase="${box}/vault-passphrase"
+
+pid_alive() {
+  local file="${box}/$1.pid" pid
+  [[ -r "${file}" ]] || return 1
+  pid="$(cat "${file}")"
+  [[ "${pid}" =~ ^[0-9]+$ ]] && kill -0 "${pid}" 2>/dev/null
 }
 
 healthy() {
@@ -44,45 +73,89 @@ healthy() {
 }
 
 call() {
-  local method="$1" params="${2:-}"
-  [[ -n "${params}" ]] || params='{}'
-  "${nessa}" call "${method}" --params "${params}" --credential-file "${owner_token}"
+  "${nessa}" call "$1" --params '{}' --credential-file "${owner_token}"
+}
+
+# Directories, and the vault passphrase the server unlocks with: made once,
+# on the box's first start, private to this user.
+prepare() {
+  umask 077
+  mkdir -p "${box}" "${NESSA_DATA_DIR}"
+  if [[ ! -s "${passphrase}" ]]; then
+    head -c 48 /dev/urandom | base64 | tr -d '\n=' >"${passphrase}.new"
+    printf '\n' >>"${passphrase}.new"
+    mv "${passphrase}.new" "${passphrase}"
+  fi
+}
+
+# Start `name` detached unless it already runs, its pid kept beside its log.
+launch() {
+  local name="$1"
+  shift
+  pid_alive "${name}" && return 0
+  setsid "$@" >>"${box}/${name}.log" 2>&1 </dev/null &
+  printf '%s\n' "$!" >"${box}/${name}.pid"
 }
 
 ensure_running() {
-  if ! healthy && has_systemd; then
-    systemctl start "${unit}"
+  prepare
+  if ! healthy; then
+    # With a prepared desktop runtime, the box runs the agents the app runs.
+    local serve=(server --provision-local --vault-passphrase-file "${passphrase}")
+    [[ -n "${runtime}" ]] && serve+=(--runtime "${runtime}")
+    launch gateway "${nessa}" "${serve[@]}"
   fi
+  launch app-tunnel "${cloudflared}" tunnel --no-autoupdate --metrics "${metrics}" \
+    --url "http://${host}:${port}"
   for _ in $(seq 1 "${wait_seconds}"); do
     healthy && return 0
+    pid_alive gateway || break
     sleep 1
   done
-  echo "nessa-server did not become healthy on ${host}:${port}" >&2
+  echo "nessa-server did not become healthy on ${host}:${port}; see ${box}/gateway.log" >&2
   exit 1
 }
 
-# The tunnel address the server reports, as the wss:// URL a client opens.
-reach_url() {
-  local tunnel=""
+# The app tunnel's address as the URL a client opens, once the tunnel serves
+# the box's own /health. Cloudflare names a bare hostname, served over https;
+# a stand-in on this machine (the stress check's) names a loopback origin,
+# served over plain ws, which is all the gateway accepts without TLS.
+app_url() {
+  local hostname="" origin="" url=""
   for _ in $(seq 1 "${wait_seconds}"); do
-    tunnel="$(call server.reach | jq -r '.tunnel // empty' 2>/dev/null || true)"
-    [[ -n "${tunnel}" ]] && break
+    hostname="$(curl -fsS --max-time 5 "http://${metrics}/quicktunnel" 2>/dev/null \
+      | jq -r '.hostname // empty' 2>/dev/null || true)"
+    case "${hostname}" in
+      "") origin="" ;;
+      http://127.0.0.1:* | "http://[::1]:"*)
+        origin="${hostname}"
+        url="ws://${hostname#http://}"
+        ;;
+      *[/:]*) origin="" ;;
+      *)
+        origin="https://${hostname}"
+        url="wss://${hostname}"
+        ;;
+    esac
+    if [[ -n "${origin}" ]] \
+      && curl -fsS --max-time 10 "${origin}/health" >/dev/null 2>&1; then
+      printf '%s' "${url}"
+      return 0
+    fi
     sleep 1
   done
-  if [[ "${tunnel}" != https://* ]]; then
-    echo "server.reach reported no https:// tunnel (got '${tunnel}')" >&2
-    exit 1
-  fi
-  printf 'wss://%s' "${tunnel#https://}"
+  echo "the app tunnel did not serve this gateway (hostname '${hostname}'); see ${box}/app-tunnel.log" >&2
+  exit 1
 }
 
 case "${cmd}" in
   create)
     ensure_running
-    url="$(reach_url)"
-    credential="$("${nessa}" auth token --credential-file "${owner_token}" | tr -d '\r\n')"
+    url="$(app_url)"
+    credential=""
+    [[ -r "${desktop_token}" ]] && credential="$(tr -d '\r\n' <"${desktop_token}")"
     if [[ -z "${credential}" ]]; then
-      echo "nessa auth token issued no credential" >&2
+      echo "the server provisioned no desktop credential at ${desktop_token}" >&2
       exit 1
     fi
     jq -cn --arg url "${url}" --arg credential "${credential}" \
@@ -90,30 +163,19 @@ case "${cmd}" in
     ;;
   status)
     ensure_running
-    jq -cn --arg url "$(reach_url)" '{url: $url}'
+    jq -cn --arg url "$(app_url)" '{url: $url}'
     ;;
   busy)
     if ! healthy; then
-      if unit_state="$(systemctl show --property=LoadState,ActiveState "${unit}" 2>/dev/null)" \
-        && grep -Fxq 'LoadState=loaded' <<<"${unit_state}" \
-        && grep -Fxq 'ActiveState=inactive' <<<"${unit_state}"; then
-        printf '{"busy":false}\n'
-      else
+      if pid_alive gateway; then
         printf '{"busy":true}\n'
+      else
+        printf '{"busy":false}\n'
       fi
       exit 0
     fi
-    if open="$(call conversation.list '{"archived":false}')" \
-      && archived="$(call conversation.list '{"archived":true}')" \
-      && terminals="$(call terminal.list)" \
-      && out="$(jq -cn --argjson open "${open}" --argjson archived "${archived}" \
-        --argjson terminals "${terminals}" \
-        '{busy: (
-            ([$open, $archived] | any(.complete != true or (.conversations | type) != "array"))
-            or (any(($open.conversations[], $archived.conversations[]); .running != false))
-            or ($terminals.terminals | type != "array")
-            or ($terminals.terminals | any(.state != "exited"))
-          )}')"; then
+    if activity="$(call server.activity)" \
+      && out="$(jq -c '{busy: (.busy != false)}' <<<"${activity}")"; then
       printf '%s\n' "${out}"
     else
       printf '{"busy":true}\n'

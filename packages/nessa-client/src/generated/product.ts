@@ -2941,6 +2941,17 @@ export interface DevicesListResult {
   /** Where this gateway's native listener, which paired devices dial, is bound: host:port, [v6]:port for IPv6. Absent while native linking is off. A loopback host means only this machine can reach it. */
   listening?: string
 }
+/** Result of server.activity: what runs on this gateway now, whoever started it. Every other list is scoped to the caller's own conversations and terminals; this one counts all of them, so a cloud box is never put to sleep under work another credential started. */
+export interface ServerActivityResult {
+  /** True while any count below is above zero. */
+  busy: boolean
+  /** Conversations opening, or open with a turn running, queued, or waiting on a review. */
+  runningConversations: number
+  /** Background commands an agent started that have not ended. */
+  backgroundCommands: number
+  /** Terminals open, or still starting, whose program has not ended. */
+  openTerminals: number
+}
 /** Result of server.reach: the addresses this gateway can be reached at beyond the local network, for a paired device to keep. */
 export interface ServerReachResult {
   /** The web tunnel's public address, https://host[:port], when a tunnel is ready; null otherwise. Open wss://<host>/native and speak the native connection inside its binary messages. */
@@ -4559,7 +4570,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 158,
+  maxReadyMethods: 159,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4782,6 +4793,7 @@ export const ProductMethod = {
   AuthSession: "auth.session",
   ServerHealth: "server.health",
   ServerReach: "server.reach",
+  ServerActivity: "server.activity",
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
@@ -4958,6 +4970,7 @@ export const productReadyMethods = [
   "auth.session",
   "server.health",
   "server.reach",
+  "server.activity",
   "credential.issue",
   "credential.list",
   "credential.revoke",
@@ -5120,6 +5133,7 @@ export const productMethodGrants = {
   "auth.session": null,
   "server.health": "server.read",
   "server.reach": "server.read",
+  "server.activity": "credential.manage",
   "credential.issue": "credential.manage",
   "credential.list": "credential.manage",
   "credential.revoke": "credential.manage",

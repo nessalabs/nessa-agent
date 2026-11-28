@@ -210,6 +210,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         zooms: "0",
         githubs: "0",
         boatSignIns: "0",
+        cloudBoxes: "0",
         voices: "0",
         passphrases: "0",
         channels: "0",
