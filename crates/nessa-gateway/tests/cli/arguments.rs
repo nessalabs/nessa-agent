@@ -36,6 +36,11 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
     } else {
         "/run/secrets/nessa_vault_passphrase"
     };
+    let runtime_path = if cfg!(windows) {
+        r"C:\nessa\runtime"
+    } else {
+        "/opt/nessa/runtime"
+    };
     let other_path = if cfg!(windows) {
         r"C:\secrets\other"
     } else {
@@ -87,7 +92,7 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
             "server",
             "--provision-local",
             "--runtime",
-            "/opt/nessa/runtime",
+            runtime_path,
             "--vault-passphrase-file",
             passphrase_path,
         ]))
@@ -95,13 +100,19 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         Command::Server(ServerOptions {
             provisioning: LocalProvisioning::Automatic,
             vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
-            runtime: Some(PathBuf::from("/opt/nessa/runtime")),
+            runtime: Some(PathBuf::from(runtime_path)),
         })
     );
     for refused in [
         vec!["server", "--runtime"],
         vec!["server", "--runtime", "relative/runtime"],
-        vec!["server", "--runtime", "/a", "--runtime", "/b"],
+        vec![
+            "server",
+            "--runtime",
+            runtime_path,
+            "--runtime",
+            runtime_path,
+        ],
     ] {
         assert!(parse(&args(&refused)).is_err(), "{refused:?}");
     }
