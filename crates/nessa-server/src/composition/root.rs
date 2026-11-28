@@ -152,7 +152,8 @@ impl CompositionRoot {
     }
 
     pub async fn serve(options: ServerOptions, launch: &Launch) -> Result<(), RunError> {
-        Self::serve_runtime(None, options, launch).await
+        let runtime = options.runtime.clone();
+        Self::serve_runtime(runtime.as_deref(), options, launch).await
     }
 
     /// The packaged app owns its private namespace and has no operator to run the

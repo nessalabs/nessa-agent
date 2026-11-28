@@ -132,6 +132,13 @@
       "destructive": false
     },
     {
+      "name": "server.activity",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": true,
+      "destructive": false
+    },
+    {
       "name": "credential.issue",
       "params": "CredentialIssueParams",
       "grant": "credential.manage",

@@ -2990,6 +2990,14 @@ pub struct DevicesListResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServerActivityResult {
+    pub busy: bool,
+    pub running_conversations: u64,
+    pub background_commands: u64,
+    pub open_terminals: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerReachResult {
     #[serde(deserialize_with = "Option::deserialize")]
     pub tunnel: Option<String>,
@@ -5162,6 +5170,7 @@ pub mod product_method {
     pub const AUTH_SESSION: &str = "auth.session";
     pub const SERVER_HEALTH: &str = "server.health";
     pub const SERVER_REACH: &str = "server.reach";
+    pub const SERVER_ACTIVITY: &str = "server.activity";
     pub const CREDENTIAL_ISSUE: &str = "credential.issue";
     pub const CREDENTIAL_LIST: &str = "credential.list";
     pub const CREDENTIAL_REVOKE: &str = "credential.revoke";
@@ -5513,7 +5522,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 158
+                items.len() <= 159
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5541,6 +5550,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "auth.session",
     "server.health",
     "server.reach",
+    "server.activity",
     "credential.issue",
     "credential.list",
     "credential.revoke",
@@ -5768,6 +5778,8 @@ pub enum ProductMethod {
     ServerHealth,
     /// `server.reach`
     ServerReach,
+    /// `server.activity`
+    ServerActivity,
     /// `credential.issue`
     CredentialIssue,
     /// `credential.list`
@@ -6087,6 +6099,7 @@ impl ProductMethod {
         ProductMethod::AuthSession,
         ProductMethod::ServerHealth,
         ProductMethod::ServerReach,
+        ProductMethod::ServerActivity,
         ProductMethod::CredentialIssue,
         ProductMethod::CredentialList,
         ProductMethod::CredentialRevoke,
@@ -6252,6 +6265,7 @@ impl ProductMethod {
             "auth.session" => Some(ProductMethod::AuthSession),
             "server.health" => Some(ProductMethod::ServerHealth),
             "server.reach" => Some(ProductMethod::ServerReach),
+            "server.activity" => Some(ProductMethod::ServerActivity),
             "credential.issue" => Some(ProductMethod::CredentialIssue),
             "credential.list" => Some(ProductMethod::CredentialList),
             "credential.revoke" => Some(ProductMethod::CredentialRevoke),
@@ -6424,6 +6438,7 @@ impl ProductMethod {
             ProductMethod::AuthSession => "auth.session",
             ProductMethod::ServerHealth => "server.health",
             ProductMethod::ServerReach => "server.reach",
+            ProductMethod::ServerActivity => "server.activity",
             ProductMethod::CredentialIssue => "credential.issue",
             ProductMethod::CredentialList => "credential.list",
             ProductMethod::CredentialRevoke => "credential.revoke",
@@ -6592,6 +6607,7 @@ impl ProductMethod {
             ProductMethod::AuthSession => None,
             ProductMethod::ServerHealth => Some("server.read"),
             ProductMethod::ServerReach => Some("server.read"),
+            ProductMethod::ServerActivity => Some("credential.manage"),
             ProductMethod::CredentialIssue => Some("credential.manage"),
             ProductMethod::CredentialList => Some("credential.manage"),
             ProductMethod::CredentialRevoke => Some("credential.manage"),
@@ -6757,6 +6773,7 @@ impl ProductMethod {
             ProductMethod::AuthSession => ProductLane::Requests,
             ProductMethod::ServerHealth => ProductLane::Requests,
             ProductMethod::ServerReach => ProductLane::Requests,
+            ProductMethod::ServerActivity => ProductLane::Requests,
             ProductMethod::CredentialIssue => ProductLane::Requests,
             ProductMethod::CredentialList => ProductLane::Requests,
             ProductMethod::CredentialRevoke => ProductLane::Requests,
@@ -6932,6 +6949,10 @@ impl ProductMethod {
             },
             ProductMethod::ServerReach => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::ServerReach,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::ServerActivity => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::ServerActivity,
                 _ => return Err(ParamsRefused),
             },
             ProductMethod::CredentialIssue => ProductParams::CredentialIssue(
@@ -7462,6 +7483,7 @@ pub enum ProductParams {
     AuthSession,
     ServerHealth,
     ServerReach,
+    ServerActivity,
     CredentialIssue(CredentialIssueParams),
     CredentialList,
     CredentialRevoke(CredentialRevokeParams),
@@ -7627,6 +7649,7 @@ impl ProductParams {
             ProductParams::AuthSession => ProductMethod::AuthSession,
             ProductParams::ServerHealth => ProductMethod::ServerHealth,
             ProductParams::ServerReach => ProductMethod::ServerReach,
+            ProductParams::ServerActivity => ProductMethod::ServerActivity,
             ProductParams::CredentialIssue(_) => ProductMethod::CredentialIssue,
             ProductParams::CredentialList => ProductMethod::CredentialList,
             ProductParams::CredentialRevoke(_) => ProductMethod::CredentialRevoke,

@@ -8,6 +8,7 @@ mod boat_callback;
 mod boat_oauth;
 mod cloud_boxes;
 mod cloud_choice;
+mod local_box_host;
 mod runtime;
 mod settings;
 mod ssh;
@@ -20,6 +21,7 @@ pub use cloud_boxes::{
     FileCloudBoxAudit, FileCloudBoxStore, ProviderActiveWorkChecker, WorkspaceCloudBoxProvider,
 };
 pub use cloud_choice::FileCloudChoice;
+pub use local_box_host::{LocalBoxHost, LocalBoxSettings};
 pub use settings::VaultSettings;
 
 mod release;

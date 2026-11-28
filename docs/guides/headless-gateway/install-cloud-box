@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Turn a VM made from Nessa's Boat image into a Cloud Box gateway image
+# (#1427). Run inside the VM, from a checkout of this repository, after
+# preparing the Linux desktop runtime there with terminals built in:
+#
+#   eval "$(scripts/terminal/ghostty.sh)"
+#   node scripts/desktop/prepare-linux.mjs        # writes src-tauri/runtime
+#   sudo docs/guides/headless-gateway/install-cloud-box src-tauri/runtime
+#
+# The runtime is what the desktop app runs its gateway from: nessa (with
+# terminals), nessa-mcp, Node, the Claude and Codex adapters and the model
+# catalog. It is installed as /opt/nessa/runtime, and beside it, under
+# /opt/nessa/bin:
+#   nessa-gateway-bootstrap  what the gateway that made the box runs in it
+#   cloudflared              the pinned release the app tunnel runs, checked
+#                            against its digest in tunnel-releases.json
+# with /etc/nessa/gateway.env pointing the helper at both. It checks that the
+# image already carries what the box needs from it: the workspace supervisor
+# the gateway connects through, jq, curl and setsid.
+#
+# It starts nothing and leaves no secret: the vault passphrase, the owner
+# token and the desktop credential are made on the box's first `create`, so
+# every box made from the snapshot has its own.
+set -euo pipefail
+
+if [[ "$(id -u)" != 0 ]]; then
+  echo "run as root: it installs into /opt/nessa" >&2
+  exit 1
+fi
+prepared="${1:?usage: install-cloud-box PREPARED_RUNTIME_DIR}"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
+releases="${repo}/crates/nessa-device-pairing/data/tunnel-releases.json"
+bin=/opt/nessa/bin
+runtime=/opt/nessa/runtime
+
+for tool in jq curl setsid sha256sum; do
+  command -v "${tool}" >/dev/null || {
+    echo "the image has no ${tool}" >&2
+    exit 1
+  }
+done
+[[ -x "${bin}/workspace-supervisor" ]] || {
+  echo "the image has no ${bin}/workspace-supervisor; start from Nessa's Boat image" >&2
+  exit 1
+}
+for part in nessa nessa-mcp node models.json manifest.json claude-acp codex-acp; do
+  [[ -e "${prepared}/${part}" ]] || {
+    echo "${prepared} is not a prepared desktop runtime: it has no ${part}" >&2
+    exit 1
+  }
+done
+"${prepared}/nessa" --help | head -1 | grep -qx Nessa
+
+case "$(uname -m)" in
+  x86_64) arch=x86_64 ;;
+  aarch64 | arm64) arch=aarch64 ;;
+  *)
+    echo "no pinned cloudflared for $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+release="$(jq -c --arg arch "${arch}" \
+  '.builds[] | select(.operatingSystem == "linux" and .architecture == $arch and .packaging == "program")' \
+  "${releases}")"
+url="$(jq -r .url <<<"${release}")"
+digest="$(jq -r .programDigest <<<"${release}")"
+download="$(mktemp)"
+trap 'rm -f "${download}"' EXIT
+curl -fsSL --retry 3 -o "${download}" "${url}"
+echo "${digest}  ${download}" | sha256sum -c - >/dev/null || {
+  echo "cloudflared from ${url} does not match ${digest}" >&2
+  exit 1
+}
+
+install -d -m 0755 "${bin}" /etc/nessa
+rm -rf "${runtime}.new"
+cp -a "${prepared}" "${runtime}.new"
+chown -R root:root "${runtime}.new"
+chmod -R go-w "${runtime}.new"
+rm -rf "${runtime}"
+mv "${runtime}.new" "${runtime}"
+install -m 0755 "${download}" "${bin}/cloudflared"
+install -m 0755 "${here}/nessa-gateway-bootstrap" "${bin}/nessa-gateway-bootstrap"
+install -m 0644 "${here}/gateway.env" /etc/nessa/gateway.env
+
+jq -c '{runtime: ., cloudflared: $cloudflared}' \
+  --arg cloudflared "$(sha256sum "${bin}/cloudflared" | cut -d' ' -f1)" \
+  "${runtime}/manifest.json"

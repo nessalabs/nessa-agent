@@ -13,6 +13,8 @@ sources:
   - "crates/nessa-conversation/src/workspaces/infrastructure/agent37.rs"
   - "crates/nessa-conversation/src/workspaces/infrastructure/boat.rs"
   - "docs/guides/headless-gateway/nessa-gateway-bootstrap"
+  - "crates/nessa-conversation/src/application/service/activity.rs"
+  - "crates/nessa-gateway/src/product/socket.rs"
   - "Cargo.lock"
 diagramLinks: {}
 model:
@@ -45,7 +47,7 @@ modelCheck:
 ---
 # Put a persistent cloud gateway to sleep
 
-When you put a cloud box to sleep, the box service asks the gateway whether it is busy and sends a stop request if it reads idle. The box service serializes sleep and wake within its own process. The gateway can admit a turn or terminal while the provider is processing the stop.
+When you put a cloud box to sleep, the box service asks the gateway whether it is busy and sends a stop request if it reads idle. The box's helper answers from `server.activity`, which counts every principal's running turns, background commands and open terminals on the box's gateway; any failure to read it, or any answer but `busy: false`, reads busy. A gateway that is not answering reads busy while its process runs. The box service serializes sleep and wake within its own process. The gateway can admit a turn or terminal while the provider is processing the stop.
 
 ## Current behavior
 

@@ -22,6 +22,11 @@
       "grant": "server.read",
       "lane": "requests"
     },
+    "server.activity": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "credential.issue": {
       "params": "CredentialIssueParams",
       "grant": "credential.manage",

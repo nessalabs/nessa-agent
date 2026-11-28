@@ -52,6 +52,7 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         Command::Server(ServerOptions {
             provisioning: LocalProvisioning::Automatic,
             vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+            runtime: None,
         })
     );
     assert_eq!(
@@ -65,6 +66,7 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         Command::Server(ServerOptions {
             provisioning: LocalProvisioning::Automatic,
             vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+            runtime: None,
         })
     );
     assert_eq!(
@@ -77,9 +79,34 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         Command::Server(ServerOptions {
             provisioning: LocalProvisioning::Manual,
             vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+            runtime: None,
         })
     );
+    assert_eq!(
+        parse(&args(&[
+            "server",
+            "--provision-local",
+            "--runtime",
+            "/opt/nessa/runtime",
+            "--vault-passphrase-file",
+            passphrase_path,
+        ]))
+        .unwrap(),
+        Command::Server(ServerOptions {
+            provisioning: LocalProvisioning::Automatic,
+            vault_passphrase_file: Some(PathBuf::from(passphrase_path)),
+            runtime: Some(PathBuf::from("/opt/nessa/runtime")),
+        })
+    );
+    for refused in [
+        vec!["server", "--runtime"],
+        vec!["server", "--runtime", "relative/runtime"],
+        vec!["server", "--runtime", "/a", "--runtime", "/b"],
+    ] {
+        assert!(parse(&args(&refused)).is_err(), "{refused:?}");
+    }
     assert!(crate::cli::entrypoint::HELP.contains("--vault-passphrase-file"));
+    assert!(crate::cli::entrypoint::HELP.contains("--runtime DIR"));
     assert_eq!(parse(&[]).unwrap(), Command::Help);
     for words in [
         vec!["auth", "init"],

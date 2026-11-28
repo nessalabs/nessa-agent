@@ -513,6 +513,16 @@ import {
   startFakeGithub,
   disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
+import {
+  boxCredential,
+  boxEvents,
+  boxGatewayRunning,
+  boxVms,
+  endBoxes,
+  loseNextCreate,
+  prepareCloudBoxHost,
+  seedBoxConfig,
+} from "./lib/cloud-box-host.mjs"
 import { FAKE_BOAT_LOGIN, startFakeBoat } from "./lib/fake-boat.mjs"
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { otelIds, startFakeOtlp } from "./lib/fake-otlp.mjs"
@@ -5906,6 +5916,163 @@ const steps = {
     })
     // The gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  /**
+   * A Cloud Box made, slept, woken and deleted from Settings › Gateways
+   * (#1427), on the stand-in cloud this machine runs (`cloud-box-host.mjs`).
+   * The stand-in loses the first create's answer after making the VM: the
+   * window asks for the same box again, and the one VM is enrolled. The box's
+   * own gateway, started by the real bootstrap helper, is then connected over
+   * its app tunnel with the desktop credential the box made. Sleep is refused
+   * while a terminal runs on the box, whoever opened it, and taken once it
+   * has ended; Wake starts the box's gateway again at the tunnel's new
+   * address; Delete VM removes the VM and its row.
+   */
+  async cloudbox(run, step, failures) {
+    const root = run.stack.cloudBoxHost
+    if (!root) {
+      failures.push("the stack was started without the stand-in cloud")
+      return
+    }
+    // The box keeps conversations and serves terminals as the check's own
+    // gateway does.
+    const config = JSON.parse(readFileSync(stackConfigPath(run), "utf8"))
+    seedBoxConfig(root, config.agents)
+    const page = run.page
+    const box = () => page.locator("[data-cloud-box]")
+    const status = () =>
+      box()
+        .getAttribute("data-gateway-status")
+        .catch(() => null)
+    const detail = async () =>
+      (await box()
+        .textContent()
+        .catch(() => "")) ?? ""
+    const address = async () =>
+      /ws:\/\/127\.0\.0\.1:\d+/.exec(await detail())?.[0] ?? null
+    const action = (name) => box().getByRole("button", { name, exact: true })
+    const shot = (name) =>
+      run.evidence
+        ? page
+            .screenshot({ path: join(run.evidence, `cloudbox-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    let client = null
+    let terminal = null
+    try {
+      await run.exclusive(async () => {
+        await openGateways(page)
+        if ((await box().count()) !== 0) {
+          failures.push("a Cloud Box row was there before one was made")
+          return
+        }
+        loseNextCreate(root)
+        await page.getByLabel("Cloud Box name").fill("Stress box")
+        await page.getByLabel("Cloud provider").selectOption("boat")
+        await page.getByRole("button", { name: "Create Cloud Box", exact: true }).click()
+        if (!(await waitFor(async () => (await status()) === "connected", 120_000))) {
+          failures.push(
+            `the new Cloud Box is ${await status()}: ${await detail()} (${boxEvents(root).join("; ")})`,
+          )
+          return
+        }
+        await shot("connected")
+      })
+      if (failures.length) return
+      const vms = boxVms(root)
+      const vm = vms[0]
+      const events = boxEvents(root)
+      if (vms.length !== 1)
+        failures.push(`the stand-in cloud holds ${vms.length} VMs: ${vms.join(", ")}`)
+      if (
+        events[0] !== `create ${vm} lost` ||
+        !events.includes(`create ${vm}`) ||
+        events.filter((line) => line.startsWith("create ")).length !== 2
+      )
+        failures.push(
+          `a lost create was not asked for again as the same box: ${events.join("; ")}`,
+        )
+      const first = await address()
+      if (!first) {
+        failures.push(`the row names no box address: ${await detail()}`)
+        return
+      }
+      // The box's own gateway, reached the way the window reaches it.
+      client = await connectBox(first, boxCredential(root, vm))
+      terminal = await client.terminals.open({
+        requestId: `cloudbox-${randomUUID()}`,
+        cols: 80,
+        rows: 24,
+      })
+      await run.exclusive(async () => {
+        await openGateways(page)
+        // Busy: a terminal runs on the box, opened by another session.
+        await action("Sleep").click()
+        const refused = await waitFor(
+          async () => (await pageText(page)).includes("This Cloud Box is still at work"),
+          15_000,
+        )
+        await sleep(1_000)
+        if (boxEvents(root).some((line) => line === `stop ${vm}`))
+          failures.push("Sleep stopped the box while a terminal ran there")
+        if ((await status()) !== "connected" || !boxGatewayRunning(root, vm))
+          failures.push(`a refused Sleep left the box ${await status()}`)
+        if (!refused) failures.push("the refused Sleep said nothing on the page")
+        await shot("busy")
+      })
+      if (failures.length) return
+      await client.terminals.close(terminal.terminalId)
+      terminal = null
+      await Promise.resolve(client.close()).catch(() => {})
+      client = null
+      await run.exclusive(async () => {
+        await openGateways(page)
+        await action("Sleep").click()
+        const slept = await waitFor(
+          async () =>
+            (await status()) === "disconnected" &&
+            boxEvents(root).includes(`stop ${vm}`) &&
+            !boxGatewayRunning(root, vm),
+          60_000,
+        )
+        if (!slept)
+          failures.push(
+            `an idle box did not sleep: ${await status()}, ${boxEvents(root).join("; ")}`,
+          )
+        await shot("sleeping")
+        if (!slept) return
+        await action("Wake").click()
+        const woke = await waitFor(
+          async () => (await status()) === "connected" && boxGatewayRunning(root, vm),
+          120_000,
+        )
+        const second = await address()
+        if (!woke)
+          failures.push(`the box did not wake: ${await status()}: ${await detail()}`)
+        else if (!second || second === first)
+          failures.push(`the woken box kept its old address ${first} (now ${second})`)
+        await shot("woken")
+        await action("Delete VM").click()
+        const deleted = await waitFor(
+          async () =>
+            (await box().count()) === 0 &&
+            boxVms(root).length === 0 &&
+            boxEvents(root).includes(`remove ${vm}`),
+          60_000,
+        )
+        if (!deleted)
+          failures.push(
+            `Delete VM left ${await box().count()} rows and VMs ${boxVms(root).join(", ")}`,
+          )
+        if (boxGatewayRunning(root, vm))
+          failures.push("the deleted box's gateway still runs")
+        await closeSettings(page)
+      })
+    } finally {
+      if (terminal) await client?.terminals.close(terminal.terminalId).catch(() => {})
+      await Promise.resolve(client?.close()).catch(() => {})
+    }
   },
 
   /**
@@ -14557,6 +14724,39 @@ async function githubReadAgent(run, step, failures) {
 }
 
 /** Leaves Settings: Esc does not close it; its back control returns to the app. */
+/** Settings › Connections › Gateways. */
+async function openGateways(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  const tab = page.locator(css.settingsTab, { hasText: "Gateways" })
+  await tab.waitFor()
+  if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click()
+}
+
+/** The check's own gateway's `config.json`. */
+function stackConfigPath(run) {
+  return join(run.stack.gateway.directory, "ci", "instances", INSTANCE, "config.json")
+}
+
+/**
+ * A client on a Cloud Box's gateway at `url`, signed in with the desktop
+ * credential the box made, as the window's registry connects to it.
+ */
+async function connectBox(url, credential) {
+  const { register } = await import("tsx/esm/api")
+  register()
+  const { NessaClient } = await import("@nessa/client")
+  return NessaClient.connect({
+    stage: "ci",
+    url,
+    role: "surface",
+    surface: { kind: "panel", instance: `cloudbox-${randomUUID()}` },
+    client: { id: "nessa-stress-cloudbox", version: "0.1.0", platform: "node" },
+    profile: "product",
+    auth: { credential },
+  })
+}
+
 async function closeSettings(page) {
   await page.getByRole("button", { name: "Back to nessa Studio" }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
@@ -15797,6 +15997,12 @@ async function startStack(options) {
   // the gateway's five-minute renewal margin, so every read of the
   // connection after sign-in renews it through the fake.
   const boat = knobs.boatSignIns > 0 ? await startFakeBoat({ expiresIn: 60 }) : null
+  // The `cloudbox` step's cloud: each box a directory here, running the
+  // real bootstrap helper, this checkout's gateway and the tunnel stand-in.
+  const cloudBoxHost =
+    knobs.cloudBoxes > 0
+      ? prepareCloudBoxHost(directory, { cloudflared: fakeCloudflared(directory) })
+      : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
   // The `telemetry` step's collector. With it the gateway exports for the
@@ -15818,6 +16024,8 @@ async function startStack(options) {
     ...(boat ? { NESSA_BOAT_APP: boat.app(join(directory, "boat-app.json")) } : {}),
     // The `tunnel` step's cloudflared (debug builds only).
     NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
+    // The `cloudbox` step's cloud, on this machine (debug builds only).
+    ...(cloudBoxHost ? { NESSA_CLOUD_BOX_HOST: cloudBoxHost } : {}),
   }
   let stack
   try {
@@ -15912,6 +16120,7 @@ async function startStack(options) {
     await boat?.close()
     await realtime?.close()
     await collector?.close()
+    if (cloudBoxHost) endBoxes(cloudBoxHost)
     rmSync(directory, { recursive: true, force: true })
     throw error
   }
@@ -15924,6 +16133,8 @@ async function startStack(options) {
       await boat?.close()
       await realtime?.close()
       await collector?.close()
+      // A box a failed step left running ends with the stack.
+      if (cloudBoxHost) endBoxes(cloudBoxHost)
       rmSync(directory, { recursive: true, force: true })
     }
   }
@@ -15936,6 +16147,7 @@ async function startStack(options) {
     nativeListen,
     github,
     boat,
+    cloudBoxHost,
     realtime,
     collector,
     scenario,
@@ -15972,11 +16184,14 @@ await main(
       // The packaged window's connect-src, plus the ports only this check
       // has: its own gateway's, and the fake voice provider the window's
       // scripted transport calls in place of WebRTC. A read the app's policy
-      // blocks fails here too (`paste`, `attach`).
+      // blocks fails here too (`paste`, `attach`). A Cloud Box's tunnel
+      // stand-in answers on a loopback port of its own over plain ws, where
+      // the app reaches a real box at a wss:// address its `https:` allows.
       const contentPolicy = appConnectPolicy([
         gateway.origin,
         `ws://${gateway.host}`,
         ...(stack.realtime ? [stack.realtime.socketOrigin] : []),
+        ...(stack.cloudBoxHost ? ["ws://127.0.0.1:*"] : []),
       ])
       const opened = await openPage(browser, {
         contentPolicy,

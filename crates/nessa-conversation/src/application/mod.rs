@@ -307,14 +307,14 @@ pub use service::{
     ChannelStore, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
     ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, FolderRefusal,
-    HistoryGeneration, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource,
-    PendingReport, PinnedStart, PlanToken, PreferenceCommandOutcome, PreferenceCommandReceipt,
-    PreferenceReading, PreferenceUpdate, QuestionChoiceInput, ReadOpening, ReconcileRetry,
-    RecordedPreference, ReplyStyleStore, ReportRegistration, RequestedAgent, RequestedConversation,
-    ScheduleActor, ScheduleDraft, ScheduleSettlement, ScheduledCommandEvidence, ScheduledMessage,
-    ScheduledMessageStore, SelectionChange, SelectionRequest, SubmissionMode, ThreadReport,
-    ThreadReportStore, ThreadTurn, UnsettledEnable, UsageLimitSnapshot, MAX_APP_CALLS,
-    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    GatewayActivity, HistoryGeneration, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead,
+    McpAppResource, PendingReport, PinnedStart, PlanToken, PreferenceCommandOutcome,
+    PreferenceCommandReceipt, PreferenceReading, PreferenceUpdate, QuestionChoiceInput,
+    ReadOpening, ReconcileRetry, RecordedPreference, ReplyStyleStore, ReportRegistration,
+    RequestedAgent, RequestedConversation, ScheduleActor, ScheduleDraft, ScheduleSettlement,
+    ScheduledCommandEvidence, ScheduledMessage, ScheduledMessageStore, SelectionChange,
+    SelectionRequest, SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, UnsettledEnable,
+    UsageLimitSnapshot, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub use service::{ExportAdmission, ExportHoldFailure, OpenPreparation, FENCE_LEASE_MS};
 pub use service::{

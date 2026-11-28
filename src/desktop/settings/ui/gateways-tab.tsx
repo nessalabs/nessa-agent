@@ -4,8 +4,8 @@
  * Lists the local host gateway alongside every registered remote `nessa-server`
  * gateway (both self-hosted and managed Cloud Box VMs) with live connection
  * status, wake/sleep/reconnect/delete/remove actions, an "Add remote gateway"
- * form (G7), and a "Create Cloud Box" form (#1420), hidden until a gateway
- * VM image exists (#1427).
+ * form (G7), and a "Create Cloud Box" form (#1420): a VM made from the
+ * gateway image `release.rs` pins (#1427).
  */
 import {
   createContext,
@@ -15,6 +15,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react"
+import { CloudBoxErrorCode } from "@nessa/client"
 import {
   gatewayStatusLabel,
   type GatewayRegistryPort,
@@ -22,13 +23,6 @@ import {
 } from "../../workspace"
 import { DesktopIcon } from "../../ui/icons"
 import { Group, ItemRow, RowAction } from "./settings-controls"
-
-/**
- * Creating a Cloud Box runs the gateway bootstrap helper inside the new VM,
- * and no image we provision ships it yet (#1427): every create would roll
- * back. The form stays hidden until that image is pinned.
- */
-const CLOUD_BOX_CREATE_AVAILABLE: boolean = false
 
 const GatewayRegistryContext = createContext<GatewayRegistryPort | undefined>(undefined)
 
@@ -158,6 +152,9 @@ export function GatewaysTab() {
           return (
             <ItemRow
               key={gateway.gatewayId}
+              data-gateway-row={gateway.gatewayId}
+              data-gateway-status={gateway.status}
+              data-cloud-box={cloudBox?.boxId}
               label={gateway.label}
               detail={
                 gateway.isLocal
@@ -192,7 +189,8 @@ export function GatewaysTab() {
                       onClick={() =>
                         void runRowAction(
                           gateway.gatewayId,
-                          () => sleepCloudBox(gateway.gatewayId),
+                          () =>
+                            sleepCloudBox(gateway.gatewayId).catch(explainSleepRefusal),
                           "Could not sleep Cloud Box.",
                         )
                       }
@@ -243,7 +241,7 @@ export function GatewaysTab() {
         })}
       </Group>
 
-      {CLOUD_BOX_CREATE_AVAILABLE && registry.createCloudBox && (
+      {registry.createCloudBox && (
         <Group
           title="Create Cloud Box"
           note={
@@ -363,4 +361,18 @@ export function GatewaysTab() {
       </Group>
     </>
   )
+}
+
+/** Said when Sleep is refused because something still runs on the box. */
+const CLOUD_BOX_AT_WORK =
+  "This Cloud Box is still at work: a chat, command or terminal is running there. Put it to sleep once that finishes."
+
+/** A refused Sleep in words a person can act on; any other failure as it came. */
+function explainSleepRefusal(error: unknown): never {
+  const refusal =
+    typeof error === "object" && error !== null && "refusal" in error
+      ? (error as { refusal?: unknown }).refusal
+      : undefined
+  if (refusal === CloudBoxErrorCode.CloudBoxActiveWork) throw new Error(CLOUD_BOX_AT_WORK)
+  throw error
 }
