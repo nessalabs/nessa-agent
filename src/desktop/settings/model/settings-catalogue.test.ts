@@ -53,20 +53,24 @@ describe("the settings catalogue", () => {
     })
   })
 
-  it("keeps experiments under Advanced, just before About", () => {
+  it("keeps the mode and experiments under Advanced, just before About", () => {
     const ids = settingsCategories.map((category) => category.id)
     expect(ids.slice(-2)).toEqual(["advanced", "about"])
-    expect(tabsOf("advanced").map((tab) => tab.id)).toEqual(["experimental", "setup"])
+    expect(tabsOf("advanced").map((tab) => tab.id)).toEqual([
+      "mode",
+      "experimental",
+      "setup",
+    ])
     expect(settingsTab("experimental")).toMatchObject({
       category: "advanced",
       label: "Experimental",
     })
-    // The previews on offer: subagents and the side rail.
+    // The mode switch, then the previews on offer: subagents and the side rail.
     expect(
       settingsEntries
         .filter((entry) => settingsTab(entry.tab).category === "advanced")
         .map((entry) => entry.id),
-    ).toEqual(["subagents-preview", "side-rail", "replay-onboarding"])
+    ).toEqual(["advanced-mode", "subagents-preview", "side-rail", "replay-onboarding"])
     expect(setting("replay-onboarding")).toMatchObject({
       tab: "setup",
       label: "Replay onboarding",
@@ -222,10 +226,15 @@ describe("searchSettings", () => {
   it("finds Advanced › Experimental by its name and by what people call it", () => {
     expect(searchSettings("advanced")[0]).toEqual({
       category: "advanced",
-      tab: "experimental",
+      tab: "mode",
       label: "Advanced",
       trail: "",
     })
+    for (const query of ["simple", "advanced mode"])
+      expect(
+        searchSettings(query).find((match) => match.setting === "advanced-mode"),
+        query,
+      ).toMatchObject({ category: "advanced", tab: "mode", trail: "Advanced › Mode" })
     for (const query of ["experimental", "labs", "preview"])
       expect(searchSettings(query)[0], query).toEqual({
         category: "advanced",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 
 /**
  * A preference remembered in this webview's storage and shared by every
@@ -21,6 +21,13 @@ import { useCallback, useEffect, useState } from "react"
 export interface StoredPreference<T> {
   /** The value and a way to choose another; every reader in the window follows. */
   usePreference(): readonly [T, (next: T) => void]
+  /**
+   * The value as stored now, for a change worked out from it outside React.
+   * Where storage refused the last choice, this is what it still holds.
+   */
+  current(): T
+  /** Chooses another value, as the hook's chooser does. */
+  choose(next: T): void
 }
 
 export function storedPreference<T>({
@@ -46,6 +53,15 @@ export function storedPreference<T>({
       return parse(null)
     }
   }
+  const choose = (next: T) => {
+    const stored = serialize(next)
+    try {
+      storage().setItem(key, stored)
+    } catch {
+      // Not remembered; the choice still applies to this window.
+    }
+    window.dispatchEvent(new CustomEvent(event, { detail: stored }))
+  }
 
   function usePreference() {
     const [value, setValue] = useState<T>(read)
@@ -66,18 +82,8 @@ export function storedPreference<T>({
       }
     }, [])
 
-    const choose = useCallback((next: T) => {
-      const stored = serialize(next)
-      try {
-        storage().setItem(key, stored)
-      } catch {
-        // Not remembered; the choice still applies to this window.
-      }
-      window.dispatchEvent(new CustomEvent(event, { detail: stored }))
-    }, [])
-
     return [value, choose] as const
   }
 
-  return { usePreference }
+  return { usePreference, current: read, choose }
 }

@@ -2916,6 +2916,197 @@ function otherAgent(agent) {
 }
 
 /** The `picker` step's work, with the stars cleared around it by the step. */
+/** Opens Settings › Advanced, which opens on its Mode tab. */
+async function openModeSettings(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  await page.locator(css.settingsTab, { hasText: "Mode" }).click()
+  await page.locator(selectorFor.settingRow("advanced-mode")).waitFor({ timeout: 10_000 })
+}
+
+async function appModeStep(run, step, failures) {
+  const page = run.page
+  const modeSwitch = page.locator(
+    `${selectorFor.settingRow("advanced-mode")} [role="switch"]`,
+  )
+  const modelFeature = page.locator(
+    `${selectorFor.appFeature("composer-model-picker")} [role="switch"]`,
+  )
+  const stored = () =>
+    page.evaluate(
+      (key) => JSON.parse(localStorage.getItem(key) ?? "null"),
+      storage.appMode,
+    )
+  const storedIs = async (expected, when) => {
+    const same = await waitFor(
+      async () => JSON.stringify(await stored()) === JSON.stringify(expected),
+      5_000,
+    )
+    if (!same)
+      failures.push(
+        `${when}, the window keeps ${JSON.stringify(await stored())}, not ${JSON.stringify(expected)}`,
+      )
+  }
+  const chipShown = () => dock(page).locator(`${css.modelChip}:visible`).count()
+  const more = () => dock(page).locator(css.composerMore)
+  // The model is in the row (`true`) or folded under + (`false`).
+  const rowShows = async (inRow, when) => {
+    const settled = await waitFor(
+      async () =>
+        (await chipShown()) === (inRow ? 1 : 0) &&
+        (await more().count()) === (inRow ? 0 : 1) &&
+        (await dock(page).locator(`${css.composerFast}:visible`).count()) ===
+          (inRow ? 1 : 0),
+      5_000,
+    )
+    if (!settled)
+      failures.push(
+        `${when}, the composer shows ${await chipShown()} model chip(s) and ${await more().count()} +, not the model ${inRow ? "in its row" : "under +"}`,
+      )
+  }
+  const shoot = (label) =>
+    run.evidence
+      ? page
+          .screenshot({ path: join(run.evidence, `app-mode-${run.engine}-${label}.png`) })
+          .catch(() => {})
+      : Promise.resolve()
+
+  // The run's window starts in Advanced (`lib/browser.mjs`).
+  await openModeSettings(page)
+  if ((await modeSwitch.getAttribute("aria-checked")) !== "true")
+    failures.push("Advanced › Mode does not show the run's window in Advanced mode")
+  await modeSwitch.click()
+  if (!(await waitFor(async () => (await modelFeature.count()) === 0, 5_000)))
+    failures.push("Simple still lists the features to choose")
+  await storedIs({ mode: "simple", picks: {} }, "turned to Simple")
+  await shoot("settings-simple")
+  await leaveTerminalSettings(page)
+  await rowShows(false, "in Simple")
+  await shoot("composer-simple")
+
+  // Under +, the same picker: the model picked there runs the next message.
+  const before = await readWithReviews(run.client, run.main.id)
+  const current = catalog.models.find((model) => model.modelId === before.runtime?.model)
+  const target =
+    current &&
+    catalog.models.find(
+      (model) => model.provider === current.provider && model.modelId !== current.modelId,
+    )
+  if (!target)
+    throw new CannotRun("no second catalog model in this conversation's provider")
+  await more().click()
+  const modelItem = page.getByRole("menuitem", { name: /^Model/ })
+  if (
+    !(await modelItem.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("Simple's + offers no Model")
+    return
+  }
+  const items = await page.getByRole("menuitem").allTextContents()
+  if (!items[0]?.startsWith("Attach files") || !items[1]?.startsWith("Model"))
+    failures.push(
+      `Simple's + offers ${JSON.stringify(items)}, not Attach files and Model`,
+    )
+  await shoot("more-menu")
+  await modelItem.click()
+  if (
+    !(await page
+      .locator(css.modelPicker)
+      .waitFor({ timeout: 5_000 })
+      .then(
+        () => true,
+        () => false,
+      ))
+  ) {
+    failures.push("Model under + did not open the model picker")
+    return
+  }
+  await page.locator(css.modelSearch).fill(target.displayName)
+  await page
+    .locator(css.modelOption)
+    .filter({
+      has: page
+        .locator(css.modelOptionLabel)
+        .getByText(target.displayName, { exact: true }),
+    })
+    .locator(css.modelOptionLabel)
+    .click()
+  if (
+    !(await waitFor(
+      async () => (await page.locator(css.modelPicker).count()) === 0,
+      5_000,
+    ))
+  )
+    failures.push("picking a model under + left the picker open")
+  if (
+    !(await waitFor(
+      () =>
+        page.evaluate(
+          (more) => document.activeElement?.matches(more) === true,
+          css.composerMore,
+        ),
+      5_000,
+    ))
+  )
+    failures.push("closing the picker opened from + did not hand focus back to +")
+  const text = prompt(run, STRESS.model, step)
+  const seen = await send(run, run.main.id, text, failures)
+  const confirmed = await waitFor(async () => {
+    const view = await readWithReviews(run.client, run.main.id)
+    return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+  }, 15_000)
+  if (!confirmed)
+    failures.push(`a model picked under + did not run on ${target.displayName}`)
+  await settled(run, run.main.id, seen, text, "completed", failures)
+  await expectShown(page, `${SAYS.model}${target.modelId}`, failures)
+  await composerSaysNothing(page, "in Simple", failures)
+
+  // Advanced again: the features are listed, and the model's own switch folds it.
+  await openModeSettings(page)
+  await modeSwitch.click()
+  if (
+    !(await modelFeature.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("Advanced mode lists no Model in the composer")
+    return
+  }
+  if ((await modelFeature.getAttribute("aria-checked")) !== "true")
+    failures.push("Advanced does not show the model in the composer until turned off")
+  await modelFeature.click()
+  await storedIs(
+    { mode: "advanced", picks: { "composer-model-picker": false } },
+    "with the model turned out of the composer",
+  )
+  await shoot("settings-advanced-picked")
+  await leaveTerminalSettings(page)
+  await rowShows(false, "in Advanced with the model turned out of the row")
+  await openModeSettings(page)
+  await modelFeature.click()
+  await storedIs({ mode: "advanced", picks: {} }, "with the model turned back on")
+  await leaveTerminalSettings(page)
+  await rowShows(true, "back in Advanced")
+  if (run.evidence)
+    writeFileSync(
+      join(run.evidence, `app-mode-${run.engine ?? "window"}-${step.index}.json`),
+      JSON.stringify(
+        {
+          before: current.modelId,
+          after: target.modelId,
+          menu: items,
+          confirmed: confirmed?.runtime,
+        },
+        null,
+        2,
+      ),
+    )
+}
+
 async function pickerStep(run, step, failures) {
   const page = run.page
   const chip = dock(page).locator(css.modelChip)
@@ -4796,6 +4987,22 @@ const steps = {
       await pickerStep(run, step, failures)
     } finally {
       await clearStarredModels(run.page).catch(() => {})
+    }
+  },
+  /**
+   * App modes, switched where a person does: Settings › Advanced › Mode.
+   * Simple folds the composer's model and Fast under +, whose Model opens
+   * the same picker; the model picked there runs the next message, and
+   * focus is back on + once it closes. Advanced again lists the features,
+   * and turning "Model in the composer" off folds the model under + there
+   * too, until it is turned back on. The window ends in Advanced with no
+   * picks, as it started, and what is stored says so at each step.
+   */
+  async appMode(run, step, failures) {
+    try {
+      await appModeStep(run, step, failures)
+    } finally {
+      await leaveTerminalSettings(run.page).catch(() => {})
     }
   },
 

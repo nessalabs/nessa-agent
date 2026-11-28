@@ -105,11 +105,17 @@ export const settingsCategories = [
     ],
   },
   {
-    // The home of previews of features not settled yet, and of first-run
-    // setup for whoever wants to see it again.
+    // The app's mode and the features Advanced lets a person choose, the
+    // home of previews of features not settled yet, and of first-run setup
+    // for whoever wants to see it again.
     id: "advanced",
     label: "Advanced",
     tabs: [
+      {
+        id: "mode",
+        label: "Mode",
+        keywords: "simple advanced mode features show hide composer model",
+      },
       {
         id: "experimental",
         label: "Experimental",
@@ -402,6 +408,14 @@ export const settingsEntries = [
     tab: "native-hooks",
     label: "Codex hooks",
     keywords: "native hooks codex approve deny change tool call startup trust",
+  },
+  // Advanced › Mode
+  {
+    id: "advanced-mode",
+    tab: "mode",
+    label: "Advanced mode",
+    detail: "Choose which features the app shows. Off, it stays simple.",
+    keywords: "simple features show hide",
   },
   // Advanced › Experimental
   {

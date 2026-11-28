@@ -118,6 +118,8 @@ export function ComposerModelPicker({
   fast,
   disabled,
   className,
+  open,
+  onOpenChange,
 }: {
   value: ModelRef | null | undefined
   onModelChange?: (model: ModelRef) => void
@@ -126,6 +128,9 @@ export function ComposerModelPicker({
   fast: { pressed: boolean; onPressedChange: (pressed: boolean) => void }
   disabled?: boolean
   className: string
+  /** Held outside where something other than its chip opens it, such as the composer's + menu. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const [starred, setStarred] = useStarredModels()
   const current = value ? findComposerModel(value.provider, value.modelId) : undefined
@@ -144,6 +149,8 @@ export function ComposerModelPicker({
   return (
     <ModelLevelPicker
       disabled={disabled}
+      open={open}
+      onOpenChange={onOpenChange}
       // A sideways trackpad swipe over a model's row moves its thinking level.
       swipeLevels
       groups={groups}
@@ -208,6 +215,9 @@ export function CatalogueModelPicker({
   onChange?: (model: ModelRef) => void
   disabled?: boolean
   className: string
+  /** Held outside where something other than its chip opens it, such as the composer's + menu. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const [starred, setStarred] = useStarredModels()
   return (

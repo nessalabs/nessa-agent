@@ -135,6 +135,9 @@ export async function openPage(browser, o) {
   })
   const prefs = {
     [storage.layout]: o.layout ?? "columns",
+    // Advanced, so a check sees every control it drives; a check of Simple
+    // (the app's default) passes its own, or switches in Settings as a person does.
+    [storage.appMode]: JSON.stringify({ mode: "advanced", picks: {} }),
     ...(o.prefs ?? {}),
   }
   let page

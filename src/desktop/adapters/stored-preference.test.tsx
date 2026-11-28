@@ -117,4 +117,13 @@ describe("a stored preference", () => {
     })
     expect(seen[1].at(-1)).toBe("red")
   })
+
+  it("is read and chosen outside React as the hook does", () => {
+    mount()
+    expect(colour.current()).toBe("grey")
+    act(() => colour.choose("blue"))
+    expect(colour.current()).toBe("blue")
+    expect(seen[0].at(-1)).toBe("blue")
+    expect(seen[1].at(-1)).toBe("blue")
+  })
 })

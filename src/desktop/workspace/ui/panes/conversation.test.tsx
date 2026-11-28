@@ -44,6 +44,11 @@ let host: HTMLDivElement
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  // Advanced, so the composer shows its model chip (`app-mode`); Simple's + is `composer.test.tsx`'s.
+  localStorage.setItem(
+    "nessa.desktop.app-mode",
+    JSON.stringify({ mode: "advanced", picks: {} }),
+  )
   Object.assign(globalThis, { ResizeObserver: Observer, IntersectionObserver: Observer })
   Element.prototype.scrollTo ??= () => {}
   window.matchMedia ??= ((query: string) => ({

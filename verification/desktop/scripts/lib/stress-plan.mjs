@@ -213,6 +213,10 @@ export const KNOBS = {
     default: 1,
     what: "times the pane's ⋯ menu and the overview's filter are opened: rows lead with their icons, a chosen filter's check sits before its number, and a number picks it",
   },
+  appModes: {
+    default: 1,
+    what: "Simple and Advanced switched in Settings › Advanced › Mode: Simple folds the model under the composer's +, a model picked there runs the next message, and Advanced's feature switch folds and unfolds it",
+  },
   pickers: {
     default: 1,
     what: "times a model is starred and then chosen with its thinking level by one press of a bar in the model picker, opened on Starred, and the next message runs on it",
@@ -451,19 +455,25 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.appCredentials, () => ({ kind: "appCredentials" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.zooms, () => ({ kind: "zoom" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.appModes, () => ({ kind: "appMode" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)
     steps.push({ kind: "sharedChat", slot })
   // Preset checks keep their original model. Positive model changes (a
-  // `model` step, and a `picker` step's bar) follow that work, using Ask
-  // before their review; chaos keeps concurrent coverage.
+  // `model` step, a `picker` step's bar, and the model an `appMode` step picks
+  // under Simple's +) follow that work, using Ask before their review; chaos
+  // keeps concurrent coverage.
   // Handoffs come last of all (a refused one too): a switch stays in the metadata, and no older
   // build's file holds one, so the `upgrade` step runs before it.
   const last = (step) =>
     step.kind === "handoff" || step.kind === "unsigned"
       ? 2
-      : step.kind === "model" || step.kind === "picker" || step.kind === "failedControl"
+      : step.kind === "model" ||
+          step.kind === "picker" ||
+          step.kind === "appMode" ||
+          step.kind === "failedControl"
         ? 1
         : 0
   const sequence = [0, 1, 2].flatMap((rank) =>
@@ -487,10 +497,15 @@ export function plan(knobs, accessScenario = "full") {
       step.kind === "reviews" ||
       step.kind === "large" ||
       step.kind === "waitingRow" ||
-      step.kind === "model"
+      step.kind === "model" ||
+      step.kind === "appMode"
     ) {
-      // These are about cards being shown, so they run where the agent asks.
-      if (mode === "full" || (step.kind === "model" && mode !== "ask")) {
+      // These are about cards being shown, so they run where the agent asks;
+      // a model change runs from Ask, which every model offers.
+      if (
+        mode === "full" ||
+        ((step.kind === "model" || step.kind === "appMode") && mode !== "ask")
+      ) {
         out.push({ kind: "switch", from: mode, to: "ask", during: false })
         mode = "ask"
       }

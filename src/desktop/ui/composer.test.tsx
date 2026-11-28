@@ -11,13 +11,21 @@ import { Composer, type ComposerImages } from "./composer"
 
 let host: HTMLDivElement
 
+const appModeKey = "nessa.desktop.app-mode"
+const advanced = JSON.stringify({ mode: "advanced", picks: {} })
+
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  // The full row, as Advanced shows it; Simple's + is tested on its own below.
+  localStorage.setItem(appModeKey, advanced)
   host = document.createElement("div")
   document.body.append(host)
 })
 
-afterEach(() => host.remove())
+afterEach(() => {
+  host.remove()
+  localStorage.removeItem(appModeKey)
+})
 
 it("does not measure an empty draft, closes its page, and still measures nonempty drafts", async () => {
   const root = createRoot(host)
@@ -582,4 +590,62 @@ it("says nothing of its own: every note is its control's tooltip, and the form h
     picker?.getAttribute("data-attention"),
   ]).toEqual(["Model didn’t change. Choose again to try.", "warning"])
   await act(async () => root.unmount())
+})
+
+it("keeps the model under + in Simple, where + opens the same picker", async () => {
+  localStorage.removeItem(appModeKey)
+  Object.assign(globalThis, {
+    ResizeObserver: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  })
+  const picked: string[] = []
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        model={{ provider: "anthropic", modelId: "claude-opus-5" }}
+        onModelChange={(model) => picked.push(model.modelId)}
+        images={{ images: [], onPaste: () => {}, onRemove: () => {} }}
+      />,
+    ),
+  )
+  try {
+    const row = host.querySelector(".desktop-composer-row")
+    // Simple: + alone at the row's start, the model and Fast not shown there.
+    expect(row?.querySelector(".desktop-composer-attach")).toBeNull()
+    expect(row?.querySelector(".desktop-composer-fast")).toBeNull()
+    const chip = row?.querySelector<HTMLElement>(".desktop-chip-model")
+    expect(chip?.closest("[hidden]")).not.toBeNull()
+    const more = row?.querySelector<HTMLButtonElement>(".desktop-composer-more")
+    expect(more?.getAttribute("aria-label")).toBe("More")
+    await act(async () => {
+      more?.focus()
+      more?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    })
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Attach files",
+      expect.stringMatching(/^Model.+/),
+    ])
+    await act(async () => items[1]?.click())
+    expect(document.querySelector('[data-slot="model-level-picker"]')).not.toBeNull()
+
+    // Advanced mode, from Settings in this window: the row is the full row again.
+    await act(async () => {
+      localStorage.setItem(appModeKey, advanced)
+      window.dispatchEvent(new StorageEvent("storage", { key: appModeKey }))
+    })
+    expect(host.querySelector(".desktop-composer-more")).toBeNull()
+    expect(host.querySelector(".desktop-composer-attach")).not.toBeNull()
+    expect(host.querySelector(".desktop-chip-model")?.closest("[hidden]")).toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+  }
 })
