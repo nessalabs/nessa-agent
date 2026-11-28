@@ -5886,6 +5886,15 @@ const steps = {
       await closeSettings(run.page)
     })
     if (failures.length) return
+    // A new account: signing in made `nessa` and set it to the posture
+    // Nessa admits, from Boat's default, which Nessa would refuse.
+    const made = boat.nessa()
+    if (boat.calls.createEnvironment !== 1 || boat.calls.updateEnvironment !== 1)
+      failures.push(
+        `a new account's sign-in made ${boat.calls.createEnvironment} and set ${boat.calls.updateEnvironment} environments`,
+      )
+    if (!made?.passAgentsCredentials || made.passGithub || made.passSecrets)
+      failures.push(`the nessa environment it made is ${JSON.stringify(made)}`)
     const asked = boat.lastAuthorize() ?? {}
     if (asked.code_challenge_method !== "S256" || !asked.code_challenge)
       failures.push("the sign-in did not ask Boat with a PKCE S256 challenge")
@@ -5930,6 +5939,56 @@ const steps = {
       failures.push(
         `Disconnect left ${boat.live()} live Boat refresh tokens (${boat.calls.revoke} revokes)`,
       )
+    if (failures.length) return
+    // An account that already has `nessa`: Nessa never changes it. In the
+    // admitted posture it is used as it is; in any other the sign-in fails
+    // and says why, and the grant is revoked. The browser here is a plain
+    // fetch that follows Boat's redirect to the gateway, as a browser does.
+    const approve = async () => {
+      const started = await run.client.boat.signIn()
+      const url = started.signIn?.url
+      if (!url) return started
+      await fetch(url).catch(() => {})
+      let status = started
+      await waitFor(
+        async () => (status = await run.client.boat.status()).signIn?.state !== "waiting",
+        30_000,
+      )
+      return status
+    }
+    const settings = {
+      create: boat.calls.createEnvironment,
+      update: boat.calls.updateEnvironment,
+    }
+    boat.environment({ passGithub: true })
+    const refused = await approve()
+    if (
+      refused.state !== "disconnected" ||
+      refused.signIn?.cause !== "boat_environment_blocks_credentials"
+    )
+      failures.push(
+        `an existing nessa that passes GitHub ended the sign-in ${JSON.stringify(refused)}`,
+      )
+    if (!boat.nessa()?.passGithub)
+      failures.push("Nessa changed an existing nessa environment")
+    if (boat.live() !== 0)
+      failures.push("a refused sign-in left its refresh token live in Boat")
+    boat.environment({})
+    const kept = await approve()
+    if (kept.state !== "connected" || kept.login !== FAKE_BOAT_LOGIN)
+      failures.push(
+        `an existing admitted nessa ended the sign-in ${JSON.stringify(kept)}`,
+      )
+    if (
+      boat.calls.createEnvironment !== settings.create ||
+      boat.calls.updateEnvironment !== settings.update
+    )
+      failures.push("signing in to an account that has nessa made or changed one")
+    if (
+      (await run.client.boat.disconnect()).state !== "disconnected" ||
+      boat.live() !== 0
+    )
+      failures.push("Disconnect after the second sign-in left it connected in Boat")
     // The gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
   },

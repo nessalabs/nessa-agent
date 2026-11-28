@@ -53,6 +53,20 @@ sequenceDiagram
     G-->>W: connected {via: signIn, login}
 ```
 
+Validation is `BoatProvider::validate`, which runs workspace-sdk's
+`Account::prepare`. A new account has no `nessa` environment: `prepare`
+makes it and sets it to the one posture Nessa admits (agent credentials
+only, nothing else injected, open access). An account that already has
+`nessa` keeps it as it is: in that posture it is used, in any other the
+sign-in fails `boat_environment_blocks_credentials` and the row says to
+allow connected agents there. Boat's `network: null` (its default network)
+is admitted; any other network is not.
+
+Both pages the loopback answers end with **Open Nessa**, a `nessa://open`
+link. The macOS app registers the `nessa` scheme (`src-tauri/Info.plist`)
+and brings its window forward on any `nessa://` link; the link carries
+nothing to act on.
+
 A visit with another sign-in's `state` is answered with the failure page and
 the sign-in keeps waiting: it is a stale tab or someone else's page. A
 redirect naming another issuer, Cancel on Boat (`access_denied`), a refused

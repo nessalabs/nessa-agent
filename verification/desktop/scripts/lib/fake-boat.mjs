@@ -13,14 +13,19 @@
  *                                    refresh token works once)
  *   POST /api/boat/oauth2/revoke     forget a refresh token
  *   GET  /api/v1/me                  the account, for a live access token
- *   GET  /api/v1/environments        the `nessa` environment, in the one
- *                                    posture Nessa admits
+ *   GET  /api/v1/environments        the account's environments
+ *   POST /api/v1/environments        make one, in Boat's own default posture
+ *   PUT  /api/v1/environments/<id>   change one's settings (a new version)
  * ```
  *
- * `app(file)` writes the app description the gateway reads from
- * `NESSA_BOAT_APP`. `deny()` makes the next approval a Cancel.
+ * The account starts as a new one: no `nessa` environment, so the first
+ * sign-in has Nessa make it and set its posture. `environment(changes)`
+ * puts one in place instead (the admitted posture with `changes` over it),
+ * as an account that already has one. `app(file)` writes the app
+ * description the gateway reads from `NESSA_BOAT_APP`. `deny()` makes the
+ * next approval a Cancel.
  */
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer } from "node:http"
 import { writeFileSync } from "node:fs"
 
@@ -29,7 +34,7 @@ export const FAKE_BOAT_LOGIN = "stress-boater"
 const CLIENT_ID = "boatapp_stressfake"
 
 /** The `nessa` environment exactly as Boat lists one Nessa admits. */
-function environment() {
+export function admittedEnvironment() {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     name: "nessa",
@@ -66,6 +71,40 @@ function environment() {
   }
 }
 
+/** What a new environment looks like before anyone sets it: Boat's default,
+ * which passes no agent credentials, so Nessa would not admit it. */
+function madeByBoat(name, id) {
+  return settle({
+    ...admittedEnvironment(),
+    id,
+    name,
+    passAgentsCredentials: false,
+  })
+}
+
+/** Boat's computed flags follow the declared ones. */
+function settle(env) {
+  env.effective = {
+    passSecrets: env.passSecrets,
+    passGithub: env.passGithub,
+    passSandboxCredentials: env.passSandboxCredentials,
+    passAgentsCredentials: env.passAgentsCredentials,
+  }
+  return env
+}
+
+const SETTINGS = [
+  "safeForThirdParties",
+  "passGithub",
+  "passSecrets",
+  "passSandboxCredentials",
+  "passAgentsCredentials",
+  "envContents",
+  "secretFiles",
+  "credentialProfileId",
+  "proxyAiCredentials",
+]
+
 /** Starts the fake on a free loopback port. Resolves with its controls. */
 export async function startFakeBoat({ clientId = CLIENT_ID, expiresIn = 3600 } = {}) {
   const codes = new Map()
@@ -79,7 +118,10 @@ export async function startFakeBoat({ clientId = CLIENT_ID, expiresIn = 3600 } =
     revoke: 0,
     me: 0,
     environments: 0,
+    createEnvironment: 0,
+    updateEnvironment: 0,
   }
+  let environments = []
   let denying = false
   let lastAuthorize = null
   const json = (response, status, body) => {
@@ -179,8 +221,38 @@ export async function startFakeBoat({ clientId = CLIENT_ID, expiresIn = 3600 } =
         return json(response, 200, {
           ok: true,
           type: "environments.list",
-          environments: [environment()],
+          environments,
         })
+      }
+      if (request.method === "POST" && url.pathname === "/api/v1/environments") {
+        calls.createEnvironment += 1
+        const name = JSON.parse(body || "{}").name
+        if (typeof name !== "string" || environments.some((env) => env.name === name))
+          return json(response, 409, { ok: false, error: { code: "conflict" } })
+        environments.push(madeByBoat(name, randomUUID()))
+        return json(response, 200, { ok: true, type: "environments.list", environments })
+      }
+      const put = /^\/api\/v1\/environments\/([^/]+)$/.exec(url.pathname)
+      if (request.method === "PUT" && put) {
+        calls.updateEnvironment += 1
+        const env = environments.find((each) => each.id === decodeURIComponent(put[1]))
+        if (!env) return json(response, 404, { ok: false, error: { code: "not_found" } })
+        const changes = JSON.parse(body || "{}")
+        for (const key of SETTINGS) if (key in changes) env[key] = changes[key]
+        if ("repositories" in changes) env.selectedRepositories = changes.repositories
+        const version = env.latestVersionNumber + 1
+        env.latestVersionNumber = version
+        env.latestVersionId = randomUUID()
+        env.versions = [
+          {
+            id: env.latestVersionId,
+            versionNumber: version,
+            sandboxCount: 0,
+            createdAt: new Date().toISOString(),
+          },
+        ]
+        settle(env)
+        return json(response, 200, { success: true, environment: env })
       }
       json(response, 404, { ok: false, error: { code: "not_found" } })
     })
@@ -197,6 +269,13 @@ export async function startFakeBoat({ clientId = CLIENT_ID, expiresIn = 3600 } =
     lastAuthorize: () => lastAuthorize,
     /** Whether a refresh token is still live (not revoked, not spent). */
     live: () => refresh.size,
+    /** The account's `nessa` environment, or undefined while it has none. */
+    nessa: () => environments.find((env) => env.name === "nessa"),
+    /** The account already has `nessa`: the admitted posture, `changes` over
+     * it. With no argument, the account has none again. */
+    environment(changes) {
+      environments = changes ? [settle({ ...admittedEnvironment(), ...changes })] : []
+    },
     /** The next approval is a Cancel on Boat's page. */
     deny() {
       denying = true

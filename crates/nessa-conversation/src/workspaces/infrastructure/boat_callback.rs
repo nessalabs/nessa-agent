@@ -173,24 +173,33 @@ fn html(page: CallbackPage) -> String {
     let (title, line) = match page {
         CallbackPage::Connected => (
             "Nessa is connected to Boat",
-            "You can close this tab and go back to Nessa.",
+            "You can close this tab.",
         ),
         CallbackPage::Failed => (
             "Nessa could not connect to Boat",
-            "Go back to Nessa to see why, and try again from there.",
+            "Nessa says why, and you can try again from there.",
         ),
     };
     format!(
         "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><title>{title}</title>\
 <style>body{{font:15px/1.5 -apple-system,system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;color:#1d1d1f;background:#fbfbfa}}\
-@media (prefers-color-scheme:dark){{body{{color:#ececec;background:#141414}}}}main{{max-width:28rem;padding:0 16px;text-align:center}}h1{{font-size:17px;font-weight:600;margin:0 0 4px}}p{{margin:0;opacity:.7}}</style>\
-<main><h1>{title}</h1><p>{line}</p></main>"
+@media (prefers-color-scheme:dark){{body{{color:#ececec;background:#141414}}}}main{{max-width:28rem;padding:0 16px;text-align:center}}h1{{font-size:17px;font-weight:600;margin:0 0 4px}}p{{margin:0;opacity:.7}}\
+a{{display:inline-block;margin-top:16px;padding:6px 14px;border-radius:8px;font-weight:500;text-decoration:none;color:#fbfbfa;background:#1d1d1f;transition:transform 160ms ease-out}}a:active{{transform:scale(.97)}}\
+@media (prefers-color-scheme:dark){{a{{color:#141414;background:#ececec}}}}</style>\
+<main><h1>{title}</h1><p>{line}</p><a href=\"nessa://open\">Open Nessa</a></main>"
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_pages_offer_to_open_nessa() {
+        for page in [CallbackPage::Connected, CallbackPage::Failed] {
+            assert!(html(page).contains(r#"<a href="nessa://open">Open Nessa</a>"#));
+        }
+    }
 
     #[test]
     fn only_a_get_head_names_a_target() {
