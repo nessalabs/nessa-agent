@@ -59,7 +59,7 @@
 /* A page arrives by fading in; it never slides, so the sheet stays still. */
 .channel-settings-page {
   padding: 8px 12px 24px;
-  transition: opacity 160ms var(--channel-settings-ease);
+  transition: opacity var(--desktop-medium) var(--channel-settings-ease);
 }
 
 @starting-style {
@@ -143,8 +143,8 @@
   opacity: 0;
   transform: scale(0.8);
   transition:
-    opacity 140ms ease,
-    transform 180ms var(--channel-settings-ease);
+    opacity var(--desktop-fast) ease,
+    transform var(--desktop-base) var(--channel-settings-ease);
 }
 
 [aria-checked="true"] > .channel-settings-check {
@@ -174,7 +174,7 @@
 .channel-settings-cloud-rows {
   padding-inline-start: 16px;
   opacity: 0;
-  transition: opacity 180ms ease;
+  transition: opacity var(--desktop-base) ease;
 }
 
 .channel-settings-cloud[data-open] .channel-settings-cloud-rows {
@@ -183,7 +183,7 @@
 
 /* A new provider's row crossfades in place. */
 .channel-settings-swap {
-  transition: opacity 140ms ease;
+  transition: opacity var(--desktop-fast) ease;
 }
 
 @starting-style {
@@ -211,7 +211,7 @@
 @media (prefers-reduced-motion: reduce) {
   .channel-settings-cloud,
   .channel-settings-check {
-    transition: opacity 120ms ease;
+    transition: opacity var(--desktop-fast) ease;
   }
 
   .channel-settings-check {
