@@ -649,3 +649,100 @@ it("keeps the model under + in Simple, where + opens the same picker", async () 
     await act(async () => root.unmount())
   }
 })
+
+it("says every note in Simple on +, and each on its own item", async () => {
+  localStorage.removeItem(appModeKey)
+  Object.assign(globalThis, {
+    ResizeObserver: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  })
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        model={{ provider: "anthropic", modelId: "claude-opus-5" }}
+        onModelChange={() => {}}
+        modelNote={{ tone: "warning", text: "The model change is not confirmed." }}
+        images={{
+          images: [],
+          onPaste: () => {},
+          onRemove: () => {},
+          note: { tone: "warning", text: "An image can be 5 MiB at most." },
+        }}
+      />,
+    ),
+  )
+  try {
+    const more = host.querySelector<HTMLButtonElement>(".desktop-composer-more")
+    expect(more?.getAttribute("data-attention")).toBe("warning")
+    expect(more?.getAttribute("aria-description")).toContain("5 MiB")
+    expect(more?.getAttribute("aria-description")).toContain("not confirmed")
+    await act(async () => {
+      more?.focus()
+      more?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    })
+    const [attach, model] = [...document.querySelectorAll('[role="menuitem"]')]
+    expect(attach?.getAttribute("aria-description")).toBe(
+      "An image can be 5 MiB at most.",
+    )
+    expect(model?.getAttribute("aria-description")).toBe(
+      "The model change is not confirmed.",
+    )
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+it("never opens the picker on its own when the mode changes while it is open", async () => {
+  localStorage.removeItem(appModeKey)
+  const root = createRoot(host)
+  await act(async () =>
+    root.render(
+      <Composer
+        page={false}
+        onPageChange={() => {}}
+        text=""
+        onTextChange={() => {}}
+        model={{ provider: "anthropic", modelId: "claude-opus-5" }}
+        onModelChange={() => {}}
+      />,
+    ),
+  )
+  const switchTo = (mode: "simple" | "advanced") =>
+    act(async () => {
+      localStorage.setItem(appModeKey, JSON.stringify({ mode, picks: {} }))
+      window.dispatchEvent(new StorageEvent("storage", { key: appModeKey }))
+    })
+  const picker = () => document.querySelector('[data-slot="model-level-picker"]')
+  try {
+    const more = host.querySelector<HTMLButtonElement>(".desktop-composer-more")
+    await act(async () => {
+      more?.focus()
+      more?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))
+    })
+    const model = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].at(-1)
+    await act(async () => model?.click())
+    expect(picker()).not.toBeNull()
+    // Advanced while it is open: the same picker, still open, now on the chip.
+    await switchTo("advanced")
+    expect(picker()).not.toBeNull()
+    await act(async () =>
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    )
+    expect(picker()).toBeNull()
+    // Simple again: it stays closed until asked for.
+    await switchTo("simple")
+    expect(picker()).toBeNull()
+  } finally {
+    await act(async () => root.unmount())
+  }
+})

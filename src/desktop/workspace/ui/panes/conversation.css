@@ -422,6 +422,12 @@
   .workspace-pane .desktop-chip {
     padding: 0 8px;
   }
+
+  /* An icon-only chip stays square: its icon is centred, not padded. */
+  .workspace-pane .desktop-composer-attach,
+  .workspace-pane .desktop-composer-more {
+    padding: 0;
+  }
 }
 
 /*

@@ -207,7 +207,9 @@ export function Composer({
       onThinkingChange={setThinking}
       fast={{ pressed: fast, onPressedChange: setFast }}
       className="desktop-chip desktop-chip-model"
-      {...(modelInRow ? {} : { open: pickerOpen, onOpenChange: setPickerOpen })}
+      // Held here in both modes, so a mode change never leaves it open unseen.
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
     />
   )
 
@@ -337,7 +339,15 @@ export function Composer({
                   attach={attached}
                   model={model ? shortModelName(model) : undefined}
                   modelDisabled={modelDisabled}
-                  modelNote={modelNote}
+                  modelNote={
+                    modelNote ??
+                    (onModelChange
+                      ? undefined
+                      : {
+                          tone: "neutral",
+                          text: "Thinking. Start a new conversation to choose another model",
+                        })
+                  }
                   onModel={() => setPickerOpen(true)}
                 />
                 {/* Opened from +; its chip is not shown, and focus goes back to +. */}
@@ -514,9 +524,9 @@ function AttachButton({
 
 /**
  * Simple's +: what the row leaves out, in a menu — attach files, and the
- * model, which opens the same picker the model's chip opens. A note either
- * has to say travels to + (its tooltip, and the dot of a warning), since
- * their own controls are not shown.
+ * model, which opens the same picker the model's chip opens. Each item says
+ * its own note, and + says them all (its tooltip, and the dot of a warning),
+ * since the controls they belong to are not in the row.
  */
 function MoreMenu({
   attach,
@@ -533,10 +543,13 @@ function MoreMenu({
   onModel: () => void
 }) {
   const files = useFilePicker(attach?.onPaste)
-  const note =
-    [modelNote, attach?.note].find((each) => each?.tone === "warning") ??
-    modelNote ??
-    attach?.note
+  const notes = [attach?.note, modelNote].filter((each) => each !== undefined)
+  const note: ComposerNote | undefined = notes.length
+    ? {
+        tone: notes.some((each) => each.tone === "warning") ? "warning" : "neutral",
+        text: notes.map((each) => each.text).join("\n"),
+      }
+    : undefined
   return (
     <>
       {files.element}
@@ -556,12 +569,12 @@ function MoreMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="start" sideOffset={6}>
           {attach ? (
-            <MenuItem onSelect={files.pick}>
+            <MenuItem onSelect={files.pick} {...said(attach.note)}>
               <DesktopIcon name="file" />
               Attach files
             </MenuItem>
           ) : null}
-          <MenuItem disabled={modelDisabled} onSelect={onModel}>
+          <MenuItem disabled={modelDisabled} onSelect={onModel} {...said(modelNote)}>
             <DesktopIcon name="thinking" />
             Model
             {model ? <MenuShortcut>{model}</MenuShortcut> : null}

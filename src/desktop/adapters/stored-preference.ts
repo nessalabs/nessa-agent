@@ -22,8 +22,8 @@ export interface StoredPreference<T> {
   /** The value and a way to choose another; every reader in the window follows. */
   usePreference(): readonly [T, (next: T) => void]
   /**
-   * The value as stored now, for a change worked out from it outside React.
-   * Where storage refused the last choice, this is what it still holds.
+   * The value in force in this window, for a change worked out from it
+   * outside React: the last choice storage refused to keep, else what it holds.
    */
   current(): T
   /** Chooses another value, as the hook's chooser does. */
@@ -53,18 +53,30 @@ export function storedPreference<T>({
       return parse(null)
     }
   }
+  // A choice storage refused to keep, still in force in this window, so the
+  // next change is worked out from it rather than from what storage holds.
+  // A successful write, or another window's change, ends it.
+  let unkept: { readonly value: T } | undefined
+  const current = (): T => (unkept ? unkept.value : read())
+  if (typeof window !== "undefined")
+    window.addEventListener("storage", (change) => {
+      if (change.key === null || change.key === key) unkept = undefined
+    })
+
   const choose = (next: T) => {
     const stored = serialize(next)
     try {
       storage().setItem(key, stored)
+      unkept = undefined
     } catch {
       // Not remembered; the choice still applies to this window.
+      unkept = { value: parse(stored) }
     }
     window.dispatchEvent(new CustomEvent(event, { detail: stored }))
   }
 
   function usePreference() {
-    const [value, setValue] = useState<T>(read)
+    const [value, setValue] = useState<T>(current)
 
     useEffect(() => {
       const follow = (change: Event) => {
@@ -85,5 +97,5 @@ export function storedPreference<T>({
     return [value, choose] as const
   }
 
-  return { usePreference, current: read, choose }
+  return { usePreference, current, choose }
 }

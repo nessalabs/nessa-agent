@@ -215,9 +215,6 @@ export function CatalogueModelPicker({
   onChange?: (model: ModelRef) => void
   disabled?: boolean
   className: string
-  /** Held outside where something other than its chip opens it, such as the composer's + menu. */
-  open?: boolean
-  onOpenChange?: (open: boolean) => void
 }) {
   const [starred, setStarred] = useStarredModels()
   return (

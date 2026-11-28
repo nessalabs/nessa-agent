@@ -2915,7 +2915,31 @@ function otherAgent(agent) {
   return agent === "claude" ? "codex" : "claude"
 }
 
-/** The `picker` step's work, with the stars cleared around it by the step. */
+/**
+ * Puts the window back in Advanced with no picks, however the `appMode`
+ * step ended, so the steps after it find the model chip in the row: closes
+ * any menu or picker left open, leaves Settings, and announces the stored
+ * settings as another window would.
+ */
+async function restoreAdvanced(page, failures) {
+  // Escape only for what is open: in the workspace it means something else.
+  for (const open of [css.modelPicker, '[role="menu"]'])
+    if (await page.locator(open).count())
+      await page.keyboard.press(keys.escape).catch(() => {})
+  await leaveTerminalSettings(page).catch(() => {})
+  await page
+    .evaluate((key) => {
+      localStorage.setItem(key, JSON.stringify({ mode: "advanced", picks: {} }))
+      window.dispatchEvent(new StorageEvent("storage", { key }))
+    }, storage.appMode)
+    .catch(() => {})
+  const back = await waitFor(
+    async () => (await dock(page).locator(`${css.modelChip}:visible`).count()) === 1,
+    5_000,
+  )
+  if (!back) failures.push("after the appMode step the model chip is not back in the row")
+}
+
 /** Opens Settings › Advanced, which opens on its Mode tab. */
 async function openModeSettings(page) {
   if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
@@ -3107,6 +3131,7 @@ async function appModeStep(run, step, failures) {
     )
 }
 
+/** The `picker` step's work, with the stars cleared around it by the step. */
 async function pickerStep(run, step, failures) {
   const page = run.page
   const chip = dock(page).locator(css.modelChip)
@@ -5002,7 +5027,7 @@ const steps = {
     try {
       await appModeStep(run, step, failures)
     } finally {
-      await leaveTerminalSettings(run.page).catch(() => {})
+      await restoreAdvanced(run.page, failures)
     }
   },
 
