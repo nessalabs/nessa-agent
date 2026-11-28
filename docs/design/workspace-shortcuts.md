@@ -1,7 +1,7 @@
 # Workspace shortcut ownership — issue 819
 
 `ui/layouts/shortcuts.ts` publishes the workspace's chords and commands.
-`adapters/dom/shortcuts.ts` matches that data using the window's platform matcher
+`src/desktop/adapters/key-bindings.ts` matches that data using the window's platform matcher
 and consumes a matched key before invoking its handler. The command may be
 unavailable while a modal is open; that does not transfer the bound key to a
 native New Window or Close Window action. Unmatched keys retain their existing

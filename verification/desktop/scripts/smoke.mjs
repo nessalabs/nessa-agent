@@ -37,7 +37,7 @@ Checks, per engine and layout:
   split            ⇧⌘N (new session beside) adds a pane
   settings         ⌘, opens Settings; Advanced shows its catalogue's tabs and preview
                    switches; its Back button closes it and the panes return
-  overview         on a fresh profile the sidebar offers "Agents"; ⌘0 shows the
+  overview         on a fresh profile the sidebar offers "Agents"; ⇧⌘A shows the
                    overview and the keyboard lands on its row; Escape returns to the
                    panes (focus.mjs covers Escape before it lands)
   console          no console.error / pageerror / failed request (favicon 404 ignored)`,
@@ -250,7 +250,7 @@ await main(meta, async ({ options, rep, url }) => {
         const open = await state(page)
         if (open.content !== content.overview)
           failures.push(
-            `content is ${open.content} after ⌘0, expected ${content.overview}`,
+            `content is ${open.content} after ⇧⌘A, expected ${content.overview}`,
           )
         // Escape leaves whether or not the keyboard has landed yet; waiting
         // for it keeps this check about the overview opening and leaving.
@@ -260,7 +260,7 @@ await main(meta, async ({ options, rep, url }) => {
           css.overviewItem,
         )
         if (!landed)
-          failures.push("the keyboard did not land on an overview row after ⌘0")
+          failures.push("the keyboard did not land on an overview row after ⇧⌘A")
         await page.keyboard.press(keys.escape)
         await contentIs(page, content.panes)
         const left = await state(page)

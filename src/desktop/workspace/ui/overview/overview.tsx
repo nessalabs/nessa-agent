@@ -262,7 +262,7 @@ export function AgentsOverview({
   const currentNow = useRef(current)
   currentNow.current = current
 
-  // Opened — from the sidebar, ⌘0 or an agent — the keyboard is here, on the
+  // Opened — from the sidebar, ⇧⌘A or an agent — the keyboard is here, on the
   // current row, once that row is committed. The list arrives a few rows at
   // a time, after the title, so a try on the open commit finds nothing and
   // would give up (`overview.test.tsx`). It waits, and lands once, the frame

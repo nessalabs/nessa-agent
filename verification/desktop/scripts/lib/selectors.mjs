@@ -231,7 +231,7 @@ export const css = {
   messageAuthor: ".workspace-message-author", // class: which app wrote it, above its bubble
   bubble: ".workspace-bubble", // class: a message of the person's
 
-  // Agents overview (always offered: the sidebar's entry and ⌘0)
+  // Agents overview (always offered: the sidebar's entry and ⇧⌘A)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
   overview: ".agents-overview", // class
   overviewItem: "[data-overview-item]",
@@ -581,7 +581,11 @@ export const keys = {
   focusNext: "Meta+Shift+BracketRight",
   moveLeft: "Control+Alt+ArrowLeft",
   moveRight: "Control+Alt+ArrowRight",
-  overview: "Meta+Digit0",
+  overview: "Meta+Shift+KeyA",
+  // The window's zoom, where its host zooms it (`adapters/window-zoom.ts`).
+  zoomIn: "Meta+Equal",
+  zoomOut: "Meta+Minus",
+  zoomReset: "Meta+Digit0",
   settings: "Meta+Comma",
   allow: "Meta+Enter",
   /** ⌘↩ as its two keys, for holding it down (`keyboard.down` repeats). */

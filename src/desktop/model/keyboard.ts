@@ -2,7 +2,7 @@
  * The window's keyboard, as a platform writes and presses it: the one owner
  * of how a chord is matched against a key event and written out for a menu
  * or tooltip, on a Mac and elsewhere. Every surface of the window — the
- * workspace (`workspace/adapters/dom/shortcuts.ts`) and Settings — states its chords as data and asks
+ * workspace, the window's zoom (both through `adapters/key-bindings.ts`) and Settings — states its chords as data and asks
  * here, so no label can name a key the binding does not take.
  *
  * Pure: which platform it is, is the caller's to say. The window reads it
@@ -66,6 +66,9 @@ const keyNames: Record<string, string> = {
   BracketLeft: "[",
   BracketRight: "]",
   Comma: ",",
+  // The key is "=", written as the "+" it shares a cap with, as a Mac's menus write Zoom In.
+  Equal: "+",
+  Minus: "-",
   ArrowLeft: "←",
   ArrowRight: "→",
   ArrowUp: "↑",

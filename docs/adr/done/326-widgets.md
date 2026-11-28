@@ -65,7 +65,7 @@ What binds:
   as one of its parts, like text and steps.
 - **Escape already has owners** in 238: menus and dialogs, the drag (it
   cancels and goes no further), the overview, the edge peek.
-- **The content region already has a second view.** The Agents overview (⌘0) is
+- **The content region already has a second view.** The Agents overview (⇧⌘A) is
   drawn in a layer over the session list and the panes, which stay as they were
   beneath it; 238 says how it is left: Escape, or going anywhere else — a
   session chosen, any change of the panes — is going back to them
@@ -127,7 +127,7 @@ What binds:
 | --- | --- | --- | --- |
 | `inline` | a card in the message the widget part is in | the transcript | — |
 | `panel` (was `pane`; see the amendment) | a tab in its chat's right panel, which each chat has its own of | `open("panel")`: a tab in the panel of the chat its `origin` names (else the focused chat's), added after the others if new, brought to the front, and the panel shown | its tab's close; the last tab closing leaves the panel's note; the chat deleted, or let go as an unsent draft, takes its panel with it |
-| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⌘0 goes to the overview — with two differences: it covers the content region only, so the session list stays in reach beside it; and ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
+| `window` | the content region's third view, beside the panes and the overview: the widget drawn instead of the panes, which stay beneath it as they were | `open("window")` | as the overview is — Escape or its close, a session chosen, or any change of the panes goes back to the panes; ⇧⌘A goes to the overview — with two differences: it covers the content region only, so the session list stays in reach beside it; and ⌘W closes the window, never a pane beneath it (over the overview, ⌘W closes the focused pane, 238) |
 
 The sidebar beside the window keeps the channel and the focused session marked
 as chosen, as over the panes; only the overview takes the sidebar's choice for

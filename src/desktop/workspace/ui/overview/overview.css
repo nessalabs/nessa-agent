@@ -583,7 +583,7 @@ html:not(.dark) .agents-request {
 }
 
 /*
- * The row holding the keyboard, however it got there (a click, ⌘0, the
+ * The row holding the keyboard, however it got there (a click, ⇧⌘A, the
  * sidebar), shows its answers, and Allow once in the held fill: it is the
  * row's default, which ↩ presses (`request-row.tsx`).
  */

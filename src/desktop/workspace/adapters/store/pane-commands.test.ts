@@ -232,7 +232,7 @@ describe("a widget over the panes is left as the overview is, but for ⌘W", () 
     expect(store.getState().workspace.content).toBe("panes")
   })
 
-  it("goes to the overview on ⌘0", async () => {
+  it("goes to the overview on ⇧⌘A", async () => {
     const { store } = await ready()
     store.dispatch(openWidget({ widget: run, place: "window" }))
     store.dispatch(showContent({ content: "agents" }))

@@ -291,7 +291,7 @@ const modifiers = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn", 
 /**
  * What a key pressed during a press or a drag is to it: Escape is Escape; any
  * other key but a lone modifier is a command about to change what the drag
- * read (⌘W, ⌘0, ⌘B, ⌘,, an arrow…), so it ends the drag first.
+ * read (⌘W, ⇧⌘A, ⌘B, ⌘,, an arrow…), so it ends the drag first.
  */
 export function keyToDrag(
   key: string,

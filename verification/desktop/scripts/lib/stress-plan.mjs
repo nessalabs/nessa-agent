@@ -193,6 +193,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
+  zooms: {
+    default: 1,
+    what: "times the window is zoomed in twice with ⌘=, a message sent at that zoom, the window reloaded, then zoomed out with ⌘- and back to 100% with ⌘0: the host is asked for each zoom once and again at launch, the sidebar's rows and icons keep the one row's size, the titlebar's controls stay clear of the traffic lights, nothing runs past the window's edge, and ⇧⌘A still opens the Agents overview",
+  },
   terminals: {
     default: 1,
     what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
@@ -445,6 +449,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.apps, () => ({ kind: "apps" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.appCredentials, () => ({ kind: "appCredentials" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.zooms, () => ({ kind: "zoom" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

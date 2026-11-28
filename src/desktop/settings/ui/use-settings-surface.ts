@@ -17,6 +17,7 @@ import {
 import type { HostKind } from "../../../host/features"
 import { holdStill, slideFrom } from "../../adapters/hold-still"
 import { isMac } from "../../adapters/platform"
+import { zoomShortcuts } from "../../adapters/window-zoom"
 import { chordLabel, commandKey, matchesChord, type Chord } from "../../model/keyboard"
 import { reducedMotion } from "../../adapters/motion-preference"
 import { useThemePreference } from "../../adapters/theme-preference"
@@ -170,12 +171,14 @@ export function useSettingsSurface({
 
   // ⌘B toggles this sidebar, and only this one: caught before the app's own
   // listeners, so the sidebar under Settings stays as it was. Settings is
-  // modal, so the window's other shortcuts wait too — ⌘W must not close a
-  // pane nobody can see. Only their listeners are stopped: text editing in
+  // modal, so the workspace's shortcuts wait too — ⌘W must not close a
+  // pane nobody can see — and only the window's own zoom goes by. Only their listeners are stopped: text editing in
   // Settings' own fields is the browser's default, and still happens.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!commandKey(event, isMac) && !event.ctrlKey) return
+      // The zoom is the window's, not the workspace's: it works here too.
+      if (zoomShortcuts.some(({ chord }) => matchesChord(event, chord, isMac))) return
       event.stopPropagation()
       if (matchesChord(event, searchChord, isMac)) {
         event.preventDefault()

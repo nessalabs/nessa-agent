@@ -485,7 +485,7 @@ describe("the window", () => {
     expect(content(store)).toBe("panes")
   })
 
-  it("is closed by ⌘W, never a pane beneath it; left for a session chosen; and ⌘0 goes to the overview", async () => {
+  it("is closed by ⌘W, never a pane beneath it; left for a session chosen; and ⇧⌘A goes to the overview", async () => {
     const store = await render()
     await openWindow(store)
     await act(async () => press("closePane"))

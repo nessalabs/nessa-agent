@@ -7,7 +7,7 @@ summary: "Keyboard actions follow the current focus."
 parent: "desktop-workspace"
 sources:
   - "src/desktop/workspace/ui/layouts/shortcuts.ts"
-  - "src/desktop/workspace/adapters/dom/shortcuts.ts"
+  - "src/desktop/adapters/key-bindings.ts"
   - "src/desktop/workspace/adapters/dom/focus.ts"
   - "src/desktop/workspace/ui/panes/use-pane-focus.ts"
   - "src/desktop/workspace/application/usecases/navigation.ts"
@@ -59,7 +59,7 @@ stateDiagram-v2
 
 ## Further reading
 
-[Source](../../../../../src/desktop/workspace/ui/layouts/shortcuts.ts) · [Related source](../../../../../src/desktop/workspace/adapters/dom/shortcuts.ts) · [Related tests](../../../../../src/desktop/workspace/adapters/dom/focus.test.tsx)
+[Source](../../../../../src/desktop/workspace/ui/layouts/shortcuts.ts) · [Related source](../../../../../src/desktop/adapters/key-bindings.ts) · [Related tests](../../../../../src/desktop/workspace/adapters/dom/focus.test.tsx)
 
 ## Model coverage
 

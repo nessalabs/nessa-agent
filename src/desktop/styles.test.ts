@@ -753,3 +753,107 @@ it("quiets a short pane's composer at the height the pane limits name", () => {
     `@container workspace-pane (max-height: ${paneLimits.quietComposerBelow - 1}px)`,
   )
 })
+
+it("sizes every sidebar's row from the one row, never a length of its own", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
+  // The row is defined once, with the window's other scales.
+  for (const name of ["height", "pad", "gap", "icon", "text", "label-text"])
+    expect(styles, name).toMatch(new RegExp(`\\n  --desktop-row-${name}: [^;]+;`))
+  const rule = (sheet: string, selector: string) => {
+    const start = sheet.indexOf(selector)
+    expect(start, selector).toBeGreaterThanOrEqual(0)
+    return sheet.slice(start, sheet.indexOf("}", start))
+  }
+  const sourceList = read("./workspace/ui/source-list/source-list.css")
+  const branch = read("./workspace/ui/source-list/channel-branch.css")
+  const settings = read("./settings/ui/settings.css")
+  const heights = [
+    // A channel, Agents, "Show all": the kit's row.
+    rule(
+      sourceList,
+      '.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {',
+    ),
+    // The count laid over it, centred on the same height.
+    rule(sourceList, '.workspace-sidebar [data-slot="sidebar-menu-item-trailing"] {'),
+    rule(sourceList, ".workspace-section-head {"),
+    rule(sourceList, ".workspace-thread-row {"),
+    rule(branch, ".workspace-disclosure {"),
+    rule(branch, ".workspace-search-button {"),
+    rule(settings, ".settings-nav-item {"),
+  ]
+  for (const body of heights) expect(body).toMatch(/height: var\(--desktop-row-height\);/)
+  const icons = [
+    rule(sourceList, ".workspace-row-icon svg {"),
+    rule(branch, ".workspace-disclosure > svg {"),
+    rule(branch, ".workspace-search-button > svg {"),
+    rule(settings, ".settings-nav-icon {"),
+  ]
+  for (const body of icons) expect(body).toMatch(/width: var\(--desktop-row-icon\);/)
+  // The words, and the room around them.
+  const identity = read("./ui/identity.css")
+  const rail = read("./workspace/ui/chrome/side-rail.css")
+  const kitRow = rule(
+    sourceList,
+    '.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {',
+  )
+  const search = rule(branch, ".workspace-search-button {")
+  for (const body of [kitRow, search]) {
+    expect(body).toMatch(/gap: var\(--desktop-row-gap\);/)
+    expect(body).toMatch(/padding: 0 var\(--desktop-row-pad\);/)
+  }
+  expect(search).toMatch(/font-size: var\(--desktop-row-text\);/)
+  expect(rule(sourceList, ".workspace-thread-row {")).toMatch(
+    /--list-row-gap: var\(--desktop-row-gap\);/,
+  )
+  expect(rule(sourceList, ".workspace-row-icon {\n  display: inline-flex;")).toMatch(
+    /width: var\(--desktop-row-icon\);/,
+  )
+  expect(sourceList).toMatch(/font-size: var\(--desktop-row-label-text\) !important;/)
+  for (const sheet of [identity, rail])
+    expect(sheet).toMatch(/font-size: var\(--desktop-row-text\);/)
+  expect(rule(settings, ".settings-nav-item {")).toMatch(
+    /font-size: var\(--desktop-row-text\);/,
+  )
+  expect(
+    rule(
+      branch,
+      ".workspace-branch-sessions :is(.workspace-thread-row, .workspace-more) {",
+    ),
+  ).toMatch(/font-size: var\(--desktop-row-text\);/)
+  expect(rule(sourceList, ".workspace-thread-row {")).toMatch(
+    /padding: 0 var\(--desktop-row-pad\);/,
+  )
+  // A row's label leaves room for what is laid over its end: the row's own
+  // pad and gap, never a copy of their sum.
+  expect(sourceList).not.toMatch(/padding-right: calc\(\s*\d/)
+  expect(
+    sourceList.match(/var\(--desktop-row-pad\) \+ var\(--desktop-row-gap\) \+/g),
+  ).toHaveLength(5)
+  // The guides under a channel, and its disclosure, stand on the icon column.
+  for (const sheet of [sourceList, branch])
+    expect(sheet).toMatch(
+      /left: calc\(var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2 - /,
+    )
+  expect(rule(branch, "--workspace-disclosure-width:").replace(/\s+/g, " ")).toMatch(
+    /var\(--desktop-row-icon\) \+ 2 \* \(var\(--desktop-row-pad\) - var\(--workspace-disclosure-inset\)\)/,
+  )
+  // The side rail stands on the rows' icon column, wherever the row puts it.
+  expect(
+    rule(read("./workspace/ui/chrome/side-rail.css"), "--rail-column:").replace(
+      /\s+/g,
+      " ",
+    ),
+  ).toMatch(
+    /var\(--desktop-list-pad\) \+ var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
+  )
+  expect(rule(sourceList, ".workspace-sidebar-scroll {")).toMatch(
+    /padding: 4px var\(--desktop-list-pad\) 12px;/,
+  )
+})
+
+it("divides the host's room for the traffic lights by the page's zoom", () => {
+  // The host's buttons are in screen points, which the page's zoom does not scale.
+  expect(styles).toMatch(
+    /\[data-host="macos"\]\[data-surface="window"\] \{[^}]*--desktop-window-controls-inset: calc\(79px \/ var\(--desktop-zoom, 1\)\);/,
+  )
+})

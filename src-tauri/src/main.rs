@@ -127,6 +127,7 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            desktop_window::desktop_zoom,
             panel::finish_setup,
             panel::retry_setup_record,
             panel::chosen_agent,

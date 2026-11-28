@@ -81,6 +81,15 @@ export const STARTING = {
  * panel's size (`panel_size`) with the page's own, and says setup chose no
  * agent (`chosen_agent`).
  *
+ * Every page's host zooms a desktop page as `src-tauri/src/desktop_window.rs`
+ * does: `desktop_zoom` takes `zoom`, a finite number greater than 0 and
+ * nothing else, and each zoom taken is kept in `window.__fakeHostZooms`, in
+ * order; anything else is refused. Given `zoomSteps` (the list the real host
+ * reads, `src/host/window-zoom.json`), a zoom that is not one of them is
+ * refused as the real host refuses it. A browser page cannot be zoomed from
+ * a script, so the fake only records: a step that wants the page laid out as
+ * the zoomed webview lays it out narrows the viewport by the zoom itself.
+ *
  * Every page's host keeps installed apps as `src-tauri/src/installed_apps.rs`
  * does. The system's Install/Cancel dialog (`installed_app_confirm`) answers
  * from `window.__fakeHostAppAnswers`, each taken once, in order, Cancel when
@@ -104,6 +113,7 @@ export function gatewayHost({
   starting = null,
   setup = false,
   panel = false,
+  zoomSteps = null,
 }) {
   // Setup and the panel both wait for the host to say it is up.
   const started = setup || panel
@@ -137,6 +147,7 @@ export function gatewayHost({
   window.__fakeHostAskTimes = []
   window.__fakeHostStillStarting = 0
   window.__fakeHostReplays = 0
+  window.__fakeHostZooms = []
   window.__fakeHostSetupFinishes = []
   window.__fakeHostTrayAsks = 0
   window.__fakeHostPicks = { folders: [], resources: [] }
@@ -256,6 +267,21 @@ export function gatewayHost({
       }
       if (command === "call_pill_drag") {
         pillArgs(command, args, [])
+        return Promise.resolve(null)
+      }
+      if (command === "desktop_zoom") {
+        const zoom = args?.zoom
+        if (
+          Object.keys(args ?? {}).join() !== "zoom" ||
+          typeof zoom !== "number" ||
+          !Number.isFinite(zoom) ||
+          zoom <= 0 ||
+          (zoomSteps !== null && !zoomSteps.includes(zoom))
+        )
+          return Promise.reject(
+            `${JSON.stringify(args)} is not one of the window's zoom steps`,
+          )
+        window.__fakeHostZooms.push(zoom)
         return Promise.resolve(null)
       }
       if (command === "replay_onboarding") {
