@@ -18,15 +18,15 @@ use super::state::ProductRouteState;
 use crate::installed_apps::application::{
     AppsCaller, AppsError, Checked, Installed, IssuedAppCredential, Review,
 };
-use nessa_app_package::{InlineAsset, InlinePackage};
+use nessa_app_package::{InlineAsset, InlinePackage, ServerRuntime};
 use nessa_auth::application::app_credential::AppCapability as GrantedCapability;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    AppCapability, AppPackage, AppPackageAsset, AppReview, AppsErrorCode, AppsInstallParams,
-    AppsInstallResult, AppsInstalledResult, AppsIssueCredentialParams, AppsIssueCredentialResult,
-    AppsPackageResult, AppsReadParams, AppsReviewParams, AppsRevokeCredentialsParams,
-    AppsRevokeCredentialsResult, AppsStarterParams, AppsUninstallParams, AppsUninstallResult,
-    InstalledApp,
+    AppCapability, AppPackage, AppPackageAsset, AppReview, AppServer, AppServerRuntime,
+    AppsErrorCode, AppsInstallParams, AppsInstallResult, AppsInstalledResult,
+    AppsIssueCredentialParams, AppsIssueCredentialResult, AppsPackageResult, AppsReadParams,
+    AppsReviewParams, AppsRevokeCredentialsParams, AppsRevokeCredentialsResult, AppsStarterParams,
+    AppsUninstallParams, AppsUninstallResult, InstalledApp,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_types::app_identity::ExtensionAppId;
@@ -47,7 +47,11 @@ pub(super) async fn dispatch(
             let Some(params) = decode::<AppsStarterParams>(&frame) else {
                 return failure(&id, "invalid_request");
             };
-            match apps.starter(params.app_id, params.package_version) {
+            let server = params.server.map(|runtime| match runtime {
+                AppServerRuntime::Node => ServerRuntime::Node,
+                AppServerRuntime::Bun => ServerRuntime::Bun,
+            });
+            match apps.starter(params.app_id, params.package_version, server) {
                 Ok(checked) => success(&id, &package_result(checked)),
                 Err(error) => failure(&id, code(error).as_str()),
             }
@@ -255,6 +259,13 @@ fn wire_review(review: Review) -> AppReview {
             .into_iter()
             .map(wire_capability)
             .collect(),
+        server: review.server.map(|(entry, runtime)| AppServer {
+            entry,
+            runtime: match runtime {
+                ServerRuntime::Node => AppServerRuntime::Node,
+                ServerRuntime::Bun => AppServerRuntime::Bun,
+            },
+        }),
     }
 }
 

@@ -1,6 +1,7 @@
 import type { RpcRequester } from "../application/session-port.js"
 import {
   AppCapability,
+  AppServerRuntime,
   ProductMethod,
   type AppPackage,
   type AppReview,
@@ -23,10 +24,16 @@ export type AppsApi = {
    */
   untrust(server: string, requestId: string): Promise<boolean>
   /**
-   * The starter static app package for a new app, and what the gateway's
-   * verifier found in it. Nothing is installed or kept.
+   * The starter app package for a new app, and what the gateway's verifier
+   * found in it. Nothing is installed or kept. With `server`, a dynamic app:
+   * a page and a program that runtime runs, which starts chats in Nessa
+   * through `@nessa/client`; without, a static page.
    */
-  starter(appId: string, packageVersion: string): Promise<CheckedAppPackage>
+  starter(
+    appId: string,
+    packageVersion: string,
+    server?: AppServerRuntime,
+  ): Promise<CheckedAppPackage>
   /** What the gateway's verifier finds in `pkg`. Nothing is installed or kept. */
   review(pkg: AppPackage): Promise<AppReview>
   /**
@@ -94,9 +101,14 @@ export function createAppsApi(session: RpcRequester): AppsApi {
         throw new Error("Invalid untrust app response")
       return answer.applied
     },
-    starter: async (appId, packageVersion) =>
+    starter: async (appId, packageVersion, server) =>
       checkedPackage(
-        await session.request(ProductMethod.AppsStarter, { appId, packageVersion }),
+        await session.request(
+          ProductMethod.AppsStarter,
+          server === undefined
+            ? { appId, packageVersion }
+            : { appId, packageVersion, server },
+        ),
       ),
     review: async (pkg) =>
       appReview(await session.request(ProductMethod.AppsReview, { package: pkg })),
@@ -236,17 +248,38 @@ function installedApp(value: unknown): InstalledApp {
   return { appId: value.appId, packageVersion: value.packageVersion }
 }
 
+const RUNTIMES: readonly string[] = Object.values(AppServerRuntime)
+
+/** A dynamic app's program as the gateway names it, or undefined for none. */
+function appServer(value: unknown): AppReview["server"] {
+  if (value === undefined) return undefined
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["entry", "runtime"]) ||
+    !text(value.entry) ||
+    typeof value.runtime !== "string" ||
+    !RUNTIMES.includes(value.runtime)
+  )
+    throw new Error("Invalid app server")
+  return { entry: value.entry, runtime: value.runtime as AppServerRuntime }
+}
+
+const REVIEW_KEYS = [
+  "appId",
+  "packageVersion",
+  "entrypoint",
+  "assetCount",
+  "digest",
+  "requestedCapabilities",
+] as const
+
 function appReview(value: unknown): AppReview {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
-      "appId",
-      "packageVersion",
-      "entrypoint",
-      "assetCount",
-      "digest",
-      "requestedCapabilities",
-    ]) ||
+    !exactKeys(
+      value,
+      Object.hasOwn(value, "server") ? [...REVIEW_KEYS, "server"] : REVIEW_KEYS,
+    ) ||
     !text(value.appId) ||
     !text(value.packageVersion) ||
     !text(value.entrypoint) ||
@@ -264,6 +297,7 @@ function appReview(value: unknown): AppReview {
     assetCount: value.assetCount as number,
     digest: value.digest,
     requestedCapabilities: capabilityList(value.requestedCapabilities),
+    ...(Object.hasOwn(value, "server") ? { server: appServer(value.server) } : {}),
   }
 }
 

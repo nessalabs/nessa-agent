@@ -5,8 +5,8 @@ mod infrastructure;
 
 pub use domain::asset_integrity::{verify_asset, AssetIntegrityError, VerifiedAsset};
 pub use domain::static_package::{
-    PackageError, PackageManifest, RequestedCapability, VerifiedPackage, MAX_FILES,
-    MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
+    AppServer, PackageError, PackageManifest, RequestedCapability, ServerRuntime, VerifiedPackage,
+    MAX_FILES, MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
 pub use infrastructure::inline::{
     encode_inline_package, scaffold_inline_package, validate_inline_package, verify_inline_package,
@@ -18,6 +18,10 @@ pub use infrastructure::launcher::{
     RUNNING_PID,
 };
 pub use infrastructure::manifest::{parse_manifest, scaffold_package, verify_package};
+pub use infrastructure::server::{
+    find_runtime, ready_proof, start_server, AppCredentialRecord, RunningServer, ServerRefusal,
+    APP_CREDENTIAL, MAX_APP_CREDENTIAL_BYTES, READY_PATH, SERVER_FOLDER, SERVER_LOG,
+};
 
 #[cfg(feature = "disposable-store")]
 pub use infrastructure::installed_store::{InstalledApp, InstalledAppStore, StoreError};

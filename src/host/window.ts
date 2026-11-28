@@ -1502,20 +1502,18 @@ export interface HostAppPackage {
  * (its requested capabilities). Answers false for Cancel, for a
  * dismissal, and where there is no host to ask.
  */
-export async function confirmAppInstall(review: {
-  readonly appId: string
-  readonly packageVersion: string
-  readonly digest: string
-  readonly requestedCapabilities: readonly string[]
-}): Promise<boolean> {
+export async function confirmAppInstall(
+  review: { readonly appId: string; readonly digest: string },
+  pkg: HostAppPackage,
+): Promise<boolean> {
   if (!inTauri) return false
   const { invoke } = await import("@tauri-apps/api/core")
+  // The host verifies the package and says what it does from its bytes.
   return (
     (await invoke<unknown>("installed_app_confirm", {
       appId: review.appId,
-      packageVersion: review.packageVersion,
+      package: pkg,
       digest: review.digest,
-      capabilities: review.requestedCapabilities,
     })) === true
   )
 }
@@ -1547,6 +1545,35 @@ export async function openInstalledApp(
   if (!inTauri) throw new Error("Apps open only in the desktop app")
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("installed_app_open", { appId, package: pkg, digest })
+}
+
+/**
+ * Hands a dynamic app the credential the gateway issued it: the host keeps
+ * it in the app's launcher, readable only by this user, for its server to
+ * sign in with. Only the desktop window may ask.
+ */
+export async function handInstalledAppCredential(
+  appId: string,
+  credential: string,
+  expiresAt: number | undefined,
+): Promise<void> {
+  if (!inTauri) throw new Error("Apps install only in the desktop app")
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("installed_app_credential", {
+    appId,
+    credential,
+    expiresAt: expiresAt ?? null,
+  })
+}
+
+/**
+ * Whether `appId`'s launcher holds a credential for its server that still
+ * works for a month: Settings issues a new one on Open when not.
+ */
+export async function installedAppHasCredential(appId: string): Promise<boolean> {
+  if (!inTauri) return false
+  const { invoke } = await import("@tauri-apps/api/core")
+  return (await invoke<unknown>("installed_app_has_credential", { appId })) === true
 }
 
 /** Ends `appId`, if it is running. Only the desktop window may ask. */

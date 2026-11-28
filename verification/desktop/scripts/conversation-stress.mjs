@@ -372,6 +372,14 @@ import {
  *               are forbidden; a second app holding only list cannot create.
  *               Uninstalling the first revokes its credential: its open
  *               session ends and it cannot sign in again
+ *   dynamicApps a dynamic app made in Settings with a Node server: the
+ *               Install dialog names its runtime, the gateway issues its
+ *               credential once it is installed and the host is handed it.
+ *               Its server, run as nessa-app-host runs it (the app_server
+ *               example: the package's files, Nessa's own @nessa/client
+ *               beside them, the kept credential), refuses a call without
+ *               its launch token, starts a chat that completes in Nessa as
+ *               the app, lists only that chat, and ends when its host lets go
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -10994,6 +11002,198 @@ const steps = {
         failures.push("the apps audit has no revoked credential record")
     } finally {
       app.close()
+    }
+  },
+
+  async dynamicApps(run, step, failures) {
+    const appId = `stress-d${step.index}-s${run.knobs.seed}`
+    const page = run.page
+    // Made in Settings as a person makes one: a Node server, then Install.
+    let confirm
+    let handed
+    await run.exclusive(async () => {
+      if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+      await page
+        .locator(css.settingsCategory, { hasText: names.workspaceSettings })
+        .click()
+      await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
+      await page.locator("[data-create-app-id]:enabled").waitFor({ timeout: 10_000 })
+      await pickChoice(page, page.locator('[data-setting="create-app"]'), "node")
+      const asked = await page.evaluate(() => window.__fakeHostAppConfirms.length)
+      await page.evaluate(() => window.__fakeHostAppAnswers.push(true))
+      await page.locator("[data-create-app-id]").fill(appId)
+      await page.locator("[data-create-app]").click({ timeout: 10_000 })
+      confirm = await waitFor(
+        () => page.evaluate((from) => window.__fakeHostAppConfirms[from] ?? null, asked),
+        10_000,
+      )
+      if (!confirm) {
+        const said = await page
+          .locator("[data-installed-apps-said]")
+          .textContent({ timeout: 2_000 })
+          .catch(() => "nothing")
+        failures.push(`Create asked no Install dialog; Settings said ${said}`)
+      }
+      // Installed, the gateway issues its credential and the host keeps it.
+      handed = await waitFor(
+        () =>
+          page.evaluate(
+            (id) => window.__fakeHostAppCredentials.find((each) => each.appId === id),
+            appId,
+          ),
+        15_000,
+      )
+      await closeSettings(page)
+    })
+    // The host reads what the dialog says from the package itself.
+    if (confirm?.appId !== appId || typeof confirm?.package?.manifest !== "string")
+      failures.push(`the Install dialog was asked ${JSON.stringify(confirm)}`)
+    if (!handed?.credential) {
+      failures.push("the host was never handed the dynamic app's credential")
+      return
+    }
+    if (!(handed.expiresAt > Date.now() / 1000 + 300 * 24 * 60 * 60))
+      failures.push(`the host was handed a credential ending at ${handed.expiresAt}`)
+    const { package: pkg, review } = await run.client.apps.read(appId)
+    if (review.server?.runtime !== "node" || review.server?.entry !== "server/main.mjs")
+      failures.push(`the installed app's review names ${JSON.stringify(review.server)}`)
+
+    // Its server, run as its app host runs it: Nessa's client beside its
+    // files, the kept credential, and where the gateway publishes itself.
+    const work = mkdtempSync(join(tmpdir(), "nessa-dynamic-app-"))
+    const folder = join(work, appId)
+    mkdirSync(folder)
+    writeFileSync(join(work, "package.json"), JSON.stringify(pkg))
+    writeFileSync(
+      join(folder, "credential.json"),
+      JSON.stringify({
+        credential: handed.credential,
+        stage: "ci",
+        dataDir: run.stack.gateway.directory,
+        instance: INSTANCE,
+        expiresAt: handed.expiresAt,
+      }),
+      { mode: 0o600 },
+    )
+    const { bundleAppClient } =
+      await import("../../../scripts/desktop/app-client-bundle.mjs")
+    await bundleAppClient(join(work, "app-client.mjs"))
+    const built = spawnSync(
+      "cargo",
+      ["build", "--quiet", "-p", "nessa-app-package", "--example", "app_server"],
+      { cwd: repoRoot, stdio: "inherit" },
+    )
+    if (built.status !== 0) throw new Error("could not build the app server runner")
+    const server = spawn(
+      join(repoRoot, "target", "debug", "examples", "app_server"),
+      [
+        "--package",
+        join(work, "package.json"),
+        "--folder",
+        folder,
+        "--client",
+        join(work, "app-client.mjs"),
+      ],
+      { cwd: work, stdio: ["pipe", "pipe", "inherit"] },
+    )
+    const ended = new Promise((resolve) => server.once("exit", resolve))
+    let origin
+    let token
+    try {
+      const started = await Promise.race([
+        new Promise((resolve) =>
+          server.stdout.once("data", (chunk) => resolve(String(chunk))),
+        ),
+        ended.then(() => null),
+        sleep(60_000).then(() => null),
+      ])
+      if (!started) {
+        failures.push(
+          `the app's server did not start: ${readFileSync(join(folder, "server.log"), "utf8").slice(-2000)}`,
+        )
+        return
+      }
+      ;({ origin, token } = JSON.parse(started))
+      if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin))
+        failures.push(`the app's server answers at ${origin}, not on loopback`)
+      const call = (path, init = {}, as = token) =>
+        fetch(origin + path, {
+          ...init,
+          headers: { "content-type": "application/json", "x-nessa-app-token": as },
+        })
+      // Only its own page, which holds this launch's token, may use it.
+      for (const as of ["", "0".repeat(64)]) {
+        const refused = await call("/chats", {}, as)
+        if (refused.status !== 401)
+          failures.push(`the app's server answered ${refused.status} without its token`)
+      }
+      // It answers at once and signs in to Nessa beside that: 503 until in.
+      const signedIn = await waitFor(
+        async () => ((await call("/chats")).status === 200 ? true : null),
+        30_000,
+      )
+      if (!signedIn) {
+        failures.push(
+          `the app's server never signed in: ${readFileSync(join(folder, "server.log"), "utf8").slice(-2000)}`,
+        )
+        return
+      }
+      const text = prompt(run, STRESS.reply, step, " from a dynamic app")
+      const made = await call("/chats", {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      })
+      const answer = await made.json()
+      if (!made.ok || typeof answer.id !== "string") {
+        failures.push(
+          `the app's server could not start a chat: ${JSON.stringify(answer)}`,
+        )
+        return
+      }
+      // The chat runs in Nessa as the app's own: it follows it as the app.
+      const app = await connectApp(run.stack.gateway, INSTANCE, handed.credential)
+      try {
+        await settled(
+          { ...run, client: app },
+          answer.id,
+          new Set(),
+          text,
+          "completed",
+          failures,
+        )
+      } finally {
+        app.close()
+      }
+      const listed = await (await call("/chats")).json()
+      if (!Array.isArray(listed) || !listed.some((chat) => chat.id === answer.id))
+        failures.push(`the app's server lists ${JSON.stringify(listed)}, not its chat`)
+      if (Array.isArray(listed) && listed.some((chat) => chat.id === run.main.id))
+        failures.push("the app's server lists the owner's conversation")
+      const owners = await run.client.conversation.list({})
+      if (owners.conversations.some((row) => row.conversationId === answer.id))
+        failures.push("the owner's list shows the dynamic app's chat")
+    } finally {
+      // Its host ending closes its stdin, and the server ends with it.
+      server.stdin.end()
+      const gone = await Promise.race([
+        ended.then(() => true),
+        sleep(10_000).then(() => false),
+      ])
+      if (!gone) {
+        failures.push("the app's server outlived its host")
+        server.kill("SIGKILL")
+      }
+      // Ended, not just its runner: nothing answers on its port any more.
+      if (origin) {
+        const still = await fetch(`${origin}/.nessa-ready`).then(
+          () => true,
+          () => false,
+        )
+        if (still)
+          failures.push(`something still answers at ${origin} after the app ended`)
+      }
+      await run.client.apps.uninstall(appId, randomUUID()).catch(() => undefined)
+      rmSync(work, { recursive: true, force: true })
     }
   },
 

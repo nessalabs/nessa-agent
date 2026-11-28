@@ -7,7 +7,9 @@ import {
   NessaRpcError,
   type AppPackage,
   type AppReview,
+  type AppServerRuntime,
   type AppsApi,
+  type AppsIssueCredentialResult,
   type CheckedAppPackage,
   type InstalledApp,
 } from "@nessa/client"
@@ -16,12 +18,22 @@ import {
 export interface InstalledAppsClient {
   readonly apps: Pick<
     AppsApi,
-    "starter" | "review" | "install" | "installed" | "read" | "uninstall"
+    | "starter"
+    | "review"
+    | "install"
+    | "installed"
+    | "read"
+    | "uninstall"
+    | "issueCredential"
   >
 }
 
 export interface InstalledAppsGateway {
-  starter(appId: string, packageVersion: string): Promise<CheckedAppPackage>
+  starter(
+    appId: string,
+    packageVersion: string,
+    server?: AppServerRuntime,
+  ): Promise<CheckedAppPackage>
   review(pkg: AppPackage): Promise<AppReview>
   install(
     pkg: AppPackage,
@@ -31,13 +43,15 @@ export interface InstalledAppsGateway {
   installed(): Promise<readonly InstalledApp[]>
   read(appId: string): Promise<CheckedAppPackage>
   uninstall(appId: string, requestId: string): Promise<void>
+  issueCredential(appId: string, requestId: string): Promise<AppsIssueCredentialResult>
 }
 
 export function installedAppsGateway(
   connected: () => Promise<InstalledAppsClient>,
 ): InstalledAppsGateway {
   return {
-    starter: async (appId, version) => (await connected()).apps.starter(appId, version),
+    starter: async (appId, version, server) =>
+      (await connected()).apps.starter(appId, version, server),
     review: async (pkg) => (await connected()).apps.review(pkg),
     install: async (pkg, digest, requestId) =>
       (await connected()).apps.install(pkg, digest, requestId),
@@ -45,6 +59,8 @@ export function installedAppsGateway(
     read: async (appId) => (await connected()).apps.read(appId),
     uninstall: async (appId, requestId) =>
       (await connected()).apps.uninstall(appId, requestId),
+    issueCredential: async (appId, requestId) =>
+      (await connected()).apps.issueCredential(appId, requestId),
   }
 }
 

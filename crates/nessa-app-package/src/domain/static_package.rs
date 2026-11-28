@@ -28,6 +28,10 @@ pub enum PackageError {
     ConflictingPaths,
     InvalidEntrypoint,
     InvalidIcon,
+    /// The server names no declared script, or a runtime Nessa does not run,
+    /// or the package asks for nothing in Nessa, so its server could never
+    /// sign in.
+    InvalidServer,
     InvalidDigest,
     MissingAsset,
     UndeclaredAsset,
@@ -47,6 +51,18 @@ pub enum RequestedCapability {
 }
 
 impl RequestedCapability {
+    /// The capability as a manifest declares it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Subscribe => "subscribe",
+            Self::Stop => "stop",
+            Self::Send => "send",
+        }
+    }
+
     fn from_declaration(value: &str) -> Option<Self> {
         match value {
             "list" => Some(Self::List),
@@ -57,6 +73,51 @@ impl RequestedCapability {
             "send" => Some(Self::Send),
             _ => None,
         }
+    }
+}
+
+/// The program a dynamic app runs beside its window, as `node` or `bun`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServerRuntime {
+    Node,
+    Bun,
+}
+
+impl ServerRuntime {
+    pub(crate) fn from_declaration(value: &str) -> Option<Self> {
+        match value {
+            "node" => Some(Self::Node),
+            "bun" => Some(Self::Bun),
+            _ => None,
+        }
+    }
+
+    /// The runtime's name, as the manifest declares it and the program it runs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Bun => "bun",
+        }
+    }
+}
+
+/// A dynamic app's own program: one of its declared scripts, run by a
+/// JavaScript runtime on this computer while the app is open.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppServer {
+    entry: String,
+    runtime: ServerRuntime,
+}
+
+impl AppServer {
+    /// The declared script the runtime starts.
+    pub fn entry(&self) -> &str {
+        &self.entry
+    }
+
+    /// The runtime that runs it.
+    pub fn runtime(&self) -> ServerRuntime {
+        self.runtime
     }
 }
 
@@ -73,6 +134,7 @@ pub struct PackageManifest {
     package_version: String,
     entrypoint: String,
     icon: Option<String>,
+    server: Option<AppServer>,
     requested_capabilities: BTreeSet<RequestedCapability>,
     assets: BTreeMap<String, AssetIntegrity>,
     json: Vec<u8>,
@@ -103,6 +165,11 @@ impl PackageManifest {
     /// The exact declared icon asset path, if present.
     pub fn icon(&self) -> Option<&str> {
         self.icon.as_deref()
+    }
+
+    /// The program the app runs beside its window, when it is a dynamic app.
+    pub fn server(&self) -> Option<&AppServer> {
+        self.server.as_ref()
     }
 
     /// The capabilities the package declares it would like to use.
@@ -198,6 +265,8 @@ pub(crate) struct ManifestDeclarations {
     pub package_version: String,
     pub entrypoint: String,
     pub icon: Option<String>,
+    /// `(entry, runtime)` as declared.
+    pub server: Option<(String, String)>,
     pub requested_capabilities: Vec<String>,
     pub assets: Vec<AssetDeclaration>,
 }
@@ -261,11 +330,33 @@ pub(crate) fn validate_declarations(
         return Err(PackageError::InvalidIcon);
     }
 
+    let server = match input.server {
+        None => None,
+        Some((entry, runtime)) => {
+            let runtime =
+                ServerRuntime::from_declaration(&runtime).ok_or(PackageError::InvalidServer)?;
+            let script = entry.ends_with(".js")
+                || entry.ends_with(".mjs")
+                || (runtime == ServerRuntime::Bun && entry.ends_with(".ts"));
+            // A server signs in with the app's credential, and an app that
+            // asks for nothing is issued none.
+            if !script
+                || !assets.contains_key(&entry)
+                || entry == input.entrypoint
+                || requested_capabilities.is_empty()
+            {
+                return Err(PackageError::InvalidServer);
+            }
+            Some(AppServer { entry, runtime })
+        }
+    };
+
     Ok(PackageManifest {
         app_id: input.app_id,
         package_version: input.package_version,
         entrypoint: input.entrypoint,
         icon: input.icon,
+        server,
         requested_capabilities,
         assets,
         json,

@@ -101,7 +101,7 @@ fn edited(package: &InlinePackage, html: &[u8]) -> InlinePackage {
 #[tokio::test]
 async fn the_reviewed_bytes_install_and_read_back_exactly() {
     let (_folder, apps, audit) = apps();
-    let starter = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let starter = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
     assert_eq!(starter.review.app_id, "notes");
     assert_eq!(starter.review.entrypoint, "index.html");
     assert_eq!(
@@ -169,7 +169,7 @@ async fn the_reviewed_bytes_install_and_read_back_exactly() {
 #[tokio::test]
 async fn a_package_that_is_not_the_reviewed_one_writes_nothing() {
     let (_folder, apps, audit) = apps();
-    let starter = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let starter = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
     let swapped = edited(&starter.package, b"<!doctype html><p>not what you saw</p>");
     assert_ne!(apps.review(&swapped).unwrap().digest, starter.review.digest);
     assert_eq!(
@@ -192,7 +192,7 @@ async fn a_package_that_is_not_the_reviewed_one_writes_nothing() {
 #[tokio::test]
 async fn another_package_under_an_installed_identity_is_refused() {
     let (_folder, apps, audit) = apps();
-    let starter = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let starter = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
     apps.install(
         owner(),
         "r1".into(),
@@ -218,7 +218,7 @@ async fn another_package_under_an_installed_identity_is_refused() {
 async fn uninstall_removes_one_app_and_leaves_the_other() {
     let (_folder, apps, audit) = apps();
     for name in ["calendar", "notes"] {
-        let starter = apps.starter(name.into(), "1.0.0".into()).unwrap();
+        let starter = apps.starter(name.into(), "1.0.0".into(), None).unwrap();
         apps.install(
             owner(),
             name.into(),
@@ -260,7 +260,7 @@ async fn uninstall_removes_one_app_and_leaves_the_other() {
 #[tokio::test]
 async fn a_change_that_cannot_be_recorded_is_not_made_or_not_answered_as_made() {
     let (_folder, apps, audit) = apps();
-    let starter = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let starter = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
     // The request cannot be recorded: nothing is installed.
     *audit.refuse_from.lock().unwrap() = Some(0);
     assert_eq!(
@@ -320,8 +320,8 @@ async fn a_change_that_cannot_be_recorded_is_not_made_or_not_answered_as_made() 
 async fn an_uninstall_and_a_reinstall_at_once_never_remove_what_was_not_named() {
     let (_folder, apps, audit) = apps();
     let apps = Arc::new(apps);
-    let one = apps.starter("notes".into(), "1.0.0".into()).unwrap();
-    let two = apps.starter("notes".into(), "2.0.0".into()).unwrap();
+    let one = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
+    let two = apps.starter("notes".into(), "2.0.0".into(), None).unwrap();
     apps.install(owner(), "r1".into(), &one.package, &one.review.digest)
         .await
         .unwrap();
@@ -369,7 +369,7 @@ async fn an_uninstall_and_a_reinstall_at_once_never_remove_what_was_not_named() 
 #[tokio::test]
 async fn a_package_outside_the_inline_limits_is_too_large() {
     let (_folder, apps, _audit) = apps();
-    let starter = apps.starter("notes".into(), "1.0.0".into()).unwrap();
+    let starter = apps.starter("notes".into(), "1.0.0".into(), None).unwrap();
     let big = edited(&starter.package, &vec![b'a'; 17 * 1024]);
     assert_eq!(apps.review(&big), Err(AppsError::PackageTooLarge));
 }
@@ -379,7 +379,7 @@ async fn no_more_apps_install_than_the_list_can_hold() {
     let (_folder, apps, audit) = apps();
     for index in 0..super::application::MAX_INSTALLED_APPS {
         let starter = apps
-            .starter(format!("app-{index}"), "1.0.0".into())
+            .starter(format!("app-{index}"), "1.0.0".into(), None)
             .unwrap();
         apps.install(
             owner(),
@@ -391,7 +391,9 @@ async fn no_more_apps_install_than_the_list_can_hold() {
         .unwrap();
     }
     let recorded = events(&audit).len();
-    let one_more = apps.starter("one-more".into(), "1.0.0".into()).unwrap();
+    let one_more = apps
+        .starter("one-more".into(), "1.0.0".into(), None)
+        .unwrap();
     assert_eq!(
         apps.install(
             owner(),
@@ -412,7 +414,7 @@ async fn no_more_apps_install_than_the_list_can_hold() {
         super::application::MAX_INSTALLED_APPS
     );
     // A retry of an installed app's own bytes is still answered.
-    let first = apps.starter("app-0".into(), "1.0.0".into()).unwrap();
+    let first = apps.starter("app-0".into(), "1.0.0".into(), None).unwrap();
     assert!(apps
         .install(owner(), "r0".into(), &first.package, &first.review.digest)
         .await

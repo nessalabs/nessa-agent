@@ -25,6 +25,8 @@ export {
 } from "./call-pill"
 export {
   confirmAppInstall,
+  handInstalledAppCredential,
+  installedAppHasCredential,
   keepOnlyInstalledApps,
   onInstalledAppsChanged,
   openInstalledApp,

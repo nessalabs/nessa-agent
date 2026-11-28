@@ -144,3 +144,25 @@ it("refuses credential answers that are not the documented shape", async () => {
   await expect(apps.revokeCredentials("notes", "c2")).rejects.toThrow()
   await expect(apps.review(pkg)).rejects.toThrow()
 })
+
+it("asks for a dynamic starter and reads the server its review names", async () => {
+  const dynamic = { ...review, server: { entry: "server/main.mjs", runtime: "bun" } }
+  const { asked, session } = requester([
+    { package: pkg, review: dynamic },
+    { ...review, server: { entry: "server/main.mjs", runtime: "deno" } },
+    { ...review, server: { entry: "", runtime: "node" } },
+    { ...review, server: { entry: "main.mjs", runtime: "node", args: [] } },
+    { ...review, server: null },
+  ])
+  const apps = createAppsApi(session as never)
+  await expect(apps.starter("notes", "1.0.0", "bun")).resolves.toEqual({
+    package: pkg,
+    review: dynamic,
+  })
+  expect(asked[0]).toEqual([
+    "apps.starter",
+    { appId: "notes", packageVersion: "1.0.0", server: "bun" },
+  ])
+  for (let index = 0; index < 4; index += 1)
+    await expect(apps.review(pkg)).rejects.toThrow()
+})

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use nessa_app_package::{
     parse_manifest, verify_package, AssetIntegrityError, PackageError, RequestedCapability,
-    MAX_FILES, MAX_MANIFEST_BYTES,
+    ServerRuntime, MAX_FILES, MAX_MANIFEST_BYTES,
 };
 use nessa_types::app_identity::ExtensionAppIdError;
 use serde_json::{json, Value};
@@ -285,4 +285,120 @@ fn refuses_more_than_128_manifest_declarations_before_held_verification() {
         parse_manifest(encoded(&manifest(assets))).unwrap_err(),
         PackageError::TooManyFiles
     );
+}
+
+fn with_server(entry: &str, runtime: &str) -> (Vec<u8>, BTreeMap<String, Vec<u8>>) {
+    let mut assets = held();
+    assets.insert("server/main.mjs".into(), b"export {}".to_vec());
+    assets.insert("server/main.ts".into(), b"export {}".to_vec());
+    assets.insert("server/notes.txt".into(), b"hi".to_vec());
+    let mut input = manifest(
+        assets
+            .iter()
+            .map(|(path, bytes)| declaration(path, bytes))
+            .collect(),
+    );
+    input["server"] = json!({"entry": entry, "runtime": runtime});
+    input["requestedCapabilities"] = json!(["list"]);
+    (encoded(&input), assets)
+}
+
+#[test]
+fn reads_a_declared_server_entry_run_by_node_or_bun() {
+    let (manifest, assets) = with_server("server/main.mjs", "node");
+    let record = verify_package(manifest, assets).unwrap();
+    let server = record.manifest().server().unwrap();
+    assert_eq!(server.entry(), "server/main.mjs");
+    assert_eq!(server.runtime(), ServerRuntime::Node);
+    let (manifest, assets) = with_server("server/main.ts", "bun");
+    let record = verify_package(manifest, assets).unwrap();
+    assert_eq!(
+        record.manifest().server().unwrap().runtime(),
+        ServerRuntime::Bun
+    );
+    // A package without one is a static app.
+    let plain = encoded(&manifest_of_held());
+    assert!(verify_package(plain, held())
+        .unwrap()
+        .manifest()
+        .server()
+        .is_none());
+}
+
+fn manifest_of_held() -> Value {
+    manifest(vec![declaration("index.html", b"abc")])
+}
+
+#[test]
+fn refuses_a_server_that_is_not_a_declared_script_for_its_runtime() {
+    for (entry, runtime) in [
+        ("server/main.mjs", "deno"),
+        ("server/main.mjs", "Node"),
+        ("server/main.ts", "node"),
+        ("server/notes.txt", "node"),
+        ("server/missing.mjs", "node"),
+        ("index.html", "node"),
+    ] {
+        let (manifest, assets) = with_server(entry, runtime);
+        assert_eq!(
+            verify_package(manifest, assets).unwrap_err(),
+            PackageError::InvalidServer,
+            "{entry} {runtime}"
+        );
+    }
+    // A server signs in as the app, so a package asking for nothing in
+    // Nessa cannot have one.
+    let (manifest, assets) = with_server("server/main.mjs", "node");
+    let mut input: Value = serde_json::from_slice(&manifest).unwrap();
+    input["requestedCapabilities"] = json!([]);
+    assert_eq!(
+        verify_package(encoded(&input), assets).unwrap_err(),
+        PackageError::InvalidServer
+    );
+    // The declaration takes exactly its two fields.
+    let (manifest, assets) = with_server("server/main.mjs", "node");
+    let mut input: Value = serde_json::from_slice(&manifest).unwrap();
+    input["server"]["args"] = json!(["--inspect"]);
+    assert_eq!(
+        verify_package(encoded(&input), assets).unwrap_err(),
+        PackageError::MalformedManifest
+    );
+}
+
+#[test]
+fn a_dynamic_starter_holds_its_server_and_asks_for_what_it_uses() {
+    let starter = nessa_app_package::scaffold_package(
+        "notes".into(),
+        "1.0.0".into(),
+        Some(ServerRuntime::Bun),
+    )
+    .unwrap();
+    let server = starter.manifest().server().unwrap();
+    assert_eq!(server.runtime(), ServerRuntime::Bun);
+    let main = std::str::from_utf8(starter.asset(server.entry()).unwrap()).unwrap();
+    assert!(main.contains("from \"@nessa/client\""));
+    assert_eq!(
+        starter
+            .manifest()
+            .requested_capabilities()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        [
+            RequestedCapability::List,
+            RequestedCapability::Read,
+            RequestedCapability::Create,
+            RequestedCapability::Send,
+        ]
+    );
+    // It fits the inline profile Settings and the CLI exchange.
+    nessa_app_package::scaffold_inline_package(
+        "notes".into(),
+        "1.0.0".into(),
+        Some(ServerRuntime::Node),
+    )
+    .unwrap();
+    let plain = nessa_app_package::scaffold_package("notes".into(), "1.0.0".into(), None).unwrap();
+    assert!(plain.manifest().server().is_none());
+    assert!(plain.manifest().requested_capabilities().is_empty());
 }
