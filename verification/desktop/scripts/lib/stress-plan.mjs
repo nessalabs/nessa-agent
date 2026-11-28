@@ -275,7 +275,7 @@ export const KNOBS = {
   },
   styles: {
     default: 1,
-    what: "times Threads are given the person's own words in the default channel's settings (saved only on Save): a new chat is told them, the main chat keeps the plain style it began with, and the choice is cleared after",
+    what: "times the default channel's settings sheet is walked, one fixed size on every page: Where it runs ticks this machine and ticking Cloud box opens Provider and Boat's account or Agent37's key; then Threads are given the person's own words in the writer Your own opens (Cancel keeps nothing, saved only on Save, View shows them again): a new chat is told them, the main chat keeps the plain style it began with, and the choice is cleared after",
   },
   coordinators: {
     default: 1,

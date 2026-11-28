@@ -696,6 +696,53 @@ async function composerSaysNothing(page, when, failures) {
     )
 }
 
+/**
+ * A channel's Where it runs page: the channel's own machine is ticked; ticking
+ * Cloud box opens the cloud's rows under it (Provider, then Boat's account or
+ * Agent37's key, swapped by the provider), and ticking back closes them.
+ * Nothing here is saved: the tick only opens what a cloud needs.
+ */
+async function where(dialog, failures) {
+  await dialog.locator('[data-channel-settings-tab="where"]').click({ timeout: 10_000 })
+  const here = dialog.locator('[data-channel-place="here"]')
+  const cloud = dialog.locator('[data-channel-place="cloud"]')
+  const rows = dialog.locator(".channel-settings-cloud")
+  await here.waitFor({ timeout: 10_000 })
+  if ((await here.getAttribute("aria-checked")) !== "true")
+    failures.push("Where it runs did not tick the channel's own machine")
+  if ((await rows.getAttribute("data-open")) !== null)
+    failures.push("the cloud's rows were open before Cloud box was ticked")
+  await cloud.click({ timeout: 10_000 })
+  const opened = await waitFor(
+    async () =>
+      (await cloud.getAttribute("aria-checked")) === "true" &&
+      (await rows.getAttribute("data-open")) !== null,
+    5_000,
+  )
+  if (!opened) failures.push("ticking Cloud box never opened its rows")
+  await dialog.locator("[data-channel-boat]").waitFor({ timeout: 10_000 })
+  await pickChoice(
+    dialog.page(),
+    dialog.locator(".channel-settings-cloud .settings-row").first(),
+    "agent37",
+  )
+  await dialog.locator("[data-channel-agent37]").waitFor({ timeout: 10_000 })
+  if ((await dialog.locator("[data-channel-boat]").count()) > 0)
+    failures.push("Agent37 chosen, Boat's account row stayed")
+  await pickChoice(
+    dialog.page(),
+    dialog.locator(".channel-settings-cloud .settings-row").first(),
+    "boat",
+  )
+  await dialog.locator("[data-channel-boat]").waitFor({ timeout: 10_000 })
+  await here.click({ timeout: 10_000 })
+  const closed = await waitFor(
+    async () => (await rows.getAttribute("data-open")) === null,
+    5_000,
+  )
+  if (!closed) failures.push("ticking the machine back never closed the cloud's rows")
+}
+
 async function pageText(page) {
   return fold(
     await page
@@ -9299,18 +9346,42 @@ const steps = {
           `${css.channelSettingsOpen}[data-channel-settings-open="gateway-conversations"]`,
         )
         .click({ timeout: 10_000 })
-      const control = run.page
-        .locator(css.channelSettingsDialog)
-        .locator('[data-reply-style="nessa"]')
+      const dialog = run.page.locator(css.channelSettingsDialog)
+      // One sheet of one size on every page: moving between pages never
+      // moves its edges.
+      const box = async () => JSON.stringify(await dialog.boundingBox())
+      await where(dialog, failures)
+      const whereBox = await box()
+      await dialog
+        .locator('[data-channel-settings-tab="talk"]')
+        .click({ timeout: 10_000 })
+      const control = dialog.locator('[data-reply-style="nessa"]')
       const threads = control.locator('[data-reply-style-role="thread"]')
       await threads.locator("[data-choice-trigger]:enabled").waitFor({ timeout: 10_000 })
+      if ((await box()) !== whereBox)
+        failures.push(
+          `the settings sheet changed size between pages: ${whereBox} -> ${await box()}`,
+        )
+      // A role not on your own words has nothing to view.
+      if ((await control.locator('[data-reply-style-view="thread"]').count()) > 0)
+        failures.push("Threads offered View before it had words of its own")
+      // Your own opens the writer, apart from the row, and Cancel keeps nothing.
+      const writer = run.page.locator('[data-reply-style-writer="thread"]')
       await pickChoice(run.page, threads, "custom")
-      await control.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
+      await writer.waitFor({ timeout: 10_000 })
+      await writer.locator('[data-reply-style-text="thread"]').fill("Never saved.")
+      await writer.getByRole("button", { name: "Cancel" }).click({ timeout: 10_000 })
+      await writer.waitFor({ state: "detached", timeout: 5_000 })
+      if ((await run.client.replyStyle.read()).nessa.thread !== undefined)
+        failures.push("Cancel in the writer saved a style")
+      await pickChoice(run.page, threads, "custom")
+      await writer.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
       // Choosing "Your own" saves nothing until Save.
       const before = await run.client.replyStyle.read()
       if (before.nessa.thread?.mode === "custom")
         failures.push("choosing Your own saved before Save was pressed")
-      await control.locator('[data-reply-style-save="thread"]').click({ timeout: 10_000 })
+      await writer.locator('[data-reply-style-save="thread"]').click({ timeout: 10_000 })
+      await writer.waitFor({ state: "detached", timeout: 10_000 })
       const saved = await waitFor(async () => {
         const read = await run.client.replyStyle.read()
         return (
@@ -9319,6 +9390,24 @@ const steps = {
       }, 10_000)
       if (!saved)
         failures.push("the gateway never read back the Threads style as saved, trimmed")
+      // Saved, the row is "Your own" with View, which opens the words saved.
+      const shown = await waitFor(
+        async () =>
+          (await threads.locator("[data-choice-trigger]").getAttribute("data-choice")) ===
+          "custom",
+        10_000,
+      )
+      if (!shown) failures.push("the Threads row never showed Your own after Save")
+      await control.locator('[data-reply-style-view="thread"]').click({ timeout: 10_000 })
+      const viewed = await writer
+        .locator('[data-reply-style-text="thread"]')
+        .inputValue({ timeout: 10_000 })
+      if (viewed !== marker)
+        failures.push(
+          `View opened the writer on ${JSON.stringify(viewed)}, not the words saved`,
+        )
+      await writer.getByRole("button", { name: "Cancel" }).click({ timeout: 10_000 })
+      await writer.waitFor({ state: "detached", timeout: 5_000 })
       if (run.evidence)
         await run.page.screenshot({
           path: join(run.evidence, `style-${run.engine}-threads-own.png`),
