@@ -5513,7 +5513,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 156
+                items.len() <= 158
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()

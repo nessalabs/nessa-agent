@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 156,
+          "maxItems": 158,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
