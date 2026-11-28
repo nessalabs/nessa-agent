@@ -206,32 +206,32 @@ export function ComposerTray({
     setFocusKey(focus)
   }, [])
 
-  // The page stays as it was while a closed tray fades out; opening starts
-  // again from the first page.
-  const close = React.useCallback((returnFocus: boolean) => {
-    setOpen(false)
-    if (returnFocus) trigger.current?.focus()
-  }, [])
+  // A closed tray stays drawn, inert and unnamed, for its short exit, so it
+  // shrinks back into + rather than vanishing. `leaving` is set in the same
+  // update that closes it: the tray is never unmounted and drawn again, so
+  // the page it shows keeps its state (Agent downloads does not re-read)
+  // through the exit. The page stays as it was; opening starts again from
+  // the first page.
+  const [leaving, setLeaving] = React.useState(false)
+  const close = React.useCallback(
+    (returnFocus: boolean) => {
+      if (open) setLeaving(true)
+      setOpen(false)
+      if (returnFocus) trigger.current?.focus()
+    },
+    [open],
+  )
   const openTray = React.useCallback(() => {
+    setLeaving(false)
     setPage("root")
     setFocusKey(undefined)
     setOpen(true)
   }, [])
-
-  // A closed tray stays drawn, inert and unnamed, for its short exit, so it
-  // shrinks back into + rather than vanishing. Set before paint, so no frame
-  // goes without it.
-  const [leaving, setLeaving] = React.useState(false)
-  const wasOpen = React.useRef(open)
-  React.useLayoutEffect(() => {
-    const closed = wasOpen.current && !open
-    wasOpen.current = open
-    if (open) setLeaving(false)
-    if (!closed) return
-    setLeaving(true)
+  React.useEffect(() => {
+    if (open || !leaving) return
     const done = setTimeout(() => setLeaving(false), TRAY_EXIT_MS)
     return () => clearTimeout(done)
-  }, [open])
+  }, [open, leaving])
 
   React.useEffect(() => {
     if (!open) return

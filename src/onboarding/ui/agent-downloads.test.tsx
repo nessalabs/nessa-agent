@@ -247,3 +247,28 @@ it.each(["busy", "not-confirmed"] as const)(
     }
   },
 )
+
+it("keeps the rows and offers Check again when a later check fails", async () => {
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  let notify = () => {}
+  const source = {
+    subscribe: (listener: () => void) => {
+      notify = listener
+      return () => {}
+    },
+    offers: vi
+      .fn()
+      .mockResolvedValueOnce([{ agent: "claude", archiveBytes: 1, installed: true }])
+      .mockRejectedValue(new Error("disconnected")),
+    install: vi.fn(),
+  }
+  await React.act(async () => root.render(<AgentDownloads source={source} />))
+  await React.act(async () => notify())
+  expect(requiredElement(container, '[data-agent-download="claude"]').textContent).toBe(
+    "ClaudeInstalled",
+  )
+  expect(container.textContent).toContain("Can’t check downloads")
+  expect(requiredElement(container, "button").textContent).toBe("Check again")
+  await React.act(async () => root.unmount())
+})

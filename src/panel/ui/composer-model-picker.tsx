@@ -118,7 +118,11 @@ export function ComposerModelPicker({
       }}
       onPointerDown={() => setDismissed(true)}
       onPointerEnter={() => {
+        // A fresh arrival: the picker it was pressed for may have closed with
+        // the pointer elsewhere, which no leave reports (the picker is a
+        // portal, inside this span to React).
         hovered.current = true
+        setDismissed(false)
       }}
       onPointerLeave={() => {
         hovered.current = false

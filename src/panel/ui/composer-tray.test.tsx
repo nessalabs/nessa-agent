@@ -259,9 +259,13 @@ it("shrinks back into + when it closes: drawn briefly, unnamed and inert", () =>
   try {
     render()
     click(plus())
+    const opened = tray()
     click(plus())
     expect(tray()).toBeNull()
     const leaving = container.querySelector<HTMLElement>(".nessa-composer-tray")
+    // The same element, never unmounted and drawn again, so the page it
+    // shows keeps its state through the exit.
+    expect(leaving).toBe(opened)
     expect(leaving?.hasAttribute("data-leaving")).toBe(true)
     expect(leaving?.hasAttribute("inert")).toBe(true)
     expect(leaving?.getAttribute("aria-hidden")).toBe("true")

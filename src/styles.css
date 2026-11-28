@@ -1030,9 +1030,11 @@ body {
   opacity: 0;
   transition-delay: 0s;
 }
+/* No movement for reduced motion, but the same wait: a duration of 0 keeps
+   the delay, where `transition: none` would drop it and show the name at once. */
 @media (prefers-reduced-motion: reduce) {
   .nessa-model-hint-label {
-    transition: none;
+    transition-duration: 0s;
   }
 }
 

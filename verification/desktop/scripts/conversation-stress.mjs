@@ -12880,7 +12880,10 @@ async function panelComposerControls(page, failures) {
       !(await waitFor(async () => (await opacity()) >= 0.99, MODEL_NAME_WAIT_MS + 3_000))
     )
       failures.push("the model's name never showed under a resting pointer")
+    // It goes at once: no wait on the way out, only the short fade.
     await page.mouse.move(1, 1)
+    if (!(await waitFor(async () => (await opacity()) < 1, 300)))
+      failures.push("the model's name waited after the pointer left its mark")
     if (!(await waitFor(async () => (await opacity()) <= 0.01, 1_000)))
       failures.push("the model's name stayed after the pointer left its mark")
   }
