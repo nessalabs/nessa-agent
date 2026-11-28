@@ -323,9 +323,7 @@ it("starts again an app opened while its credential was replaced", async () => {
   host.stopInstalledApp.mockClear()
   // Not running when asked; opened from the Dock while the new one was
   // issued, so it started with the one issuing ended.
-  host.runningInstalledApps
-    .mockResolvedValueOnce([])
-    .mockResolvedValueOnce(["notes"])
+  host.runningInstalledApps.mockResolvedValueOnce([]).mockResolvedValueOnce(["notes"])
   await press('[data-installed-app-open="notes"]')
   expect(gateway.issueCredential).toHaveBeenCalledTimes(2)
   expect(host.stopInstalledApp).toHaveBeenCalledWith("notes")

@@ -197,11 +197,7 @@ export function InstalledAppsTab() {
   // menu while this ran started with the one issuing ended, so it starts
   // again. An app's host reads the credential only once it holds its running
   // lock, so one not running when asked after the hand reads the new one.
-  const handCredential = async (
-    appId: string,
-    pkg: HostAppPackage,
-    digest: string,
-  ) => {
+  const handCredential = async (appId: string, pkg: HostAppPackage, digest: string) => {
     if (!gateway) return
     const issued = await gateway.issueCredential(appId, requestId())
     await handInstalledAppCredential(appId, issued.credential, issued.expiresAt)
