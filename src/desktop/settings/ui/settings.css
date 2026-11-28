@@ -1688,28 +1688,6 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   flex-direction: column;
 }
 
-/*
- * A channel's settings dialog: each part is a section under the dialog's
- * title, its words starting where the title's do, and a hairline between
- * one part and the next.
- */
-.channel-settings-section {
-  display: grid;
-  gap: 4px;
-  padding-block: 0;
-}
-
-.channel-settings-section + .channel-settings-section {
-  margin-top: 12px;
-  padding-top: 16px;
-  border-top: 1px solid var(--settings-hairline);
-}
-
-.channel-settings-section :is(.settings-row, [data-slot="settings-row"]) {
-  padding-inline: 0;
-  padding-block: 10px;
-}
-
 /* A row's choice in a menu (`ChoiceMenu`): the choice, then a chevron. */
 .choice-menu {
   gap: 6px;
@@ -1721,14 +1699,6 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .choice-menu > svg {
   flex: none;
   color: var(--desktop-muted, currentColor);
-}
-
-.channel-settings-heading {
-  margin: 0 0 8px;
-  color: var(--desktop-muted);
-  font-size: var(--desktop-text-footnote);
-  font-weight: 500;
-  line-height: 1.4;
 }
 
 /* Apps: an app row's buttons side by side. */
@@ -1773,4 +1743,16 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-new-app-field {
   inline-size: 100%;
   max-inline-size: 280px;
+}
+
+/* How agents talk: "View" beside a role set to your own words, quiet as a link. */
+.settings-reply-style-view {
+  color: var(--desktop-muted);
+}
+
+/* The writer for your own words: one roomy field. */
+.settings-style-writer-field {
+  inline-size: 100%;
+  min-block-size: 10rem;
+  resize: none;
 }

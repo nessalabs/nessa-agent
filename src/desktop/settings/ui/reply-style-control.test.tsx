@@ -67,20 +67,39 @@ async function pick(role: ReplyStyleRole, value: string) {
   await act(async () => option.click())
 }
 
-function detail(role: ReplyStyleRole) {
-  return host.querySelector(`[data-reply-style-role="${role}"]`)?.textContent ?? ""
+/** The choice a role's menu shows. */
+function chosen(role: ReplyStyleRole) {
+  return host
+    .querySelector(`[data-reply-style-role="${role}"] [data-choice-trigger]`)
+    ?.getAttribute("data-choice")
+}
+
+/** Types into the writer that "Your own" opens (a dialog, outside the row). */
+async function write(role: ReplyStyleRole, text: string) {
+  const field = document.querySelector<HTMLTextAreaElement>(
+    `[data-reply-style-text="${role}"]`,
+  )
+  if (!field) throw new Error("missing writer")
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set
+    set?.call(field, text)
+    field.dispatchEvent(new Event("input", { bubbles: true }))
+  })
 }
 
 it("the Nessa level starts plain, and off saves as it is chosen", async () => {
   const { gateway, saves } = memory()
   await act(async () => root.render(<ReplyStyleControl gateway={gateway} />))
-  expect(detail("thread")).toContain("Nessa’s plain style")
+  expect(chosen("thread")).toBe("plain")
   expect(
     host.querySelector('[data-reply-style-role="thread"] [data-value="default"]'),
   ).toBeNull()
   await pick("thread", "off")
   expect(saves).toEqual([["thread", { mode: "off" }, undefined]])
-  expect(detail("thread")).toContain("No style")
+  expect(chosen("thread")).toBe("off")
 })
 
 it("your own words save only on Save, trimmed, and a channel can follow Nessa again", async () => {
@@ -88,32 +107,52 @@ it("your own words save only on Save, trimmed, and a channel can follow Nessa ag
   await act(async () =>
     root.render(<ReplyStyleControl channelId="ch_aaaaaaaaaa" gateway={gateway} />),
   )
-  expect(detail("coordinator")).toContain("Same as Nessa")
+  expect(chosen("coordinator")).toBe("default")
+  // Your own opens the writer, and the row keeps what is saved until Save.
   await pick("coordinator", "custom")
   expect(saves).toEqual([])
-  const field = host.querySelector<HTMLTextAreaElement>(
-    '[data-reply-style-text="coordinator"]',
-  )
-  if (!field) throw new Error("missing text field")
-  await act(async () => {
-    const set = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      "value",
-    )?.set
-    set?.call(field, "  One line only.  ")
-    field.dispatchEvent(new Event("input", { bubbles: true }))
-  })
+  expect(chosen("coordinator")).toBe("default")
+  await write("coordinator", "  Never this.  ")
+  // Cancel saves nothing and closes the writer.
   await act(async () =>
-    host
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((each) => each.textContent === "Cancel")
+      ?.click(),
+  )
+  expect(saves).toEqual([])
+  expect(document.querySelector('[data-reply-style-writer="coordinator"]')).toBeNull()
+  // A role not on your own words has nothing to view.
+  expect(host.querySelector('[data-reply-style-view="coordinator"]')).toBeNull()
+  await pick("coordinator", "custom")
+  await write("coordinator", "  One line only.  ")
+  await act(async () =>
+    document
       .querySelector<HTMLButtonElement>('[data-reply-style-save="coordinator"]')
       ?.click(),
   )
   expect(saves).toEqual([
     ["coordinator", { mode: "custom", text: "One line only." }, "ch_aaaaaaaaaa"],
   ])
+  expect(chosen("coordinator")).toBe("custom")
+  expect(document.querySelector('[data-reply-style-writer="coordinator"]')).toBeNull()
+  // View opens the writer on the words saved.
+  await act(async () =>
+    host
+      .querySelector<HTMLButtonElement>('[data-reply-style-view="coordinator"]')
+      ?.click(),
+  )
+  expect(
+    document.querySelector<HTMLTextAreaElement>('[data-reply-style-text="coordinator"]')
+      ?.value,
+  ).toBe("One line only.")
+  await act(async () =>
+    [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((each) => each.textContent === "Cancel")
+      ?.click(),
+  )
   await pick("coordinator", "default")
   expect(saves.at(-1)).toEqual(["coordinator", undefined, "ch_aaaaaaaaaa"])
-  expect(detail("coordinator")).toContain("Same as Nessa: Nessa’s plain style")
+  expect(chosen("coordinator")).toBe("default")
 })
 
 it("a read that fails says so and offers Reload", async () => {
