@@ -123,7 +123,7 @@ dbus-secret-service = { version = "=4.1.0", default-features = false, features =
 [target.'cfg(unix)'.dependencies]
 pty-runtime = { git = "https://github.com/nessalabs/pty-runtime", rev = "c68837e2b7bf1c9009e1a4587a1a58107ec0425c", optional = true, default-features = false, features = ["ghostty"] }
 pty-runtime-infrastructure = { git = "https://github.com/nessalabs/pty-runtime", rev = "c68837e2b7bf1c9009e1a4587a1a58107ec0425c", optional = true, features = ["ghostty"] }
-workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "7aea78061bdde4fa1f600674e6f37fa951f162f3" }
+workspace_sdk = { git = "https://github.com/nessalabs/workspace-sdk", rev = "a64f81368d633a5f15033152577e2fdce3d95af8" }
 # Opening the gateway log without following a link where it should be.
 libc = "0.2"
 # `nessa env serve` runs command leases' commands in process scopes of their

@@ -54,6 +54,7 @@ function environment() {
     secretFiles: [],
     selectedRepositories: [],
     safetyAnsweredAt: null,
+    network: null,
     versions: [
       {
         id: "22222222-2222-4222-8222-222222222222",
