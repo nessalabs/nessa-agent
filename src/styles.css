@@ -985,8 +985,8 @@ body {
   max-height: min(20rem, calc(var(--nessa-window-height, 100vh) - 12rem));
 }
 
-/* The model's name above its mark, at once on hover or keyboard focus, and
-   not while the picker it opens is showing. */
+/* The model's name above its mark, after resting on it (hover or keyboard
+   focus), and not while the picker it opens is showing or once it was pressed. */
 .nessa-model-hint-label {
   position: absolute;
   right: 0;
@@ -1011,32 +1011,47 @@ body {
 }
 /* Hover only where there is a pointer that hovers: a touch screen's sticky
    :hover would leave the label up after a tap. */
+/* The model's name waits two seconds of resting on the button before it
+   shows, so passing over the composer never flashes it; it goes at once. */
 @media (hover: hover) {
   .nessa-model-hint:hover .nessa-model-hint-label {
     opacity: 1;
     transform: none;
+    transition-delay: 2s;
   }
 }
 .nessa-model-hint:has(:focus-visible) .nessa-model-hint-label {
   opacity: 1;
   transform: none;
+  transition-delay: 2s;
 }
 .nessa-model-hint[data-dismissed] .nessa-model-hint-label,
 .nessa-model-hint:has([aria-expanded="true"]) .nessa-model-hint-label {
   opacity: 0;
+  transition-delay: 0s;
 }
+/* No movement for reduced motion, but the same wait: a duration of 0 keeps
+   the delay, where `transition: none` would drop it and show the name at once. */
 @media (prefers-reduced-motion: reduce) {
   .nessa-model-hint-label {
-    transition: none;
+    transition-duration: 0s;
   }
 }
 
-/* The + tray rises from the composer's corner; a page it switches to settles
-   in from the side it came from. Both are skipped for reduced motion. */
+/* The + tray grows out of the + that opened it (composer-tray.tsx sets its
+   transform origin to the button's centre) and shrinks back into it, faster,
+   when it closes; a page it switches to settles in from the side it came
+   from. Reduced motion skips the movement: the tray appears and goes. */
 @keyframes nessa-composer-tray-rise {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.97);
+    transform: scale(0.94);
+  }
+}
+@keyframes nessa-composer-tray-leave {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
   }
 }
 @keyframes nessa-composer-tray-page {
@@ -1047,7 +1062,12 @@ body {
 }
 .nessa-composer-tray {
   transform-origin: bottom left;
-  animation: nessa-composer-tray-rise 180ms ease-out;
+  animation: nessa-composer-tray-rise 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+/* TRAY_EXIT_MS in composer-tray.tsx is this length. */
+.nessa-composer-tray[data-leaving] {
+  pointer-events: none;
+  animation: nessa-composer-tray-leave 120ms cubic-bezier(0.23, 1, 0.32, 1) forwards;
 }
 .nessa-composer-tray-page {
   animation: nessa-composer-tray-page 180ms ease-out;
@@ -1056,6 +1076,9 @@ body {
   .nessa-composer-tray,
   .nessa-composer-tray-page {
     animation: none;
+  }
+  .nessa-composer-tray[data-leaving] {
+    visibility: hidden;
   }
 }
 
@@ -1068,10 +1091,14 @@ body {
 html:has(.nessa-panel[data-compositor="layout"]) .nessa-composer-model-content {
   animation: none;
 }
+.nessa-panel[data-compositor="layout"] .nessa-composer-tray[data-leaving] {
+  visibility: hidden;
+}
 .nessa-panel[data-compositor="layout"] .nessa-model-hint-label,
 .nessa-panel[data-compositor="layout"] [data-slot="composer-tray-plus"] {
   transform: none;
-  transition: opacity 120ms ease-out;
+  /* The property alone, so the label keeps its wait before showing. */
+  transition-property: opacity;
 }
 
 .nessa-browser-login {

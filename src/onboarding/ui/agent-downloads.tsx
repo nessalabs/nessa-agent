@@ -4,7 +4,7 @@ import type {
 } from "../application/agent-installations"
 import { AGENT_CHOICES, type AgentId } from "../model/onboarding"
 import { useAgentDownloads } from "./use-agent-downloads"
-import { AgentDownloadProgress } from "./agent-download-progress"
+import { LoaderCircle } from "lucide-react"
 
 export function installationOutcomeText(
   outcome: InstallationOutcome | undefined,
@@ -32,11 +32,49 @@ export function installationOutcomeText(
   }
 }
 
+const megabytes = (bytes: number) => `${Math.ceil(bytes / 1_000_000)} MB`
+
+const agentName = (agent: AgentId) =>
+  AGENT_CHOICES.find((choice) => choice.id === agent)?.name ?? agent
+
+const ROW_ACTION =
+  "rounded-full px-3 py-1 nessa-text-3 text-foreground bg-muted transition-[background-color,transform] duration-150 ease-out hover:bg-accent focus-visible:bg-accent active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
+
+/**
+ * Offers are unknown or stale: the gateway could not be asked, or an install
+ * may still be running and needs a fresh look before another try.
+ */
+function CheckAgain({
+  unavailable,
+  refresh,
+}: {
+  unavailable: boolean
+  refresh: () => void
+}) {
+  return (
+    <div className="flex min-h-11 items-center gap-3 px-3.5 py-1.5 nessa-text-4">
+      <span className="flex-1 text-muted-foreground">
+        {unavailable ? "Can’t check downloads" : "Check again shortly"}
+      </span>
+      <button type="button" onClick={refresh} className={ROW_ACTION}>
+        Check again
+      </button>
+    </div>
+  )
+}
+
+/**
+ * One row per agent and a word or two for where it stands: Installed,
+ * Downloading, Download, or Retry. Everything longer — why a download failed,
+ * what is downloading — is said to assistive technology and kept in the
+ * Retry button's tooltip, not printed under the rows.
+ */
 export function AgentDownloadsView({
   offers,
   agents,
   pending,
   outcome,
+  attempted,
   unavailable,
   refresh,
   install,
@@ -44,57 +82,80 @@ export function AgentDownloadsView({
   /** Only these agents' downloads, when the surface lists fewer agents. */
   agents?: readonly AgentId[]
 }) {
+  // Retry only where the download itself went wrong. After "busy" or "not
+  // confirmed" it may still be running, and a fresh check says what it is.
+  const failed =
+    outcome?.status === "failed" &&
+    !["busy", "not-confirmed", "unavailable"].includes(outcome.reason)
+      ? attempted
+      : undefined
+  const reason = installationOutcomeText(outcome)
+  const listed = offers?.filter(
+    (offer) => agents === undefined || agents.includes(offer.agent),
+  )
   return (
-    <section aria-label="Agent downloads" className="flex flex-col gap-2">
-      <p className="nessa-text-2 text-muted-foreground">
-        Download only the agents you use. Your own account is still required.
+    <section aria-label="Agent downloads" className="flex flex-col">
+      {listed ? (
+        <>
+          <ul role="list" className="m-0 flex flex-col p-0">
+            {listed.map((offer) => {
+              const name = agentName(offer.agent)
+              return (
+                <li
+                  key={offer.agent}
+                  data-agent-download={offer.agent}
+                  className="flex min-h-11 list-none items-center gap-3 px-3.5 py-1.5 nessa-text-4"
+                >
+                  <span className="flex-1 truncate">{name}</span>
+                  {offer.installed ? (
+                    <span className="nessa-text-3 text-muted-foreground">Installed</span>
+                  ) : pending === offer.agent ? (
+                    <span
+                      role="progressbar"
+                      aria-label={`Downloading ${name}`}
+                      className="flex items-center gap-1.5 nessa-text-3 text-muted-foreground"
+                    >
+                      <LoaderCircle
+                        aria-hidden="true"
+                        className="size-3.5 motion-safe:animate-spin"
+                      />
+                      Downloading
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={`${failed === offer.agent ? "Retry" : "Download"} ${name} · ${megabytes(offer.archiveBytes)}`}
+                      title={
+                        failed === offer.agent ? reason : megabytes(offer.archiveBytes)
+                      }
+                      disabled={pending !== undefined}
+                      onClick={() => install(offer.agent)}
+                      className={ROW_ACTION}
+                    >
+                      {failed === offer.agent ? "Retry" : "Download"}
+                    </button>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+          {unavailable ? <CheckAgain unavailable refresh={refresh} /> : null}
+        </>
+      ) : unavailable || outcome ? (
+        <CheckAgain unavailable={unavailable} refresh={refresh} />
+      ) : (
+        <p className="m-0 flex min-h-11 items-center px-3.5 nessa-text-4 text-muted-foreground">
+          Checking…
+        </p>
+      )}
+      {/* Said, not shown: the rows already carry the word. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {pending
+          ? `Downloading ${agentName(pending)}`
+          : unavailable
+            ? "Cannot check downloads. Connect to Nessa and try again."
+            : reason}
       </p>
-      {offers
-        ?.filter((offer) => agents === undefined || agents.includes(offer.agent))
-        .map((offer) => (
-          <div
-            key={offer.agent}
-            className="flex items-center justify-between gap-2 nessa-text-2"
-          >
-            <span>{AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name}</span>
-            {offer.installed ? (
-              <span>Installed</span>
-            ) : (
-              <button
-                type="button"
-                aria-label={`Download ${AGENT_CHOICES.find((choice) => choice.id === offer.agent)?.name} · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
-                disabled={pending !== undefined}
-                onClick={() => install(offer.agent)}
-                className="rounded-full border border-border px-3 py-2 focus-visible:outline focus-visible:outline-ring disabled:opacity-60"
-              >
-                {pending === offer.agent
-                  ? "Downloading…"
-                  : `Download · ${Math.ceil(offer.archiveBytes / 1_000_000)} MB`}
-              </button>
-            )}
-          </div>
-        ))}
-      <p role="status" aria-live="polite" className="nessa-text-2 text-muted-foreground">
-        {pending ? (
-          <AgentDownloadProgress
-            name={
-              AGENT_CHOICES.find((choice) => choice.id === pending)?.name ?? "the runtime"
-            }
-            archiveBytes={offers?.find((offer) => offer.agent === pending)?.archiveBytes}
-          />
-        ) : unavailable ? (
-          "Cannot check downloads. Connect to Nessa and try again."
-        ) : (
-          installationOutcomeText(outcome)
-        )}
-      </p>
-      <button
-        type="button"
-        onClick={refresh}
-        className="self-start rounded-full border border-border px-3 py-2 nessa-text-2 focus-visible:outline focus-visible:outline-ring"
-      >
-        Check downloads
-      </button>
     </section>
   )
 }

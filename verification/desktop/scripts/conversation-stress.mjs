@@ -7417,6 +7417,8 @@ const steps = {
           ))
       )
         failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      await panelComposerControls(page, failures)
+      await panelDetailsSheet(page, failures)
       // A chat archived from Messages leaves a row card with its avatar,
       // and the card's Undo brings it back, in the list and the gateway.
       const conversationId = randomUUID()
@@ -13253,6 +13255,203 @@ async function panelWindow(run) {
   })
   await page.goto(`${new URL(run.page.url()).origin}/index.html`)
   return page
+}
+
+/** How long the model's name waits under a resting pointer (styles.css). */
+const MODEL_NAME_WAIT_MS = 2_000
+/** What an Agent downloads row may say beside the agent's name. */
+const DOWNLOAD_WORDS = new Set(["Installed", "Downloading", "Download", "Retry"])
+
+/**
+ * The panel composer's two quiet controls. The model's name shows only after
+ * the pointer rests on its mark for two seconds, and goes when it leaves. The
+ * + tray grows out of + (its transform origin is the button's centre), its
+ * Agent downloads page is rows of a name and one word with nothing printed
+ * around them, and on close it shrinks back, unnamed, and is gone.
+ */
+async function panelComposerControls(page, failures) {
+  const mark = page.locator(css.panelModelMark).first()
+  const name = page.locator(css.panelModelName).first()
+  if ((await mark.count()) === 0 || (await name.count()) === 0) {
+    failures.push("the panel composer draws no model mark with its name")
+  } else {
+    const opacity = () => name.evaluate((node) => Number(getComputedStyle(node).opacity))
+    await page.mouse.move(1, 1)
+    await mark.hover()
+    const hovered = Date.now()
+    await sleep(MODEL_NAME_WAIT_MS / 3)
+    if ((await opacity()) > 0.01)
+      failures.push(
+        `the model's name shows ${Date.now() - hovered} ms into a hover, before its ${MODEL_NAME_WAIT_MS} ms wait`,
+      )
+    if (
+      !(await waitFor(async () => (await opacity()) >= 0.99, MODEL_NAME_WAIT_MS + 3_000))
+    )
+      failures.push("the model's name never showed under a resting pointer")
+    // It goes at once: no wait on the way out, only the short fade.
+    await page.mouse.move(1, 1)
+    if (!(await waitFor(async () => (await opacity()) < 1, 300)))
+      failures.push("the model's name waited after the pointer left its mark")
+    if (!(await waitFor(async () => (await opacity()) <= 0.01, 1_000)))
+      failures.push("the model's name stayed after the pointer left its mark")
+  }
+
+  const plus = page.locator(css.panelPlus).first()
+  await plus.click()
+  const tray = page.locator(css.panelTray)
+  if (
+    !(await tray.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("+ opened no tray")
+    // Whatever opened instead must not cover the panel for the steps after.
+    await page.keyboard.press("Escape")
+    return
+  }
+  // Once its entrance has played, where it grew from: the origin as the
+  // browser resolved it, in the page, against +'s centre.
+  await sleep(400)
+  const grown = await page.evaluate(
+    ([traySelector, plusSelector]) => {
+      const tray = document.querySelector(traySelector)
+      const plus = document.querySelector(plusSelector)
+      if (!tray || !plus) return null
+      const style = getComputedStyle(tray)
+      const [x, y] = style.transformOrigin.split(" ").map(parseFloat)
+      const box = tray.getBoundingClientRect()
+      const button = plus.getBoundingClientRect()
+      return {
+        animation: style.animationName,
+        dx: Math.round(box.left + x - (button.left + button.width / 2)),
+        dy: Math.round(box.top + y - (button.top + button.height / 2)),
+      }
+    },
+    [css.panelTray, css.panelPlus],
+  )
+  if (!grown) failures.push("the tray or + went while the tray was open")
+  else {
+    if (!grown.animation.includes("nessa-composer-tray-rise"))
+      failures.push(`the tray opens without growing: animation ${grown.animation}`)
+    if (Math.abs(grown.dx) > 2 || Math.abs(grown.dy) > 2)
+      failures.push(
+        `the tray grows from ${grown.dx},${grown.dy} px off +'s centre, not from +`,
+      )
+  }
+
+  const downloads = tray.getByRole("button", { name: /^Agent downloads/ })
+  if ((await downloads.count()) === 0) {
+    failures.push("the tray offers no Agent downloads")
+  } else {
+    await downloads.click()
+    // Settled: rows, or the one line that says they could not be read.
+    const section = tray.getByRole("region", { name: "Agent downloads" })
+    const settledPage = await waitFor(async () => {
+      const text = await section.innerText().catch(() => "")
+      return text !== "" && !text.includes("Checking")
+    }, 15_000)
+    if (!settledPage) failures.push("Agent downloads still says Checking after 15 s")
+    const shown = await tray.innerText()
+    for (const extra of [
+      "Download only",
+      "account is still required",
+      "verifying",
+      "Archive size",
+      "Check downloads",
+    ])
+      if (shown.includes(extra))
+        failures.push(`Agent downloads still prints ${JSON.stringify(extra)}`)
+    const rows = await tray.locator(css.agentDownloadRow).evaluateAll((all) =>
+      all.map((row) => ({
+        name: row.firstElementChild?.textContent ?? "",
+        word: (row.lastElementChild?.textContent ?? "").trim(),
+      })),
+    )
+    if (rows.length === 0 && !shown.includes("Check again"))
+      failures.push(`Agent downloads lists no agent: ${JSON.stringify(shown)}`)
+    for (const row of rows)
+      if (!DOWNLOAD_WORDS.has(row.word))
+        failures.push(
+          `Agent downloads says ${JSON.stringify(row.word)} beside ${row.name}, not one word`,
+        )
+    // Escape steps back to the first page, then closes.
+    await page.keyboard.press("Escape")
+  }
+  await page.evaluate(() => {
+    window.__trayLeft = false
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(".nessa-composer-tray[data-leaving]")) {
+        window.__trayLeft = true
+        observer.disconnect()
+      }
+    })
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+  })
+  await page.keyboard.press("Escape")
+  const gone = await waitFor(
+    () => page.evaluate(() => !document.querySelector(".nessa-composer-tray")),
+    2_000,
+  )
+  if (!gone) failures.push("the tray is still drawn a second after it closed")
+  if (!(await page.evaluate(() => window.__trayLeft)))
+    failures.push("the tray vanished on close instead of shrinking back into +")
+  if (
+    !(await plus.evaluate(
+      (node) =>
+        document.activeElement === node && node.getAttribute("aria-expanded") === "false",
+    ))
+  )
+    failures.push("closing the tray with Escape did not hand focus back to +")
+}
+
+/**
+ * The chat's Details sheet, opened from its tab's menu: what the chat runs on
+ * and where, and no Approvals group (the composer owns the approval mode).
+ */
+async function panelDetailsSheet(page, failures) {
+  // The selected tab's dot: its menu holds View details.
+  const target = page.locator(css.panelActiveTab).first()
+  await target.click({ button: "right" })
+  const item = page.getByRole("menuitem", { name: "View details" })
+  if (
+    !(await item.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("the chat's tab menu offers no View details")
+    await page.keyboard.press("Escape")
+    return
+  }
+  await item.click()
+  const sheet = page.getByRole("dialog", { name: "Conversation details" })
+  if (
+    !(await sheet.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("View details opened no Details sheet")
+    return
+  }
+  const groups = await sheet.locator("section > h3").allInnerTexts()
+  if (!groups.includes("Model"))
+    failures.push(`the Details sheet has no Model group: ${JSON.stringify(groups)}`)
+  if (groups.includes("Approvals"))
+    failures.push("the Details sheet still has an Approvals group")
+  const text = await sheet.innerText()
+  for (const gone of ["Tool calls", "Deny a request", "Answer later", "Native hooks"])
+    if (text.includes(gone))
+      failures.push(`the Details sheet still says ${JSON.stringify(gone)}`)
+  await sheet.getByRole("button", { name: "Done" }).click()
+  if (
+    !(await sheet.waitFor({ state: "detached", timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    failures.push("Done left the Details sheet open")
 }
 
 /** Waits until the panel's strip leads with `title`, the selected tab's name. */
