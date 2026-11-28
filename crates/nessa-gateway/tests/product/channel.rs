@@ -2,9 +2,10 @@
 //! the default channel first and never answers past one frame; each refusal
 //! has its own code.
 use super::*;
-use crate::conversation::domain::{ChannelFolder, ChannelParts};
+use crate::conversation::domain::{ChannelFolder, ChannelParts, DefaultCoordinator};
 use crate::conversation_test_support::absolute;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::protocol::ResponseFrame;
 use serde_json::json;
 
@@ -87,24 +88,46 @@ fn stored(n: u8, notes: &str) -> Channel {
 
 #[test]
 fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
+    let coordinator = ConversationId::new("6f1c3a52-0b7e-4d3a-9c55-2b8e1f0a9d41").unwrap();
     let list = listed(
         ChannelListing {
-            default_folder: Some(absolute("/work/default")),
+            default: Some(DefaultChannel {
+                folder: absolute("/work/default"),
+                coordinator: Some(DefaultCoordinator::new(coordinator.clone(), true)),
+            }),
             channels: vec![stored(1, "private notes")],
         },
         None,
     );
     let wire = serde_json::to_value(&list).unwrap();
+    // The default channel has its owner's coordinator, on until turned off.
     assert_eq!(
         wire["channels"][0],
         json!({
             "channelId": "default", "name": "Conversations", "folder": absolute("/work/default"),
             "folderMade": false, "agent": null, "model": null, "approvalMode": "ask",
             "createdAtMs": 0,
-            "coordinatorConversationId": null,
-            "coordinatorOn": false
+            "coordinatorConversationId": coordinator.to_string(),
+            "coordinatorOn": true
         })
     );
+    // With no channel store there is none to name.
+    let unkept = listed(
+        ChannelListing {
+            default: Some(DefaultChannel {
+                folder: absolute("/work/default"),
+                coordinator: None,
+            }),
+            channels: vec![],
+        },
+        None,
+    );
+    let unkept = serde_json::to_value(&unkept).unwrap();
+    assert_eq!(
+        unkept["channels"][0]["coordinatorConversationId"],
+        json!(null)
+    );
+    assert_eq!(unkept["channels"][0]["coordinatorOn"], false);
     // A made channel's coordinator is on until the person turns it off.
     assert_eq!(wire["channels"][1]["coordinatorOn"], true);
     assert_eq!(wire["channels"][1]["agent"], "claude");
@@ -113,7 +136,7 @@ fn a_list_starts_with_the_default_channel_and_lists_no_notes() {
     assert!(list.complete);
     let without = listed(
         ChannelListing {
-            default_folder: None,
+            default: None,
             channels: vec![],
         },
         None,
@@ -156,7 +179,13 @@ fn long(index: u16) -> Channel {
 fn a_list_longer_than_a_frame_is_paged_and_every_channel_is_listed_once() {
     let channels: Vec<Channel> = (0..1000).map(long).collect();
     let listing = || ChannelListing {
-        default_folder: Some(absolute("/work/default")),
+        default: Some(DefaultChannel {
+            folder: absolute("/work/default"),
+            coordinator: Some(DefaultCoordinator::new(
+                ConversationId::new("6f1c3a52-0b7e-4d3a-9c55-2b8e1f0a9d41").unwrap(),
+                true,
+            )),
+        }),
         channels: channels.clone(),
     };
     let mut seen = Vec::new();

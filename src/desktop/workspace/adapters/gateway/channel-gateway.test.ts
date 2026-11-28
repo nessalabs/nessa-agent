@@ -125,14 +125,35 @@ describe("the flow's bounds", () => {
     expect(on?.coordinatorConversationId).toBe("main")
   })
 
-  it("refuses to switch the default channel's coordinator without asking", async () => {
-    const setCoordinator = vi.fn()
+  it("switches the default channel's coordinator by its gateway id", async () => {
+    const setCoordinator = vi.fn().mockResolvedValue({
+      channelId: "default",
+      name: "Conversations",
+      folder: "/work",
+      folderMade: false,
+      agent: null,
+      model: null,
+      approvalMode: "ask",
+      coordinatorConversationId: "main",
+      coordinatorOn: false,
+      createdAtMs: 0,
+    })
     const source = channelGateway({
       connected: async () => ({ channels: { create: vi.fn(), setCoordinator } }),
     })
-    await expect(
-      source.setCoordinator?.(gatewayChannel.id, true, "r"),
-    ).rejects.toMatchObject({ reason: "forbidden" })
-    expect(setCoordinator).not.toHaveBeenCalled()
+    const off = await source.setCoordinator?.(gatewayChannel.id, false, "r")
+    expect(setCoordinator).toHaveBeenCalledWith({
+      requestId: "r",
+      channelId: "default",
+      on: false,
+    })
+    // Read back as the index's Conversations, with its coordinator kept.
+    expect(off).toMatchObject({
+      id: gatewayChannel.id,
+      name: "Conversations",
+      folder: "/work",
+      coordinatorConversationId: "main",
+      coordinatorOn: false,
+    })
   })
 })

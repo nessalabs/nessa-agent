@@ -1,6 +1,7 @@
 -- A person's channels (`ChannelStore`), and which conversation is in which.
 -- A conversation with no row in `channel_conversations` is in the default
--- channel, which is never stored. A channel's id is made from its owner and
+-- channel, which is never stored; its coordinator is kept, by owner, in
+-- `default_coordinators`. A channel's id is made from its owner and
 -- request id, so a retried creation names the same row.
 CREATE TABLE channels (
     channel TEXT PRIMARY KEY NOT NULL,
@@ -60,4 +61,13 @@ CREATE TABLE conversation_reply_styles (
     -- as told: a conversation from before jobs has none and is told none.
     job TEXT CHECK (job IS NULL OR (length(job) > 0 AND length(CAST(job AS BLOB)) <= 8192))
 ) STRICT, WITHOUT ROWID;
-PRAGMA user_version = 8;
+-- The default channel's coordinator, one for each owner, made on the first
+-- time the owner's channels are read.
+CREATE TABLE default_coordinators (
+    organization_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    coordinator TEXT NOT NULL UNIQUE,
+    coordinator_on INTEGER NOT NULL DEFAULT 1 CHECK (coordinator_on IN (0, 1)),
+    PRIMARY KEY (organization_id, owner_id)
+) STRICT, WITHOUT ROWID;
+PRAGMA user_version = 9;

@@ -6,12 +6,15 @@
 //!   ──▶ ConversationService::create_channel ──▶ { channel } | its ChannelErrorCode
 //! channel.list ──▶ ConversationService::list_channels
 //!   ──▶ the default channel first, then the stored ones ──▶ cut to one frame
-//! channel.setCoordinator ──▶ ConversationService::set_channel_coordinator
+//! channel.setCoordinator ──▶ default? ── ConversationService::set_default_coordinator
+//!                            └─ made ── ConversationService::set_channel_coordinator
 //!   (channel.settings, audited) ──▶ { channel }, the same main conversation
 //! ```
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
-use crate::conversation::application::{ChannelError, ChannelListing, FolderRefusal};
+use crate::conversation::application::{
+    ChannelError, ChannelListing, DefaultChannel, FolderRefusal,
+};
 use crate::conversation::domain::{
     Channel, ChannelDefaults, ChannelId, ChannelName, ChannelNotes, ChannelPath, ChannelRequest,
     ChannelResources,
@@ -108,16 +111,19 @@ pub(super) async fn dispatch(
                 return failure(&frame.id, ChannelErrorCode::InvalidRequest.as_str());
             };
             let caller = super::conversation::caller(session, params.request_id);
-            match service
-                .set_channel_coordinator(&caller, &channel, params.on)
-                .await
-            {
-                Ok(channel) => success(
-                    &frame.id,
-                    &ChannelSetCoordinatorResult {
-                        channel: wire_channel(&channel),
-                    },
-                ),
+            let switched = if channel.is_default() {
+                service
+                    .set_default_coordinator(&caller, params.on)
+                    .await
+                    .map(|default| wire_default(&default))
+            } else {
+                service
+                    .set_channel_coordinator(&caller, &channel, params.on)
+                    .await
+                    .map(|channel| wire_channel(&channel))
+            };
+            match switched {
+                Ok(channel) => success(&frame.id, &ChannelSetCoordinatorResult { channel }),
                 Err(error) => refused(&frame.id, error),
             }
         }
@@ -180,6 +186,29 @@ fn wire_channel(channel: &Channel) -> WireChannel {
     }
 }
 
+/// The default channel as the caller has it: the gateway's workspace, and
+/// their own coordinator there when a channel store keeps one.
+fn wire_default(default: &DefaultChannel) -> WireChannel {
+    WireChannel {
+        channel_id: ChannelId::DEFAULT.to_owned(),
+        name: DEFAULT_NAME.to_owned(),
+        folder: default.folder.clone(),
+        folder_made: false,
+        agent: None,
+        model: None,
+        approval_mode: ApprovalMode::Ask,
+        coordinator_conversation_id: default
+            .coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.coordinator_id().to_string()),
+        coordinator_on: default
+            .coordinator
+            .as_ref()
+            .is_some_and(|coordinator| coordinator.coordinator_on()),
+        created_at_ms: 0,
+    }
+}
+
 /// The default channel, then the stored ones; after `after`, only the stored
 /// ones made after it. With no workspace configured the default channel has
 /// no folder to show, and is left out.
@@ -193,19 +222,9 @@ fn listed(listing: ChannelListing, after: Option<&ChannelId>) -> ChannelListResu
             .map(wire_channel)
             .collect(),
         None => listing
-            .default_folder
-            .map(|folder| WireChannel {
-                channel_id: ChannelId::DEFAULT.to_owned(),
-                name: DEFAULT_NAME.to_owned(),
-                folder,
-                folder_made: false,
-                agent: None,
-                model: None,
-                approval_mode: ApprovalMode::Ask,
-                coordinator_conversation_id: None,
-                coordinator_on: false,
-                created_at_ms: 0,
-            })
+            .default
+            .as_ref()
+            .map(wire_default)
             .into_iter()
             .chain(listing.channels.iter().map(wire_channel))
             .collect(),

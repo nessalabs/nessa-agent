@@ -27,7 +27,7 @@ use crate::application::{
 };
 use crate::domain::{
     Channel, ChannelFolder, ChannelId, ChannelParts, ChannelPath, ChannelRequest, ChannelResources,
-    MAX_CHANNELS_PER_OWNER,
+    DefaultCoordinator, MAX_CHANNELS_PER_OWNER,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationId};
@@ -81,6 +81,26 @@ pub trait ChannelStore: Send + Sync {
         channel: &ChannelId,
         on: bool,
     ) -> ConversationFuture<'_, Option<Channel>>;
+    /// `owner`'s coordinator of the default channel, made on the first time
+    /// it is asked for, under an id chosen then.
+    fn default_coordinator(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, DefaultCoordinator>;
+    /// Turn `owner`'s default-channel coordinator on or off, keeping its
+    /// conversation.
+    fn set_default_coordinator_on(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        on: bool,
+    ) -> ConversationFuture<'_, DefaultCoordinator>;
+    /// Whose default-channel coordinator `conversation` is, if anyone's.
+    fn default_coordinator_of(
+        &self,
+        conversation: &ConversationId,
+    ) -> ConversationFuture<'_, Option<(OrganizationId, PrincipalId)>>;
 }
 
 /// Why a folder or a file is not one a channel takes.
@@ -179,13 +199,27 @@ pub fn working_folder(
         .or_else(|| gateway.cloned())
 }
 
-/// The caller's channels: the default one's folder, then the stored ones in
-/// the order they were made.
+/// The caller's channels: the default one, then the stored ones in the order
+/// they were made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelListing {
-    pub default_folder: Option<String>,
+    /// `None` when the gateway has no workspace: the default channel has no
+    /// folder to work in, and is not listed.
+    pub default: Option<DefaultChannel>,
     pub channels: Vec<Channel>,
 }
+
+/// The default channel as the caller has it: the gateway's workspace, and
+/// their own coordinator there (`None` when no channel store is bound).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultChannel {
+    pub folder: String,
+    pub coordinator: Option<DefaultCoordinator>,
+}
+
+/// What a channel's main agent is told, besides its role's job: it is the
+/// one that hands work to Nessa threads.
+const MAIN_AGENT: &str = "\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and run on this computer. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle.\n";
 
 /// The store and file system channels are kept with, bound once at startup.
 #[derive(Default)]
@@ -425,16 +459,27 @@ impl ConversationService {
                 app_namespace: &nessa_auth::domain::AppNamespace::DEFAULT,
             },
         )?;
-        let channels = match self.channel_store() {
-            Some(store) => {
+        let (channels, coordinator) = match self.channel_store() {
+            Some(store) => (
                 store
                     .list(&caller.organization_id, &caller.principal_id)
-                    .await?
-            }
-            None => Vec::new(),
+                    .await?,
+                match &self.inner.workspace {
+                    Some(_) => Some(
+                        store
+                            .default_coordinator(&caller.organization_id, &caller.principal_id)
+                            .await?,
+                    ),
+                    None => None,
+                },
+            ),
+            None => (Vec::new(), None),
         };
         Ok(ChannelListing {
-            default_folder: self.inner.workspace.clone(),
+            default: self.inner.workspace.clone().map(|folder| DefaultChannel {
+                folder,
+                coordinator,
+            }),
             channels,
         })
     }
@@ -479,7 +524,7 @@ impl ConversationService {
     ///
     /// # Errors
     /// `Forbidden` when the caller has no such channel or may not change its
-    /// settings (the default channel is never stored, so it has none);
+    /// settings (the default channel's is [`Self::set_default_coordinator`]);
     /// `Storage` or `Unavailable` when it could not be written.
     pub async fn set_channel_coordinator(
         &self,
@@ -542,6 +587,104 @@ impl ConversationService {
         .map_err(|_| ChannelError::Unavailable)?;
         tracing::info!(channel_id = %id, on, "channel coordinator switched");
         Ok(changed)
+    }
+
+    /// Turn the caller's default-channel coordinator on or off, as
+    /// [`Self::set_channel_coordinator`] does a made channel's: the same
+    /// Cedar action on the caller's own default channel, the same audit.
+    ///
+    /// # Errors
+    /// `Forbidden` when the policy refuses it or no channel store is bound;
+    /// `NotConfigured` when the gateway has no workspace, so no default
+    /// channel; `Storage` or `Unavailable` when it could not be written.
+    pub async fn set_default_coordinator(
+        &self,
+        caller: &ConversationCaller,
+        on: bool,
+    ) -> Result<DefaultChannel, ChannelError> {
+        let _admission = self.admit().await.map_err(|_| ChannelError::Unavailable)?;
+        self.admit_channel(
+            caller,
+            AccessAction::ChannelSettings,
+            AccessResource::Channel {
+                organization: &caller.organization_id,
+                owner: &caller.principal_id,
+            },
+        )?;
+        let store = self.channel_store().ok_or(ChannelError::Forbidden)?;
+        let folder = self
+            .inner
+            .workspace
+            .clone()
+            .ok_or(ChannelError::NotConfigured)?;
+        let (organization, owner) = (&caller.organization_id, &caller.principal_id);
+        let _switch = self.inner.channel_switches.lock().await;
+        let current = store.default_coordinator(organization, owner).await?;
+        if current.coordinator_on() == on {
+            return Ok(DefaultChannel {
+                folder,
+                coordinator: Some(current),
+            });
+        }
+        let operation = uuid::Uuid::new_v4().to_string();
+        let record = |outcome| SettingsAuditRecord {
+            operation_id: operation.clone(),
+            caller: caller.clone(),
+            change: SettingsChange::ChannelCoordinator {
+                channel: ChannelId::default_channel(),
+                before: current.coordinator_on(),
+                after: on,
+                coordinator: current.coordinator_id(),
+            },
+            outcome,
+        };
+        self.record_setting(record(SettingsOutcome::Requested))
+            .await
+            .map_err(|_| ChannelError::Unavailable)?;
+        let changed = match store
+            .set_default_coordinator_on(organization, owner, on)
+            .await
+        {
+            Ok(changed) => changed,
+            Err(error) => {
+                if self
+                    .record_setting(record(SettingsOutcome::Failed))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("a failed default coordinator switch was not recorded");
+                }
+                return Err(error.into());
+            }
+        };
+        self.record_setting(record(SettingsOutcome::Applied {
+            changed: true,
+            coordinator: Some(changed.coordinator_id()),
+        }))
+        .await
+        .map_err(|_| ChannelError::Unavailable)?;
+        tracing::info!(on, "default channel coordinator switched");
+        Ok(DefaultChannel {
+            folder,
+            coordinator: Some(changed),
+        })
+    }
+
+    /// Whether `id` is `caller`'s own default-channel coordinator.
+    pub(super) async fn is_default_coordinator_of(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<bool, ConversationError> {
+        let Some(store) = self.channel_store() else {
+            return Ok(false);
+        };
+        Ok(store
+            .default_coordinator_of(id)
+            .await?
+            .is_some_and(|(organization, owner)| {
+                organization == caller.organization_id && owner == caller.principal_id
+            }))
     }
 
     pub(super) async fn channel_for_action(
@@ -615,8 +758,9 @@ impl ConversationService {
         }
     }
 
-    /// Where `id`'s agent works, when it is in a stored channel; `None` is
-    /// the default channel, the gateway's configured workspace.
+    /// Where `id`'s agent works, when it is in a stored channel or is the
+    /// default channel's coordinator; `None` is any other conversation in the
+    /// default channel, which works in the gateway's configured workspace.
     ///
     /// # Errors
     /// `Unavailable` when its placement, or the channel it names, cannot be
@@ -629,7 +773,21 @@ impl ConversationService {
             return Ok(None);
         };
         let Some(channel) = store.channel_of(id).await? else {
-            return Ok(None);
+            // The default channel's coordinator works in the gateway's
+            // workspace, as every conversation there does, and is told it is
+            // the main agent as a made channel's is.
+            let workspace = self.inner.workspace.as_ref();
+            return Ok(match workspace {
+                Some(folder) if store.default_coordinator_of(id).await?.is_some() => {
+                    Some(AgentPlace {
+                        folder: PathBuf::from(folder),
+                        instructions: format!(
+                            "This conversation is in the person's channel \"Conversations\", their default one. Its folder is {folder}.{MAIN_AGENT}"
+                        ),
+                    })
+                }
+                _ => None,
+            });
         };
         let found = store
             .get(&channel)
@@ -637,7 +795,7 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)?;
         let mut place = AgentPlace::of(&found);
         if *id == found.coordinator_id() {
-            place.instructions.push_str("\nYou are the main agent for this channel. Coordinate the user's work here. Use the nessa-agents MCP server: create_thread creates a separate Nessa thread, and send_message delegates work to it. Use those tools for channel delegation rather than the harness runtime’s built-in subagent or fork tools, which do not allocate Nessa workspaces. Child Nessa threads inherit this channel and run on this computer. Report the thread UUID and receipt actually returned by Nessa. You run only when there is work or a report to handle.\n");
+            place.instructions.push_str(MAIN_AGENT);
         }
         Ok(Some(place))
     }

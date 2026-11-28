@@ -3693,9 +3693,9 @@ export interface Channel {
   approvalMode: ApprovalMode
   /** When the channel was made, in Unix milliseconds; 0 for the default channel. */
   createdAtMs: number
-  /** Stable main-agent conversation identity; null for the default channel. Opening a channel uses this conversation while coordinatorOn; New thread uses another identity. */
+  /** Stable main-agent conversation identity. The default channel's is the caller's own, chosen the first time their channels are read; null only when the gateway keeps no channels. Opening a channel uses this conversation while coordinatorOn; New thread uses another identity. */
   coordinatorConversationId: string | null
-  /** Whether the channel's coordinator is on; false for the default channel. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator). */
+  /** Whether the channel's coordinator is on; a made channel and the default one start with it on, and the default one is false only when it has no coordinatorConversationId. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator). */
   coordinatorOn: boolean
 }
 /** Make a channel (channel.create). Repeating the same requestId with the same channel answers the channel it made; with another, channel_request_conflict. The folder is the one path a request may name, and only here: a conversation names its channel, never a folder. */
@@ -3723,7 +3723,7 @@ export interface ChannelCreateParams {
 export interface ChannelCreateResult {
   channel: Channel
 }
-/** Turn a made channel's coordinator on or off (channel.setCoordinator). Off keeps its main conversation and its threads; the channel is no longer opened at it. On again, the same conversation is its coordinator. The default channel has none and is refused forbidden, as is a channel the caller may not change. */
+/** Turn a channel's coordinator on or off (channel.setCoordinator): a made channel's, or the caller's own in the default channel. Off keeps its main conversation and its threads; the channel is no longer opened at it. On again, the same conversation is its coordinator. A channel the caller may not change is refused forbidden; the default channel on a gateway that keeps no channels is refused forbidden too, and on one with no workspace conversations_not_configured. */
 export interface ChannelSetCoordinatorParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string

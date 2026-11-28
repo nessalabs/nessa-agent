@@ -328,7 +328,7 @@ async fn erasing_a_coordinator_rotates_once_and_survives_reopen() {
 
 #[tokio::test]
 async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
-    for version in [1, 2, 3, 4, 5, 6, 7] {
+    for version in [1, 2, 3, 4, 5, 6, 7, 8] {
         let directory = tempfile::tempdir().unwrap();
         let private = directory.path().join("conversations");
         nessa_local_storage::create_directory(&private).unwrap();
@@ -341,8 +341,9 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
             .lines()
             .filter(|line| {
                 let line = line.trim_start();
-                !line.starts_with("coordinator_on ")
-                    && !line.starts_with("-- Whether its coordinator is on")
+                version >= 8
+                    || (!line.starts_with("coordinator_on ")
+                        && !line.starts_with("-- Whether its coordinator is on"))
             })
             .map(|line| format!("{line}\n"))
             .collect::<String>();
@@ -383,22 +384,30 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 "cause = 'coordinator_conversation_erased'",
             )
         };
-        // A v7 file already keeps how agents talk, but no job (v8).
+        // A v7 file already keeps how agents talk, but no job (v8). No file
+        // before v9 keeps the default channel's coordinator.
         let styles = if version >= 7 {
             current[current.find("-- How agents talk").unwrap()
-                ..current.find("PRAGMA user_version").unwrap()]
+                ..current
+                    .find("-- The default channel's coordinator, one for each owner")
+                    .unwrap()]
                 .lines()
                 .filter(|line| {
                     let line = line.trim_start();
-                    !line.starts_with("job TEXT")
-                        && !line.starts_with("-- The job its role")
-                        && !line.starts_with("-- as told:")
+                    version >= 8
+                        || (!line.starts_with("job TEXT")
+                            && !line.starts_with("-- The job its role")
+                            && !line.starts_with("-- as told:"))
                 })
                 .map(|line| format!("{line}\n"))
                 .collect::<String>()
                 .replace(
                     "<= 4096),\n) STRICT, WITHOUT ROWID",
-                    "<= 4096)\n) STRICT, WITHOUT ROWID",
+                    if version >= 8 {
+                        "<= 4096),\n) STRICT, WITHOUT ROWID"
+                    } else {
+                        "<= 4096)\n) STRICT, WITHOUT ROWID"
+                    },
                 )
         } else {
             String::new()
@@ -484,6 +493,23 @@ async fn older_channel_schemas_upgrade_without_relocating_existing_work() {
                 .unwrap(),
             RoleStyles::default()
         );
+        // Every owner from before gets a coordinator in Conversations, on,
+        // the first time their channels are read; the channel's own main
+        // conversation is not it.
+        let default = store
+            .default_coordinator(kept.organization(), kept.owner())
+            .await
+            .unwrap();
+        assert!(default.coordinator_on(), "version {version}");
+        assert_ne!(default.coordinator_id(), main);
+        assert_eq!(
+            store
+                .default_coordinator_of(&default.coordinator_id())
+                .await
+                .unwrap(),
+            Some((kept.organization().clone(), kept.owner().clone()))
+        );
+        assert_eq!(store.default_coordinator_of(&main).await.unwrap(), None);
         let pinned = store.pinned(&main).await.unwrap();
         if version == 7 {
             assert_eq!(
@@ -542,6 +568,62 @@ async fn a_coordinator_switched_off_keeps_its_chat_and_reads_back_after_a_reopen
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn a_default_coordinator_is_made_once_per_owner_and_its_switch_survives_a_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = store(directory.path());
+    let (organization, owner) = (
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("owner").unwrap(),
+    );
+    let first = store
+        .default_coordinator(&organization, &owner)
+        .await
+        .unwrap();
+    assert!(first.coordinator_on());
+    assert_eq!(
+        store
+            .default_coordinator(&organization, &owner)
+            .await
+            .unwrap(),
+        first
+    );
+    let other = store
+        .default_coordinator(&organization, &PrincipalId::new("other").unwrap())
+        .await
+        .unwrap();
+    assert_ne!(other.coordinator_id(), first.coordinator_id());
+    let off = store
+        .set_default_coordinator_on(&organization, &owner, false)
+        .await
+        .unwrap();
+    assert_eq!(off.coordinator_id(), first.coordinator_id());
+    drop(store);
+    let reopened =
+        LocalChannelStore::open(&directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept = reopened
+        .default_coordinator(&organization, &owner)
+        .await
+        .unwrap();
+    assert!(!kept.coordinator_on());
+    assert_eq!(kept.coordinator_id(), first.coordinator_id());
+    // Erased, it is replaced; the switch stays as it was.
+    reopened.forget(&first.coordinator_id()).await.unwrap();
+    let next = reopened
+        .default_coordinator(&organization, &owner)
+        .await
+        .unwrap();
+    assert_ne!(next.coordinator_id(), first.coordinator_id());
+    assert!(!next.coordinator_on());
+    assert_eq!(
+        reopened
+            .default_coordinator_of(&first.coordinator_id())
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

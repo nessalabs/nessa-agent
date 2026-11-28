@@ -1,7 +1,7 @@
 //! Faulty channel lookup ports for cross-boundary identity and refusal tests.
 use crate::{
     application::{ChannelStore, ConversationFuture},
-    domain::{Channel, ChannelId},
+    domain::{Channel, ChannelId, DefaultCoordinator},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -49,5 +49,26 @@ impl ChannelStore for ChannelLookup {
         _: bool,
     ) -> ConversationFuture<'_, Option<Channel>> {
         panic!("lookup fixture cannot write")
+    }
+    fn default_coordinator(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+    ) -> ConversationFuture<'_, DefaultCoordinator> {
+        panic!("lookup fixture cannot write")
+    }
+    fn set_default_coordinator_on(
+        &self,
+        _: &OrganizationId,
+        _: &PrincipalId,
+        _: bool,
+    ) -> ConversationFuture<'_, DefaultCoordinator> {
+        panic!("lookup fixture cannot write")
+    }
+    fn default_coordinator_of(
+        &self,
+        _: &ConversationId,
+    ) -> ConversationFuture<'_, Option<(OrganizationId, PrincipalId)>> {
+        Box::pin(async { Ok(None) })
     }
 }

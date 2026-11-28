@@ -114,13 +114,20 @@ function catalogueModel(agent: string, modelId: string): ModelRef | undefined {
 
 /**
  * A channel the gateway lists, as the index holds it. The default channel is
- * `gatewayChannel`, with the folder the gateway says it works in. A channel
- * whose model the catalogue does not list has no defaults: its new sessions
- * start as any other.
+ * `gatewayChannel`, with the folder the gateway says it works in and the
+ * person's own coordinator there, as a made channel has one. A channel whose
+ * model the catalogue does not list has no defaults: its new sessions start
+ * as any other.
  */
 export function channelFrom(wire: WireChannel): Channel {
+  const coordinator = {
+    ...(wire.coordinatorConversationId
+      ? { coordinatorConversationId: wire.coordinatorConversationId }
+      : {}),
+    coordinatorOn: wire.coordinatorOn,
+  }
   if (wire.channelId === defaultChannelId)
-    return { ...gatewayChannel, folder: wire.folder }
+    return { ...gatewayChannel, folder: wire.folder, ...coordinator }
   const model =
     wire.agent && wire.model ? catalogueModel(wire.agent, wire.model) : undefined
   return {
@@ -130,10 +137,7 @@ export function channelFrom(wire: WireChannel): Channel {
     private: false,
     topic: "",
     folder: wire.folder,
-    ...(wire.coordinatorConversationId
-      ? { coordinatorConversationId: wire.coordinatorConversationId }
-      : {}),
-    coordinatorOn: wire.coordinatorOn,
+    ...coordinator,
     ...(model ? { defaults: { model, access: wire.approvalMode } } : {}),
   }
 }

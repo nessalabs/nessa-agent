@@ -213,7 +213,11 @@ impl ConversationService {
         };
         let role = match channel {
             Some(channel) if *id == channel.coordinator_id() => StyleRole::Coordinator,
-            _ => StyleRole::Thread,
+            Some(_) => StyleRole::Thread,
+            // The default channel's coordinator is its owner's alone: the
+            // same id created by anyone else is an ordinary thread.
+            None if self.is_default_coordinator_of(id, caller).await? => StyleRole::Coordinator,
+            None => StyleRole::Thread,
         };
         let scope = channel.map_or(SettingsScope::Global, |channel| {
             SettingsScope::Channel(channel.id().clone())
