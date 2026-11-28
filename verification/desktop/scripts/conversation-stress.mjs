@@ -7550,7 +7550,9 @@ const steps = {
       } finally {
         // Whatever failed, the next step gets the window at 100% and full size.
         await page.setViewportSize(size)
-        if ((await zoomNow(page)).root !== "1") await page.keyboard.press(keys.zoomReset)
+        const end = await zoomNow(page)
+        if (end.root !== "1" || (end.stored !== null && end.stored !== "1"))
+          await page.keyboard.press(keys.zoomReset)
         if (folded) await page.keyboard.press(keys.toggleSidebar)
       }
     })

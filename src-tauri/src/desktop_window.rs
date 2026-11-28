@@ -104,10 +104,15 @@ pub fn desktop_zoom(window: WebviewWindow, zoom: f64) -> Result<(), String> {
     may_zoom(window.label())?;
     let zoom = allowed_zoom(zoom)?;
     window.set_zoom(zoom).map_err(|error| error.to_string())?;
-    // The page is zoomed from here on, so the controls follow it before
-    // anything else can fail, and the page is told of the zoom whatever
-    // becomes of the window's size.
-    platform::current().zoom_window_controls(&window, zoom)?;
+    // The page is zoomed from here on, and is told so whatever becomes of
+    // what follows it: a control or a size the host could not move is the
+    // host's to report, and refusing here would leave the page unaware of a
+    // zoom it already has.
+    if let Err(error) = platform::current().zoom_window_controls(&window, zoom) {
+        crate::host_log::warn(format!(
+            "could not move the desktop window's controls for its zoom: {error}"
+        ));
+    }
     let at_rest = window
         .config()
         .app

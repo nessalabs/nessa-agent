@@ -790,6 +790,27 @@ it("sizes every sidebar's row from the one row, never a length of its own", () =
   ]
   for (const body of icons) expect(body).toMatch(/width: var\(--desktop-row-icon\);/)
   // The words, and the room around them.
+  const identity = read("./ui/identity.css")
+  const rail = read("./workspace/ui/chrome/side-rail.css")
+  const kitRow = rule(
+    sourceList,
+    '.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {',
+  )
+  const search = rule(branch, ".workspace-search-button {")
+  for (const body of [kitRow, search]) {
+    expect(body).toMatch(/gap: var\(--desktop-row-gap\);/)
+    expect(body).toMatch(/padding: 0 var\(--desktop-row-pad\);/)
+  }
+  expect(search).toMatch(/font-size: var\(--desktop-row-text\);/)
+  expect(rule(sourceList, ".workspace-thread-row {")).toMatch(
+    /--list-row-gap: var\(--desktop-row-gap\);/,
+  )
+  expect(rule(sourceList, ".workspace-row-icon {\n  display: inline-flex;")).toMatch(
+    /width: var\(--desktop-row-icon\);/,
+  )
+  expect(sourceList).toMatch(/font-size: var\(--desktop-row-label-text\) !important;/)
+  for (const sheet of [identity, rail])
+    expect(sheet).toMatch(/font-size: var\(--desktop-row-text\);/)
   expect(rule(settings, ".settings-nav-item {")).toMatch(
     /font-size: var\(--desktop-row-text\);/,
   )

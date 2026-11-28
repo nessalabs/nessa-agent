@@ -19,21 +19,20 @@
  * surface of the control it names, so it wears that surface's theme.
  */
 import { useEffect } from "react"
-import { placeTooltip, type Box, type TooltipSide } from "../model/tooltip-placement"
+import {
+  placeTooltip,
+  trafficLightsBox,
+  type Box,
+  type TooltipSide,
+} from "../model/tooltip-placement"
 
 /** How long the pointer rests on a control before its tooltip shows. */
 const restMs = 500
 /** How long after one tooltip hides the next shows at once. */
 const warmMs = 300
-/**
- * Where the traffic lights sit in a macOS window, which no tooltip covers.
- * The host draws them in screen points, which the window's zoom does not
- * scale, so in the page's own pixels the box is that much smaller or larger
- * (`window-zoom.ts` puts the zoom the host applied on the root).
- */
+/** The traffic lights' box at the zoom the host last applied (`window-zoom.ts` puts it on the root). */
 function trafficLights(): Box {
-  const zoom = Number(document.documentElement.dataset.zoom) || 1
-  return { left: 0, top: 0, width: 84 / zoom, height: 36 / zoom }
+  return trafficLightsBox(Number(document.documentElement.dataset.zoom) || 1)
 }
 
 /** The box a control is drawn in; a wrapper that only groups its child is measured by the child. */

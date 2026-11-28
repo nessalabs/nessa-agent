@@ -25,6 +25,17 @@ export interface TooltipPlacement {
 }
 
 /** The gap between a control and its tooltip, and the least room kept from the window's edge. */
+/**
+ * Where the traffic lights sit in a macOS window at `zoom`, in the page's own
+ * pixels, which no tooltip covers. The host draws the buttons in screen
+ * points, which the zoom does not scale, and centres them on the titlebar
+ * row, which it does: so their width and their reach below the row's middle
+ * shrink as the page grows, and the row's middle stays 24px down.
+ */
+export function trafficLightsBox(zoom: number): Box {
+  return { left: 0, top: 0, width: 84 / zoom, height: 24 + 12 / zoom }
+}
+
 export const tooltipSpacing = { gap: 6, margin: 8 } as const
 
 const overlaps = (a: Box, b: Box) =>

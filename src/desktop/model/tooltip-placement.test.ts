@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { placeTooltip } from "./tooltip-placement"
+import { placeTooltip, trafficLightsBox } from "./tooltip-placement"
 
 const window = { width: 1000, height: 700 }
 const tip = { width: 120, height: 22 }
@@ -33,12 +33,22 @@ describe("where a tooltip sits", () => {
   })
 
   it("flips away from the window's traffic lights", () => {
-    const lights = { left: 0, top: 0, width: 84, height: 36 }
+    const lights = trafficLightsBox(1)
+    expect(lights).toEqual({ left: 0, top: 0, width: 84, height: 36 })
     const placed = placeTooltip(button(20, 60), tip, window, {
       prefer: "above",
       avoid: lights,
     })
     expect(placed.side).toBe("below")
+  })
+
+  it("keeps the traffic lights' box over the buttons as the window zooms", () => {
+    // The buttons end 76pt across and 7pt under the row's middle, on screen.
+    for (const zoom of [0.8, 1, 1.25, 1.5]) {
+      const box = trafficLightsBox(zoom)
+      expect(box.width, `${zoom} across`).toBeGreaterThan(76 / zoom)
+      expect(box.height, `${zoom} down`).toBeGreaterThan(24 + 7 / zoom)
+    }
   })
 })
 
