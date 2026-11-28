@@ -503,6 +503,7 @@ import {
   names,
   offeredLabel,
   overviewFilterKeys,
+  harmlessConsole,
   selectorFor,
   storage,
 } from "./lib/selectors.mjs"
@@ -5949,6 +5950,13 @@ const steps = {
       (await box()
         .textContent()
         .catch(() => "")) ?? ""
+    const settingsText = async () =>
+      fold(
+        await page
+          .locator(css.settings)
+          .innerText()
+          .catch(() => ""),
+      )
     const address = async () =>
       /ws:\/\/127\.0\.0\.1:\d+/.exec(await detail())?.[0] ?? null
     const action = (name) => box().getByRole("button", { name, exact: true })
@@ -5960,6 +5968,22 @@ const steps = {
         : undefined
     let client = null
     let terminal = null
+    // While the box is put to sleep or deleted, the window's own socket to
+    // it drops and is tried again until the row stops asking: refusals at
+    // that one address, during that one action, are what stopping a gateway
+    // looks like. Taken back once the step ends, so a window still dialing a
+    // deleted box afterwards fails the console check.
+    const expectedRefusals = []
+    const expectRefusals = (url) => {
+      const entry = {
+        text: new RegExp(
+          `^WebSocket connection to '${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/session' failed: .*net::ERR_CONNECTION_REFUSED$`,
+        ),
+        url: /.*/,
+      }
+      harmlessConsole.push(entry)
+      expectedRefusals.push(entry)
+    }
     try {
       await run.exclusive(async () => {
         await openGateways(page)
@@ -6009,13 +6033,6 @@ const steps = {
         await openGateways(page)
         // Busy: a terminal runs on the box, opened by another session.
         await action("Sleep").click()
-        const settingsText = async () =>
-          fold(
-            await page
-              .locator(css.settings)
-              .innerText()
-              .catch(() => ""),
-          )
         const refused = await waitFor(
           async () => (await settingsText()).includes("This Cloud Box is still at work"),
           15_000,
@@ -6038,6 +6055,7 @@ const steps = {
       client = null
       await run.exclusive(async () => {
         await openGateways(page)
+        expectRefusals(first)
         await action("Sleep").click()
         const slept = await waitFor(
           async () =>
@@ -6063,6 +6081,7 @@ const steps = {
         else if (!second || second === first)
           failures.push(`the woken box kept its old address ${first} (now ${second})`)
         await shot("woken")
+        if (second) expectRefusals(second)
         await action("Delete VM").click()
         const deleted = await waitFor(
           async () =>
@@ -6073,7 +6092,7 @@ const steps = {
         )
         if (!deleted)
           failures.push(
-            `Delete VM left ${await box().count()} rows and VMs ${boxVms(root).join(", ")}`,
+            `Delete VM left ${await box().count()} rows and VMs ${boxVms(root).join(", ")}: ${(await settingsText()).slice(0, 600)} (${boxEvents(root).join("; ")})`,
           )
         if (boxGatewayRunning(root, vm))
           failures.push("the deleted box's gateway still runs")
@@ -6082,6 +6101,8 @@ const steps = {
     } finally {
       if (terminal) await client?.terminals.close(terminal.terminalId).catch(() => {})
       await Promise.resolve(client?.close()).catch(() => {})
+      for (const entry of expectedRefusals)
+        harmlessConsole.splice(harmlessConsole.indexOf(entry), 1)
     }
   },
 

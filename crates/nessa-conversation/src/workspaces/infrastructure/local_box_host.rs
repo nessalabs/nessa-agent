@@ -94,8 +94,11 @@ impl LocalBoxHost {
     }
 
     /// End every process the helper started in `dir`, as an archived VM
-    /// keeps its disk and runs nothing.
-    fn end_processes(dir: &Path) {
+    /// keeps its disk and runs nothing, and wait until each has ended: a
+    /// stopped VM runs nothing, and a process still exiting would keep
+    /// writing into a directory being removed.
+    async fn end_processes(dir: &Path) {
+        let mut groups = Vec::new();
         let Ok(entries) = std::fs::read_dir(dir.join(BOX_DIR)) else {
             return;
         };
@@ -116,12 +119,42 @@ impl LocalBoxHost {
                 .args(["-TERM", "--", &format!("-{pid}")])
                 .stderr(std::process::Stdio::null())
                 .status();
-            if let Err(error) = ended {
-                tracing::warn!(%error, pid, "the local box host could not end a process");
+            match ended {
+                Ok(_) => groups.push(pid),
+                Err(error) => {
+                    tracing::warn!(%error, pid, "the local box host could not end a process");
+                }
             }
             let _ = std::fs::remove_file(&path);
         }
+        for _ in 0..END_WAIT_STEPS {
+            groups.retain(|pid| group_runs(*pid));
+            if groups.is_empty() {
+                return;
+            }
+            crate::timer::clock::sleep(END_WAIT_STEP).await;
+        }
+        for pid in groups {
+            tracing::warn!(pid, "a local box process outlived its stop; killing it");
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", "--", &format!("-{pid}")])
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
     }
+}
+
+/// How long a stop waits for the box's processes to end, in steps.
+const END_WAIT_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+const END_WAIT_STEPS: usize = 150;
+
+/// Whether any process of the group led by `pid` still runs.
+fn group_runs(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", "--", &format!("-{pid}")])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Copy `from` into `to`, keeping each entry's mode; a missing `from` is an
@@ -267,7 +300,7 @@ impl Provider for LocalBoxHost {
         _admission: &Admitted,
     ) -> Result<(), Failure> {
         let dir = self.vm_dir(vm)?;
-        Self::end_processes(&dir);
+        Self::end_processes(&dir).await;
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -283,7 +316,7 @@ impl Provider for LocalBoxHost {
         vm: &str,
         _cause: RestCause,
     ) -> Result<(), Failure> {
-        Self::end_processes(&self.vm_dir(vm)?);
+        Self::end_processes(&self.vm_dir(vm)?).await;
         self.log(&format!("stop {vm}"));
         Ok(())
     }
