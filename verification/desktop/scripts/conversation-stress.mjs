@@ -700,9 +700,10 @@ async function composerSaysNothing(page, when, failures) {
  * A channel's Where it runs page: the channel's own machine is ticked; ticking
  * Cloud box opens the cloud's rows under it (Provider, then Boat's account or
  * Agent37's key, swapped by the provider), and ticking back closes them.
- * Nothing here is saved: the tick only opens what a cloud needs.
+ * Nothing here is saved: the tick only opens what a cloud needs. `shot`
+ * keeps a picture of the sheet at each stop, for evidence.
  */
-async function where(dialog, failures) {
+async function where(dialog, failures, shot = async () => {}) {
   await dialog.locator('[data-channel-settings-tab="where"]').click({ timeout: 10_000 })
   const here = dialog.locator('[data-channel-place="here"]')
   const cloud = dialog.locator('[data-channel-place="cloud"]')
@@ -712,6 +713,7 @@ async function where(dialog, failures) {
     failures.push("Where it runs did not tick the channel's own machine")
   if ((await rows.getAttribute("data-open")) !== null)
     failures.push("the cloud's rows were open before Cloud box was ticked")
+  await shot("where")
   await cloud.click({ timeout: 10_000 })
   const opened = await waitFor(
     async () =>
@@ -721,12 +723,14 @@ async function where(dialog, failures) {
   )
   if (!opened) failures.push("ticking Cloud box never opened its rows")
   await dialog.locator("[data-channel-boat]").waitFor({ timeout: 10_000 })
+  await shot("where-boat")
   await pickChoice(
     dialog.page(),
     dialog.locator(".channel-settings-cloud .settings-row").first(),
     "agent37",
   )
   await dialog.locator("[data-channel-agent37]").waitFor({ timeout: 10_000 })
+  await shot("where-agent37")
   if ((await dialog.locator("[data-channel-boat]").count()) > 0)
     failures.push("Agent37 chosen, Boat's account row stayed")
   await pickChoice(
@@ -9350,7 +9354,15 @@ const steps = {
       // One sheet of one size on every page: moving between pages never
       // moves its edges.
       const box = async () => JSON.stringify(await dialog.boundingBox())
-      await where(dialog, failures)
+      // Pictures of the sheet for evidence, once its motion has settled.
+      const shot = async (name, target = dialog) => {
+        if (!run.evidence) return
+        await sleep(300)
+        await target
+          .screenshot({ path: join(run.evidence, `style-${run.engine}-${name}.png`) })
+          .catch((error) => log(`${name} screenshot: ${error.message.split("\n")[0]}`))
+      }
+      await where(dialog, failures, shot)
       const whereBox = await box()
       await dialog
         .locator('[data-channel-settings-tab="talk"]')
@@ -9376,6 +9388,7 @@ const steps = {
         failures.push("Cancel in the writer saved a style")
       await pickChoice(run.page, threads, "custom")
       await writer.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
+      await shot("writer", writer)
       // Choosing "Your own" saves nothing until Save.
       const before = await run.client.replyStyle.read()
       if (before.nessa.thread?.mode === "custom")
@@ -9408,10 +9421,7 @@ const steps = {
         )
       await writer.getByRole("button", { name: "Cancel" }).click({ timeout: 10_000 })
       await writer.waitFor({ state: "detached", timeout: 5_000 })
-      if (run.evidence)
-        await run.page.screenshot({
-          path: join(run.evidence, `style-${run.engine}-threads-own.png`),
-        })
+      await shot("talk")
     } finally {
       await close()
     }
