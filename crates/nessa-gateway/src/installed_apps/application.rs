@@ -316,7 +316,7 @@ impl InstalledApps {
                 .revoke_all(
                     caller.organization_id.clone(),
                     caller.principal_id.clone(),
-                    format!("{request_id}:unrecorded"),
+                    unrecorded_key(&request_id),
                     app.clone(),
                 )
                 .await
@@ -362,7 +362,8 @@ impl InstalledApps {
             .await
             .map_err(credential_error)?;
         // The revocation stands either way; a lost record is reported, and a
-        // retry under the same request id replays the count and records it.
+        // retry under the same request id answers what it revoked, so the
+        // record is written then.
         if revoked > 0 {
             self.record(
                 &Uuid::new_v4().to_string(),
@@ -656,4 +657,15 @@ pub fn capability_name(capability: AppCapability) -> &'static str {
         AppCapability::Stop => "stop",
         AppCapability::Send => "send",
     }
+}
+
+/// The key the gateway revokes a credential under when its issued record was
+/// lost: a digest of the issue's request id, so no request id a client sends
+/// can equal it.
+fn unrecorded_key(request_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "nessa-app-unrecorded-{}",
+        hex::encode(Sha256::digest(request_id.as_bytes()))
+    )
 }

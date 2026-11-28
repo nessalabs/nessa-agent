@@ -16,7 +16,7 @@ use nessa_auth::application::credential_admin::{
 };
 use nessa_auth::application::ports::{Clock, PortFuture};
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_auth::domain::CredentialId;
+use nessa_auth::domain::{CredentialId, PrincipalId};
 use nessa_types::app_identity::ExtensionAppId;
 use uuid::Uuid;
 
@@ -65,8 +65,9 @@ impl LocalAppCredentials {
     /// Revoke every live credential of `app` under the command
     /// `request_id`. Issuing supersedes an app's older credential in the
     /// same commit, so it holds at most one, revoked under the command's own
-    /// key: a retry of the command replays it, and a late retry that finds a
-    /// newer credential is a conflict, never a revoke of that one.
+    /// key: a retry of the command answers what it revoked (so the caller can
+    /// still record it), and a late retry that finds a newer credential is a
+    /// conflict, never a revoke of that one.
     async fn revoke_live(
         &self,
         organization: &str,
@@ -75,12 +76,20 @@ impl LocalAppCredentials {
         app: &ExtensionAppId,
     ) -> Result<usize, CredentialRefusal> {
         let live = self.live(organization, app)?;
+        if live.is_empty() {
+            let issuer = PrincipalId::new(issuer).map_err(|_| CredentialRefusal::Unavailable)?;
+            let earlier = self
+                .store
+                .revoked_under(&issuer, request_id)
+                .map_err(|_| CredentialRefusal::Unavailable)?;
+            return Ok(usize::from(earlier));
+        }
         for (index, credential_id) in live.iter().enumerate() {
             // More than one is only left from before issuing superseded; each
-            // after the first gets a key of its own.
+            // after the first gets a key no client request id can be.
             let key = match index {
                 0 => request_id.to_owned(),
-                n => format!("{request_id}#{n}"),
+                n => internal_key(&format!("extra-{n}"), request_id),
             };
             self.admin
                 .revoke(RevokeCredentialRequest {
@@ -97,6 +106,15 @@ impl LocalAppCredentials {
         }
         Ok(live.len())
     }
+}
+
+/// A command key derived from a client's `request_id` for a step it takes
+/// on its own: a digest, so no request id a client sends can equal it.
+fn internal_key(purpose: &str, request_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{purpose}\0{request_id}"));
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("nessa-app-{purpose}-{hex}")
 }
 
 impl AppCredentialAuthority for LocalAppCredentials {

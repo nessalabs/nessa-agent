@@ -203,6 +203,22 @@ impl LocalCredentialStore {
     }
 }
 
+impl LocalCredentialStore {
+    /// Whether `issuer` already revoked a credential under `request_id`: a
+    /// retried revoke command answers from this once nothing is left live.
+    pub fn revoked_under(
+        &self,
+        issuer: &PrincipalId,
+        request_id: &str,
+    ) -> Result<bool, AccessError> {
+        self.with_published_registry(|registry| {
+            Ok(registry.revoke_receipts.iter().any(|receipt| {
+                receipt.issuer_principal_id == issuer.as_str() && receipt.request_id == request_id
+            }))
+        })
+    }
+}
+
 impl AppCredentials for LocalCredentialStore {
     fn verify_app<'a>(
         &'a self,
@@ -444,6 +460,7 @@ mod tests {
         RevokeCredentialRequest,
     };
     use super::*;
+    use crate::application::dto::{RevocationCauseDto, SupersessionDto, TransitionCauseDto};
     use crate::application::{
         ports::{PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential},
         session::{
@@ -953,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn app_reissue_keeps_registration_and_each_credential_remains_independent() {
+    fn app_reissue_keeps_registration_and_supersedes_the_earlier_credential() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
         let store = open_store(&path).unwrap();
@@ -993,6 +1010,17 @@ mod tests {
             assert_eq!(metadata.id, id);
             if let Some(first) = &first_subject {
                 assert_eq!(&metadata.principal_id, first);
+                // The same commit ends the earlier credential: an app holds one.
+                assert!(transitions.iter().any(|transition| {
+                    transition.credential_id == "app-a"
+                        && transition.cause
+                            == TransitionCauseDto::Revoked {
+                                cause: RevocationCauseDto::Superseded {
+                                    by: "app-b".into(),
+                                    supersession: SupersessionDto::AppReissue,
+                                },
+                            }
+                }));
             } else {
                 first_subject = Some(metadata.principal_id);
             }
@@ -1003,14 +1031,7 @@ mod tests {
             ready(store.issue_app(&owner, ambiguous_retry, &clock, &policy)),
             Err(LocalStoreError::Conflict)
         ));
-        store
-            .revoke_sync(RevokeCredentialRequest {
-                request_id: "revoke-app-a".into(),
-                issuer_principal_id: owner.context().principal_id().as_str().into(),
-                credential_id: "app-a".into(),
-                revoked_at: 120,
-            })
-            .unwrap();
+        // It stays ended after a restart, and the new one stays good.
         drop(store);
         let store = open_store(&path).unwrap();
         let first = CredentialId::new("app-a").unwrap();

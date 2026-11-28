@@ -235,6 +235,14 @@ async fn revoking_an_app_ends_only_its_own_credentials() {
         registry.sign_in(&calendar.secret).await.unwrap(),
         "calendar"
     );
+    // A retry of the same command answers what it revoked, so its caller
+    // can still record it.
+    let retried = registry
+        .credentials
+        .revoke_all("org".into(), "owner".into(), "r3".into(), app("notes"))
+        .await
+        .unwrap();
+    assert_eq!(retried, 1);
     // Nothing left to revoke is not a failure.
     let again = registry
         .credentials
