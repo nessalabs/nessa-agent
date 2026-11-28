@@ -152,8 +152,10 @@ impl CompositionRoot {
     }
 
     pub async fn serve(options: ServerOptions, launch: &Launch) -> Result<(), RunError> {
+        // A headless gateway given `--runtime` runs that runtime's agents
+        // but is no desktop service: it has no registration to identify.
         let runtime = options.runtime.clone();
-        Self::serve_runtime(runtime.as_deref(), options, launch).await
+        Self::serve_runtime(runtime.as_deref(), Service::Headless, options, launch).await
     }
 
     /// The packaged app owns its private namespace and has no operator to run the
@@ -161,6 +163,7 @@ impl CompositionRoot {
     async fn serve_desktop(bundle: &std::path::Path, launch: &Launch) -> Result<(), RunError> {
         Self::serve_runtime(
             Some(bundle),
+            Service::Desktop,
             ServerOptions::new(LocalProvisioning::Automatic),
             launch,
         )
@@ -169,6 +172,7 @@ impl CompositionRoot {
 
     async fn serve_runtime(
         bundle: Option<&std::path::Path>,
+        service: Service,
         options: ServerOptions,
         launch: &Launch,
     ) -> Result<(), RunError> {
@@ -264,7 +268,7 @@ impl CompositionRoot {
         let warm_ups = Arc::new(warm_ups);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let retirement_clock = product.clock.clone();
-        let desktop_identity = if let Some(bundle) = bundle {
+        let desktop_identity = if let (Some(bundle), Service::Desktop) = (bundle, service) {
             let configured = std::env::var("NESSA_RUNTIME_FINGERPRINT")
                 .map_err(|_| RunError::Runtime("missing desktop runtime fingerprint".into()))?;
             let generation = Environment::service_generation_from_system()
@@ -792,6 +796,14 @@ async fn stop_signal(
 type ReportSlot = Mutex<Option<ShutdownReport>>;
 
 /// What [`take_shutdown`] found. A confirmed report stays in the slot.
+/// Whether a gateway runs as the desktop app's registered service, which
+/// carries the identity its launcher gave it, or headless on its own.
+#[derive(Clone, Copy)]
+enum Service {
+    Desktop,
+    Headless,
+}
+
 enum ShutdownRead {
     Confirmed,
     /// Not confirmed. The report was taken; `None` means it was never published.
