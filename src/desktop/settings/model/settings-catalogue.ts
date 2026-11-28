@@ -35,6 +35,11 @@ export const settingsCategories = [
       { id: "layout", label: "Layout", keywords: "columns sidebar panes split" },
       { id: "sessions", label: "Sessions", keywords: "history archive conversations" },
       { id: "keyboard", label: "Keyboard", keywords: "shortcuts keys hotkeys" },
+      {
+        id: "installed-apps",
+        label: "Apps",
+        keywords: "app apps install static create review open stop uninstall remove",
+      },
     ],
   },
   {
@@ -353,6 +358,20 @@ export const settingsEntries = [
     detail:
       "A tool you always allow or always deny in one project. Revoke one to be asked again.",
     keywords: "allow deny permission rule revoke project",
+  },
+  {
+    id: "installed-apps",
+    tab: "installed-apps",
+    label: "Installed apps",
+    detail: "Open, stop or uninstall your apps.",
+    keywords: "app apps installed open stop uninstall remove window",
+  },
+  {
+    id: "create-app",
+    tab: "installed-apps",
+    label: "Create an app",
+    detail: "Make a new app. It installs once you choose Install.",
+    keywords: "app create new starter install",
   },
   {
     id: "trusted-apps",

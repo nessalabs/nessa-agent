@@ -312,6 +312,36 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "apps.starter": {
+      "params": "AppsStarterParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.review": {
+      "params": "AppsReviewParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.install": {
+      "params": "AppsInstallParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.installed": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.read": {
+      "params": "AppsReadParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.uninstall": {
+      "params": "AppsUninstallParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "phone.endpoint": {
       "params": "PhoneEndpointParams",
       "grant": "server.read",

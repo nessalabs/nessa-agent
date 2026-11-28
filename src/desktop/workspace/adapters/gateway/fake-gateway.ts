@@ -58,6 +58,7 @@ export type FakeGatewayClient = {
   readonly agent37: import("@nessa/client").Agent37Api
   readonly cloud: import("@nessa/client").CloudApi
   readonly replyStyle: import("@nessa/client").ReplyStyleApi
+  readonly apps: import("@nessa/client").AppsApi
 } & GatewayClient &
   WindowPublishClient &
   WindowCommandClient &
@@ -713,6 +714,7 @@ export function fakeGateway(
       disconnect: async () => ({ state: "disconnected" as const }),
     },
     replyStyle: fakeReplyStyle(),
+    apps: fakeApps(),
     cloud: {
       read: async () => ({ cloud: "boat" as const }),
       choose: async (cloud) => {
@@ -1204,6 +1206,62 @@ export function fakeGateway(
  * How agents talk, kept in memory as the gateway keeps it: each level's own
  * choice per role, and what a role gets where nothing is chosen.
  */
+/**
+ * Installed apps, kept in memory: a starter is one page, its "digest" a
+ * label of its id and version. The real gateway verifies and hashes.
+ */
+function fakeApps(): import("@nessa/client").AppsApi {
+  type Checked = import("@nessa/client").CheckedAppPackage
+  const installed = new Map<string, Checked>()
+  const checked = (appId: string, packageVersion: string): Checked => ({
+    package: {
+      manifest: btoa(JSON.stringify({ appId, packageVersion })),
+      assets: [{ path: "index.html", bytes: btoa(`<!doctype html><h1>${appId}</h1>`) }],
+    },
+    review: {
+      appId,
+      packageVersion,
+      entrypoint: "index.html",
+      assetCount: 1,
+      digest: `fake-${appId}-${packageVersion}`.padEnd(64, "0"),
+    },
+  })
+  const unpack = (pkg: Checked["package"]): Checked => {
+    const { appId, packageVersion } = JSON.parse(atob(pkg.manifest)) as {
+      appId: string
+      packageVersion: string
+    }
+    return checked(appId, packageVersion)
+  }
+  return {
+    trusted: async () => [],
+    untrust: async () => false,
+    starter: async (appId, packageVersion) => checked(appId, packageVersion),
+    review: async (pkg) => unpack(pkg).review,
+    install: async (pkg, reviewedDigest) => {
+      const app = unpack(pkg)
+      if (app.review.digest !== reviewedDigest) throw new Error("app_review_stale")
+      installed.set(app.review.appId, app)
+      return { appId: app.review.appId, packageVersion: app.review.packageVersion }
+    },
+    installed: async () =>
+      [...installed.values()]
+        .map(({ review }) => ({
+          appId: review.appId,
+          packageVersion: review.packageVersion,
+        }))
+        .sort((a, b) => a.appId.localeCompare(b.appId)),
+    read: async (appId) => {
+      const app = installed.get(appId)
+      if (!app) throw new Error("app_not_installed")
+      return app
+    },
+    uninstall: async (appId) => {
+      if (!installed.delete(appId)) throw new Error("app_not_installed")
+    },
+  }
+}
+
 function fakeReplyStyle(): import("@nessa/client").ReplyStyleApi {
   type Roles = import("@nessa/client").ReplyStyleRoles
   type Choice = import("@nessa/client").ReplyStyleChoice

@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 150,
+          "maxItems": 156,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -4619,6 +4619,283 @@
         "applied": { "type": "boolean" }
       },
       "required": ["requestId", "applied"]
+    },
+    "AppPackageAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One file of a static app package, as the manifest declares it.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "x-utf8MaxBytes": 240,
+          "description": "The file's path inside the package, exactly as the manifest declares it."
+        },
+        "bytes": {
+          "type": "string",
+          "maxLength": 21848,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "description": "The file's bytes, standard base64 with padding."
+        }
+      },
+      "required": ["path", "bytes"]
+    },
+    "AppPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A small static app package held inline: its manifest and every file it declares. Up to 16 KiB of decoded bytes and 8 files. Holding a package grants nothing.",
+      "properties": {
+        "manifest": {
+          "type": "string",
+          "maxLength": 21848,
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "description": "The manifest's exact JSON bytes, standard base64 with padding."
+        },
+        "assets": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/AppPackageAsset" },
+          "description": "Every file the manifest declares, each once."
+        }
+      },
+      "required": ["manifest", "assets"]
+    },
+    "AppReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the gateway's package verifier found in a package: the facts a person reviews before installing it. Not evidence of who made it.",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The version label the package declares."
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "x-utf8MaxBytes": 240,
+          "description": "The HTML file the app opens on."
+        },
+        "assetCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "description": "How many files the package holds."
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 of the package's exact manifest bytes. The manifest declares every asset's size and digest, so this names the whole package."
+        }
+      },
+      "required": ["appId", "packageVersion", "entrypoint", "assetCount", "digest"]
+    },
+    "AppsStarterParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Make the starter static app package for a new app (apps.starter). Nothing is installed or kept.",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The version label the package declares."
+        }
+      },
+      "required": ["appId", "packageVersion"]
+    },
+    "AppsPackageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A verified package and its review (apps.starter, apps.read).",
+      "properties": {
+        "package": { "$ref": "#/$defs/AppPackage" },
+        "review": { "$ref": "#/$defs/AppReview" }
+      },
+      "required": ["package", "review"]
+    },
+    "AppsReviewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Verify a package and say what it holds (apps.review). Nothing is installed or kept.",
+      "properties": { "package": { "$ref": "#/$defs/AppPackage" } },
+      "required": ["package"]
+    },
+    "AppsInstallParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Install a package the owner reviewed and approved (apps.install). The gateway verifies the bytes again and installs only if their digest is the one reviewed.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "package": { "$ref": "#/$defs/AppPackage" },
+        "reviewedDigest": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The digest the owner was shown and approved. A package whose digest differs is refused app_review_stale."
+        }
+      },
+      "required": ["requestId", "package", "reviewedDigest"]
+    },
+    "InstalledApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One installed app.",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "x-utf8MaxBytes": 128,
+          "description": "The version label the package declares."
+        }
+      },
+      "required": ["appId", "packageVersion"]
+    },
+    "AppsInstallResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The app apps.install installed.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "app": { "$ref": "#/$defs/InstalledApp" }
+      },
+      "required": ["requestId", "app"]
+    },
+    "AppsInstalledResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every installed app, in identity order (apps.installed). An empty list means none is installed.",
+      "properties": {
+        "apps": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/InstalledApp" },
+          "description": "The installed apps."
+        }
+      },
+      "required": ["apps"]
+    },
+    "AppsReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read one installed app's verified package, to render it (apps.read).",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        }
+      },
+      "required": ["appId"]
+    },
+    "AppsUninstallParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Remove one installed app and every file it holds (apps.uninstall). Other apps are untouched.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        }
+      },
+      "required": ["requestId", "appId"]
+    },
+    "AppsUninstallResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The app apps.uninstall removed.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa."
+        }
+      },
+      "required": ["requestId", "appId"]
+    },
+    "AppsErrorCode": {
+      "type": "string",
+      "enum": [
+        "apps_not_configured",
+        "app_package_invalid",
+        "app_package_too_large",
+        "app_review_stale",
+        "app_already_installed",
+        "apps_limit_reached",
+        "app_not_installed",
+        "apps_storage_unavailable",
+        "apps_audit_unavailable"
+      ],
+      "description": "Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made."
     },
     "McpServersRevokeParams": {
       "type": "object",

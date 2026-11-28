@@ -14,14 +14,14 @@ const MAX_INLINE_ASSETS: usize = 8;
 const MAX_ENCODED_BYTES: usize = MAX_INLINE_BYTES.div_ceil(3) * 4;
 
 /// One held asset in the inline authoring profile.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InlineAsset {
     pub path: String,
     pub bytes_base64: String,
 }
 
 /// Held bytes for a small static app. This is not an installed app or a grant.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InlinePackage {
     pub manifest_base64: String,
     pub assets: Vec<InlineAsset>,
@@ -79,10 +79,24 @@ pub fn scaffold_inline_package(
     package_version: String,
 ) -> Result<InlinePackage, InlineRefusal> {
     checked_total(app_id.len(), package_version.len())?;
-    let package = scaffold_package(app_id, package_version)?;
+    encode_inline_package(&scaffold_package(app_id, package_version)?)
+}
+
+/// Encode verified bytes in the inline profile, as `apps.read` hands an
+/// installed package back. A package larger than the profile is refused
+/// rather than cut.
+///
+/// # Errors
+/// Rejects a package outside the small inline profile.
+pub fn encode_inline_package(package: &VerifiedPackage) -> Result<InlinePackage, InlineRefusal> {
     let mut total = package.manifest().json().len();
+    let mut count = 0;
     for (_, bytes) in package.assets() {
         total = checked_total(total, bytes.len())?;
+        count += 1;
+    }
+    if count > MAX_INLINE_ASSETS {
+        return Err(InlineRefusal::InlineLimit);
     }
     Ok(InlinePackage {
         manifest_base64: STANDARD.encode(package.manifest().json()),
@@ -94,6 +108,15 @@ pub fn scaffold_inline_package(
             })
             .collect(),
     })
+}
+
+/// Decode and verify the exact held bytes, keeping them for a caller that
+/// installs or renders what it checked.
+///
+/// # Errors
+/// Rejects invalid encoding, oversize input, and nonverifying packages.
+pub fn verify_inline_package(input: &InlinePackage) -> Result<VerifiedPackage, InlineRefusal> {
+    verify_inline(input)
 }
 
 /// Validate the exact held bytes and return only the verification facts.
@@ -170,6 +193,25 @@ mod tests {
     }
 
     #[test]
+    fn verified_bytes_encode_back_to_the_same_package_and_digest() {
+        let input = starter();
+        let verified = verify_inline_package(&input).unwrap();
+        assert_eq!(encode_inline_package(&verified), Ok(input.clone()));
+        let digest = verified.digest();
+        assert_eq!(digest.len(), 64);
+        assert_eq!(digest, verify_inline_package(&input).unwrap().digest());
+        let other = verify_inline_package(
+            &scaffold_inline_package("sample-app".to_owned(), "2".to_owned()).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            other.digest(),
+            digest,
+            "another manifest is another package"
+        );
+    }
+
+    #[test]
     fn exact_starter_is_deterministic_and_reuses_package_validation() {
         let input = starter();
         assert_eq!(input, starter());
@@ -178,10 +220,14 @@ mod tests {
             checked.manifest().json(),
             STANDARD.decode(&input.manifest_base64).unwrap()
         );
-        assert_eq!(
-            checked.asset("index.html").unwrap(),
-            STANDARD.decode(&input.assets[0].bytes_base64).unwrap()
-        );
+        for asset in &input.assets {
+            assert_eq!(
+                checked.asset(&asset.path).unwrap(),
+                STANDARD.decode(&asset.bytes_base64).unwrap()
+            );
+        }
+        assert_eq!(checked.manifest().icon(), Some("icon.png"));
+        assert!(checked.asset("icon.png").unwrap().starts_with(b"\x89PNG"));
         assert!(checked.manifest().requested_capabilities().is_empty());
         assert_eq!(
             validate_inline_package(&input),
@@ -189,7 +235,7 @@ mod tests {
                 app_id: "sample-app".to_owned(),
                 package_version: "preview + 1".to_owned(),
                 entrypoint: "index.html".to_owned(),
-                asset_count: 1,
+                asset_count: 2,
             })
         );
 

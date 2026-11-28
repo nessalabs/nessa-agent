@@ -60,6 +60,9 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
 const SCHEMA_VERSION: u32 = 1;
 const STARTER_ENTRYPOINT: &str = "index.html";
 const STARTER_HTML: &[u8] = b"<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<title>Nessa app</title>\n<h1>Nessa app</h1>\n</html>\n";
+/// The starter's icon: what its launcher shows in the Dock and app menus.
+const STARTER_ICON: &str = "icon.png";
+const STARTER_ICON_PNG: &[u8] = include_bytes!("starter-icon.png");
 
 /// Build one inert, deterministic static starter. The app ID and version are
 /// written only to the manifest; they are not inserted into the HTML.
@@ -75,18 +78,29 @@ pub fn scaffold_package(
         app_id,
         package_version,
         entrypoint: STARTER_ENTRYPOINT.to_owned(),
-        icon: None,
+        icon: Some(STARTER_ICON.to_owned()),
         requested_capabilities: Vec::new(),
-        assets: vec![Object(Asset {
-            path: STARTER_ENTRYPOINT.to_owned(),
-            size_bytes: STARTER_HTML.len() as u64,
-            sha256: hex::encode(Sha256::digest(STARTER_HTML)),
-        })],
+        assets: [
+            (STARTER_ICON, STARTER_ICON_PNG),
+            (STARTER_ENTRYPOINT, STARTER_HTML),
+        ]
+        .into_iter()
+        .map(|(path, bytes)| {
+            Object(Asset {
+                path: path.to_owned(),
+                size_bytes: bytes.len() as u64,
+                sha256: hex::encode(Sha256::digest(bytes)),
+            })
+        })
+        .collect(),
     };
     let json = serde_json::to_vec(&manifest).map_err(|_| PackageError::MalformedManifest)?;
     verify_package(
         json,
-        BTreeMap::from([(STARTER_ENTRYPOINT.to_owned(), STARTER_HTML.to_vec())]),
+        BTreeMap::from([
+            (STARTER_ENTRYPOINT.to_owned(), STARTER_HTML.to_vec()),
+            (STARTER_ICON.to_owned(), STARTER_ICON_PNG.to_vec()),
+        ]),
     )
 }
 

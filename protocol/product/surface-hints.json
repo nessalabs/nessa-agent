@@ -235,6 +235,22 @@
     "readOnly": false,
     "destructive": true
   },
+  "apps.starter": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "apps.review": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "apps.installed": {
+    "readOnly": true,
+    "destructive": false
+  },
+  "apps.read": {
+    "readOnly": true,
+    "destructive": false
+  },
   "phone.endpoint": {
     "readOnly": true,
     "destructive": false

@@ -9,8 +9,13 @@ pub use domain::static_package::{
     MAX_MANIFEST_BYTES, MAX_PATH_BYTES,
 };
 pub use infrastructure::inline::{
-    scaffold_inline_package, validate_inline_package, InlineAsset, InlinePackage, InlineRefusal,
-    ValidationReceipt,
+    encode_inline_package, scaffold_inline_package, validate_inline_package, verify_inline_package,
+    InlineAsset, InlinePackage, InlineRefusal, ValidationReceipt,
+};
+pub use infrastructure::launcher::{
+    content_type, launcher_record, read_launcher_record, LauncherRefusal,
+    APP_CONTENT_SECURITY_POLICY, LAUNCHER_RECORD, MAX_LAUNCHER_RECORD_BYTES, RUNNING_LOCK,
+    RUNNING_PID,
 };
 pub use infrastructure::manifest::{parse_manifest, scaffold_package, verify_package};
 

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_credentials;
+mod app_launchers;
 mod app_sandbox;
 mod attachments;
 mod call_pill;
@@ -15,6 +16,7 @@ mod gateway_endpoint;
 mod host;
 mod host_log;
 mod host_refusal;
+mod installed_apps;
 mod launch;
 mod linger;
 mod links;
@@ -168,6 +170,13 @@ fn main() {
             call_pill::call_pill_read,
             call_pill::call_pill_press,
             call_pill::call_pill_drag,
+            installed_apps::installed_app_confirm,
+            installed_apps::installed_app_place,
+            installed_apps::installed_app_open,
+            installed_apps::installed_app_stop,
+            installed_apps::installed_app_remove,
+            installed_apps::installed_app_running,
+            installed_apps::installed_app_keep_only,
         ])
         .setup(move |app| {
             if let Some(pill) = app.get_webview_window(call_pill::CALL_WINDOW) {

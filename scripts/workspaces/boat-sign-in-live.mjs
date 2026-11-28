@@ -85,6 +85,8 @@ try {
   process.exitCode = 1
   say(`FAIL ${error.message}`)
 } finally {
-  await client?.close?.().catch(() => {})
+  try {
+    client?.close?.()
+  } catch {}
   await gateway?.stop?.().catch(() => {})
 }
