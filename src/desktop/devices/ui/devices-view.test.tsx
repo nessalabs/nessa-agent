@@ -132,7 +132,10 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   const calls: string[] = []
   const boat: BoatGateway = {
     read: async () => ({ state: "connected", environment: "nessa" }),
-    save: async () => ({ state: "connected", environment: "nessa" }),
+    signIn: async () => ({ state: "disconnected" }),
+    cancelSignIn: async () => ({ state: "disconnected" }),
+    open: () => {},
+    pollMs: 2000,
     disconnect: async () => {
       calls.push("disconnect")
       return { state: "disconnected" }
@@ -158,7 +161,7 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   await act(async () => {})
   expect(host.querySelector('[data-devices-page="cloud"] h1')?.textContent).toBe("Boat")
   expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
-  expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  expect(host.querySelector('input[type="password"]')).toBeNull()
   const pageBoat = () =>
     host.querySelector('[data-devices-page="cloud"] [data-slot=device-figure]')
   expect(pageBoat()?.getAttribute("data-afloat")).toBe("true")
@@ -175,13 +178,16 @@ it("manages Boat from its own page, with no trip to Settings", async () => {
   await act(async () => root.unmount())
 })
 
-it("offers Unlock, not a token field, while the vault is locked, then reads Boat again", async () => {
+it("offers Unlock, not Sign in with Boat, while the vault is locked, then reads Boat again", async () => {
   let locked = true
   let cloud: "locked" | "connected" = "locked"
   const boat: BoatGateway = {
     read: async () =>
       locked ? { state: "locked" } : { state: "connected", environment: "nessa" },
-    save: async () => ({ state: "connected", environment: "nessa" }),
+    signIn: async () => ({ state: "disconnected" }),
+    cancelSignIn: async () => ({ state: "disconnected" }),
+    open: () => {},
+    pollMs: 2000,
     disconnect: async () => ({ state: "disconnected" }),
   }
   const { gateway } = fakeGateway({ cloud: async () => ({ ok: true, value: cloud }) })
@@ -192,7 +198,7 @@ it("offers Unlock, not a token field, while the vault is locked, then reads Boat
   )
   await act(async () => {})
   expect(text(host, "[data-devices-cloud-state]")).toContain("Locked")
-  expect(host.querySelector('input[type="password"]')).toBeNull()
+  expect(host.querySelector('[data-boat-action="sign-in"]')).toBeNull()
   expect(host.querySelector('[data-boat-action="unlock"]')).not.toBeNull()
   // The vault opens elsewhere: the list's next read notices, and the page reads again.
   locked = false
@@ -200,7 +206,7 @@ it("offers Unlock, not a token field, while the vault is locked, then reads Boat
   await act(async () => vi.advanceTimersByTime(5_000))
   await act(async () => {})
   expect(text(host, "[data-devices-cloud-state]")).toContain("Connected")
-  expect(host.querySelector('input[type="password"]')).not.toBeNull()
+  expect(host.querySelector('input[type="password"]')).toBeNull()
   await act(async () => root.unmount())
 })
 

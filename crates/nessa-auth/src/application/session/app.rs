@@ -8,7 +8,7 @@ use crate::{
         origin::CredentialOrigin,
         ports::{AccessError, Clock, CredentialEvidence, Decision, PolicyEvaluator},
     },
-    domain::{Action, AudienceId, AuthContext, Resource, ResourceId},
+    domain::{Action, AppCall, AudienceId, AuthContext, Resource, ResourceId},
 };
 
 /// Authenticated app identity. This is not an ordinary session and grants
@@ -34,6 +34,21 @@ impl ScopedAppSession {
     /// Auth revision at entry, not proof of a current permission.
     pub fn auth_revision(&self) -> u64 {
         self.identity.auth_revision()
+    }
+
+    /// The app and the capabilities approved at entry. Ask
+    /// [`ReadCurrentAppSession`] before acting on them.
+    pub fn binding(&self) -> &AppCredentialBinding {
+        &self.binding
+    }
+
+    /// The app's own identity as a session, for the one dispatcher that
+    /// serves an app: it checks [`ReadCurrentAppSession`] and the method's
+    /// capability first, and acts only on conversations this principal
+    /// owns. Never hand it to the ordinary Product dispatcher, which
+    /// authorizes by grants this identity does not hold.
+    pub fn app_identity(&self) -> &AuthenticatedSession {
+        &self.identity
     }
 }
 
@@ -111,5 +126,81 @@ impl ReadCurrentAppSession<'_> {
             return Err(AccessError::IdentityMismatch);
         }
         Ok(binding)
+    }
+}
+
+/// Something a request asks for beyond its method, which policy decides
+/// apart from the operations the owner approved (`app_call.shape`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppCallAsk {
+    /// A new conversation in `full` approval mode.
+    FullAccess,
+    /// A new conversation in one of the owner's channels.
+    Channel,
+    /// A new conversation in a named environment.
+    Environment,
+    /// A message linking files or uploads from this computer.
+    LinkedFiles,
+}
+
+impl AppCallAsk {
+    /// The ask as policy spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FullAccess => "fullAccess",
+            Self::Channel => "channel",
+            Self::Environment => "environment",
+            Self::LinkedFiles => "linkedFiles",
+        }
+    }
+}
+
+/// Whether an app session may call `method` now: its credential is still
+/// current, and policy admits the method, with what the request `asks`, for
+/// the operations its owner approved. `Denied` is a refusal of this one
+/// call; any other error ends the session.
+pub struct AdmitAppCall<'a> {
+    pub credentials: &'a dyn AppCredentials,
+    pub clock: &'a dyn Clock,
+    pub policy: &'a dyn PolicyEvaluator,
+}
+
+impl AdmitAppCall<'_> {
+    pub async fn execute(
+        &self,
+        session: &ScopedAppSession,
+        method: &str,
+        asks: &[AppCallAsk],
+    ) -> Result<AppCredentialBinding, AccessError> {
+        let AppCredentialSnapshot { access, binding } = self
+            .credentials
+            .read_app(session.context().credential_id())
+            .await?;
+        validate_current(&session.identity, &access, self.clock)?;
+        if access.origin != session.origin || binding != session.binding {
+            return Err(AccessError::IdentityMismatch);
+        }
+        let action = Action::new("appCredential.call").map_err(|_| AccessError::Unavailable)?;
+        let call = Resource::new(
+            session.context().organization_id().clone(),
+            ResourceId::new(session.context().audience_id().as_str())
+                .map_err(|_| AccessError::Unavailable)?,
+        )
+        .with_app_call(AppCall {
+            method: method.to_owned(),
+            capabilities: binding
+                .capabilities()
+                .iter()
+                .map(|capability| capability.as_str().to_owned())
+                .collect(),
+            asks: asks.iter().map(|ask| ask.as_str().to_owned()).collect(),
+        });
+        match self
+            .policy
+            .evaluate(session.context(), &action, &call, &access)?
+        {
+            Decision::Allow => Ok(binding),
+            _ => Err(AccessError::Denied),
+        }
     }
 }

@@ -342,6 +342,16 @@
       "grant": "credential.manage",
       "lane": "requests"
     },
+    "apps.issueCredential": {
+      "params": "AppsIssueCredentialParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "apps.revokeCredentials": {
+      "params": "AppsRevokeCredentialsParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
     "phone.endpoint": {
       "params": "PhoneEndpointParams",
       "grant": "server.read",
@@ -619,6 +629,16 @@
     },
     "boat.save": {
       "params": "BoatSaveParams",
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "boat.signIn": {
+      "params": null,
+      "grant": "credential.manage",
+      "lane": "requests"
+    },
+    "boat.cancelSignIn": {
+      "params": null,
       "grant": "credential.manage",
       "lane": "requests"
     },

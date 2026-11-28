@@ -1794,7 +1794,19 @@ export interface AppReview {
   assetCount: number
   /** Lowercase hex SHA-256 of the package's exact manifest bytes. The manifest declares every asset's size and digest, so this names the whole package. */
   digest: string
+  /** What the app asks to do in Nessa, in a fixed order. Empty for an app that asks for nothing. Installing the app approves exactly these: apps.issueCredential issues a credential that holds them and nothing else. */
+  requestedCapabilities: AppCapability[]
 }
+/** One thing an app may do with its own conversations. list: list them (conversation.list). read: read one (conversation.read, conversation.readEarlier, conversation.receipt, conversation.messageStatus). create: start one (conversation.create). subscribe: page through its catalogue (conversation.observe). stop: stop a turn (conversation.stop). send: send a message or steer (conversation.send, conversation.steer). An app sees only conversations it created, never the owner's. */
+export const AppCapability = {
+  List: "list",
+  Read: "read",
+  Create: "create",
+  Subscribe: "subscribe",
+  Stop: "stop",
+  Send: "send",
+} as const
+export type AppCapability = (typeof AppCapability)[keyof typeof AppCapability]
 /** Make the starter static app package for a new app (apps.starter). Nothing is installed or kept. */
 export interface AppsStarterParams {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
@@ -1856,7 +1868,45 @@ export interface AppsUninstallResult {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
   appId: string
 }
-/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. */
+/** Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and it ends any credential issued to that app before, in the same step. */
+export interface AppsIssueCredentialParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+}
+/** The credential apps.issueCredential issued. The secret is answered only here, once: a retry of the same request is refused app_credential_conflict. */
+export interface AppsIssueCredentialResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+  /** The issued credential's id. */
+  credentialId: string
+  /** The bearer credential the app passes to session.authenticate. Keep it secret. */
+  credential: string
+  /** When the credential stops working, in Unix seconds. */
+  expiresAt: number
+  /** What the credential lets the app do, in a fixed order. */
+  capabilities: AppCapability[]
+}
+/** Revoke every credential issued to one app (apps.revokeCredentials). A session signed in with one is ended at its next request. apps.uninstall does this too. */
+export interface AppsRevokeCredentialsParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+}
+/** How many live credentials apps.revokeCredentials revoked. Zero when the app held none. */
+export interface AppsRevokeCredentialsResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+  /** Live credentials revoked. */
+  revoked: number
+}
+/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. app_requests_nothing: the installed package requests no capability, so it has nothing to sign in for. app_credential_conflict: this request already issued a credential, whose secret is not answered twice; issue again with a new request id. app_credentials_unavailable: the credential store could not issue or revoke; nothing was issued. */
 export const AppsErrorCode = {
   AppsNotConfigured: "apps_not_configured",
   AppPackageInvalid: "app_package_invalid",
@@ -1867,6 +1917,9 @@ export const AppsErrorCode = {
   AppNotInstalled: "app_not_installed",
   AppsStorageUnavailable: "apps_storage_unavailable",
   AppsAuditUnavailable: "apps_audit_unavailable",
+  AppRequestsNothing: "app_requests_nothing",
+  AppCredentialConflict: "app_credential_conflict",
+  AppCredentialsUnavailable: "app_credentials_unavailable",
 } as const
 export type AppsErrorCode = (typeof AppsErrorCode)[keyof typeof AppsErrorCode]
 /** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
@@ -3903,7 +3956,7 @@ export interface BoatSaveParams {
   /** Boat infrastructure token. Never returned or logged. */
   token: string
 }
-/** Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
+/** Typed Boat connection refusals. boat_sign_in_unavailable: this build names no Boat OAuth app, so boat.signIn is not offered; a pasted token still is. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values. */
 export const BoatErrorCode = {
   VaultLocked: "vault_locked",
   BoatNotConfigured: "boat_not_configured",
@@ -3915,6 +3968,7 @@ export const BoatErrorCode = {
   BoatEnvironmentBlocksCredentials: "boat_environment_blocks_credentials",
   BoatProvisioningUncertain: "boat_provisioning_uncertain",
   BoatCleanupUncertain: "boat_cleanup_uncertain",
+  BoatSignInUnavailable: "boat_sign_in_unavailable",
 } as const
 export type BoatErrorCode = (typeof BoatErrorCode)[keyof typeof BoatErrorCode]
 /** Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs. */
@@ -3925,6 +3979,23 @@ export interface BoatStatus {
   environment?: string
   /** The release-owned shared worker image saved with this connection; present only while connected. */
   image?: string
+  /** How the saved connection was made: Sign in with Boat, whose access token the gateway renews itself, or a pasted API token. Present only while connected. */
+  via?: "signIn" | "token"
+  /** The Boat account Sign in with Boat signed in as; present only while connected via signIn. */
+  login?: string
+  /** Whether boat.signIn is offered: this build names a Boat OAuth app. */
+  signInAvailable?: boolean
+  /** The Sign in with Boat in progress, or the one that last failed; absent when none is running and none failed. */
+  signIn?: BoatSignInState
+}
+/** Where the gateway's Sign in with Boat stands. boat.signIn starts one (ending any earlier one): the gateway listens on this machine's loopback for Boat's redirect, exchanges the code with PKCE, reads the account, validates and saves the connection like boat.save, and renews the one-hour access token itself from then on. boat.cancelSignIn stops waiting. */
+export interface BoatSignInState {
+  /** Waiting for the browser to come back from Boat, or the last sign-in ended without a connection. Absent (no signIn) when no sign-in is running and none failed. */
+  state: "waiting" | "failed"
+  /** While waiting: the Boat page where the person approves Nessa. Holds no secret: the code it leads to is useless without the verifier the gateway keeps. */
+  url?: string
+  /** When failed: denied (the person chose Cancel on Boat), expired (no answer in 10 minutes), rejected (the redirect was not Boat's), boat_unreachable (Boat refused or did not answer the code exchange), or a BoatErrorCode from saving the connection. */
+  cause?: string
 }
 /** Connect a user-owned Agent37 workspace. The gateway makes this install's SSH key, registers it with the workspace, checks the release's pinned runtime template, then encrypts the key, the SSH key and the template in the unlocked vault. */
 export interface Agent37SaveParams {
@@ -4488,7 +4559,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 154,
+  maxReadyMethods: 158,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4775,6 +4846,8 @@ export const ProductMethod = {
   AppsInstalled: "apps.installed",
   AppsRead: "apps.read",
   AppsUninstall: "apps.uninstall",
+  AppsIssueCredential: "apps.issueCredential",
+  AppsRevokeCredentials: "apps.revokeCredentials",
   PhoneEndpoint: "phone.endpoint",
   PhoneAuthorize: "phone.authorize",
   PhoneStatus: "phone.status",
@@ -4831,6 +4904,8 @@ export const ProductMethod = {
   VaultLock: "vault.lock",
   BoatStatus: "boat.status",
   BoatSave: "boat.save",
+  BoatSignIn: "boat.signIn",
+  BoatCancelSignIn: "boat.cancelSignIn",
   BoatDisconnect: "boat.disconnect",
   Agent37Status: "agent37.status",
   Agent37Save: "agent37.save",
@@ -4947,6 +5022,8 @@ export const productReadyMethods = [
   "apps.installed",
   "apps.read",
   "apps.uninstall",
+  "apps.issueCredential",
+  "apps.revokeCredentials",
   "phone.endpoint",
   "phone.authorize",
   "phone.status",
@@ -5003,6 +5080,8 @@ export const productReadyMethods = [
   "vault.lock",
   "boat.status",
   "boat.save",
+  "boat.signIn",
+  "boat.cancelSignIn",
   "boat.disconnect",
   "agent37.status",
   "agent37.save",
@@ -5105,6 +5184,8 @@ export const productMethodGrants = {
   "apps.installed": "credential.manage",
   "apps.read": "credential.manage",
   "apps.uninstall": "credential.manage",
+  "apps.issueCredential": "credential.manage",
+  "apps.revokeCredentials": "credential.manage",
   "phone.endpoint": "server.read",
   "phone.authorize": "credential.manage",
   "phone.status": "credential.manage",
@@ -5161,6 +5242,8 @@ export const productMethodGrants = {
   "vault.lock": "credential.manage",
   "boat.status": "credential.manage",
   "boat.save": "credential.manage",
+  "boat.signIn": "credential.manage",
+  "boat.cancelSignIn": "credential.manage",
   "boat.disconnect": "credential.manage",
   "agent37.status": "credential.manage",
   "agent37.save": "credential.manage",

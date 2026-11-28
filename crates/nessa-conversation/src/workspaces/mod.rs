@@ -13,6 +13,10 @@ pub mod infrastructure;
 mod settings_tests;
 
 #[cfg(test)]
+#[path = "../../tests/workspaces/boat_sign_in.rs"]
+mod boat_sign_in_tests;
+
+#[cfg(test)]
 #[path = "../../tests/workspaces/provider_contract.rs"]
 mod provider_contract_tests;
 

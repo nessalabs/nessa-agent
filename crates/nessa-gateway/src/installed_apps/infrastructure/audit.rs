@@ -55,6 +55,17 @@ fn stored(record: &AppsRecord) -> (&'static str, Value) {
             "app_uninstall",
             json!({ "reason": reason, "after": "installed" }),
         ),
+        AppsEvent::CredentialIssued {
+            credential_id,
+            capabilities,
+        } => (
+            "issued",
+            "app_credential",
+            json!({ "credentialId": credential_id, "capabilities": capabilities }),
+        ),
+        AppsEvent::CredentialsRevoked { revoked } => {
+            ("revoked", "app_credential", json!({ "revoked": revoked }))
+        }
     };
     (
         phase,

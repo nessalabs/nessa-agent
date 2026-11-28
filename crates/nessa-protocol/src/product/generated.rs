@@ -1845,6 +1845,34 @@ pub struct AppReview {
     pub entrypoint: String,
     pub asset_count: u64,
     pub digest: String,
+    pub requested_capabilities: Vec<AppCapability>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AppCapability {
+    #[serde(rename = "list")]
+    List,
+    #[serde(rename = "read")]
+    Read,
+    #[serde(rename = "create")]
+    Create,
+    #[serde(rename = "subscribe")]
+    Subscribe,
+    #[serde(rename = "stop")]
+    Stop,
+    #[serde(rename = "send")]
+    Send,
+}
+impl AppCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Subscribe => "subscribe",
+            Self::Stop => "stop",
+            Self::Send => "send",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1904,6 +1932,35 @@ pub struct AppsUninstallResult {
     pub request_id: String,
     pub app_id: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsIssueCredentialParams {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsIssueCredentialResult {
+    pub request_id: String,
+    pub app_id: String,
+    pub credential_id: String,
+    pub credential: String,
+    pub expires_at: u64,
+    pub capabilities: Vec<AppCapability>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsRevokeCredentialsParams {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsRevokeCredentialsResult {
+    pub request_id: String,
+    pub app_id: String,
+    pub revoked: u64,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AppsErrorCode {
     #[serde(rename = "apps_not_configured")]
@@ -1924,6 +1981,12 @@ pub enum AppsErrorCode {
     AppsStorageUnavailable,
     #[serde(rename = "apps_audit_unavailable")]
     AppsAuditUnavailable,
+    #[serde(rename = "app_requests_nothing")]
+    AppRequestsNothing,
+    #[serde(rename = "app_credential_conflict")]
+    AppCredentialConflict,
+    #[serde(rename = "app_credentials_unavailable")]
+    AppCredentialsUnavailable,
 }
 impl AppsErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -1937,6 +2000,9 @@ impl AppsErrorCode {
             Self::AppNotInstalled => "app_not_installed",
             Self::AppsStorageUnavailable => "apps_storage_unavailable",
             Self::AppsAuditUnavailable => "apps_audit_unavailable",
+            Self::AppRequestsNothing => "app_requests_nothing",
+            Self::AppCredentialConflict => "app_credential_conflict",
+            Self::AppCredentialsUnavailable => "app_credentials_unavailable",
         }
     }
 }
@@ -4339,6 +4405,8 @@ pub enum BoatErrorCode {
     BoatProvisioningUncertain,
     #[serde(rename = "boat_cleanup_uncertain")]
     BoatCleanupUncertain,
+    #[serde(rename = "boat_sign_in_unavailable")]
+    BoatSignInUnavailable,
 }
 impl BoatErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -4353,6 +4421,7 @@ impl BoatErrorCode {
             Self::BoatEnvironmentBlocksCredentials => "boat_environment_blocks_credentials",
             Self::BoatProvisioningUncertain => "boat_provisioning_uncertain",
             Self::BoatCleanupUncertain => "boat_cleanup_uncertain",
+            Self::BoatSignInUnavailable => "boat_sign_in_unavailable",
         }
     }
 }
@@ -4364,6 +4433,23 @@ pub struct BoatStatus {
     pub environment: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_available: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<BoatSignInState>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoatSignInState {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -5141,6 +5227,8 @@ pub mod product_method {
     pub const APPS_INSTALLED: &str = "apps.installed";
     pub const APPS_READ: &str = "apps.read";
     pub const APPS_UNINSTALL: &str = "apps.uninstall";
+    pub const APPS_ISSUE_CREDENTIAL: &str = "apps.issueCredential";
+    pub const APPS_REVOKE_CREDENTIALS: &str = "apps.revokeCredentials";
     pub const PHONE_ENDPOINT: &str = "phone.endpoint";
     pub const PHONE_AUTHORIZE: &str = "phone.authorize";
     pub const PHONE_STATUS: &str = "phone.status";
@@ -5197,6 +5285,8 @@ pub mod product_method {
     pub const VAULT_LOCK: &str = "vault.lock";
     pub const BOAT_STATUS: &str = "boat.status";
     pub const BOAT_SAVE: &str = "boat.save";
+    pub const BOAT_SIGN_IN: &str = "boat.signIn";
+    pub const BOAT_CANCEL_SIGN_IN: &str = "boat.cancelSignIn";
     pub const BOAT_DISCONNECT: &str = "boat.disconnect";
     pub const AGENT37_STATUS: &str = "agent37.status";
     pub const AGENT37_SAVE: &str = "agent37.save";
@@ -5423,7 +5513,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 154
+                items.len() <= 158
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5515,6 +5605,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "apps.installed",
     "apps.read",
     "apps.uninstall",
+    "apps.issueCredential",
+    "apps.revokeCredentials",
     "phone.endpoint",
     "phone.authorize",
     "phone.status",
@@ -5571,6 +5663,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "vault.lock",
     "boat.status",
     "boat.save",
+    "boat.signIn",
+    "boat.cancelSignIn",
     "boat.disconnect",
     "agent37.status",
     "agent37.save",
@@ -5802,6 +5896,10 @@ pub enum ProductMethod {
     AppsRead,
     /// `apps.uninstall`
     AppsUninstall,
+    /// `apps.issueCredential`
+    AppsIssueCredential,
+    /// `apps.revokeCredentials`
+    AppsRevokeCredentials,
     /// `phone.endpoint`
     PhoneEndpoint,
     /// `phone.authorize`
@@ -5914,6 +6012,10 @@ pub enum ProductMethod {
     BoatStatus,
     /// `boat.save`
     BoatSave,
+    /// `boat.signIn`
+    BoatSignIn,
+    /// `boat.cancelSignIn`
+    BoatCancelSignIn,
     /// `boat.disconnect`
     BoatDisconnect,
     /// `agent37.status`
@@ -6049,6 +6151,8 @@ impl ProductMethod {
         ProductMethod::AppsInstalled,
         ProductMethod::AppsRead,
         ProductMethod::AppsUninstall,
+        ProductMethod::AppsIssueCredential,
+        ProductMethod::AppsRevokeCredentials,
         ProductMethod::PhoneEndpoint,
         ProductMethod::PhoneAuthorize,
         ProductMethod::PhoneStatus,
@@ -6105,6 +6209,8 @@ impl ProductMethod {
         ProductMethod::VaultLock,
         ProductMethod::BoatStatus,
         ProductMethod::BoatSave,
+        ProductMethod::BoatSignIn,
+        ProductMethod::BoatCancelSignIn,
         ProductMethod::BoatDisconnect,
         ProductMethod::Agent37Status,
         ProductMethod::Agent37Save,
@@ -6214,6 +6320,8 @@ impl ProductMethod {
             "apps.installed" => Some(ProductMethod::AppsInstalled),
             "apps.read" => Some(ProductMethod::AppsRead),
             "apps.uninstall" => Some(ProductMethod::AppsUninstall),
+            "apps.issueCredential" => Some(ProductMethod::AppsIssueCredential),
+            "apps.revokeCredentials" => Some(ProductMethod::AppsRevokeCredentials),
             "phone.endpoint" => Some(ProductMethod::PhoneEndpoint),
             "phone.authorize" => Some(ProductMethod::PhoneAuthorize),
             "phone.status" => Some(ProductMethod::PhoneStatus),
@@ -6272,6 +6380,8 @@ impl ProductMethod {
             "vault.lock" => Some(ProductMethod::VaultLock),
             "boat.status" => Some(ProductMethod::BoatStatus),
             "boat.save" => Some(ProductMethod::BoatSave),
+            "boat.signIn" => Some(ProductMethod::BoatSignIn),
+            "boat.cancelSignIn" => Some(ProductMethod::BoatCancelSignIn),
             "boat.disconnect" => Some(ProductMethod::BoatDisconnect),
             "agent37.status" => Some(ProductMethod::Agent37Status),
             "agent37.save" => Some(ProductMethod::Agent37Save),
@@ -6380,6 +6490,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => "apps.installed",
             ProductMethod::AppsRead => "apps.read",
             ProductMethod::AppsUninstall => "apps.uninstall",
+            ProductMethod::AppsIssueCredential => "apps.issueCredential",
+            ProductMethod::AppsRevokeCredentials => "apps.revokeCredentials",
             ProductMethod::PhoneEndpoint => "phone.endpoint",
             ProductMethod::PhoneAuthorize => "phone.authorize",
             ProductMethod::PhoneStatus => "phone.status",
@@ -6436,6 +6548,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => "vault.lock",
             ProductMethod::BoatStatus => "boat.status",
             ProductMethod::BoatSave => "boat.save",
+            ProductMethod::BoatSignIn => "boat.signIn",
+            ProductMethod::BoatCancelSignIn => "boat.cancelSignIn",
             ProductMethod::BoatDisconnect => "boat.disconnect",
             ProductMethod::Agent37Status => "agent37.status",
             ProductMethod::Agent37Save => "agent37.save",
@@ -6542,6 +6656,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => Some("credential.manage"),
             ProductMethod::AppsRead => Some("credential.manage"),
             ProductMethod::AppsUninstall => Some("credential.manage"),
+            ProductMethod::AppsIssueCredential => Some("credential.manage"),
+            ProductMethod::AppsRevokeCredentials => Some("credential.manage"),
             ProductMethod::PhoneEndpoint => Some("server.read"),
             ProductMethod::PhoneAuthorize => Some("credential.manage"),
             ProductMethod::PhoneStatus => Some("credential.manage"),
@@ -6598,6 +6714,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => Some("credential.manage"),
             ProductMethod::BoatStatus => Some("credential.manage"),
             ProductMethod::BoatSave => Some("credential.manage"),
+            ProductMethod::BoatSignIn => Some("credential.manage"),
+            ProductMethod::BoatCancelSignIn => Some("credential.manage"),
             ProductMethod::BoatDisconnect => Some("credential.manage"),
             ProductMethod::Agent37Status => Some("credential.manage"),
             ProductMethod::Agent37Save => Some("credential.manage"),
@@ -6703,6 +6821,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => ProductLane::Requests,
             ProductMethod::AppsRead => ProductLane::Requests,
             ProductMethod::AppsUninstall => ProductLane::Requests,
+            ProductMethod::AppsIssueCredential => ProductLane::Requests,
+            ProductMethod::AppsRevokeCredentials => ProductLane::Requests,
             ProductMethod::PhoneEndpoint => ProductLane::Requests,
             ProductMethod::PhoneAuthorize => ProductLane::Requests,
             ProductMethod::PhoneStatus => ProductLane::Requests,
@@ -6759,6 +6879,8 @@ impl ProductMethod {
             ProductMethod::VaultLock => ProductLane::Requests,
             ProductMethod::BoatStatus => ProductLane::Requests,
             ProductMethod::BoatSave => ProductLane::Requests,
+            ProductMethod::BoatSignIn => ProductLane::Requests,
+            ProductMethod::BoatCancelSignIn => ProductLane::Requests,
             ProductMethod::BoatDisconnect => ProductLane::Requests,
             ProductMethod::Agent37Status => ProductLane::Requests,
             ProductMethod::Agent37Save => ProductLane::Requests,
@@ -7025,6 +7147,12 @@ impl ProductMethod {
             ProductMethod::AppsUninstall => ProductParams::AppsUninstall(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
+            ProductMethod::AppsIssueCredential => ProductParams::AppsIssueCredential(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsRevokeCredentials => ProductParams::AppsRevokeCredentials(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
             ProductMethod::PhoneEndpoint => ProductParams::PhoneEndpoint(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
@@ -7210,6 +7338,14 @@ impl ProductMethod {
             ProductMethod::BoatSave => {
                 ProductParams::BoatSave(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
+            ProductMethod::BoatSignIn => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatSignIn,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::BoatCancelSignIn => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::BoatCancelSignIn,
+                _ => return Err(ParamsRefused),
+            },
             ProductMethod::BoatDisconnect => match params {
                 Value::Object(fields) if fields.is_empty() => ProductParams::BoatDisconnect,
                 _ => return Err(ParamsRefused),
@@ -7390,6 +7526,8 @@ pub enum ProductParams {
     AppsInstalled,
     AppsRead(AppsReadParams),
     AppsUninstall(AppsUninstallParams),
+    AppsIssueCredential(AppsIssueCredentialParams),
+    AppsRevokeCredentials(AppsRevokeCredentialsParams),
     PhoneEndpoint(PhoneEndpointParams),
     PhoneAuthorize(PhoneAuthorizeParams),
     PhoneStatus(PhoneStatusParams),
@@ -7446,6 +7584,8 @@ pub enum ProductParams {
     VaultLock,
     BoatStatus,
     BoatSave(BoatSaveParams),
+    BoatSignIn,
+    BoatCancelSignIn,
     BoatDisconnect,
     Agent37Status,
     Agent37Save(Agent37SaveParams),
@@ -7569,6 +7709,8 @@ impl ProductParams {
             ProductParams::AppsInstalled => ProductMethod::AppsInstalled,
             ProductParams::AppsRead(_) => ProductMethod::AppsRead,
             ProductParams::AppsUninstall(_) => ProductMethod::AppsUninstall,
+            ProductParams::AppsIssueCredential(_) => ProductMethod::AppsIssueCredential,
+            ProductParams::AppsRevokeCredentials(_) => ProductMethod::AppsRevokeCredentials,
             ProductParams::PhoneEndpoint(_) => ProductMethod::PhoneEndpoint,
             ProductParams::PhoneAuthorize(_) => ProductMethod::PhoneAuthorize,
             ProductParams::PhoneStatus(_) => ProductMethod::PhoneStatus,
@@ -7631,6 +7773,8 @@ impl ProductParams {
             ProductParams::VaultLock => ProductMethod::VaultLock,
             ProductParams::BoatStatus => ProductMethod::BoatStatus,
             ProductParams::BoatSave(_) => ProductMethod::BoatSave,
+            ProductParams::BoatSignIn => ProductMethod::BoatSignIn,
+            ProductParams::BoatCancelSignIn => ProductMethod::BoatCancelSignIn,
             ProductParams::BoatDisconnect => ProductMethod::BoatDisconnect,
             ProductParams::Agent37Status => ProductMethod::Agent37Status,
             ProductParams::Agent37Save(_) => ProductMethod::Agent37Save,

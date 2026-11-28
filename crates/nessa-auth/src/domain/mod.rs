@@ -35,6 +35,7 @@ pub use identifiers::{
     Action, AudienceId, CredentialId, MembershipId, OrganizationId, PrincipalId, ResourceId,
     MAX_IDENTIFIER_BYTES,
 };
+pub(crate) use models::AppCall;
 pub use models::{
     Credential, Grant, Membership, MembershipRole, MembershipStatus, Organization, Principal,
     PrincipalKind, Resource,

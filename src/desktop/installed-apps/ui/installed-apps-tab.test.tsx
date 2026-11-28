@@ -54,6 +54,7 @@ function checked(appId: string, packageVersion: string): CheckedAppPackage {
       entrypoint: "index.html",
       assetCount: 1,
       digest: "a".repeat(64),
+      requestedCapabilities: [],
     },
   }
 }

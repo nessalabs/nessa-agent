@@ -10,7 +10,7 @@ use crate::installed_apps::infrastructure::{DurableAppsAudit, SqliteAppStore};
 /// The installed apps kept under `namespace`, or `None` — logged — when the
 /// store cannot be opened. Without them the apps methods answer
 /// `apps_not_configured`, and nothing installed is lost.
-pub(super) fn compose(namespace: &Path) -> Option<Arc<InstalledApps>> {
+pub(super) fn compose(namespace: &Path) -> Option<InstalledApps> {
     let root = conversation_root(namespace);
     if let Err(error) = nessa_local_storage::create_directory(&root) {
         tracing::error!(%error, "installed apps are off this run: the data folder could not be made");
@@ -26,11 +26,11 @@ pub(super) fn compose(namespace: &Path) -> Option<Arc<InstalledApps>> {
             return None;
         }
     };
-    Some(Arc::new(InstalledApps::new(
+    Some(InstalledApps::new(
         Box::new(store),
         Arc::new(DurableAppsAudit::new(
             root.join("audit").join("apps"),
             Arc::new(SystemClock),
         )),
-    )))
+    ))
 }

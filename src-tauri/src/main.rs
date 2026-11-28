@@ -421,6 +421,13 @@ fn main() {
             if let tauri::RunEvent::Reopen { .. } = event {
                 desktop_window::open(app);
             }
+            // A `nessa://` link (Info.plist registers the scheme), such as
+            // Open Nessa on the page Boat's sign-in returns to, brings the
+            // desktop window forward. No link carries anything to act on.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { .. } = event {
+                desktop_window::open(app);
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 // One resolution, at the entry point. The decision itself takes
                 // what it needs as parameters and lives below.

@@ -5,7 +5,7 @@
 //! recorded.
 use crate::workspaces::{
     application::Settings,
-    domain::{BoatConnection, CloudConnection, Failure},
+    domain::{BoatConnection, BoatGrant, CloudConnection, Failure},
 };
 use async_trait::async_trait;
 use nessa_vault::{application::Vault, domain::EntryName};
@@ -20,12 +20,31 @@ struct Stored {
     token: String,
     environment: String,
     image: String,
+    /// Only for Sign in with Boat; a pasted token has none.
+    #[serde(default)]
+    grant: Option<StoredGrant>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct StoredGrant {
+    refresh: String,
+    expires_at_ms: u64,
+    login: String,
 }
 #[derive(Serialize)]
 struct Borrowed<'a> {
     token: &'a str,
     environment: &'a str,
     image: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grant: Option<BorrowedGrant<'a>>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedGrant<'a> {
+    refresh: &'a str,
+    expires_at_ms: u64,
+    login: &'a str,
 }
 fn entry() -> EntryName {
     EntryName::new("boat.connection").expect("static vault entry")
@@ -51,9 +70,16 @@ impl Settings for VaultSettings {
                 .map_err(failed)?
                 .ok_or(Failure::NotConfigured)?;
             let stored: Stored = serde_json::from_slice(&bytes).map_err(|_| Failure::Storage)?;
-            BoatConnection::new(stored.token, stored.environment, stored.image)
-                .map(CloudConnection::Boat)
-                .map_err(|_| Failure::Storage)
+            let connection = BoatConnection::new(stored.token, stored.environment, stored.image)
+                .map_err(|_| Failure::Storage)?;
+            let connection = match stored.grant {
+                None => connection,
+                Some(grant) => connection.with_grant(
+                    BoatGrant::new(grant.refresh, grant.expires_at_ms, grant.login)
+                        .map_err(|_| Failure::Storage)?,
+                ),
+            };
+            Ok(CloudConnection::Boat(connection))
         })
         .await
         .map_err(|_| Failure::Storage)?
@@ -66,11 +92,21 @@ impl Settings for VaultSettings {
         tokio::task::spawn_blocking(move || {
             let token = std::str::from_utf8(connection.account.token.as_slice())
                 .map_err(|_| Failure::InvalidInput)?;
+            let grant = match &connection.grant {
+                None => None,
+                Some(grant) => Some(BorrowedGrant {
+                    refresh: std::str::from_utf8(grant.refresh.as_slice())
+                        .map_err(|_| Failure::InvalidInput)?,
+                    expires_at_ms: grant.expires_at_ms,
+                    login: &grant.login,
+                }),
+            };
             let bytes = Zeroizing::new(
                 serde_json::to_vec(&Borrowed {
                     token,
                     environment: &connection.environment,
                     image: &connection.image,
+                    grant,
                 })
                 .map_err(|_| Failure::Storage)?,
             );

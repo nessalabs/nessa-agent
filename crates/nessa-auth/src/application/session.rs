@@ -2,7 +2,9 @@
 //! original issuance permits entry. Callers still authorize each operation against
 //! fresh state and own invalidation/expiry handling for open connections.
 mod app;
-pub use app::{AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession};
+pub use app::{
+    AdmitAppCall, AppCallAsk, AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession,
+};
 
 use super::ports::{
     AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,

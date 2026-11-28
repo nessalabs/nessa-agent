@@ -700,6 +700,10 @@ export function fakeGateway(
       save: async () => {
         throw new Error("Boat provisioning is unavailable in this fixture")
       },
+      signIn: async () => {
+        throw new Error("Boat sign-in is unavailable in this fixture")
+      },
+      cancelSignIn: async () => ({ state: "disconnected" as const }),
       disconnect: async () => ({ state: "disconnected" as const }),
     },
     agent37: {
@@ -1220,6 +1224,7 @@ function fakeApps(): import("@nessa/client").AppsApi {
       entrypoint: "index.html",
       assetCount: 1,
       digest: `fake-${appId}-${packageVersion}`.padEnd(64, "0"),
+      requestedCapabilities: [],
     },
   })
   const unpack = (pkg: Checked["package"]): Checked => {
@@ -1255,6 +1260,11 @@ function fakeApps(): import("@nessa/client").AppsApi {
     uninstall: async (appId) => {
       if (!installed.delete(appId)) throw new Error("app_not_installed")
     },
+    // A starter asks for nothing, so it has nothing to sign in for.
+    issueCredential: async (appId) => {
+      throw new Error(installed.has(appId) ? "app_requests_nothing" : "app_not_installed")
+    },
+    revokeCredentials: async () => 0,
   }
 }
 

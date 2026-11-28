@@ -2,15 +2,13 @@ import {
   createContext,
   useContext,
   useEffect,
-  useId,
   useRef,
   useState,
   type ReactNode,
 } from "react"
 import { NessaBoatError, type BoatStatus } from "@nessa/client"
-import { Dialog } from "@nessa-ui/react/dialog"
 import type { BoatGateway } from "../adapters/boat-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 const BoatContext = createContext<BoatGateway | undefined>(undefined)
@@ -26,27 +24,47 @@ export function BoatProvider({
 export function useBoatGateway() {
   return useContext(BoatContext)
 }
-/** What the Boat connection reads and does: its status, the token being entered, save and disconnect. */
+/** What the Boat connection reads and does: its status, signing in, and disconnecting. */
 export interface BoatConnection {
   readonly gateway: BoatGateway | undefined
   readonly status: BoatStatus | undefined
   /** No status will come: there is no gateway, or its read failed. */
   readonly unread: boolean
-  readonly token: string
-  readonly setToken: (token: string) => void
   readonly busy: boolean
   readonly error: string
-  readonly save: () => Promise<void>
+  /** Start Sign in with Boat and open Boat's page in the browser. */
+  readonly signIn: () => Promise<void>
+  /** Stop waiting for the browser. */
+  readonly cancelSignIn: () => Promise<void>
+  /** Open Boat's page again, for a sign-in still waiting. */
+  readonly reopen: () => void
   readonly disconnect: () => Promise<void>
   /** Asks for the vault, then reads the status again. */
   readonly unlock: () => Promise<void>
 }
 
+/** What the person reads when a sign-in ended without a connection. */
+export function signInFailureText(cause: string): string {
+  switch (cause) {
+    case "denied":
+      return "Sign-in was cancelled on Boat."
+    case "expired":
+      return "Boat didn't answer in time. Try signing in again."
+    case "boat_worker_unavailable":
+      return "This Nessa build needs a matching Boat worker image. Update Nessa and try again."
+    case "boat_environment_blocks_credentials":
+      return "The Nessa environment in Boat blocks agent credentials. Allow connected agents there, then retry."
+    default:
+      return "Boat couldn't finish signing in. Try again."
+  }
+}
+
 /**
- * The token stays in this transient field, then in the encrypted gateway vault.
- * A saved infrastructure connection is distinct from model authentication.
- * `onChange` hears each status a save or disconnect answers; a change of
- * `seen`, what another read last said about the connection, reads it again.
+ * The gateway holds the sign-in; the window only starts it, opens Boat's
+ * page, and reads where it stands: every `pollMs` while it waits for the
+ * browser, and when the window comes back to the front. `onChange` hears
+ * each status a sign-in or disconnect answers; a change of `seen`, what
+ * another read last said about the connection, reads it again.
  */
 export function useBoatConnection(
   onChange?: (status: BoatStatus) => void,
@@ -54,13 +72,17 @@ export function useBoatConnection(
 ): BoatConnection {
   const gateway = useContext(BoatContext)
   const ensure = useVaultUnlock()
+  // An unlock from any dialog (another row's, the page's) reads again.
+  const settled = useVaultSettled()
   const reads = useRef(0)
   const [status, setStatus] = useState<BoatStatus>()
-  const [token, setToken] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [readFailed, setReadFailed] = useState(false)
   const [round, setRound] = useState(0)
+  const heard = useRef(onChange)
+  heard.current = onChange
+  const waiting = status?.signIn?.state === "waiting"
   useEffect(() => {
     let current = true
     const revision = ++reads.current
@@ -68,7 +90,15 @@ export function useBoatConnection(
     void gateway
       ?.read()
       .then((value) => {
-        if (current && revision === reads.current) setStatus(value)
+        if (!current || revision !== reads.current) return
+        setStatus((before) => {
+          // A sign-in that just finished is news to the tab around it.
+          if (before?.state !== value.state) heard.current?.(value)
+          return value
+        })
+        if (value.signIn?.state === "failed")
+          setError(signInFailureText(value.signIn.cause ?? ""))
+        else if (value.state === "connected") setError("")
       })
       .catch(() => {
         if (current && revision === reads.current) {
@@ -79,47 +109,56 @@ export function useBoatConnection(
     return () => {
       current = false
     }
-  }, [gateway, round, seen])
+  }, [gateway, round, seen, settled])
+  useEffect(() => {
+    if (!gateway || !waiting) return
+    const again = () => setRound((value) => value + 1)
+    const timer = window.setInterval(again, gateway.pollMs)
+    window.addEventListener("focus", again)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", again)
+    }
+  }, [gateway, waiting])
   const answered = (value: BoatStatus) => {
     setStatus(value)
     onChange?.(value)
   }
-  const save = async () => {
+  const act = async (work: (gateway: BoatGateway) => Promise<void>, failed: string) => {
     if (!gateway || busy) return
     reads.current += 1
     setBusy(true)
     setError("")
     try {
       if (!(await ensure())) return
-      answered(await gateway.save(token.trim()))
-      setToken("")
+      await work(gateway)
     } catch (cause) {
       setError(
-        cause instanceof NessaBoatError && cause.refusal === "boat_worker_unavailable"
-          ? "This Nessa build needs a matching Boat worker image. Update Nessa and try again."
-          : cause instanceof NessaBoatError &&
-              cause.refusal === "boat_environment_blocks_credentials"
-            ? "The Nessa environment in Boat blocks agent credentials. Allow connected agents there, then retry."
-            : "Boat could not be connected. Check your token and Boat connection, then try again.",
+        cause instanceof NessaBoatError && cause.refusal === "boat_sign_in_unavailable"
+          ? "This Nessa build can't sign in to Boat."
+          : failed,
       )
     } finally {
       setBusy(false)
     }
   }
-  const disconnect = async () => {
-    if (!gateway || busy) return
-    reads.current += 1
-    setBusy(true)
-    setError("")
-    try {
-      if (!(await ensure())) return
-      answered(await gateway.disconnect())
-      setToken("")
-    } catch {
-      setError("Boat could not be disconnected. Try again.")
-    } finally {
-      setBusy(false)
-    }
+  const signIn = () =>
+    act(async (gateway) => {
+      const value = await gateway.signIn()
+      answered(value)
+      if (value.signIn?.state === "waiting" && value.signIn.url)
+        gateway.open(value.signIn.url)
+    }, "Boat sign-in could not start. Try again.")
+  const cancelSignIn = () =>
+    act(async (gateway) => answered(await gateway.cancelSignIn()), "Try again.")
+  const disconnect = () =>
+    act(
+      async (gateway) => answered(await gateway.disconnect()),
+      "Boat could not be disconnected. Try again.",
+    )
+  const reopen = () => {
+    const url = status?.signIn?.state === "waiting" ? status.signIn.url : undefined
+    if (gateway && url) gateway.open(url)
   }
   const unlock = async () => {
     if (await ensure()) setRound((value) => value + 1)
@@ -128,122 +167,95 @@ export function useBoatConnection(
     gateway,
     status,
     unread: status === undefined && (!gateway || readFailed),
-    token,
-    setToken,
     busy,
     error,
-    save,
+    signIn,
+    cancelSignIn,
+    reopen,
     disconnect,
     unlock,
   }
 }
 
-/** The token form and any error: Boat's settings wherever they are shown. */
+/** Sign in with Boat and any error: Boat's settings wherever they are shown. */
 export function BoatConnectionFields({ connection }: { connection: BoatConnection }) {
   return (
     <div className="settings-boat">
-      <BoatTokenForm connection={connection} />
+      <BoatSignIn connection={connection} />
       {connection.error && <p role="alert">{connection.error}</p>}
     </div>
   )
 }
 
 /**
- * Unlock, or the token field and Connect Boat: the one way Boat is connected,
- * in Settings and wherever Boat is offered while it is not connected.
+ * Unlock, or Sign in with Boat: the one way Boat is connected, in Settings
+ * and wherever Boat is offered while it is not connected. While the
+ * browser is out, it says so and offers the page again and Cancel.
  */
-export function BoatTokenForm({ connection }: { connection: BoatConnection }) {
-  const tokenId = useId()
-  const { gateway, status, token, setToken, busy } = connection
-  return (
-    <>
-      {!gateway && <p role="status">Connect a gateway to manage Boat.</p>}
-      {status?.state === "locked" ? (
-        // Whether a token is saved is unknown until the vault opens: unlock,
-        // never a form that would replace a token already there.
+export function BoatSignIn({ connection }: { connection: BoatConnection }) {
+  const { gateway, status, busy } = connection
+  if (!gateway) return <p role="status">Connect a gateway to manage Boat.</p>
+  if (status?.state === "locked")
+    return (
+      <div className="settings-boat-fields">
+        <button
+          className="settings-button settings-button-primary"
+          type="button"
+          disabled={busy}
+          onClick={() => void connection.unlock()}
+          data-boat-action="unlock"
+        >
+          Unlock
+        </button>
+      </div>
+    )
+  if (status?.state === "connected") return null
+  if (status?.signInAvailable === false)
+    return <p role="status">This Nessa build can't sign in to Boat yet.</p>
+  if (status?.signIn?.state === "waiting")
+    return (
+      <div className="settings-boat-waiting" data-boat-sign-in="waiting">
+        <p role="status">Finish signing in to Boat in your browser.</p>
         <div className="settings-boat-fields">
           <button
-            className="settings-button settings-button-primary"
+            className="settings-button"
+            type="button"
+            onClick={connection.reopen}
+            data-boat-action="reopen"
+          >
+            Open Boat again
+          </button>
+          <button
+            className="settings-button"
             type="button"
             disabled={busy}
-            onClick={() => void connection.unlock()}
-            data-boat-action="unlock"
+            onClick={() => void connection.cancelSignIn()}
+            data-boat-action="cancel-sign-in"
           >
-            Unlock
+            Cancel
           </button>
         </div>
-      ) : (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            void connection.save()
-          }}
-        >
-          <label htmlFor={tokenId}>API token</label>
-          <div className="settings-boat-fields">
-            <input
-              id={tokenId}
-              className="settings-input"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Paste your Boat token"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              disabled={busy || !gateway}
-            />
-            <button
-              className="settings-button"
-              type="submit"
-              disabled={!token.trim() || busy || !gateway}
-            >
-              {busy
-                ? "Connecting…"
-                : status?.state === "connected"
-                  ? "Replace token"
-                  : "Connect Boat"}
-            </button>
-          </div>
-        </form>
-      )}
-      {status?.state !== "connected" && status?.state !== "locked" && gateway && (
-        <p className="settings-boat-note">
-          Get one, and connect ChatGPT or Claude, in{" "}
-          <a
-            href="https://boat.dev/dashboard?tab=agents"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Boat
-          </a>
-          .
-        </p>
-      )}
-    </>
-  )
-}
-
-/** "Connected" and its Disconnect, once Boat is connected. */
-export function BoatConnected({ connection }: { connection: BoatConnection }) {
-  if (connection.status?.state !== "connected") return null
+      </div>
+    )
   return (
-    <span className="settings-boat-status" role="status">
-      Connected{" "}
-      <RowAction
-        disabled={connection.busy}
-        onClick={() => {
-          void connection.disconnect()
-        }}
+    <div className="settings-boat-fields">
+      <button
+        className="settings-button settings-button-primary"
+        type="button"
+        disabled={busy || status === undefined}
+        onClick={() => void connection.signIn()}
+        data-boat-action="sign-in"
       >
-        Disconnect
-      </RowAction>
-    </span>
+        {busy ? "Opening Boat…" : "Sign in with Boat"}
+      </button>
+    </div>
   )
 }
 
 /**
  * Settings › Connections › Accounts › Boat: one word of where it stands and
- * one button. The token is pasted in a dialog that Connect… opens.
+ * one button. Sign in with Boat starts at once; while the browser is out the
+ * row says so and offers the page again and Cancel.
  */
 export function BoatRow({
   onChange,
@@ -254,74 +266,77 @@ export function BoatRow({
   const connection = useBoatConnection()
   const entry = setting("boat")
   const found = useContext(FoundSetting) === "boat"
-  const [asking, setAsking] = useState(false)
-  const state = connection.status?.state
-  // A token the dialog saved closes it: the row says Connected.
+  const { status } = connection
+  const state = status?.state
+  const waiting = status?.signIn?.state === "waiting"
   useEffect(() => {
-    if (state === "connected") setAsking(false)
     if (state !== undefined) onChange?.(state)
   }, [state, onChange])
   return (
-    <>
-      <ItemRow
-        unavailable={!connection.gateway}
-        setting="boat"
-        found={found}
-        label={entry.label}
-        data-boat-state={state ?? (connection.unread ? "unread" : "reading")}
-        detail={
-          !asking && connection.error
-            ? connection.error
-            : state === "connected"
-              ? "Connected"
-              : state === "locked"
-                ? "Locked"
-                : state === undefined
-                  ? connection.unread
-                    ? undefined
-                    : "Loading…"
+    <ItemRow
+      unavailable={!connection.gateway}
+      setting="boat"
+      found={found}
+      label={entry.label}
+      data-boat-state={state ?? (connection.unread ? "unread" : "reading")}
+      data-boat-sign-in={waiting ? "waiting" : undefined}
+      detail={
+        connection.error
+          ? connection.error
+          : state === "connected"
+            ? status?.login
+              ? `Connected as ${status.login}`
+              : "Connected"
+            : state === "locked"
+              ? "Locked"
+              : state === undefined
+                ? connection.unread
+                  ? undefined
+                  : "Loading…"
+                : waiting
+                  ? "Finish signing in in your browser"
                   : "Not connected"
-        }
-        control={
-          state === "connected" ? (
+      }
+      control={
+        state === "connected" ? (
+          <RowAction
+            disabled={connection.busy}
+            onClick={() => void connection.disconnect()}
+            data-boat-action="disconnect"
+          >
+            Disconnect
+          </RowAction>
+        ) : state === "locked" ? (
+          <RowAction
+            disabled={connection.busy}
+            onClick={() => void connection.unlock()}
+            data-boat-action="unlock"
+          >
+            Unlock
+          </RowAction>
+        ) : waiting ? (
+          <span className="settings-boat-status">
+            <RowAction onClick={connection.reopen} data-boat-action="reopen">
+              Open Boat
+            </RowAction>
             <RowAction
               disabled={connection.busy}
-              onClick={() => void connection.disconnect()}
-              data-boat-action="disconnect"
+              onClick={() => void connection.cancelSignIn()}
+              data-boat-action="cancel-sign-in"
             >
-              Disconnect
+              Cancel
             </RowAction>
-          ) : state === "locked" ? (
-            <RowAction
-              disabled={connection.busy}
-              onClick={() => void connection.unlock()}
-              data-boat-action="unlock"
-            >
-              Unlock
-            </RowAction>
-          ) : (
-            <RowAction onClick={() => setAsking(true)} data-boat-action="connect">
-              Connect…
-            </RowAction>
-          )
-        }
-      />
-      {asking ? (
-        <Dialog
-          open
-          size="sm"
-          title="Connect Boat"
-          data-boat-dialog=""
-          onOpenChange={(open) => {
-            if (!open) setAsking(false)
-          }}
-        >
-          <div className="settings-surface settings-boat">
-            <BoatTokenForm connection={connection} />
-            {connection.error && <p role="alert">{connection.error}</p>}
-          </div>
-        </Dialog>
-      ) : null}
-    </>
+          </span>
+        ) : status?.signInAvailable === false ? null : (
+          <RowAction
+            disabled={connection.busy || state === undefined}
+            onClick={() => void connection.signIn()}
+            data-boat-action="sign-in"
+          >
+            Sign in with Boat
+          </RowAction>
+        )
+      }
+    />
   )
 }

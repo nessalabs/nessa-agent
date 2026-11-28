@@ -132,6 +132,34 @@ impl ResourceAttributes<'_> {
                 RestrictedExpression::new_string(owner.as_str().to_owned()),
             );
         }
+        if let Some(panel) = self.resource.panel_membership() {
+            attrs.insert(
+                "panelMembershipId".to_owned(),
+                RestrictedExpression::new_string(panel.as_str().to_owned()),
+            );
+        }
+        if let Some(call) = self.resource.app_call() {
+            attrs.insert(
+                "appMethod".to_owned(),
+                RestrictedExpression::new_string(call.method.clone()),
+            );
+            attrs.insert(
+                "appCapabilities".to_owned(),
+                RestrictedExpression::new_set(
+                    call.capabilities
+                        .iter()
+                        .map(|capability| RestrictedExpression::new_string(capability.clone())),
+                ),
+            );
+            attrs.insert(
+                "appAsks".to_owned(),
+                RestrictedExpression::new_set(
+                    call.asks
+                        .iter()
+                        .map(|ask| RestrictedExpression::new_string(ask.clone())),
+                ),
+            );
+        }
         attrs
     }
 }

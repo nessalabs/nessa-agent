@@ -99,6 +99,14 @@
     {
       "method": "apps.uninstall",
       "reason": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one."
+    },
+    {
+      "method": "apps.issueCredential",
+      "reason": "An app's credential is a secret handed to that app's own launcher by Nessa's Settings. No agent, CLI or MCP call is answered one."
+    },
+    {
+      "method": "apps.revokeCredentials",
+      "reason": "Revoking an app's credentials is the owner's choice in Nessa's Settings, and uninstalling does it. No agent, CLI or MCP call revokes them."
     }
   ],
   "methods": [
@@ -882,6 +890,20 @@
     {
       "name": "boat.save",
       "params": "BoatSaveParams",
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.signIn",
+      "params": null,
+      "grant": "credential.manage",
+      "readOnly": false,
+      "destructive": false
+    },
+    {
+      "name": "boat.cancelSignIn",
+      "params": null,
       "grant": "credential.manage",
       "readOnly": false,
       "destructive": false

@@ -147,6 +147,19 @@ pub struct Resource {
     organization_id: OrganizationId,
     id: ResourceId,
     owner_membership: Option<MembershipId>,
+    panel_membership: Option<MembershipId>,
+    app_call: Option<AppCall>,
+}
+
+/// What an app session asks to call, and the operations its owner approved:
+/// facts for policy, not a verdict.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AppCall {
+    pub(crate) method: String,
+    pub(crate) capabilities: Vec<String>,
+    /// What the request itself asks for, beyond the method, as policy
+    /// spells it (`fullAccess`, `channel`, `environment`, `linkedFiles`).
+    pub(crate) asks: Vec<String>,
 }
 
 impl Resource {
@@ -158,6 +171,8 @@ impl Resource {
             organization_id,
             id,
             owner_membership: None,
+            panel_membership: None,
+            app_call: None,
         }
     }
 
@@ -169,6 +184,28 @@ impl Resource {
 
     pub(crate) fn owner_membership(&self) -> Option<&MembershipId> {
         self.owner_membership.as_ref()
+    }
+
+    /// Attach the owner's desktop window membership (the provisioned panel
+    /// surface), which may act for the owner where a policy says so.
+    pub(crate) fn with_panel_membership(mut self, panel: MembershipId) -> Self {
+        self.panel_membership = Some(panel);
+        self
+    }
+
+    pub(crate) fn panel_membership(&self) -> Option<&MembershipId> {
+        self.panel_membership.as_ref()
+    }
+
+    /// Attach the method an app session asks to call and its approved
+    /// operations.
+    pub(crate) fn with_app_call(mut self, call: AppCall) -> Self {
+        self.app_call = Some(call);
+        self
+    }
+
+    pub(crate) fn app_call(&self) -> Option<&AppCall> {
+        self.app_call.as_ref()
     }
 
     /// Organization that owns this record or resource.

@@ -71,6 +71,28 @@
             "ownerMembershipId": {
               "type": "String",
               "required": false
+            },
+            "panelMembershipId": {
+              "type": "String",
+              "required": false
+            },
+            "appMethod": {
+              "type": "String",
+              "required": false
+            },
+            "appCapabilities": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": false
+            },
+            "appAsks": {
+              "type": "Set",
+              "element": {
+                "type": "String"
+              },
+              "required": false
             }
           },
           "additionalAttributes": false
@@ -152,6 +174,21 @@
         }
       },
       "appCredential.enter": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "appCredential.call": {
         "appliesTo": {
           "principalTypes": [
             "Actor"

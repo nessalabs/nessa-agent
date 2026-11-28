@@ -32,7 +32,7 @@ use nessa_auth::application::ports::{
     SessionEvidence, VerifiedCredential,
 };
 use nessa_auth::application::session::{
-    AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession,
+    AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession, ScopedAppSession,
 };
 use nessa_auth::domain::{Action, AudienceId, CredentialId};
 #[cfg(test)]
@@ -145,7 +145,7 @@ where
         receive_authentication(&mut socket, &state, &nonce, deadline, proof).await
     })
     .await;
-    let (request_id, session, handshake) = match authenticated {
+    let (request_id, entered, handshake) = match authenticated {
         Ok(Ok(value)) => value,
         Ok(Err((request_id, code))) => {
             if code != "handshake_timeout" {
@@ -172,6 +172,13 @@ where
         }
     };
 
+    let session = match entered {
+        Entered::Person(session) => session,
+        Entered::App(app) => {
+            super::app_session::serve(socket, state, *app, request_id, handshake.client_id).await;
+            return;
+        }
+    };
     let (session, snapshot) = match current_identity(&state, &session).await {
         Ok(current) => current,
         Err(error) => {
@@ -306,7 +313,7 @@ async fn receive_authentication<S, P>(
     nonce: &str,
     deadline: Instant,
     proof: &P,
-) -> Result<(String, AuthenticatedSession, RecordedHandshake), (String, &'static str)>
+) -> Result<(String, Entered, RecordedHandshake), (String, &'static str)>
 where
     S: Stream<Item = Result<Message, Error>> + Unpin,
     P: SessionProof<S>,
@@ -401,7 +408,7 @@ where
                 ));
             }
         };
-        return Ok((frame.id, identity, handshake));
+        return Ok((frame.id, Entered::Person(identity), handshake));
     }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
@@ -413,21 +420,32 @@ where
         clock: state.clock.as_ref(),
     }
     .execute(&evidence, &state.audience)
-    .await
-    .map_err(|error| {
-        (
-            frame.id.clone(),
-            if retryable_access_error(error) {
-                "temporarily_unavailable"
-            } else {
-                "unauthorized"
-            },
-        )
-    })?;
+    .await;
+    let session = match session {
+        Ok(session) => Entered::Person(session),
+        // The ordinary verifier never accepts an app's credential. Only
+        // when it refuses one is the same evidence asked as an app's.
+        Err(error) if !retryable_access_error(error) => {
+            match super::app_session::authenticate(state, &evidence).await {
+                Some(Ok(app)) => Entered::App(Box::new(app)),
+                Some(Err(app_error)) if retryable_access_error(app_error) => {
+                    return Err((frame.id, "temporarily_unavailable"));
+                }
+                _ => return Err((frame.id, "unauthorized")),
+            }
+        }
+        Err(_) => return Err((frame.id, "temporarily_unavailable")),
+    };
     if clock::now() >= deadline {
         return Err((frame.id, "handshake_timeout"));
     }
     Ok((frame.id, session, handshake))
+}
+
+/// Who a handshake signed in: a person's surface, or an installed app.
+enum Entered {
+    Person(AuthenticatedSession),
+    App(Box<ScopedAppSession>),
 }
 
 fn credential_admin_code(error: CredentialAdminError) -> &'static str {
@@ -2262,7 +2280,9 @@ async fn dispatch_authorized(
         | ProductMethod::AppsInstall
         | ProductMethod::AppsInstalled
         | ProductMethod::AppsRead
-        | ProductMethod::AppsUninstall => {
+        | ProductMethod::AppsUninstall
+        | ProductMethod::AppsIssueCredential
+        | ProductMethod::AppsRevokeCredentials => {
             super::installed_apps::dispatch(state, session, frame).await
         }
         // Every other `conversation.` method. On a socket the record reads and
@@ -2348,9 +2368,11 @@ async fn dispatch_authorized(
         | ProductMethod::CloudBoxesDelete => {
             super::cloud_boxes::dispatch(state, session, frame).await
         }
-        ProductMethod::BoatStatus | ProductMethod::BoatSave | ProductMethod::BoatDisconnect => {
-            super::boat::dispatch(state, session, frame).await
-        }
+        ProductMethod::BoatStatus
+        | ProductMethod::BoatSave
+        | ProductMethod::BoatSignIn
+        | ProductMethod::BoatCancelSignIn
+        | ProductMethod::BoatDisconnect => super::boat::dispatch(state, session, frame).await,
         ProductMethod::VaultStatus
         | ProductMethod::VaultSetup
         | ProductMethod::VaultUnlock
@@ -2798,7 +2820,7 @@ async fn send_error<S: Sink<Message> + Unpin>(
     send(write_timeout, socket, failure(request_id, code)).await
 }
 
-async fn send<S: Sink<Message> + Unpin>(
+pub(super) async fn send<S: Sink<Message> + Unpin>(
     write_timeout: Duration,
     socket: &mut S,
     message: OutgoingMessage,
@@ -2925,11 +2947,11 @@ pub(super) fn close_reason(error: AccessError) -> SessionCloseReason {
     }
 }
 
-fn retryable_access_error(error: AccessError) -> bool {
+pub(super) fn retryable_access_error(error: AccessError) -> bool {
     matches!(error, AccessError::Unavailable | AccessError::StaleRevision)
 }
 
-async fn close_session<S: Sink<Message> + Unpin>(
+pub(super) async fn close_session<S: Sink<Message> + Unpin>(
     write_timeout: Duration,
     socket: &mut S,
     reason: SessionCloseReason,

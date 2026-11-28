@@ -233,6 +233,10 @@ export const KNOBS = {
     default: 1,
     what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
   },
+  boatSignIns: {
+    default: 1,
+    what: "times Boat is connected by Sign in with Boat through a fake Boat (no token field): a Cancel on Boat's page said on the row, then a sign-in whose browser comes back to the gateway, the account named, its one-minute access token renewed on later reads, no token in the page or log, and Disconnect revoking it",
+  },
   voices: {
     default: 1,
     what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, and away from the window the floating pill: its mute and speaker switches, gone when the window is back in front, and End on it",
@@ -284,6 +288,10 @@ export const KNOBS = {
   apps: {
     default: 1,
     what: "static apps made in Settings › Workspace › Apps: reviewed with a sandboxed preview, Cancel in the system's dialog installs nothing, Install keeps the exact reviewed package; opened in its own window with no network, stopped, then uninstalled while another app stays",
+  },
+  appCredentials: {
+    default: 1,
+    what: "installed apps that sign in with their own credential: the owner issues it after install with exactly the capabilities the package requests; the app connects with @nessa/client and sees, creates and runs only its own conversations, never the owner's; every method outside its capabilities is forbidden; uninstalling revokes it and its open session is closed",
   },
   telemetries: {
     default: 1,
@@ -401,6 +409,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.runs, () => ({ kind: "run" }))
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.boatSignIns, () => ({ kind: "boatSignIn" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))
@@ -438,6 +447,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.telemetries, () => ({ kind: "telemetry" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.apps, () => ({ kind: "apps" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.appCredentials, () => ({ kind: "appCredentials" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.zooms, () => ({ kind: "zoom" }))
   if (knobs.pairedCatalogues > 0)

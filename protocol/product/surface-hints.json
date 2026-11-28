@@ -439,6 +439,14 @@
     "readOnly": false,
     "destructive": false
   },
+  "boat.signIn": {
+    "readOnly": false,
+    "destructive": false
+  },
+  "boat.cancelSignIn": {
+    "readOnly": false,
+    "destructive": false
+  },
   "boat.disconnect": {
     "readOnly": false,
     "destructive": true
