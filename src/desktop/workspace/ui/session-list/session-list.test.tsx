@@ -677,3 +677,21 @@ it("the command key on the coordinator's row opens its chat beside, as on any ro
   expect(shownNow).toContain("main")
   expect(shownNow).toContain(before)
 })
+
+it("focus goes to the coordinator's row when the last session beside it leaves", async () => {
+  const source = fakeSource(coordinated("gateway"))
+  const store = await shown(source)
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "gateway" }))
+    await settle()
+  })
+  const row = host.querySelector<HTMLElement>('[data-session-row="d"]')
+  await act(async () => row?.focus())
+  expect(document.activeElement).toBe(row)
+  await act(async () => {
+    source.emit({ kind: "session-removed", sessionId: "d", revision: 2 })
+    await settle()
+  })
+  expect(host.querySelector("[data-session-row]")).toBeNull()
+  expect(document.activeElement).toBe(host.querySelector("[data-coordinator-start=main]"))
+})

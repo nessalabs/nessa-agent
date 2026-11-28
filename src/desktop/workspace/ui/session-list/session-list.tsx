@@ -85,7 +85,9 @@ export const SessionList = memo(function SessionList() {
     (state) => !query && selectChannelShells(state, view.channelId).length > 0,
   )
   const listRef = useRef<HTMLDivElement>(null)
-  useRowFocusKept(listRef, "[data-session-row]")
+  // The coordinator's row not yet begun is one of the rows: focus goes to it
+  // when the last session beside it leaves.
+  useRowFocusKept(listRef, "[data-session-row], [data-coordinator-start]")
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // A coordinator not yet begun is a row of its own: the list is not empty,
