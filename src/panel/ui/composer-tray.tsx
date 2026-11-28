@@ -77,6 +77,12 @@ const FOCUS_RING_OUTSIDE =
 // where focus is, and red text keeps its contrast on the lighter fill.
 const ROW = `flex w-full items-center gap-3 rounded-[14px] px-3.5 py-3 text-start nessa-text-4 text-foreground transition-colors hover:bg-accent/70 focus-visible:bg-accent/70 disabled:pointer-events-none disabled:opacity-50 ${FOCUS_RING}`
 
+/** How long a closed tray takes to shrink back into +; styles.css's exit. */
+const TRAY_EXIT_MS = 120
+
+/** A page's way back, named for the page it is on. */
+const BACK = `flex items-center gap-1 self-start rounded-[12px] px-2 py-2 nessa-text-3 text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground ${FOCUS_RING}`
+
 /**
  * Where the tray sits relative to the + wrapper: its bottom edge just above the
  * composer, its left edge on the composer's, no wider than the composer, and
@@ -117,18 +123,24 @@ function useTrayPlacement(
       if (!anchor) return
       const from = own.getBoundingClientRect()
       const to = anchor.getBoundingClientRect()
+      // The tray grows out of the + that opened it: its transform origin is
+      // the button's centre, measured from the tray's left and bottom edges.
+      const originX = Math.round(from.left + from.width / 2 - to.left)
+      const originY = Math.round(from.top + from.height / 2 - (to.top - gap))
       const next = {
         bottom: from.bottom - to.top + gap,
         left: to.left - from.left,
         width: Math.min(336, to.width),
         maxHeight: Math.max(120, roomAbove(anchor)),
+        transformOrigin: `${originX}px calc(100% + ${originY}px)`,
       }
       setPlacement((previous) =>
         previous &&
         previous.bottom === next.bottom &&
         previous.left === next.left &&
         previous.width === next.width &&
-        previous.maxHeight === next.maxHeight
+        previous.maxHeight === next.maxHeight &&
+        previous.transformOrigin === next.transformOrigin
           ? previous
           : next,
       )
@@ -194,12 +206,32 @@ export function ComposerTray({
     setFocusKey(focus)
   }, [])
 
+  // The page stays as it was while a closed tray fades out; opening starts
+  // again from the first page.
   const close = React.useCallback((returnFocus: boolean) => {
     setOpen(false)
-    setPage("root")
-    setFocusKey(undefined)
     if (returnFocus) trigger.current?.focus()
   }, [])
+  const openTray = React.useCallback(() => {
+    setPage("root")
+    setFocusKey(undefined)
+    setOpen(true)
+  }, [])
+
+  // A closed tray stays drawn, inert and unnamed, for its short exit, so it
+  // shrinks back into + rather than vanishing. Set before paint, so no frame
+  // goes without it.
+  const [leaving, setLeaving] = React.useState(false)
+  const wasOpen = React.useRef(open)
+  React.useLayoutEffect(() => {
+    const closed = wasOpen.current && !open
+    wasOpen.current = open
+    if (open) setLeaving(false)
+    if (!closed) return
+    setLeaving(true)
+    const done = setTimeout(() => setLeaving(false), TRAY_EXIT_MS)
+    return () => clearTimeout(done)
+  }, [open])
 
   React.useEffect(() => {
     if (!open) return
@@ -253,7 +285,7 @@ export function ComposerTray({
         aria-expanded={open}
         aria-controls={open ? trayId : undefined}
         disabled={disabled && !onSignOut && !approval && !agentInstallations}
-        onClick={() => (open ? close(false) : setOpen(true))}
+        onClick={() => (open ? close(false) : openTray())}
       >
         <Plus
           aria-hidden="true"
@@ -262,12 +294,15 @@ export function ComposerTray({
           style={{ transform: open ? "rotate(45deg)" : undefined }}
         />
       </ChatComposerAction>
-      {open ? (
+      {open || leaving ? (
         <div
           ref={tray}
-          id={trayId}
-          role="dialog"
-          aria-label="Composer options"
+          id={open ? trayId : undefined}
+          role={open ? "dialog" : undefined}
+          aria-label={open ? "Composer options" : undefined}
+          aria-hidden={open ? undefined : true}
+          inert={!open}
+          data-leaving={open ? undefined : ""}
           style={placement}
           className="nessa-composer-tray absolute bottom-[calc(100%+10px)] left-0 z-50 w-[21rem] overflow-y-auto overscroll-contain rounded-[22px] border border-border/60 bg-popover p-1.5 text-popover-foreground shadow-xl"
         >
@@ -343,17 +378,15 @@ export function ComposerTray({
               ) : null}
             </div>
           ) : shown === "agents" && agentInstallations ? (
-            <div
-              key="agents"
-              className="nessa-composer-tray-page flex flex-col gap-3 p-2"
-            >
+            <div key="agents" className="nessa-composer-tray-page flex flex-col">
               <button
                 type="button"
-                className={ROW}
+                aria-label="Back from Agent downloads"
                 onClick={() => go("root", "agents-row")}
+                className={BACK}
               >
                 <ChevronLeft aria-hidden="true" className="size-4" />
-                Back
+                Agent downloads
               </button>
               <AgentDownloads source={agentInstallations} />
             </div>
@@ -363,7 +396,7 @@ export function ComposerTray({
                 type="button"
                 aria-label="Back from Tool approval"
                 onClick={() => go("root", "approval-row")}
-                className={`flex items-center gap-1 self-start rounded-[12px] px-2 py-2 nessa-text-3 text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground ${FOCUS_RING}`}
+                className={BACK}
               >
                 <ChevronLeft aria-hidden="true" className="size-4" />
                 Tool approval

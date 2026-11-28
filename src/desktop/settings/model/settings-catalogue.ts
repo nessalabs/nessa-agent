@@ -324,8 +324,7 @@ export const settingsEntries = [
     id: "vault-touch-id",
     tab: "accounts",
     label: "Unlock with Touch ID",
-    detail:
-      "Your fingerprint instead of your passphrase. Turn it on with “Use Touch ID” when you next unlock.",
+    detail: "Turn on when you next unlock.",
     keywords: "fingerprint biometric touch id unlock password passphrase keychain",
   },
   // Connections › MCP servers
