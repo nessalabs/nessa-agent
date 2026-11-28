@@ -3018,6 +3018,8 @@ async function appModeStep(run, step, failures) {
     )
   if (!target)
     throw new CannotRun("no second catalog model in this conversation's provider")
+  // A model change from the switch to Ask before this step can still be
+  // settling; Model is disabled only while it is in flight.
   await more().click()
   const modelItem = page.getByRole("menuitem", { name: /^Model/ })
   if (
@@ -3035,6 +3037,14 @@ async function appModeStep(run, step, failures) {
       `Simple's + offers ${JSON.stringify(items)}, not Attach files and Model`,
     )
   await shoot("more-menu")
+  const enabled = await waitFor(
+    async () => (await modelItem.getAttribute("aria-disabled")) !== "true",
+    10_000,
+  )
+  if (!enabled) {
+    failures.push("Model under + stayed disabled: a model change never settled")
+    return
+  }
   await modelItem.click()
   if (
     !(await page
@@ -3058,6 +3068,8 @@ async function appModeStep(run, step, failures) {
     })
     .locator(css.modelOptionLabel)
     .click()
+  // Staged until the next send; put back if the step ends before it.
+  run.appModeStaged = current
   if (
     !(await waitFor(
       async () => (await page.locator(css.modelPicker).count()) === 0,
@@ -3078,6 +3090,7 @@ async function appModeStep(run, step, failures) {
     failures.push("closing the picker opened from + did not hand focus back to +")
   const text = prompt(run, STRESS.model, step)
   const seen = await send(run, run.main.id, text, failures)
+  run.appModeStaged = undefined
   const confirmed = await waitFor(async () => {
     const view = await readWithReviews(run.client, run.main.id)
     return view.runtime?.model === target.modelId && !view.modelChange ? view : null
@@ -5028,6 +5041,18 @@ const steps = {
       await appModeStep(run, step, failures)
     } finally {
       await restoreAdvanced(run.page, failures)
+      // A model picked under + and never sent stays staged; the steps after
+      // this one start from the conversation's model, so it is put back.
+      if (run.appModeStaged) {
+        const model = run.appModeStaged
+        run.appModeStaged = undefined
+        failures.push("the appMode step ended with a model picked under + and never sent")
+        await selectStressModel(
+          run.page,
+          dock(run.page).locator(css.modelChip),
+          model.displayName,
+        ).catch(() => {})
+      }
     }
   },
 
