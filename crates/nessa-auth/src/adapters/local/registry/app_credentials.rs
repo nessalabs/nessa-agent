@@ -76,22 +76,31 @@ impl LocalCredentialStore {
         .await
         .map_err(|_| LocalStoreError::Conflict)?;
         let context = session.context();
-        let owner_membership = self
+        let (owner_membership, owner_principal, panel_membership) = self
             .with_published_registry(|registry| {
                 if registry.revision != snapshot.revision {
                     return Err(AccessError::StaleRevision);
                 }
-                MembershipId::new(&registry.owner_membership_id)
-                    .map_err(|_| AccessError::Unavailable)
+                let owner = MembershipId::new(&registry.owner_membership_id)
+                    .map_err(|_| AccessError::Unavailable)?;
+                let owner_principal = owner_principal(registry)?;
+                let panel = owner_panel(registry)
+                    .map(|panel| MembershipId::new(&panel.id))
+                    .transpose()
+                    .map_err(|_| AccessError::Unavailable)?;
+                Ok((owner, owner_principal, panel))
             })
             .map_err(|_| LocalStoreError::Conflict)?;
         let action = Action::new("appCredential.issue").map_err(|_| LocalStoreError::Corrupt)?;
-        let resource = Resource::new(
+        let mut resource = Resource::new(
             context.organization_id().clone(),
             ResourceId::new(context.audience_id().as_str())
                 .map_err(|_| LocalStoreError::Corrupt)?,
         )
         .with_owner_membership(owner_membership);
+        if let Some(panel) = panel_membership {
+            resource = resource.with_panel_membership(panel);
+        }
         if policy.evaluate(context, &action, &resource, &snapshot) != Ok(Decision::Allow) {
             return Err(LocalStoreError::Conflict);
         }
@@ -99,8 +108,10 @@ impl LocalCredentialStore {
         if now >= approval.expires_at {
             return Err(LocalStoreError::Conflict);
         }
+        // The app is the owner's, whichever of the owner's surfaces approved
+        // it, so its conversations stay its own across a re-issue.
         let principal = app_principal(
-            context.principal_id(),
+            &owner_principal,
             context.organization_id(),
             context.audience_id(),
             &approval.app,
@@ -192,6 +203,22 @@ impl LocalCredentialStore {
     }
 }
 
+impl LocalCredentialStore {
+    /// Whether `issuer` already revoked a credential under `request_id`: a
+    /// retried revoke command answers from this once nothing is left live.
+    pub fn revoked_under(
+        &self,
+        issuer: &PrincipalId,
+        request_id: &str,
+    ) -> Result<bool, AccessError> {
+        self.with_published_registry(|registry| {
+            Ok(registry.revoke_receipts.iter().any(|receipt| {
+                receipt.issuer_principal_id == issuer.as_str() && receipt.request_id == request_id
+            }))
+        })
+    }
+}
+
 impl AppCredentials for LocalCredentialStore {
     fn verify_app<'a>(
         &'a self,
@@ -242,6 +269,30 @@ fn scoped_snapshot(
     let access = access_snapshot(registry, stored)?;
     let binding = approved_app_binding(registry, stored, &access)?;
     Ok(AppCredentialSnapshot { access, binding })
+}
+
+/// The owner's own principal.
+fn owner_principal(registry: &Registry) -> Result<PrincipalId, AccessError> {
+    let owner = registry
+        .memberships
+        .iter()
+        .find(|member| member.id == registry.owner_membership_id)
+        .ok_or(AccessError::Unavailable)?;
+    PrincipalId::new(&owner.principal_id).map_err(|_| AccessError::Unavailable)
+}
+
+/// The owner's desktop window membership: the active panel surface in the
+/// owner's organization, when one is provisioned.
+fn owner_panel(registry: &Registry) -> Option<&MembershipInputDto> {
+    let owner = registry
+        .memberships
+        .iter()
+        .find(|member| member.id == registry.owner_membership_id)?;
+    registry.memberships.iter().find(|member| {
+        member.principal_id == super::PANEL_PRINCIPAL
+            && member.organization_id == owner.organization_id
+            && member.state == MembershipStateDto::Active
+    })
 }
 
 /// Registration is stable across credentials and scoped to this owner and
@@ -321,7 +372,6 @@ pub(super) fn approved_app_binding(
         .ok_or(AccessError::Unavailable)?;
     let credential = &snapshot.credential;
     let app = ExtensionAppId::new(&scope.app_id).map_err(|_| AccessError::Unavailable)?;
-    let approver = PrincipalId::new(&owner.principal_id).map_err(|_| AccessError::Unavailable)?;
     let request_id = snapshot
         .origin
         .correlation()
@@ -331,6 +381,16 @@ pub(super) fn approved_app_binding(
         .iter()
         .filter(|r| r.credential_id == credential.id().as_str());
     let receipt = receipts.next().ok_or(AccessError::Unavailable)?;
+    // The owner approved it, at their own credential or at their desktop
+    // window (the panel surface in the owner's organization); nobody else.
+    let approved_by_owner = receipt.issuer_principal_id == owner.principal_id
+        || owner_panel(registry)
+            .is_some_and(|panel| receipt.issuer_principal_id == panel.principal_id);
+    if !approved_by_owner {
+        return Err(AccessError::IdentityMismatch);
+    }
+    let approver =
+        PrincipalId::new(&receipt.issuer_principal_id).map_err(|_| AccessError::Unavailable)?;
     let principal = registry
         .principals
         .iter()
@@ -341,8 +401,10 @@ pub(super) fn approved_app_binding(
         .iter()
         .find(|m| m.id == snapshot.membership.id().as_str())
         .ok_or(AccessError::Unavailable)?;
+    let owner_principal =
+        PrincipalId::new(&owner.principal_id).map_err(|_| AccessError::Unavailable)?;
     let expected_principal = app_principal(
-        &approver,
+        &owner_principal,
         credential.organization_id(),
         credential.audience_id(),
         &app,
@@ -398,10 +460,12 @@ mod tests {
         RevokeCredentialRequest,
     };
     use super::*;
+    use crate::application::dto::{RevocationCauseDto, SupersessionDto, TransitionCauseDto};
     use crate::application::{
         ports::{PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential},
         session::{
-            AuthenticateAppSession, AuthenticateSession, ReadCurrentAppSession, ResumeSession,
+            AdmitAppCall, AppCallAsk, AuthenticateAppSession, AuthenticateSession,
+            ReadCurrentAppSession, ResumeSession,
         },
     };
     use crate::{
@@ -444,6 +508,106 @@ mod tests {
             capabilities: AppCapabilities::new(capability, &[]),
             expires_at: 180,
         }
+    }
+
+    /// The desktop window is the owner's own surface: Settings issues an
+    /// installed app its credential from there. Another admin surface may
+    /// not, and the binding names who approved it.
+    #[test]
+    fn the_owners_desktop_window_issues_and_no_other_surface_does() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        let owner_proof = store.bootstrap(bootstrap()).unwrap().evidence;
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let surface = |name: &str, id: &str| {
+            let IssueCredentialOutcome::Issued { evidence, .. } = store
+                .provision_surface(
+                    name,
+                    format!("request-{id}"),
+                    id.into(),
+                    vec!["server.read".into(), "credential.manage".into()],
+                    100,
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("new surface credential")
+            };
+            let auth = AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            };
+            ready(auth.execute(&evidence, &audience)).unwrap()
+        };
+        let panel = surface("nessa-panel", "panel-one");
+        let other = surface("helper", "helper-one");
+        assert!(matches!(
+            ready(store.issue_app(
+                &other,
+                request("app-from-helper", "notes", AppCapability::List),
+                &clock,
+                &policy,
+            )),
+            Err(LocalStoreError::Conflict)
+        ));
+        let IssueCredentialOutcome::Issued { evidence, .. } = ready(store.issue_app(
+            &panel,
+            request("app-from-panel", "notes", AppCapability::List),
+            &clock,
+            &policy,
+        ))
+        .unwrap() else {
+            panic!("the panel issues once")
+        };
+        let app = ready(
+            AuthenticateAppSession {
+                credentials: &store,
+                clock: &clock,
+                policy: &policy,
+            }
+            .execute(&evidence, &audience),
+        )
+        .unwrap();
+        assert_eq!(app.binding().app().as_str(), "notes");
+        // The app is the owner's whichever of the owner's surfaces approved
+        // it: issued again from the owner's own credential, it is the same
+        // app, so its conversations stay its own.
+        let owner = ready(
+            AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            }
+            .execute(&owner_proof, &audience),
+        )
+        .unwrap();
+        let IssueCredentialOutcome::Issued { evidence, .. } = ready(store.issue_app(
+            &owner,
+            request("app-from-owner", "notes", AppCapability::List),
+            &clock,
+            &policy,
+        ))
+        .unwrap() else {
+            panic!("the owner issues once")
+        };
+        let again = ready(
+            AuthenticateAppSession {
+                credentials: &store,
+                clock: &clock,
+                policy: &policy,
+            }
+            .execute(&evidence, &audience),
+        )
+        .unwrap();
+        assert_eq!(
+            again.app_identity().context().principal_id(),
+            app.app_identity().context().principal_id()
+        );
     }
 
     #[test]
@@ -607,6 +771,104 @@ mod tests {
         ));
     }
 
+    /// Which methods an app may call is policy's, from the operations its
+    /// owner approved; a revoked credential ends the session instead.
+    #[test]
+    fn policy_admits_an_app_only_the_methods_its_operations_name() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        let bootstrap = store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let owner = ready(
+            AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            }
+            .execute(&bootstrap.evidence, &audience),
+        )
+        .unwrap();
+        let mut approval = request("app-call", "notes", AppCapability::List);
+        approval.capabilities = AppCapabilities::new(AppCapability::List, &[AppCapability::Send]);
+        let IssueCredentialOutcome::Issued { evidence, .. } =
+            ready(store.issue_app(&owner, approval, &clock, &policy)).unwrap()
+        else {
+            panic!("one new app credential")
+        };
+        let session = ready(
+            AuthenticateAppSession {
+                credentials: &store,
+                clock: &clock,
+                policy: &policy,
+            }
+            .execute(&evidence, &audience),
+        )
+        .unwrap();
+        let admit = AdmitAppCall {
+            credentials: &store,
+            clock: &clock,
+            policy: &policy,
+        };
+        for method in [
+            "conversation.list",
+            "conversation.send",
+            "conversation.steer",
+        ] {
+            assert!(
+                ready(admit.execute(&session, method, &[])).is_ok(),
+                "{method}"
+            );
+        }
+        for method in [
+            "conversation.create",
+            "conversation.read",
+            "conversation.stop",
+            "conversation.delete",
+            "apps.installed",
+            "credential.list",
+        ] {
+            assert!(
+                matches!(
+                    ready(admit.execute(&session, method, &[])),
+                    Err(AccessError::Denied)
+                ),
+                "{method}"
+            );
+        }
+        // What a request asks for is policy's too: an app approved to send
+        // still may not link files, nor one approved to create ask for `full`.
+        for (method, ask) in [
+            ("conversation.send", AppCallAsk::LinkedFiles),
+            ("conversation.steer", AppCallAsk::LinkedFiles),
+            ("conversation.list", AppCallAsk::FullAccess),
+            ("conversation.send", AppCallAsk::Channel),
+            ("conversation.send", AppCallAsk::Environment),
+        ] {
+            assert!(
+                matches!(
+                    ready(admit.execute(&session, method, &[ask])),
+                    Err(AccessError::Denied)
+                ),
+                "{method} {ask:?}"
+            );
+        }
+        store
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-app-call".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: "app-call".into(),
+                revoked_at: 111,
+            })
+            .unwrap();
+        assert!(matches!(
+            ready(admit.execute(&session, "conversation.list", &[])),
+            Err(AccessError::CredentialRevoked)
+        ));
+    }
+
     #[test]
     fn app_session_uses_only_app_proof_and_current_registry_binding() {
         let root = tempfile::tempdir().unwrap();
@@ -728,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn app_reissue_keeps_registration_and_each_credential_remains_independent() {
+    fn app_reissue_keeps_registration_and_supersedes_the_earlier_credential() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
         let store = open_store(&path).unwrap();
@@ -768,6 +1030,17 @@ mod tests {
             assert_eq!(metadata.id, id);
             if let Some(first) = &first_subject {
                 assert_eq!(&metadata.principal_id, first);
+                // The same commit ends the earlier credential: an app holds one.
+                assert!(transitions.iter().any(|transition| {
+                    transition.credential_id == "app-a"
+                        && transition.cause
+                            == TransitionCauseDto::Revoked {
+                                cause: RevocationCauseDto::Superseded {
+                                    by: "app-b".into(),
+                                    supersession: SupersessionDto::AppReissue,
+                                },
+                            }
+                }));
             } else {
                 first_subject = Some(metadata.principal_id);
             }
@@ -778,14 +1051,7 @@ mod tests {
             ready(store.issue_app(&owner, ambiguous_retry, &clock, &policy)),
             Err(LocalStoreError::Conflict)
         ));
-        store
-            .revoke_sync(RevokeCredentialRequest {
-                request_id: "revoke-app-a".into(),
-                issuer_principal_id: owner.context().principal_id().as_str().into(),
-                credential_id: "app-a".into(),
-                revoked_at: 120,
-            })
-            .unwrap();
+        // It stays ended after a restart, and the new one stays good.
         drop(store);
         let store = open_store(&path).unwrap();
         let first = CredentialId::new("app-a").unwrap();

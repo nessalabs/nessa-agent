@@ -45,6 +45,9 @@ pub enum Supersession {
     Provision,
     /// The owner recovered and the earlier owner credential was displaced.
     OwnerRecovery,
+    /// The owner issued an installed app a new credential, which ends the
+    /// one it held: an app holds at most one.
+    AppReissue,
 }
 
 /// Why a credential stopped being valid.

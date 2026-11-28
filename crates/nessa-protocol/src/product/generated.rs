@@ -1845,6 +1845,34 @@ pub struct AppReview {
     pub entrypoint: String,
     pub asset_count: u64,
     pub digest: String,
+    pub requested_capabilities: Vec<AppCapability>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AppCapability {
+    #[serde(rename = "list")]
+    List,
+    #[serde(rename = "read")]
+    Read,
+    #[serde(rename = "create")]
+    Create,
+    #[serde(rename = "subscribe")]
+    Subscribe,
+    #[serde(rename = "stop")]
+    Stop,
+    #[serde(rename = "send")]
+    Send,
+}
+impl AppCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Subscribe => "subscribe",
+            Self::Stop => "stop",
+            Self::Send => "send",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1904,6 +1932,35 @@ pub struct AppsUninstallResult {
     pub request_id: String,
     pub app_id: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsIssueCredentialParams {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsIssueCredentialResult {
+    pub request_id: String,
+    pub app_id: String,
+    pub credential_id: String,
+    pub credential: String,
+    pub expires_at: u64,
+    pub capabilities: Vec<AppCapability>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsRevokeCredentialsParams {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsRevokeCredentialsResult {
+    pub request_id: String,
+    pub app_id: String,
+    pub revoked: u64,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AppsErrorCode {
     #[serde(rename = "apps_not_configured")]
@@ -1924,6 +1981,12 @@ pub enum AppsErrorCode {
     AppsStorageUnavailable,
     #[serde(rename = "apps_audit_unavailable")]
     AppsAuditUnavailable,
+    #[serde(rename = "app_requests_nothing")]
+    AppRequestsNothing,
+    #[serde(rename = "app_credential_conflict")]
+    AppCredentialConflict,
+    #[serde(rename = "app_credentials_unavailable")]
+    AppCredentialsUnavailable,
 }
 impl AppsErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -1937,6 +2000,9 @@ impl AppsErrorCode {
             Self::AppNotInstalled => "app_not_installed",
             Self::AppsStorageUnavailable => "apps_storage_unavailable",
             Self::AppsAuditUnavailable => "apps_audit_unavailable",
+            Self::AppRequestsNothing => "app_requests_nothing",
+            Self::AppCredentialConflict => "app_credential_conflict",
+            Self::AppCredentialsUnavailable => "app_credentials_unavailable",
         }
     }
 }
@@ -5161,6 +5227,8 @@ pub mod product_method {
     pub const APPS_INSTALLED: &str = "apps.installed";
     pub const APPS_READ: &str = "apps.read";
     pub const APPS_UNINSTALL: &str = "apps.uninstall";
+    pub const APPS_ISSUE_CREDENTIAL: &str = "apps.issueCredential";
+    pub const APPS_REVOKE_CREDENTIALS: &str = "apps.revokeCredentials";
     pub const PHONE_ENDPOINT: &str = "phone.endpoint";
     pub const PHONE_AUTHORIZE: &str = "phone.authorize";
     pub const PHONE_STATUS: &str = "phone.status";
@@ -5445,7 +5513,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 156
+                items.len() <= 158
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5537,6 +5605,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "apps.installed",
     "apps.read",
     "apps.uninstall",
+    "apps.issueCredential",
+    "apps.revokeCredentials",
     "phone.endpoint",
     "phone.authorize",
     "phone.status",
@@ -5826,6 +5896,10 @@ pub enum ProductMethod {
     AppsRead,
     /// `apps.uninstall`
     AppsUninstall,
+    /// `apps.issueCredential`
+    AppsIssueCredential,
+    /// `apps.revokeCredentials`
+    AppsRevokeCredentials,
     /// `phone.endpoint`
     PhoneEndpoint,
     /// `phone.authorize`
@@ -6077,6 +6151,8 @@ impl ProductMethod {
         ProductMethod::AppsInstalled,
         ProductMethod::AppsRead,
         ProductMethod::AppsUninstall,
+        ProductMethod::AppsIssueCredential,
+        ProductMethod::AppsRevokeCredentials,
         ProductMethod::PhoneEndpoint,
         ProductMethod::PhoneAuthorize,
         ProductMethod::PhoneStatus,
@@ -6244,6 +6320,8 @@ impl ProductMethod {
             "apps.installed" => Some(ProductMethod::AppsInstalled),
             "apps.read" => Some(ProductMethod::AppsRead),
             "apps.uninstall" => Some(ProductMethod::AppsUninstall),
+            "apps.issueCredential" => Some(ProductMethod::AppsIssueCredential),
+            "apps.revokeCredentials" => Some(ProductMethod::AppsRevokeCredentials),
             "phone.endpoint" => Some(ProductMethod::PhoneEndpoint),
             "phone.authorize" => Some(ProductMethod::PhoneAuthorize),
             "phone.status" => Some(ProductMethod::PhoneStatus),
@@ -6412,6 +6490,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => "apps.installed",
             ProductMethod::AppsRead => "apps.read",
             ProductMethod::AppsUninstall => "apps.uninstall",
+            ProductMethod::AppsIssueCredential => "apps.issueCredential",
+            ProductMethod::AppsRevokeCredentials => "apps.revokeCredentials",
             ProductMethod::PhoneEndpoint => "phone.endpoint",
             ProductMethod::PhoneAuthorize => "phone.authorize",
             ProductMethod::PhoneStatus => "phone.status",
@@ -6576,6 +6656,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => Some("credential.manage"),
             ProductMethod::AppsRead => Some("credential.manage"),
             ProductMethod::AppsUninstall => Some("credential.manage"),
+            ProductMethod::AppsIssueCredential => Some("credential.manage"),
+            ProductMethod::AppsRevokeCredentials => Some("credential.manage"),
             ProductMethod::PhoneEndpoint => Some("server.read"),
             ProductMethod::PhoneAuthorize => Some("credential.manage"),
             ProductMethod::PhoneStatus => Some("credential.manage"),
@@ -6739,6 +6821,8 @@ impl ProductMethod {
             ProductMethod::AppsInstalled => ProductLane::Requests,
             ProductMethod::AppsRead => ProductLane::Requests,
             ProductMethod::AppsUninstall => ProductLane::Requests,
+            ProductMethod::AppsIssueCredential => ProductLane::Requests,
+            ProductMethod::AppsRevokeCredentials => ProductLane::Requests,
             ProductMethod::PhoneEndpoint => ProductLane::Requests,
             ProductMethod::PhoneAuthorize => ProductLane::Requests,
             ProductMethod::PhoneStatus => ProductLane::Requests,
@@ -7061,6 +7145,12 @@ impl ProductMethod {
                 ProductParams::AppsRead(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
             }
             ProductMethod::AppsUninstall => ProductParams::AppsUninstall(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsIssueCredential => ProductParams::AppsIssueCredential(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsRevokeCredentials => ProductParams::AppsRevokeCredentials(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::PhoneEndpoint => ProductParams::PhoneEndpoint(
@@ -7436,6 +7526,8 @@ pub enum ProductParams {
     AppsInstalled,
     AppsRead(AppsReadParams),
     AppsUninstall(AppsUninstallParams),
+    AppsIssueCredential(AppsIssueCredentialParams),
+    AppsRevokeCredentials(AppsRevokeCredentialsParams),
     PhoneEndpoint(PhoneEndpointParams),
     PhoneAuthorize(PhoneAuthorizeParams),
     PhoneStatus(PhoneStatusParams),
@@ -7617,6 +7709,8 @@ impl ProductParams {
             ProductParams::AppsInstalled => ProductMethod::AppsInstalled,
             ProductParams::AppsRead(_) => ProductMethod::AppsRead,
             ProductParams::AppsUninstall(_) => ProductMethod::AppsUninstall,
+            ProductParams::AppsIssueCredential(_) => ProductMethod::AppsIssueCredential,
+            ProductParams::AppsRevokeCredentials(_) => ProductMethod::AppsRevokeCredentials,
             ProductParams::PhoneEndpoint(_) => ProductMethod::PhoneEndpoint,
             ProductParams::PhoneAuthorize(_) => ProductMethod::PhoneAuthorize,
             ProductParams::PhoneStatus(_) => ProductMethod::PhoneStatus,

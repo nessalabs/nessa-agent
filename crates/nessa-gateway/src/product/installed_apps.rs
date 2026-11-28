@@ -8,17 +8,25 @@
 //!     ──▶ verified again ──▶ digest == reviewedDigest ──▶ audited install ──▶ { app }
 //! apps.installed                       ──▶ { apps }  (empty means none)
 //! apps.read {appId}                    ──▶ { package, review }  bytes verified on load
-//! apps.uninstall {requestId, appId}    ──▶ audited remove ──▶ { appId }
+//! apps.uninstall {requestId, appId}    ──▶ revoke its credentials ──▶ audited remove ──▶ { appId }
+//! apps.issueCredential {requestId, appId}
+//!     ──▶ installed? ──▶ revoke the old ──▶ issue exactly its requested capabilities
+//! apps.revokeCredentials {requestId, appId} ──▶ { revoked }
 //! ```
 use super::socket::{failure, success};
 use super::state::ProductRouteState;
-use crate::installed_apps::application::{AppsCaller, AppsError, Checked, Installed, Review};
+use crate::installed_apps::application::{
+    AppsCaller, AppsError, Checked, Installed, IssuedAppCredential, Review,
+};
 use nessa_app_package::{InlineAsset, InlinePackage};
+use nessa_auth::application::app_credential::AppCapability as GrantedCapability;
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    AppPackage, AppPackageAsset, AppReview, AppsErrorCode, AppsInstallParams, AppsInstallResult,
-    AppsInstalledResult, AppsPackageResult, AppsReadParams, AppsReviewParams, AppsStarterParams,
-    AppsUninstallParams, AppsUninstallResult, InstalledApp,
+    AppCapability, AppPackage, AppPackageAsset, AppReview, AppsErrorCode, AppsInstallParams,
+    AppsInstallResult, AppsInstalledResult, AppsIssueCredentialParams, AppsIssueCredentialResult,
+    AppsPackageResult, AppsReadParams, AppsReviewParams, AppsRevokeCredentialsParams,
+    AppsRevokeCredentialsResult, AppsStarterParams, AppsUninstallParams, AppsUninstallResult,
+    InstalledApp,
 };
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
 use nessa_types::app_identity::ExtensionAppId;
@@ -123,7 +131,74 @@ pub(super) async fn dispatch(
                 Err(error) => failure(&id, code(error).as_str()),
             }
         }
+        "apps.issueCredential" => {
+            let Some((params, app)) = decode::<AppsIssueCredentialParams>(&frame).and_then(|p| {
+                let app = ExtensionAppId::new(p.app_id.clone()).ok()?;
+                Some((p, app))
+            }) else {
+                return failure(&id, "invalid_request");
+            };
+            match apps
+                .issue_credential(session, caller(session), params.request_id.clone(), app)
+                .await
+            {
+                Ok(issued) => success(&id, &issued_result(params, issued)),
+                Err(error) => failure(&id, code(error).as_str()),
+            }
+        }
+        "apps.revokeCredentials" => {
+            let Some((params, app)) = decode::<AppsRevokeCredentialsParams>(&frame).and_then(|p| {
+                let app = ExtensionAppId::new(p.app_id.clone()).ok()?;
+                Some((p, app))
+            }) else {
+                return failure(&id, "invalid_request");
+            };
+            match apps
+                .revoke_credentials(caller(session), params.request_id.clone(), app)
+                .await
+            {
+                Ok(revoked) => success(
+                    &id,
+                    &AppsRevokeCredentialsResult {
+                        request_id: params.request_id,
+                        app_id: params.app_id,
+                        revoked: revoked as u64,
+                    },
+                ),
+                Err(error) => failure(&id, code(error).as_str()),
+            }
+        }
         _ => failure(&id, "unknown_method"),
+    }
+}
+
+fn issued_result(
+    params: AppsIssueCredentialParams,
+    issued: IssuedAppCredential,
+) -> AppsIssueCredentialResult {
+    AppsIssueCredentialResult {
+        request_id: params.request_id,
+        app_id: params.app_id,
+        credential_id: issued.credential_id,
+        credential: issued.secret,
+        expires_at: issued.expires_at,
+        capabilities: issued
+            .capabilities
+            .into_iter()
+            .map(wire_capability)
+            .collect(),
+    }
+}
+
+/// A capability as the wire names it.
+pub(super) fn wire_capability(capability: GrantedCapability) -> AppCapability {
+    match capability {
+        GrantedCapability::List => AppCapability::List,
+        GrantedCapability::Read => AppCapability::Read,
+        GrantedCapability::Create => AppCapability::Create,
+        GrantedCapability::Subscribe => AppCapability::Subscribe,
+        GrantedCapability::Stop => AppCapability::Stop,
+        GrantedCapability::Send => AppCapability::Send,
     }
 }
 
@@ -175,6 +250,11 @@ fn wire_review(review: Review) -> AppReview {
         entrypoint: review.entrypoint,
         asset_count: review.asset_count as u64,
         digest: review.digest,
+        requested_capabilities: review
+            .requested_capabilities
+            .into_iter()
+            .map(wire_capability)
+            .collect(),
     }
 }
 
@@ -202,5 +282,8 @@ fn code(error: AppsError) -> AppsErrorCode {
         AppsError::NotInstalled => AppsErrorCode::AppNotInstalled,
         AppsError::StorageUnavailable => AppsErrorCode::AppsStorageUnavailable,
         AppsError::AuditUnavailable => AppsErrorCode::AppsAuditUnavailable,
+        AppsError::RequestsNothing => AppsErrorCode::AppRequestsNothing,
+        AppsError::CredentialConflict => AppsErrorCode::AppCredentialConflict,
+        AppsError::CredentialsUnavailable => AppsErrorCode::AppCredentialsUnavailable,
     }
 }

@@ -155,6 +155,7 @@ impl InstalledApps {
         app_id: &str,
         package_version: &str,
         digest: &str,
+        capabilities: &[String],
     ) -> Result<bool, String> {
         if !is_app(app_id)
             || digest.len() != 64
@@ -162,11 +163,12 @@ impl InstalledApps {
         {
             return Err("not an app to install".into());
         }
+        let allowed = capability_sentence(capabilities)?;
         let short = &digest[..12];
         let (answer, asked) = tokio::sync::oneshot::channel();
         self.system.ask_to_install(
             format!(
-                "Install {app_id} {package_version}?\n\nPackage {short}… is the one you reviewed. It opens as an app of its own, with no network access."
+                "Install {app_id} {package_version}?\n\nPackage {short}… is the one you reviewed. It opens as an app of its own, with no network access.{allowed}"
             ),
             Box::new(move |yes| {
                 let _ = answer.send(yes);
@@ -347,10 +349,53 @@ pub async fn installed_app_confirm(
     app_id: String,
     package_version: String,
     digest: String,
+    capabilities: Vec<String>,
 ) -> Result<bool, String> {
     only_desktop(&window)?;
     let apps = installed(&deps)?;
-    apps.confirm(&app_id, &package_version, &digest).await
+    apps.confirm(&app_id, &package_version, &digest, &capabilities)
+        .await
+}
+
+/// What installing lets the app do in Nessa, as the Install dialog says it:
+/// empty for an app that asks for nothing. A name the gateway does not
+/// define is refused, so the dialog never leaves one out.
+fn capability_sentence(capabilities: &[String]) -> Result<String, String> {
+    let mut verbs = Vec::new();
+    for capability in capabilities {
+        let verb = match capability.as_str() {
+            "list" => "list",
+            "read" => "read",
+            "create" => "start",
+            "subscribe" => "follow",
+            "stop" => "stop",
+            "send" => "send messages in",
+            _ => return Err("not an app to install".into()),
+        };
+        if verbs.contains(&verb) {
+            return Err("not an app to install".into());
+        }
+        verbs.push(verb);
+    }
+    let Some((last, rest)) = verbs.split_last() else {
+        return Ok(String::new());
+    };
+    let joined = if rest.is_empty() {
+        (*last).to_owned()
+    } else {
+        format!("{} and {last}", rest.join(", "))
+    };
+    let runs = if capabilities
+        .iter()
+        .any(|capability| capability == "create" || capability == "send")
+    {
+        " Agents in them can read and change files on this computer."
+    } else {
+        ""
+    };
+    Ok(format!(
+        "\n\nIt can also {joined} its own Nessa conversations.{runs} It never sees yours."
+    ))
 }
 
 /// Run `work` off the main thread: placing copies a binary, Open waits for
@@ -533,17 +578,60 @@ mod tests {
         let (_dir, system, apps) = host();
         let (_, digest) = starter("notes");
         *system.answer.lock().unwrap() = Some(true);
-        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(true));
+        assert_eq!(apps.confirm("notes", "1.0.0", &digest, &[]).await, Ok(true));
         assert!(system.asked.lock().unwrap()[0].contains(&digest[..12]));
         *system.answer.lock().unwrap() = Some(false);
-        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(false));
+        assert_eq!(
+            apps.confirm("notes", "1.0.0", &digest, &[]).await,
+            Ok(false)
+        );
         // Dismissed, the dialog is a Cancel.
         *system.answer.lock().unwrap() = None;
-        assert_eq!(apps.confirm("notes", "1.0.0", &digest).await, Ok(false));
+        assert_eq!(
+            apps.confirm("notes", "1.0.0", &digest, &[]).await,
+            Ok(false)
+        );
         // Nothing is asked about what is not an app and a digest.
-        assert!(apps.confirm("nessa", "1.0.0", &digest).await.is_err());
-        assert!(apps.confirm("notes", "1.0.0", "short").await.is_err());
+        assert!(apps.confirm("nessa", "1.0.0", &digest, &[]).await.is_err());
+        assert!(apps.confirm("notes", "1.0.0", "short", &[]).await.is_err());
         assert_eq!(system.asked.lock().unwrap().len(), 3);
+        // What it may do in Nessa is named, and nothing unknown is asked.
+        let asks = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
+        *system.answer.lock().unwrap() = Some(true);
+        assert_eq!(
+            apps.confirm(
+                "notes",
+                "1.0.0",
+                &digest,
+                &asks(&["list", "create", "send"])
+            )
+            .await,
+            Ok(true)
+        );
+        assert!(system.asked.lock().unwrap()[3].ends_with(
+            "It can also list, start and send messages in its own Nessa conversations. Agents in them can read and change files on this computer. It never sees yours."
+        ));
+        assert_eq!(
+            apps.confirm("notes", "1.0.0", &digest, &asks(&["read"]))
+                .await,
+            Ok(true)
+        );
+        assert!(system.asked.lock().unwrap()[4]
+            .ends_with("It can also read its own Nessa conversations. It never sees yours."));
+        assert!(apps
+            .confirm("notes", "1.0.0", &digest, &asks(&["everything"]))
+            .await
+            .is_err());
+        assert!(apps
+            .confirm("notes", "1.0.0", &digest, &asks(&["read", "read"]))
+            .await
+            .is_err());
+        assert_eq!(system.asked.lock().unwrap().len(), 5);
     }
 
     #[test]

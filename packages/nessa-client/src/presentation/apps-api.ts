@@ -1,8 +1,10 @@
 import type { RpcRequester } from "../application/session-port.js"
 import {
+  AppCapability,
   ProductMethod,
   type AppPackage,
   type AppReview,
+  type AppsIssueCredentialResult,
   type InstalledApp,
 } from "../generated/product.js"
 
@@ -41,8 +43,19 @@ export type AppsApi = {
   installed(): Promise<readonly InstalledApp[]>
   /** One installed app's verified package, to render it. */
   read(appId: string): Promise<CheckedAppPackage>
-  /** Remove one installed app and every file it holds; other apps are untouched. */
+  /**
+   * Remove one installed app and every file it holds; other apps are
+   * untouched. Its credentials are revoked first.
+   */
   uninstall(appId: string, requestId: string): Promise<void>
+  /**
+   * Issue the credential `appId` signs in with. It holds exactly what the
+   * installed package requests (`AppReview.requestedCapabilities`), and any
+   * credential the app held before is revoked. The secret is answered once.
+   */
+  issueCredential(appId: string, requestId: string): Promise<AppsIssueCredentialResult>
+  /** Revoke every credential issued to `appId`; how many were live. */
+  revokeCredentials(appId: string, requestId: string): Promise<number>
 }
 
 /** A package and what the gateway's verifier found in it. */
@@ -132,7 +145,71 @@ export function createAppsApi(session: RpcRequester): AppsApi {
       )
         throw new Error("Invalid app uninstall response")
     },
+    issueCredential: async (appId, requestId) => {
+      const answer = await session.request(ProductMethod.AppsIssueCredential, {
+        requestId,
+        appId,
+      })
+      if (
+        !isRecord(answer) ||
+        !exactKeys(answer, [
+          "requestId",
+          "appId",
+          "credentialId",
+          "credential",
+          "expiresAt",
+          "capabilities",
+        ]) ||
+        answer.requestId !== requestId ||
+        answer.appId !== appId ||
+        !text(answer.credentialId) ||
+        !text(answer.credential) ||
+        !Number.isSafeInteger(answer.expiresAt) ||
+        (answer.expiresAt as number) < 0
+      )
+        throw new Error("Invalid app credential response")
+      const capabilities = capabilityList(answer.capabilities)
+      if (capabilities.length === 0) throw new Error("Invalid app credential response")
+      return {
+        requestId,
+        appId,
+        credentialId: answer.credentialId,
+        credential: answer.credential,
+        expiresAt: answer.expiresAt as number,
+        capabilities,
+      }
+    },
+    revokeCredentials: async (appId, requestId) => {
+      const answer = await session.request(ProductMethod.AppsRevokeCredentials, {
+        requestId,
+        appId,
+      })
+      if (
+        !isRecord(answer) ||
+        !exactKeys(answer, ["requestId", "appId", "revoked"]) ||
+        answer.requestId !== requestId ||
+        answer.appId !== appId ||
+        !Number.isSafeInteger(answer.revoked) ||
+        (answer.revoked as number) < 0
+      )
+        throw new Error("Invalid app credential revoke response")
+      return answer.revoked as number
+    },
   }
+}
+
+const CAPABILITIES: readonly string[] = Object.values(AppCapability)
+
+/** A capability list as the gateway answers it: known names, none twice. */
+function capabilityList(value: unknown): AppCapability[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > CAPABILITIES.length ||
+    !value.every((item) => typeof item === "string" && CAPABILITIES.includes(item)) ||
+    new Set(value).size !== value.length
+  )
+    throw new Error("Invalid app capabilities")
+  return value as AppCapability[]
 }
 
 const MAX_INSTALLED = 256
@@ -168,6 +245,7 @@ function appReview(value: unknown): AppReview {
       "entrypoint",
       "assetCount",
       "digest",
+      "requestedCapabilities",
     ]) ||
     !text(value.appId) ||
     !text(value.packageVersion) ||
@@ -185,6 +263,7 @@ function appReview(value: unknown): AppReview {
     entrypoint: value.entrypoint,
     assetCount: value.assetCount as number,
     digest: value.digest,
+    requestedCapabilities: capabilityList(value.requestedCapabilities),
   }
 }
 
