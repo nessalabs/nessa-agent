@@ -173,6 +173,7 @@ export const css = {
   panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
   panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
   panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelActiveTab: '.nessa-chrome [data-slot="chat-tab"][data-active]', // the selected tab; its menu holds View details
   panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
   panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
   panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor

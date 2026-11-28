@@ -7184,6 +7184,7 @@ const steps = {
       )
         failures.push(`the panel does not show ${JSON.stringify(echo)}`)
       await panelComposerControls(page, failures)
+      await panelDetailsSheet(page, failures)
       // A chat archived from Messages leaves a row card with its avatar,
       // and the card's Undo brings it back, in the list and the gateway.
       const conversationId = randomUUID()
@@ -12995,6 +12996,55 @@ async function panelComposerControls(page, failures) {
     ))
   )
     failures.push("closing the tray with Escape did not hand focus back to +")
+}
+
+/**
+ * The chat's Details sheet, opened from its tab's menu: what the chat runs on
+ * and where, and no Approvals group (the composer owns the approval mode).
+ */
+async function panelDetailsSheet(page, failures) {
+  // The selected tab's dot: its menu holds View details.
+  const target = page.locator(css.panelActiveTab).first()
+  await target.click({ button: "right" })
+  const item = page.getByRole("menuitem", { name: "View details" })
+  if (
+    !(await item.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("the chat's tab menu offers no View details")
+    await page.keyboard.press("Escape")
+    return
+  }
+  await item.click()
+  const sheet = page.getByRole("dialog", { name: "Conversation details" })
+  if (
+    !(await sheet.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("View details opened no Details sheet")
+    return
+  }
+  const groups = await sheet.locator("section > h3").allInnerTexts()
+  if (!groups.includes("Model"))
+    failures.push(`the Details sheet has no Model group: ${JSON.stringify(groups)}`)
+  if (groups.includes("Approvals"))
+    failures.push("the Details sheet still has an Approvals group")
+  const text = await sheet.innerText()
+  for (const gone of ["Tool calls", "Deny a request", "Answer later", "Native hooks"])
+    if (text.includes(gone))
+      failures.push(`the Details sheet still says ${JSON.stringify(gone)}`)
+  await sheet.getByRole("button", { name: "Done" }).click()
+  if (
+    !(await sheet.waitFor({ state: "detached", timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    failures.push("Done left the Details sheet open")
 }
 
 /** Waits until the panel's strip leads with `title`, the selected tab's name. */

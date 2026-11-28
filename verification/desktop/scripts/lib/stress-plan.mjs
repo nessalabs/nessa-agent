@@ -219,7 +219,7 @@ export const KNOBS = {
   },
   menuPanels: {
     default: 1,
-    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, the model's name shows only after a 2 s hover, the + tray grows out of + and its Agent downloads page is rows of a name and one word, and a chat archived from Messages leaves a row card whose Undo brings it back",
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, the model's name shows only after a 2 s hover, the + tray grows out of + and its Agent downloads page is rows of a name and one word, the chat's Details sheet has no Approvals group, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
   passphrases: {
     default: 1,
