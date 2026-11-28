@@ -846,6 +846,14 @@ it("sizes every sidebar's row from the one row, never a length of its own", () =
   ).toMatch(
     /var\(--desktop-list-pad\) \+ var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
   )
+  // A label's clip box reaches past its words by a margin its padding gives
+  // back, so the words stay on the row's columns.
+  const label = rule(
+    sourceList,
+    '.workspace-sidebar [data-slot="sidebar-menu-item-content"],\n.workspace-sidebar [data-slot="sidebar-menu-item-label"],\n.workspace-sidebar [data-slot="sidebar-menu-item-description"] {',
+  )
+  expect(label).toMatch(/margin-inline: calc\(-1 \* var\(--row-label-bleed\)\);/)
+  expect(label).toMatch(/padding-inline: var\(--row-label-bleed\);/)
   expect(rule(sourceList, ".workspace-sidebar-scroll {")).toMatch(
     /padding: 4px var\(--desktop-list-pad\) 12px;/,
   )
@@ -856,4 +864,26 @@ it("divides the host's room for the traffic lights by the page's zoom", () => {
   expect(styles).toMatch(
     /\[data-host="macos"\]\[data-surface="window"\] \{[^}]*--desktop-window-controls-inset: calc\(79px \/ var\(--desktop-zoom, 1\)\);/,
   )
+})
+
+it("beside a closed sidebar the rail stands on the window's ground, not the sidebar's material", () => {
+  // The sidebar's material there is a lighter strip down the window's edge,
+  // beside the panes or the Agents overview.
+  const rail = readFileSync(
+    new URL("./workspace/ui/chrome/side-rail.css", import.meta.url),
+    "utf8",
+  )
+  const base = rail.slice(rail.indexOf("\n.side-rail {")).split("}")[0]
+  expect(base).toMatch(/background: var\(--desktop-sidebar-material\);/)
+  // The change keeps the sidebar's own time, and opening the rail is no
+  // change: the closed rail wears the material already.
+  expect(base).toMatch(/transition: background-color var\(--desktop-drawer\) /)
+  expect(rail.slice(rail.indexOf("\n.side-rail[data-open] {")).split("}")[0]).not.toMatch(
+    /background/,
+  )
+  const selector =
+    '\n.workspace-window[data-sidebar="closed"]:not(:has(.workspace[data-peek])) .side-rail {'
+  const at = rail.indexOf(selector)
+  expect(at).toBeGreaterThan(rail.indexOf("\n.side-rail {"))
+  expect(rail.slice(at).split("}")[0]).toMatch(/background-color: transparent;/)
 })
