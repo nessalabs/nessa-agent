@@ -19,7 +19,7 @@ import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-pr
 import { labelOf } from "../../adapters/key-bindings"
 import { useMotionPreference } from "../../adapters/motion-preference"
 import {
-  zoomAvailable,
+  useZoomAvailable,
   zoomNames,
   zoomShortcuts,
   type ZoomCommand,
@@ -281,6 +281,7 @@ function SessionsTab() {
  * (`workspaceShortcuts`), so what Settings lists is what the keys do.
  */
 function KeyboardTab() {
+  const zooms = useZoomAvailable()
   return (
     <>
       <Group title="Window">
@@ -293,7 +294,7 @@ function KeyboardTab() {
           }
         />
         {/* The zoom's keys, where the window zooms itself: in a browser they are the browser's. */}
-        {zoomAvailable()
+        {zooms
           ? (Object.keys(zoomNames) as ZoomCommand[]).map((command) => (
               <ItemRow
                 key={command}

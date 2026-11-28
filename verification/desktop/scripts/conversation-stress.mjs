@@ -7529,6 +7529,20 @@ const steps = {
           failures.push(
             `back at 100% the titlebar's first control starts at ${back.control}, not ${rest.control}`,
           )
+        // Settings holds the workspace's keys back while it is open, and
+        // lets the window's zoom by.
+        const asked = [upAgain, up, windowZoom.default]
+        await page.keyboard.press(keys.settings)
+        await page.locator(css.settings).waitFor({ timeout: 5_000 })
+        const inSettings =
+          (await zoomed(keys.zoomIn, up, [...asked, up])) &&
+          (await zoomed(keys.zoomReset, windowZoom.default, [
+            ...asked,
+            up,
+            windowZoom.default,
+          ]))
+        await closeSettings(page)
+        if (!inSettings) return
         // ⌘0 is the zoom's now; the Agents overview answers to ⇧⌘A.
         await page.keyboard.press(keys.overview)
         const content = () =>

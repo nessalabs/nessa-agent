@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react"
+import { createContext, useContext, useLayoutEffect } from "react"
 import type { Chord } from "../model/keyboard"
 import {
   DEFAULT_ZOOM,
@@ -19,7 +19,7 @@ import { storedPreference } from "./stored-preference"
  *
  * Only a native host can zoom its webview. In a browser the browser's own
  * zoom is the person's, so nothing is bound there and no key is taken
- * (`zoomAvailable`).
+ * (`useZoomAvailable`).
  *
  * The zoom in effect is carried on the page's root as `--desktop-zoom` and
  * `data-zoom`, once the host has applied it. The stylesheet divides by it
@@ -31,12 +31,14 @@ export interface WindowZoomHost {
   apply(zoom: WindowZoom): Promise<void>
 }
 
-let hostNow: WindowZoomHost | null = null
+const WindowZoomContext = createContext<WindowZoomHost | null>(null)
 
-/** Point the window's zoom at the host that applies it. Composition binds it where there is one. */
-export function bindWindowZoom(host: WindowZoomHost | null): void {
-  hostNow = host
-}
+/**
+ * Gives the window under it the host that zooms it, or none. Composition
+ * (`main.tsx`) supplies the native host's; a window with none — a browser, a
+ * test — zooms nothing and binds no key.
+ */
+export const WindowZoomProvider = WindowZoomContext.Provider
 
 const zoomPreference = storedPreference({
   key: "nessa.desktop.zoom",
@@ -67,8 +69,8 @@ export const zoomShortcuts: readonly Binding<ZoomCommand>[] = [
 ]
 
 /** Whether this window zooms itself: only under a native host. Settings lists the keys only then. */
-export function zoomAvailable(): boolean {
-  return hostNow !== null
+export function useZoomAvailable(): boolean {
+  return useContext(WindowZoomContext) !== null
 }
 
 /** What each command is called where the keyboard is listed (Settings › Workspace › Keyboard). */
@@ -94,8 +96,7 @@ const none: readonly Binding<ZoomCommand>[] = []
  */
 export function useWindowZoomInEffect(): void {
   const [zoom, choose] = zoomPreference.usePreference()
-  // Read once: composition binds the host before the window mounts.
-  const host = hostNow
+  const host = useContext(WindowZoomContext)
   useKeyBindings(host ? zoomShortcuts : none, (command) => choose(steps[command](zoom)))
   useLayoutEffect(() => {
     if (!host) return

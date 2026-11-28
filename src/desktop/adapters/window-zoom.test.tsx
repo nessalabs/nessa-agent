@@ -5,9 +5,10 @@ import { afterEach, expect, it, vi } from "vitest"
 import { chordEvent } from "../model/keyboard"
 import { labelOf } from "./key-bindings"
 import {
-  bindWindowZoom,
+  WindowZoomProvider,
+  type WindowZoomHost,
   useWindowZoomInEffect,
-  zoomAvailable,
+  useZoomAvailable,
   zoomShortcuts,
 } from "./window-zoom"
 
@@ -15,16 +16,27 @@ vi.mock("./platform", () => ({ isMac: true }))
 
 const KEY = "nessa.desktop.zoom"
 
-async function mounted() {
+let available: boolean | null = null
+
+async function mounted(zoomHost: WindowZoomHost | null = null) {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   function Window() {
     useWindowZoomInEffect()
+    available = useZoomAvailable()
     return null
   }
   const host = document.createElement("div")
   document.body.append(host)
   const root = createRoot(host)
-  await React.act(async () => root.render(React.createElement(Window)))
+  await React.act(async () =>
+    root.render(
+      React.createElement(
+        WindowZoomProvider,
+        { value: zoomHost },
+        React.createElement(Window),
+      ),
+    ),
+  )
   return async () => {
     await React.act(async () => root.unmount())
     host.remove()
@@ -48,7 +60,7 @@ const minus = { code: "Minus", command: true } as const
 const zero = { code: "Digit0", command: true } as const
 
 afterEach(() => {
-  bindWindowZoom(null)
+  available = null
   window.localStorage.clear()
   document.documentElement.style.removeProperty("--desktop-zoom")
   delete document.documentElement.dataset.zoom
@@ -57,9 +69,9 @@ afterEach(() => {
 it("asks the host for the remembered zoom at mount, and says it on the root once applied", async () => {
   window.localStorage.setItem(KEY, "1.25")
   const apply = vi.fn((_zoom: number) => Promise.resolve())
-  bindWindowZoom({ apply })
-  const close = await mounted()
+  const close = await mounted({ apply })
   try {
+    expect(available).toBe(true)
     expect(apply.mock.calls).toEqual([[1.25]])
     expect(document.documentElement.style.getPropertyValue("--desktop-zoom")).toBe("1.25")
     expect(document.documentElement.dataset.zoom).toBe("1.25")
@@ -70,8 +82,7 @@ it("asks the host for the remembered zoom at mount, and says it on the root once
 
 it("steps with ⌘=, ⇧⌘= and ⌘-, stops at each end, and goes back to 100% on ⌘0", async () => {
   const apply = vi.fn((_zoom: number) => Promise.resolve())
-  bindWindowZoom({ apply })
-  const close = await mounted()
+  const close = await mounted({ apply })
   try {
     expect(await press(plus)).toBe(true)
     expect(await press({ ...plus, shift: true })).toBe(true)
@@ -98,8 +109,7 @@ it("says on the root only what the host did: a refused zoom leaves it as it was"
   const apply = vi.fn((zoom: number) =>
     zoom === 1.1 ? Promise.reject(new Error("refused")) : Promise.resolve(),
   )
-  bindWindowZoom({ apply })
-  const close = await mounted()
+  const close = await mounted({ apply })
   try {
     await press(plus)
     expect(apply).toHaveBeenLastCalledWith(1.1)
@@ -113,10 +123,9 @@ it("says on the root only what the host did: a refused zoom leaves it as it was"
 
 it("says on the root only the newest ask, whichever the host finishes last", async () => {
   const asked: { zoom: number; done: () => void }[] = []
-  bindWindowZoom({
+  const close = await mounted({
     apply: (zoom) => new Promise<void>((done) => asked.push({ zoom, done })),
   })
-  const close = await mounted()
   try {
     await press(plus)
     await press(plus)
@@ -130,9 +139,9 @@ it("says on the root only the newest ask, whichever the host finishes last", asy
 })
 
 it("leaves the keys to the browser where no host zooms the window", async () => {
-  expect(zoomAvailable()).toBe(false)
   const close = await mounted()
   try {
+    expect(available).toBe(false)
     expect(await press(plus)).toBe(false)
     expect(await press(minus)).toBe(false)
     expect(await press(zero)).toBe(false)
