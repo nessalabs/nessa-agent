@@ -171,10 +171,7 @@ async fn write(stream: &mut TcpStream, status: &str, body: &str) -> std::io::Res
 
 fn html(page: CallbackPage) -> String {
     let (title, line) = match page {
-        CallbackPage::Connected => (
-            "Nessa is connected to Boat",
-            "You can close this tab.",
-        ),
+        CallbackPage::Connected => ("Nessa is connected to Boat", "You can close this tab."),
         CallbackPage::Failed => (
             "Nessa could not connect to Boat",
             "Nessa says why, and you can try again from there.",
