@@ -338,6 +338,17 @@ import {
  *               and completed, and the SDK's `invoke_agent` span inside it,
  *               holding its ids and none of its words. The `voice` step checks its spoken turn's record says
  *               spoken
+ *   apps        a static app made in Settings › Workspace › Apps from the
+ *               gateway's starter, drawing no app in Settings: Create asks
+ *               the system's Install dialog, which names the package's
+ *               digest. Cancel installs nothing and writes no audit record;
+ *               Install keeps exactly that package (the gateway reads back
+ *               the digest the dialog was shown) and the host is asked to
+ *               place its launcher with that digest. Open hands the host the
+ *               read-back package and the row says it is running; Stop ends
+ *               it, and Uninstall removes it and its launcher while a second
+ *               app stays. The app's own process is nessa-app-host, which the
+ *               Linux native smoke runs
  *   trace       the agent makes three calls, one failing, then answers: the
  *               gateway's view keeps each call's start and end time and the
  *               input it was made with; the window draws them as one folded
@@ -10198,6 +10209,176 @@ const steps = {
     // Ids, kinds and counts only: never what anyone wrote.
     if (collector.anyHolds(text))
       failures.push("an export holds the words of the message")
+  },
+
+  async apps(run, step, failures) {
+    const appId = `stress-r${step.index}-s${run.knobs.seed}`
+    const kept = `${appId}-kept`
+    const namespace = join(run.stack.gateway.directory, "ci", "instances", INSTANCE)
+    const auditDir = join(namespace, "conversations", "audit", "apps")
+    const audit = () =>
+      (existsSync(auditDir) ? readdirSync(auditDir) : []).map((name) =>
+        JSON.parse(readFileSync(join(auditDir, name), "utf8")),
+      )
+    const installedIds = async () =>
+      (await run.client.apps.installed()).map((app) => app.appId)
+    const page = run.page
+    // Create one app, answering the system's Install dialog with `answer`;
+    // gives the digest that dialog named.
+    const create = async (id, answer) => {
+      const asked = await page.evaluate(() => window.__fakeHostAppConfirms.length)
+      await page.evaluate((yes) => window.__fakeHostAppAnswers.push(yes), answer)
+      await page.locator("[data-create-app-id]").fill(id)
+      await page.locator("[data-create-app]").click({ timeout: 10_000 })
+      const confirm = await waitFor(
+        () => page.evaluate((from) => window.__fakeHostAppConfirms[from] ?? null, asked),
+        10_000,
+      )
+      if (confirm?.appId !== id)
+        failures.push(`the system's dialog was asked ${JSON.stringify(confirm)}`)
+      return confirm?.digest
+    }
+    await run.exclusive(async () => {
+      if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+      await page
+        .locator(css.settingsCategory, { hasText: names.workspaceSettings })
+        .click()
+      await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
+      await page.locator("[data-create-app-id]:enabled").waitFor({ timeout: 10_000 })
+
+      // Cancel: the dialog names the package, and nothing is installed or
+      // written. Settings draws no app.
+      const before = audit().length
+      const digest = await create(appId, false)
+      if (!/^[0-9a-f]{64}$/.test(digest ?? ""))
+        failures.push(`the system's dialog names no package digest: ${digest}`)
+      await page
+        .locator("[data-create-app]:enabled")
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("Create never came back after Cancel"))
+      if ((await page.locator(`${css.settings} iframe`).count()) > 0)
+        failures.push("Settings draws the app it installs")
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `apps-${run.engine}-settings.png`),
+        })
+      if ((await installedIds()).includes(appId))
+        failures.push("Cancel in the system's dialog still installed the app")
+      if (audit().length !== before)
+        failures.push("Cancel in the system's dialog wrote an apps audit record")
+
+      // Install: exactly the package the dialog named is kept.
+      if ((await create(appId, true)) !== digest)
+        failures.push("the starter's digest changed between two asks")
+      await page
+        .locator(`[data-installed-app="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the installed app was never listed"))
+      const read = await run.client.apps.read(appId).catch(() => undefined)
+      if (read?.review.digest !== digest)
+        failures.push(
+          `the gateway kept ${read?.review.digest}, not the reviewed ${digest}`,
+        )
+      const installs = audit().filter(
+        (record) => record.kind === "app_install" && record.appId === appId,
+      )
+      for (const phase of ["requested", "installed"])
+        if (!installs.some((record) => record.phase === phase))
+          failures.push(`the apps audit has no ${phase} install record`)
+      // Installed, it is an app of its own: the host places its launcher.
+      const placed = await waitFor(
+        () =>
+          page.evaluate(
+            (id) => window.__fakeHostAppPlaced.find((each) => each.appId === id),
+            appId,
+          ),
+        10_000,
+      )
+      if (placed?.digest !== digest)
+        failures.push(`the host was asked to place ${JSON.stringify(placed)}`)
+      await create(kept, true)
+      await page
+        .locator(`[data-installed-app="${kept}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the second installed app was never listed"))
+
+      // Open: the host is handed the package the gateway read back.
+      await page.locator(`[data-installed-app-open="${appId}"]`).click()
+      const opened = await waitFor(
+        () =>
+          page.evaluate(
+            (id) => window.__fakeHostAppOpens.find((each) => each.appId === id),
+            appId,
+          ),
+        10_000,
+      )
+      if (opened?.digest !== digest)
+        failures.push(`the host was asked to open ${JSON.stringify(opened)}`)
+      await page
+        .locator(`[data-installed-app-running][data-installed-app="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the open app's row never said it was running"))
+
+      if (run.evidence)
+        await page.screenshot({
+          path: join(run.evidence, `apps-${run.engine}-running.png`),
+        })
+
+      // Stop ends it. Its own process is the host's: the Linux native smoke
+      // runs nessa-app-host itself.
+      await page.locator(`[data-installed-app-stop="${appId}"]`).click()
+      await page
+        .locator(`[data-installed-app-open="${appId}"]`)
+        .waitFor({ timeout: 10_000 })
+        .catch(() => failures.push("the stopped app's row still says it is running"))
+
+      // Uninstall removes it, and only it.
+      await page.locator(`[data-installed-app-uninstall="${appId}"]`).click()
+      await page
+        .locator(`[data-installed-app="${appId}"]`)
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => failures.push("the uninstalled app is still listed"))
+      const left = await installedIds()
+      if (left.includes(appId))
+        failures.push("the gateway still holds the uninstalled app")
+      if (!left.includes(kept)) failures.push("uninstalling one app removed the other")
+      const removed = await waitFor(
+        () =>
+          page.evaluate((id) => window.__fakeHostAppRemoved.includes(id) || null, appId),
+        10_000,
+      )
+      if (!removed) failures.push("the uninstalled app's launcher was never removed")
+      if (
+        !audit().some(
+          (record) =>
+            record.kind === "app_uninstall" &&
+            record.appId === appId &&
+            record.phase === "uninstalled",
+        )
+      )
+        failures.push("the apps audit has no uninstalled record")
+      // The other app is uninstalled from another client: its launcher goes
+      // the next time Settings reads the list.
+      await closeSettings(page)
+      await run.client.apps.uninstall(kept, randomUUID())
+      await page.keyboard.press(keys.settings)
+      await page
+        .locator(css.settingsCategory, { hasText: names.workspaceSettings })
+        .click()
+      await page.locator(css.settingsTab, { hasText: names.installedApps }).click()
+      await page
+        .locator(`[data-installed-app="${kept}"]`)
+        .waitFor({ state: "detached", timeout: 10_000 })
+        .catch(() => failures.push("the app uninstalled elsewhere is still listed"))
+      const orphan = await waitFor(
+        () =>
+          page.evaluate((id) => window.__fakeHostAppRemoved.includes(id) || null, kept),
+        10_000,
+      )
+      if (!orphan)
+        failures.push("the launcher of an app uninstalled elsewhere was never removed")
+      await closeSettings(page)
+    })
   },
 
   async trace(run, step, failures) {

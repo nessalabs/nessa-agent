@@ -266,6 +266,9 @@ pub struct AccountRoutes {
     /// The voice key and calls (`voice.*`). `None` answers
     /// `voice_not_configured`.
     pub voice: Option<Arc<crate::voice::application::VoiceCalls>>,
+    /// The owner's installed apps (`apps.starter` … `apps.uninstall`).
+    /// `None` answers `apps_not_configured`.
+    pub apps: Option<Arc<crate::installed_apps::application::InstalledApps>>,
     /// Shared vault; each socket attaches a distinct non-owning lease.
     pub vault: Option<Arc<super::VaultRoutes>>,
     pub vault_lease: Option<nessa_vault::application::Lease>,
@@ -542,6 +545,15 @@ impl ProductRouteState {
     /// Register the voice key and calls the voice methods answer for.
     pub fn with_voice(mut self, voice: Arc<crate::voice::application::VoiceCalls>) -> Self {
         self.accounts.voice = Some(voice);
+        self
+    }
+
+    /// Register the installed-app store the apps methods answer for.
+    pub fn with_apps(
+        mut self,
+        apps: Arc<crate::installed_apps::application::InstalledApps>,
+    ) -> Self {
+        self.accounts.apps = Some(apps);
         self
     }
 

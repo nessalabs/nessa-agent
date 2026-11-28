@@ -24,6 +24,17 @@ export {
   type CallPress,
 } from "./call-pill"
 export {
+  confirmAppInstall,
+  keepOnlyInstalledApps,
+  onInstalledAppsChanged,
+  openInstalledApp,
+  placeInstalledApp,
+  removeInstalledApp,
+  runningInstalledApps,
+  stopInstalledApp,
+  type HostAppPackage,
+} from "./window"
+export {
   dragCallPill,
   onCallPillPicture,
   onCallPillPress,

@@ -1827,6 +1827,121 @@ pub struct AppsUntrustResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppPackageAsset {
+    pub path: String,
+    pub bytes: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppPackage {
+    pub manifest: String,
+    pub assets: Vec<AppPackageAsset>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppReview {
+    pub app_id: String,
+    pub package_version: String,
+    pub entrypoint: String,
+    pub asset_count: u64,
+    pub digest: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsStarterParams {
+    pub app_id: String,
+    pub package_version: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsPackageResult {
+    pub package: AppPackage,
+    pub review: AppReview,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsReviewParams {
+    pub package: AppPackage,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsInstallParams {
+    pub request_id: String,
+    pub package: AppPackage,
+    pub reviewed_digest: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InstalledApp {
+    pub app_id: String,
+    pub package_version: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsInstallResult {
+    pub request_id: String,
+    pub app: InstalledApp,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsInstalledResult {
+    pub apps: Vec<InstalledApp>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsReadParams {
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUninstallParams {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppsUninstallResult {
+    pub request_id: String,
+    pub app_id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AppsErrorCode {
+    #[serde(rename = "apps_not_configured")]
+    AppsNotConfigured,
+    #[serde(rename = "app_package_invalid")]
+    AppPackageInvalid,
+    #[serde(rename = "app_package_too_large")]
+    AppPackageTooLarge,
+    #[serde(rename = "app_review_stale")]
+    AppReviewStale,
+    #[serde(rename = "app_already_installed")]
+    AppAlreadyInstalled,
+    #[serde(rename = "apps_limit_reached")]
+    AppsLimitReached,
+    #[serde(rename = "app_not_installed")]
+    AppNotInstalled,
+    #[serde(rename = "apps_storage_unavailable")]
+    AppsStorageUnavailable,
+    #[serde(rename = "apps_audit_unavailable")]
+    AppsAuditUnavailable,
+}
+impl AppsErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AppsNotConfigured => "apps_not_configured",
+            Self::AppPackageInvalid => "app_package_invalid",
+            Self::AppPackageTooLarge => "app_package_too_large",
+            Self::AppReviewStale => "app_review_stale",
+            Self::AppAlreadyInstalled => "app_already_installed",
+            Self::AppsLimitReached => "apps_limit_reached",
+            Self::AppNotInstalled => "app_not_installed",
+            Self::AppsStorageUnavailable => "apps_storage_unavailable",
+            Self::AppsAuditUnavailable => "apps_audit_unavailable",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServersRevokeParams {
     pub revision: String,
     pub id: String,
@@ -5020,6 +5135,12 @@ pub mod product_method {
     pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
     pub const APPS_TRUSTED: &str = "apps.trusted";
     pub const APPS_UNTRUST: &str = "apps.untrust";
+    pub const APPS_STARTER: &str = "apps.starter";
+    pub const APPS_REVIEW: &str = "apps.review";
+    pub const APPS_INSTALL: &str = "apps.install";
+    pub const APPS_INSTALLED: &str = "apps.installed";
+    pub const APPS_READ: &str = "apps.read";
+    pub const APPS_UNINSTALL: &str = "apps.uninstall";
     pub const PHONE_ENDPOINT: &str = "phone.endpoint";
     pub const PHONE_AUTHORIZE: &str = "phone.authorize";
     pub const PHONE_STATUS: &str = "phone.status";
@@ -5302,7 +5423,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 148
+                items.len() <= 154
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -5388,6 +5509,12 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.revoke",
     "apps.trusted",
     "apps.untrust",
+    "apps.starter",
+    "apps.review",
+    "apps.install",
+    "apps.installed",
+    "apps.read",
+    "apps.uninstall",
     "phone.endpoint",
     "phone.authorize",
     "phone.status",
@@ -5663,6 +5790,18 @@ pub enum ProductMethod {
     AppsTrusted,
     /// `apps.untrust`
     AppsUntrust,
+    /// `apps.starter`
+    AppsStarter,
+    /// `apps.review`
+    AppsReview,
+    /// `apps.install`
+    AppsInstall,
+    /// `apps.installed`
+    AppsInstalled,
+    /// `apps.read`
+    AppsRead,
+    /// `apps.uninstall`
+    AppsUninstall,
     /// `phone.endpoint`
     PhoneEndpoint,
     /// `phone.authorize`
@@ -5904,6 +6043,12 @@ impl ProductMethod {
         ProductMethod::McpServersRevoke,
         ProductMethod::AppsTrusted,
         ProductMethod::AppsUntrust,
+        ProductMethod::AppsStarter,
+        ProductMethod::AppsReview,
+        ProductMethod::AppsInstall,
+        ProductMethod::AppsInstalled,
+        ProductMethod::AppsRead,
+        ProductMethod::AppsUninstall,
         ProductMethod::PhoneEndpoint,
         ProductMethod::PhoneAuthorize,
         ProductMethod::PhoneStatus,
@@ -6063,6 +6208,12 @@ impl ProductMethod {
             "mcpServers.revoke" => Some(ProductMethod::McpServersRevoke),
             "apps.trusted" => Some(ProductMethod::AppsTrusted),
             "apps.untrust" => Some(ProductMethod::AppsUntrust),
+            "apps.starter" => Some(ProductMethod::AppsStarter),
+            "apps.review" => Some(ProductMethod::AppsReview),
+            "apps.install" => Some(ProductMethod::AppsInstall),
+            "apps.installed" => Some(ProductMethod::AppsInstalled),
+            "apps.read" => Some(ProductMethod::AppsRead),
+            "apps.uninstall" => Some(ProductMethod::AppsUninstall),
             "phone.endpoint" => Some(ProductMethod::PhoneEndpoint),
             "phone.authorize" => Some(ProductMethod::PhoneAuthorize),
             "phone.status" => Some(ProductMethod::PhoneStatus),
@@ -6223,6 +6374,12 @@ impl ProductMethod {
             ProductMethod::McpServersRevoke => "mcpServers.revoke",
             ProductMethod::AppsTrusted => "apps.trusted",
             ProductMethod::AppsUntrust => "apps.untrust",
+            ProductMethod::AppsStarter => "apps.starter",
+            ProductMethod::AppsReview => "apps.review",
+            ProductMethod::AppsInstall => "apps.install",
+            ProductMethod::AppsInstalled => "apps.installed",
+            ProductMethod::AppsRead => "apps.read",
+            ProductMethod::AppsUninstall => "apps.uninstall",
             ProductMethod::PhoneEndpoint => "phone.endpoint",
             ProductMethod::PhoneAuthorize => "phone.authorize",
             ProductMethod::PhoneStatus => "phone.status",
@@ -6379,6 +6536,12 @@ impl ProductMethod {
             ProductMethod::McpServersRevoke => Some("credential.manage"),
             ProductMethod::AppsTrusted => Some("credential.manage"),
             ProductMethod::AppsUntrust => Some("credential.manage"),
+            ProductMethod::AppsStarter => Some("credential.manage"),
+            ProductMethod::AppsReview => Some("credential.manage"),
+            ProductMethod::AppsInstall => Some("credential.manage"),
+            ProductMethod::AppsInstalled => Some("credential.manage"),
+            ProductMethod::AppsRead => Some("credential.manage"),
+            ProductMethod::AppsUninstall => Some("credential.manage"),
             ProductMethod::PhoneEndpoint => Some("server.read"),
             ProductMethod::PhoneAuthorize => Some("credential.manage"),
             ProductMethod::PhoneStatus => Some("credential.manage"),
@@ -6534,6 +6697,12 @@ impl ProductMethod {
             ProductMethod::McpServersRevoke => ProductLane::Requests,
             ProductMethod::AppsTrusted => ProductLane::Requests,
             ProductMethod::AppsUntrust => ProductLane::Requests,
+            ProductMethod::AppsStarter => ProductLane::Requests,
+            ProductMethod::AppsReview => ProductLane::Requests,
+            ProductMethod::AppsInstall => ProductLane::Requests,
+            ProductMethod::AppsInstalled => ProductLane::Requests,
+            ProductMethod::AppsRead => ProductLane::Requests,
+            ProductMethod::AppsUninstall => ProductLane::Requests,
             ProductMethod::PhoneEndpoint => ProductLane::Requests,
             ProductMethod::PhoneAuthorize => ProductLane::Requests,
             ProductMethod::PhoneStatus => ProductLane::Requests,
@@ -6835,6 +7004,25 @@ impl ProductMethod {
                 _ => return Err(ParamsRefused),
             },
             ProductMethod::AppsUntrust => ProductParams::AppsUntrust(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsStarter => ProductParams::AppsStarter(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsReview => ProductParams::AppsReview(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsInstall => ProductParams::AppsInstall(
+                serde_json::from_value(params).map_err(|_| ParamsRefused)?,
+            ),
+            ProductMethod::AppsInstalled => match params {
+                Value::Object(fields) if fields.is_empty() => ProductParams::AppsInstalled,
+                _ => return Err(ParamsRefused),
+            },
+            ProductMethod::AppsRead => {
+                ProductParams::AppsRead(serde_json::from_value(params).map_err(|_| ParamsRefused)?)
+            }
+            ProductMethod::AppsUninstall => ProductParams::AppsUninstall(
                 serde_json::from_value(params).map_err(|_| ParamsRefused)?,
             ),
             ProductMethod::PhoneEndpoint => ProductParams::PhoneEndpoint(
@@ -7196,6 +7384,12 @@ pub enum ProductParams {
     McpServersRevoke(McpServersRevokeParams),
     AppsTrusted,
     AppsUntrust(AppsUntrustParams),
+    AppsStarter(AppsStarterParams),
+    AppsReview(AppsReviewParams),
+    AppsInstall(AppsInstallParams),
+    AppsInstalled,
+    AppsRead(AppsReadParams),
+    AppsUninstall(AppsUninstallParams),
     PhoneEndpoint(PhoneEndpointParams),
     PhoneAuthorize(PhoneAuthorizeParams),
     PhoneStatus(PhoneStatusParams),
@@ -7369,6 +7563,12 @@ impl ProductParams {
             ProductParams::McpServersRevoke(_) => ProductMethod::McpServersRevoke,
             ProductParams::AppsTrusted => ProductMethod::AppsTrusted,
             ProductParams::AppsUntrust(_) => ProductMethod::AppsUntrust,
+            ProductParams::AppsStarter(_) => ProductMethod::AppsStarter,
+            ProductParams::AppsReview(_) => ProductMethod::AppsReview,
+            ProductParams::AppsInstall(_) => ProductMethod::AppsInstall,
+            ProductParams::AppsInstalled => ProductMethod::AppsInstalled,
+            ProductParams::AppsRead(_) => ProductMethod::AppsRead,
+            ProductParams::AppsUninstall(_) => ProductMethod::AppsUninstall,
             ProductParams::PhoneEndpoint(_) => ProductMethod::PhoneEndpoint,
             ProductParams::PhoneAuthorize(_) => ProductMethod::PhoneAuthorize,
             ProductParams::PhoneStatus(_) => ProductMethod::PhoneStatus,

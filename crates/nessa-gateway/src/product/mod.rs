@@ -67,6 +67,7 @@ mod cloud;
 mod cloud_boxes;
 mod conversation;
 mod github;
+mod installed_apps;
 mod mcp_apps;
 pub mod mcp_servers;
 mod native;

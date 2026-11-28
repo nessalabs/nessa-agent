@@ -624,6 +624,9 @@ export const names = {
   connections: "Connections",
   integrations: "MCP servers",
   linkedDevices: "Linked devices",
+  /** Settings' category and tab holding the installed apps. */
+  workspaceSettings: "Workspace",
+  installedApps: "Apps",
   /** Settings › Connections' tab holding the GitHub sign-in, and its row's buttons. */
   accounts: "Accounts",
   githubConnect: "Connect…",

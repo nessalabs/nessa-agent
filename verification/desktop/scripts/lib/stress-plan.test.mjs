@@ -204,6 +204,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         pickers: "0",
         raises: "0",
         telemetries: "0",
+        apps: "0",
         githubs: "0",
         voices: "0",
         passphrases: "0",

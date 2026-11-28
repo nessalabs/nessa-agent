@@ -795,15 +795,16 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   cursor: default;
   transition:
     background-color var(--desktop-fast) ease,
-    transform var(--desktop-fast) ease;
+    transform var(--desktop-medium) var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
 }
 
 .settings-button:hover:not(:disabled) {
   background: color-mix(in oklab, var(--foreground) 11%, transparent);
 }
 
+/* Pressed, it gives a little under the finger: the press was heard. */
 .settings-button:active:not(:disabled) {
-  transform: translateY(0.5px);
+  transform: scale(0.97);
 }
 
 .settings-button:disabled {
@@ -1721,4 +1722,48 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
   font-size: var(--desktop-text-footnote);
   font-weight: 500;
   line-height: 1.4;
+}
+
+/* Apps: an app row's buttons side by side. */
+.settings-installed-app-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.settings-app-tile {
+  display: grid;
+  place-items: center;
+  inline-size: 28px;
+  block-size: 28px;
+  border-radius: var(--desktop-radius-sm);
+  background: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
+}
+/* An app's row arrives rather than appearing, whether the list has just been
+   read or Create made it: the row is where the person looks next. Only
+   opacity and transform move, and reduced motion keeps only the fade. */
+.settings-row[data-installed-app] {
+  transition:
+    opacity 200ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
+    transform 200ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+@starting-style {
+  .settings-row[data-installed-app] {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-row[data-installed-app] {
+    transition: opacity 200ms ease;
+  }
+  @starting-style {
+    .settings-row[data-installed-app] {
+      transform: none;
+    }
+  }
+}
+.settings-new-app-field {
+  inline-size: 100%;
+  max-inline-size: 280px;
 }

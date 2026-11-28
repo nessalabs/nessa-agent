@@ -731,6 +731,12 @@ jobs:
       - name: Exercise the disposable app package window
         timeout-minutes: 15
         run: xvfb-run --auto-servernum pnpm desktop:smoke --app-package
+      # Each installed app runs as its own process (nessa-app-host): its own
+      # bytes, no network, one process per app, Stop frees it, changed bytes
+      # open nothing.
+      - name: Exercise the installed app host
+        timeout-minutes: 15
+        run: xvfb-run --auto-servernum pnpm desktop:smoke --app-host
       - name: Upload native desktop smoke failure evidence
         if: failure()
         uses: actions/upload-artifact@v4

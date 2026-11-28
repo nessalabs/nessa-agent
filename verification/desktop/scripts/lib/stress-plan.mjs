@@ -277,6 +277,10 @@ export const KNOBS = {
     default: 1,
     what: "times an agent asks its owner one decision in a conversation the window does not show: the row waits on the person, the host's notice says the question without the window moving, and the tapped choice is sent as the person's message, which takes the card and the notice away",
   },
+  apps: {
+    default: 1,
+    what: "static apps made in Settings › Workspace › Apps: reviewed with a sandboxed preview, Cancel in the system's dialog installs nothing, Install keeps the exact reviewed package; opened in its own window with no network, stopped, then uninstalled while another app stays",
+  },
   telemetries: {
     default: 1,
     what: "typed turns checked in the turn-origin audit (person, the window's client, not spoken) and as a turn span exported to a fake OpenTelemetry collector, with none of the message's words",
@@ -428,6 +432,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.resumes, () => ({ kind: "resume" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.telemetries, () => ({ kind: "telemetry" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.apps, () => ({ kind: "apps" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

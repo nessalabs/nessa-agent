@@ -173,6 +173,10 @@ pub struct HostDependencies {
     /// small window that shows it while its composer is out of view
     /// (`crate::call_pill`).
     pub call_pill: Arc<crate::call_pill::CallPill>,
+    /// Installed apps' launchers, which run each as an app of its own, and
+    /// the system's Install or Cancel before an install
+    /// (`crate::installed_apps`). None where no launcher folder resolves.
+    pub installed_apps: Option<Arc<crate::installed_apps::InstalledApps>>,
 }
 
 impl HostDependencies {
@@ -189,6 +193,7 @@ impl HostDependencies {
     /// missing or unreadable. `setup` shows it; it is never returned to Tauri.
     pub fn assemble(app: &AppHandle, stage: String) -> Result<Self, StartupRefusal> {
         let config_root = local_data::config_root(app, &stage);
+        let installed_apps = crate::installed_apps::native_installed_apps(app, &stage);
         let settings: Arc<dyn SettingsStore> = Arc::new(SettingsFile::at(config_root.clone()));
         // These fields own the service registration and its credential
         // namespace. A corrupt or unreadable authority cannot be replaced by
@@ -388,6 +393,7 @@ impl HostDependencies {
             review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
             tray_geometry: crate::tray::tray_geometry(app),
             call_pill: crate::call_pill::call_pill(app),
+            installed_apps,
         })
     }
 }
