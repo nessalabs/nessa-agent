@@ -36,26 +36,16 @@ function failure(cause: unknown): string {
 }
 
 /**
- * Settings › Accounts › Agent37: where it stands and one button. The key is
- * pasted in a dialog that Connect… opens. Which cloud a thread uses is its
- * channel's choice, or the default cloud's (`DefaultCloudRow`).
+ * Agent37's connection, read and changed in one place. Every page that shows
+ * it uses this hook, so a status read that a save, removal or unlock has
+ * overtaken is dropped here, once, for all of them.
  */
-export function Agent37Row({
-  onChange,
-}: {
-  /** Hears each state the row comes to read, so a page around it can follow. */
-  onChange?: (state: Agent37Status["state"]) => void
-} = {}) {
+export function useAgent37Connection() {
   const gateway = useContext(Agent37Context)
   const ensure = useVaultUnlock()
   const settled = useVaultSettled()
-  const found = useContext(FoundSetting) === "agent37"
-  const entry = setting("agent37")
   const reads = useRef(0)
-  const keyId = useId()
   const [status, setStatus] = useState<Agent37Status>()
-  const [key, setKey] = useState("")
-  const [asking, setAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [round, setRound] = useState(0)
@@ -79,24 +69,66 @@ export function Agent37Row({
       current = false
     }
   }, [gateway, round, settled])
+  /** Runs one change; a read still out when it starts can no longer land. */
   const act = async (
-    action: (gateway: Agent37Gateway) => Promise<void>,
+    action: (gateway: Agent37Gateway) => Promise<Agent37Status>,
     fallback: (cause: unknown) => string,
-  ) => {
-    if (!gateway || busy) return
+  ): Promise<boolean> => {
+    if (!gateway || busy) return false
     reads.current += 1
     setBusy(true)
     setError("")
     try {
-      if (!(await ensure())) return
-      await action(gateway)
+      if (!(await ensure())) return false
+      setStatus(await action(gateway))
+      return true
     } catch (cause) {
       setError(fallback(cause))
+      return false
     } finally {
       setBusy(false)
     }
   }
-  const state = status?.state
+  return {
+    gateway,
+    status,
+    state: status?.state,
+    unread,
+    busy,
+    error,
+    save: (key: string) => act((gateway) => gateway.save(key.trim()), failure),
+    disconnect: () =>
+      act(
+        (gateway) => gateway.disconnect(),
+        () => "Agent37 could not be disconnected. Try again.",
+      ),
+    /** Opens the vault, then reads again through the one read above. */
+    unlock: () => void ensure().then((open) => open && setRound((n) => n + 1)),
+    retry: () => {
+      setError("")
+      setRound((n) => n + 1)
+    },
+  }
+}
+
+/**
+ * Settings › Accounts › Agent37: where it stands and one button. The key is
+ * pasted in a dialog that Connect… opens. Which cloud a thread uses is its
+ * channel's choice, or the default cloud's (`DefaultCloudRow`).
+ */
+export function Agent37Row({
+  onChange,
+}: {
+  /** Hears each state the row comes to read, so a page around it can follow. */
+  onChange?: (state: Agent37Status["state"]) => void
+} = {}) {
+  const { gateway, state, unread, busy, error, save, disconnect, unlock, retry } =
+    useAgent37Connection()
+  const found = useContext(FoundSetting) === "agent37"
+  const entry = setting("agent37")
+  const keyId = useId()
+  const [key, setKey] = useState("")
+  const [asking, setAsking] = useState(false)
   useEffect(() => {
     if (state !== undefined) onChange?.(state)
   }, [state, onChange])
@@ -124,33 +156,18 @@ export function Agent37Row({
             <RowAction
               disabled={busy}
               data-agent37-action="disconnect"
-              onClick={() =>
-                void act(
-                  async (gateway) => setStatus(await gateway.disconnect()),
-                  () => "Agent37 could not be disconnected. Try again.",
-                )
-              }
+              onClick={() => void disconnect()}
             >
               Disconnect
             </RowAction>
           ) : unread && state === undefined ? (
             // Whether Agent37 is connected is unknown: never offer to
             // replace a key that may be saved.
-            <RowAction
-              data-agent37-action="retry"
-              onClick={() => {
-                setError("")
-                setRound((n) => n + 1)
-              }}
-            >
+            <RowAction data-agent37-action="retry" onClick={retry}>
               Try again
             </RowAction>
           ) : state === "locked" ? (
-            <RowAction
-              disabled={busy}
-              data-agent37-action="unlock"
-              onClick={() => void ensure().then((open) => open && setRound((n) => n + 1))}
-            >
+            <RowAction disabled={busy} data-agent37-action="unlock" onClick={unlock}>
               Unlock
             </RowAction>
           ) : (
@@ -174,11 +191,11 @@ export function Agent37Row({
             className="settings-surface settings-boat"
             onSubmit={(event) => {
               event.preventDefault()
-              void act(async (gateway) => {
-                setStatus(await gateway.save(key.trim()))
+              void save(key).then((saved) => {
+                if (!saved) return
                 setKey("")
                 setAsking(false)
-              }, failure)
+              })
             }}
           >
             <label htmlFor={keyId}>API key</label>

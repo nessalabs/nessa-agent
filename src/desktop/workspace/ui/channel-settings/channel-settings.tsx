@@ -1,16 +1,13 @@
-import { useEffect, useId, useRef, useState } from "react"
+import { useId, useRef, useState } from "react"
 import { Dialog } from "@nessa-ui/react/dialog"
-import type { Agent37Status } from "@nessa/client"
 import { IconButton } from "../../../ui/icon-button"
-import type { Agent37Gateway } from "../../../settings/adapters/agent37-gateway"
-import { useAgent37Gateway } from "../../../settings/ui/agent37-row"
+import { useAgent37Connection } from "../../../settings/ui/agent37-row"
 import { useBoatConnection } from "../../../settings/ui/boat-row"
 import {
   ReplyStyleControl,
   useReplyStyleGateway,
 } from "../../../settings/ui/reply-style-control"
 import { Choice, ItemRow, RowAction } from "../../../settings/ui/settings-controls"
-import { useVaultSettled, useVaultUnlock } from "../../../../vault"
 import { channelFailure } from "../../application/ports"
 import { gatewayChannelId } from "../../adapters/gateway/gateway-views"
 import { setChannelCoordinator } from "../../adapters/store/commands"
@@ -422,65 +419,28 @@ function BoatAccountRow() {
   )
 }
 
-/** Agent37's key, in one row: paste it and Save, or Remove the saved one. */
+/**
+ * Agent37's key, in one row: paste it and Save, or Remove the saved one. Its
+ * state comes from the same hook as Settings › Accounts, so both agree.
+ */
 function Agent37KeyRow() {
-  const gateway = useAgent37Gateway()
-  const ensure = useVaultUnlock()
-  const settled = useVaultSettled()
-  const [status, setStatus] = useState<Agent37Status>()
+  const { gateway, state, unread, busy, error, save, disconnect, unlock, retry } =
+    useAgent37Connection()
   const [key, setKey] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState("")
   const field = useId()
-  useEffect(() => {
-    let current = true
-    void gateway
-      ?.read()
-      .then((value) => {
-        if (current) setStatus(value)
-      })
-      .catch(() => {
-        if (current) setError("Couldn’t read Agent37.")
-      })
-    return () => {
-      current = false
-    }
-  }, [gateway, settled])
-  const act = async (
-    work: (gateway: Agent37Gateway) => Promise<Agent37Status>,
-    failed: string,
-  ) => {
-    if (!gateway || busy) return
-    setBusy(true)
-    setError("")
-    try {
-      if (!(await ensure())) return
-      setStatus(await work(gateway))
-      setKey("")
-    } catch {
-      setError(failed)
-    } finally {
-      setBusy(false)
-    }
-  }
-  const state = status?.state
   return (
     <ItemRow
       label={<label htmlFor={state === "connected" ? undefined : field}>API key</label>}
-      detail={error || (state === undefined && !error ? "Loading…" : undefined)}
+      detail={error || (state === undefined ? "Loading…" : undefined)}
       unavailable={!gateway}
       data-channel-agent37={state ?? "reading"}
       control={
-        state === "locked" ? (
-          <RowAction
-            disabled={busy}
-            onClick={() =>
-              void ensure().then((open) => {
-                if (open) void gateway?.read().then(setStatus)
-              })
-            }
-            data-agent37-action="unlock"
-          >
+        unread && state === undefined ? (
+          <RowAction onClick={retry} data-agent37-action="retry">
+            Try again
+          </RowAction>
+        ) : state === "locked" ? (
+          <RowAction disabled={busy} onClick={unlock} data-agent37-action="unlock">
             Unlock
           </RowAction>
         ) : state === "connected" ? (
@@ -488,9 +448,7 @@ function Agent37KeyRow() {
             <span className="channel-settings-value">Saved</span>
             <RowAction
               disabled={busy}
-              onClick={() =>
-                void act((gateway) => gateway.disconnect(), "Couldn’t remove the key.")
-              }
+              onClick={() => void disconnect()}
               data-agent37-action="disconnect"
             >
               Remove
@@ -501,12 +459,10 @@ function Agent37KeyRow() {
             className="channel-settings-actions"
             onSubmit={(event) => {
               event.preventDefault()
-              const trimmed = key.trim()
-              if (trimmed)
-                void act(
-                  (gateway) => gateway.save(trimmed),
-                  "Agent37 didn’t take that key. Check it and try again.",
-                )
+              if (key.trim())
+                void save(key).then((saved) => {
+                  if (saved) setKey("")
+                })
             }}
           >
             <input
