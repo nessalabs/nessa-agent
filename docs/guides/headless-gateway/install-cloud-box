@@ -77,7 +77,10 @@ install -d -m 0755 "${bin}" /etc/nessa
 rm -rf "${runtime}.new"
 cp -a "${prepared}" "${runtime}.new"
 chown -R root:root "${runtime}.new"
-chmod -R go-w "${runtime}.new"
+# The prepared runtime is private to its builder (0700); the box gateway
+# runs as the VM's own user, so everyone may read and enter it, and only
+# root may change it.
+chmod -R u+rwX,go+rX,go-w "${runtime}.new"
 rm -rf "${runtime}"
 mv "${runtime}.new" "${runtime}"
 install -m 0755 "${download}" "${bin}/cloudflared"
