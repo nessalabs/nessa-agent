@@ -14,11 +14,13 @@ import {
   followWorkspace,
   loadWorkspace,
   renameStarted,
+  searchList,
+  selectChannel,
 } from "../../adapters/store/commands"
 import { onScreen } from "../../application/workspace-state"
 import { emptyTranscript } from "../../model/transcript"
 import { selectFocusedSessionId, selectSession } from "../../adapters/store/selectors"
-import { fakeSource, settle, testStore } from "../../testing"
+import { fakeSource, settle, shownIn, summary, testIndex, testStore } from "../../testing"
 import { DeleteSessionHost } from "../session-row-actions"
 import { SessionList } from "./session-list"
 
@@ -541,4 +543,155 @@ it("a delete question cancelled gives focus back where it was as its menu opened
   } finally {
     outside.remove()
   }
+})
+
+/** The test index, with a coordinator kept for one of its channels. */
+function coordinated(channelId: string, coordinatorOn = true) {
+  const index = testIndex()
+  return {
+    ...index,
+    channels: index.channels.map((channel) =>
+      channel.id === channelId
+        ? { ...channel, coordinatorOn, coordinatorConversationId: "main" }
+        : channel,
+    ),
+  }
+}
+
+const groupIds = () =>
+  [...host.querySelectorAll("[data-list-group]")].map((group) =>
+    group.getAttribute("data-list-group"),
+  )
+
+it("a coordinator not yet begun is a row at the top, and opening it opens its chat", async () => {
+  const store = await shown(fakeSource(coordinated("desktop")))
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "desktop" }))
+    await settle()
+  })
+  expect(groupIds()[0]).toBe("coordinator")
+  const group = host.querySelector("[data-list-group=coordinator]")
+  // No count: the group holds the one chat, whether or not it has begun.
+  expect(group?.getAttribute("aria-label")).toBe("Coordinator")
+  const start = group?.querySelector<HTMLElement>("[data-coordinator-start=main]")
+  expect(start?.getAttribute("role")).toBe("option")
+  expect(start?.textContent).toContain("Coordinator")
+  expect(start?.getAttribute("aria-selected")).toBe("false")
+  await act(async () => {
+    start?.click()
+    await settle()
+  })
+  expect(selectFocusedSessionId(store.getState())).toBe("main")
+  const row = () => host.querySelector<HTMLElement>("[data-coordinator-start=main]")
+  expect(row()?.getAttribute("aria-selected")).toBe("true")
+  // Open, it is the list's one Tab stop, and the keys walk it with the rows.
+  expect(row()?.tabIndex).toBe(0)
+  expect(host.querySelectorAll("[role=option][tabindex='0']")).toHaveLength(1)
+  const key = async (from: Element | null, name: string) =>
+    act(async () => {
+      from?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }),
+      )
+      await settle()
+    })
+  await key(row(), "ArrowDown")
+  const first = host.querySelector<HTMLElement>("[data-session-row]")
+  expect(selectFocusedSessionId(store.getState())).toBe(
+    first?.getAttribute("data-session-row"),
+  )
+  expect(document.activeElement).toBe(first)
+  expect(row()?.tabIndex).toBe(-1)
+  await key(first, "ArrowUp")
+  expect(selectFocusedSessionId(store.getState())).toBe("main")
+  expect(document.activeElement).toBe(row())
+  await key(row(), "End")
+  expect(selectFocusedSessionId(store.getState())).not.toBe("main")
+  await key(document.activeElement, "Home")
+  expect(selectFocusedSessionId(store.getState())).toBe("main")
+  // Spaces alone are no search; a search lists only what it finds.
+  await act(async () => {
+    store.dispatch(searchList({ query: " " }))
+    await settle()
+  })
+  expect(row()).not.toBeNull()
+  await act(async () => {
+    store.dispatch(searchList({ query: "Session" }))
+    await settle()
+  })
+  expect(host.querySelector("[data-coordinator-start]")).toBeNull()
+})
+
+it("a channel with only its coordinator to begin shows that row, not the empty list", async () => {
+  const store = await shown(fakeSource(coordinated("empty")))
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "empty" }))
+    await settle()
+  })
+  expect(groupIds()).toEqual(["coordinator"])
+  expect(host.querySelector(".workspace-list-empty")).toBeNull()
+  expect(host.querySelector<HTMLElement>("[data-coordinator-start]")?.tabIndex).toBe(0)
+})
+
+it("no start row once the coordinator's chat is listed, or while it is off", async () => {
+  const index = coordinated("empty")
+  const store = await shown(
+    fakeSource({
+      ...index,
+      sessions: [...index.sessions, summary("main", "empty", 500)],
+    }),
+  )
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "empty" }))
+    await settle()
+  })
+  expect(groupIds()).toEqual(["coordinator"])
+  expect(host.querySelector("[data-coordinator-start]")).toBeNull()
+  expect(host.querySelector("[data-session-row]")).not.toBeNull()
+  unfollow()
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  const off = await shown(fakeSource(coordinated("empty", false)))
+  await act(async () => {
+    off.dispatch(selectChannel({ channelId: "empty" }))
+    await settle()
+  })
+  expect(host.querySelector("[data-list-group=coordinator]")).toBeNull()
+})
+
+it("the command key on the coordinator's row opens its chat beside, as on any row", async () => {
+  const store = await shown(fakeSource(coordinated("desktop")))
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "desktop" }))
+    await settle()
+  })
+  const before = selectFocusedSessionId(store.getState())
+  await act(async () => {
+    host
+      .querySelector("[data-coordinator-start=main]")
+      ?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, metaKey: true, ctrlKey: true }),
+      )
+    await settle()
+  })
+  const shownNow = shownIn(store.getState().workspace.panes)
+  expect(shownNow).toContain("main")
+  expect(shownNow).toContain(before)
+})
+
+it("focus goes to the coordinator's row when the last session beside it leaves", async () => {
+  const source = fakeSource(coordinated("gateway"))
+  const store = await shown(source)
+  await act(async () => {
+    store.dispatch(selectChannel({ channelId: "gateway" }))
+    await settle()
+  })
+  const row = host.querySelector<HTMLElement>('[data-session-row="d"]')
+  await act(async () => row?.focus())
+  expect(document.activeElement).toBe(row)
+  await act(async () => {
+    source.emit({ kind: "session-removed", sessionId: "d", revision: 2 })
+    await settle()
+  })
+  expect(host.querySelector("[data-session-row]")).toBeNull()
+  expect(document.activeElement).toBe(host.querySelector("[data-coordinator-start=main]"))
 })

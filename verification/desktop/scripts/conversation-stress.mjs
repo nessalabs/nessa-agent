@@ -9559,8 +9559,65 @@ const steps = {
         name: `stress-coord-r${step.index}-s${run.knobs.seed}`,
       })
       if (made) {
+        // Before a word is said the coordinator is already the list's first
+        // row, under its own label, and opening it goes to its chat: from an
+        // ordinary new session, back to the coordinator's first message.
+        const start = run.page.locator(
+          `[data-list-group="coordinator"] [data-coordinator-start="${made.coordinatorConversationId}"]`,
+        )
+        const offered = await waitFor(
+          async () =>
+            (await start.count()) === 1 &&
+            (await run.page
+              .locator("[data-list-group]")
+              .first()
+              .getAttribute("data-list-group")) === "coordinator",
+          10_000,
+        )
+        if (!offered)
+          failures.push(
+            "a channel with a coordinator does not list it first before its first message",
+          )
+        else {
+          // Made with it on, the channel opened at its coordinator's chat:
+          // read here, before anything below opens it again.
+          const opened = await waitFor(
+            async () => (await start.getAttribute("aria-selected")) === "true",
+            5_000,
+          )
+          if (!opened)
+            failures.push(
+              "a channel made with a coordinator did not open at its coordinator's chat",
+            )
+          await run.page.keyboard.press(keys.newSession)
+          const left = await waitFor(
+            async () => (await start.getAttribute("aria-selected")) === "false",
+            5_000,
+          )
+          if (!left)
+            failures.push(
+              "a new session did not take the pane from the coordinator's chat",
+            )
+          else {
+            await start.click({ timeout: 10_000 })
+            const back = await waitFor(
+              async () => (await start.getAttribute("aria-selected")) === "true",
+              5_000,
+            )
+            if (!back) failures.push("the coordinator's row did not open its chat")
+          }
+          if (run.evidence)
+            await run.page.screenshot({
+              path: join(run.evidence, `coordinator-${run.engine}-start.png`),
+            })
+        }
         // Made with it on, the channel opens at its coordinator's chat.
         const first = await talkInChannel(run, step, made, failures)
+        // Its own row then, in the same place; the offer to start it is gone.
+        if (first && (await start.count()) > 0)
+          failures.push(
+            "the coordinator is still offered to start after its first message",
+          )
         if (first && first !== made.coordinatorConversationId)
           failures.push(
             `the first chat in a channel with a coordinator is ${first}, not its coordinator ${made.coordinatorConversationId}`,

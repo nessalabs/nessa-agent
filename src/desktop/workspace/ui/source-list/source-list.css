@@ -258,6 +258,26 @@
   }
 }
 
+/*
+ * A row's label is cut where it runs out of room, and the box that cuts it
+ * starts exactly at the first letter. A letter that leans left of its own
+ * origin (an "A") then loses that edge wherever the box lands between two
+ * device pixels, as it does in a zoomed window. So the boxes that cut reach a
+ * little past the words on both sides, and the words stay where they were.
+ */
+.workspace-sidebar [data-slot="sidebar-menu-item-content"],
+.workspace-sidebar [data-slot="sidebar-menu-item-label"],
+.workspace-sidebar [data-slot="sidebar-menu-item-description"] {
+  --row-label-bleed: 2px;
+  margin-inline: calc(-1 * var(--row-label-bleed));
+  padding-inline: var(--row-label-bleed);
+}
+
+.workspace-sidebar [data-slot="sidebar-menu-item-label"],
+.workspace-sidebar [data-slot="sidebar-menu-item-description"] {
+  box-sizing: content-box;
+}
+
 .workspace-sidebar [data-slot="sidebar-menu-item-badge"] {
   min-width: 0;
   color: inherit;
