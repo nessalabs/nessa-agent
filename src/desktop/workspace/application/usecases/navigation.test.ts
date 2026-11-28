@@ -105,6 +105,28 @@ describe("opening a channel from the sidebar", () => {
     expect(opened.drafts.replacement.channelId).toBe("empty")
   })
 
+  it("goes to the coordinator's chat not yet begun where it already is, in another pane", () => {
+    const base = loaded()
+    const state = {
+      ...base,
+      channels: base.channels.map((channel) =>
+        channel.id === "empty"
+          ? { ...channel, coordinatorConversationId: "main" }
+          : channel,
+      ),
+    }
+    const begun = openChannel(state, { channelId: "empty", draftId: "unused" })
+    expect(shown(begun)).toEqual(["main"])
+    // Another chat opens beside it and takes the focus; the coordinator's is
+    // asked for again, and it is the one focused.
+    const away = openBeside(begun, { sessionId: "d", room: roomyGrid })
+    expect(shownBy(focusedPane(away.panes!))).toBe("d")
+    const back = openChannel(away, { channelId: "empty", draftId: "unused" })
+    expect(shownBy(focusedPane(back.panes!))).toBe("main")
+    expect(shown(back)).toEqual(shown(away))
+    expect(back.drafts.main).toBe(away.drafts.main)
+  })
+
   it("with its coordinator off, opens its newest other chat, or a new one, never the coordinator's", () => {
     const base = loaded()
     const off = (coordinatorConversationId: string, id: string) => ({

@@ -133,6 +133,12 @@ never opens the channel at it while off: opening the channel shows its newest
 other chat, or a new one, which is an ordinary thread. On again, it is the
 same chat: nothing is retired or remade.
 
+While on, the channel's session list always holds a "Coordinator" group
+first. The chat begins with its first message, so before that the group holds
+a row that opens it (the list reads `start` on the group, the conversation the
+channel keeps); after it, the chat's own row is in the same place. A search
+lists only what it finds, so it leaves the row out.
+
 The coordinator is told its job (`StyleRole::job`) in Nessa's own launch
 prompt as `nessa/role`, after the channel's notes and before the style. The
 job text is pinned with the role and style when the conversation is created
@@ -141,8 +147,9 @@ switching the coordinator, rewording the job later, or upgrading a file whose
 coordinators were pinned before jobs existed (they keep `job` NULL) never
 changes a saved prompt or restarts a session.
 
-The stress step `coordinator` makes a channel with it on (its first chat is
-the coordinator, told its job), switches it off in settings (a new chat there
+The stress step `coordinator` makes a channel with it on (its coordinator is
+the list's first row before a word is said, and opens from there; its first
+chat is the coordinator, told its job), switches it off in settings (a new chat there
 is a thread, told no job), on again (the same chat still answers), and makes
 a second channel with it off.
 
