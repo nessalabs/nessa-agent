@@ -391,7 +391,9 @@ async fn no_more_apps_install_than_the_list_can_hold() {
         .unwrap();
     }
     let recorded = events(&audit).len();
-    let one_more = apps.starter("one-more".into(), "1.0.0".into(), None).unwrap();
+    let one_more = apps
+        .starter("one-more".into(), "1.0.0".into(), None)
+        .unwrap();
     assert_eq!(
         apps.install(
             owner(),
