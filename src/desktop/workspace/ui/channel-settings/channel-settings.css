@@ -86,11 +86,12 @@
   border-top: 1px solid var(--settings-hairline);
 }
 
-.channel-settings-rows .settings-row {
+/* Words line up with the page's title, past the settings surface's own inset. */
+.channel-settings .channel-settings-rows .settings-row {
   padding: 8px 0;
 }
 
-.channel-settings-rows .settings-row > :first-child {
+.channel-settings .channel-settings-rows .settings-row > :first-child {
   min-height: 28px;
 }
 
