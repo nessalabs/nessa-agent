@@ -6,11 +6,11 @@
  * ⌘↩ is the Mac's "do the default thing" and ⌘⌫ its "delete, decline"; the
  * arrows walk the list, ↩ presses a row's default (Allow once on a request
  * that can be allowed now, open otherwise), ⌘R writes a reply in the peek, and Escape
- * goes back to the panes. ⌘0, which opens the overview from anywhere in the
+ * goes back to the panes. ⇧⌘A, which opens the overview from anywhere in the
  * window as its sidebar entry does, is the window's (`ui/layouts/shortcuts.ts`).
  */
 import type { Chord } from "../../../model/keyboard"
-import type { Binding } from "../../adapters/dom/shortcuts"
+import type { Binding } from "../../../adapters/key-bindings"
 
 /** The overview's commands; the three answers are an approval card's own (`ApprovalChoice`). */
 export type OverviewCommand =

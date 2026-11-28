@@ -4,7 +4,7 @@
  * them, so a chord is named only where it works.
  */
 import type { Chord } from "../../../model/keyboard"
-import type { Binding } from "../../adapters/dom/shortcuts"
+import type { Binding } from "../../../adapters/key-bindings"
 import type { ShortcutCommand } from "../workspace-frame"
 
 const bind = (chord: Chord, command: ShortcutCommand): Binding<ShortcutCommand> => ({
@@ -46,8 +46,9 @@ export const workspaceShortcuts: readonly Binding<ShortcutCommand>[] = [
   bind({ code: "ArrowRight", control: true, alt: true }, "moveRight"),
   bind({ code: "ArrowUp", control: true, alt: true }, "moveUp"),
   bind({ code: "ArrowDown", control: true, alt: true }, "moveDown"),
-  // The Agents overview, as its sidebar entry opens it: a place, so ⌘0 again keeps it.
-  bind({ code: "Digit0", command: true }, "showOverview"),
+  // The Agents overview, as its sidebar entry opens it: a place, so ⇧⌘A again
+  // keeps it. ⌘0 is the window's zoom back to 100% (`adapters/window-zoom.ts`).
+  bind({ code: "KeyA", command: true, shift: true }, "showOverview"),
 ]
 
 /** What each command is called where the keyboard is listed (Settings › Workspace › Keyboard). */

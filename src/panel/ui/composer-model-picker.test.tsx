@@ -97,6 +97,40 @@ it("shows only the agent's mark, and names the model for a tooltip and a reader"
   expect(trigger().querySelector("svg path")).not.toBeNull()
 })
 
+it("keeps the model's name away once the mark is pressed, until the pointer leaves", () => {
+  render()
+  const wrapper = container.querySelector<HTMLElement>(".nessa-model-hint")
+  if (!wrapper) throw new Error("no model hint")
+  expect(wrapper.hasAttribute("data-dismissed")).toBe(false)
+
+  open()
+  act(() => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    )
+  })
+  // Pressed: the label stays hidden over the trigger after the picker closes.
+  expect(wrapper.hasAttribute("data-dismissed")).toBe(true)
+
+  act(() => {
+    wrapper.dispatchEvent(
+      new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+    )
+  })
+  expect(wrapper.hasAttribute("data-dismissed")).toBe(false)
+
+  // Pressed, then the picker closed with the pointer elsewhere: no leave is
+  // reported, so the next arrival clears it.
+  open()
+  expect(wrapper.hasAttribute("data-dismissed")).toBe(true)
+  act(() => {
+    wrapper.dispatchEvent(
+      new PointerEvent("pointerover", { bubbles: true, relatedTarget: document.body }),
+    )
+  })
+  expect(wrapper.hasAttribute("data-dismissed")).toBe(false)
+})
+
 it("offers a tab per agent the gateway runs, naming an unlisted one by its id", () => {
   render()
   open()

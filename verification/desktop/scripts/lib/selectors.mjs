@@ -173,9 +173,15 @@ export const css = {
   panelTabs: '.nessa-chrome [data-slot="chat-tabs"]', // the panel's tab strip; data-variant="dots"
   panelCurrent: '.nessa-chrome [data-slot="chat-tabs-current"]', // the selected tab's name, leading the strip
   panelDot: '.nessa-chrome [data-slot="chat-tab-dot"]', // one page dot per tab; its [data-active] tab is the bar
+  panelActiveTab: '.nessa-chrome [data-slot="chat-tab"][data-active]', // the selected tab; its menu holds View details
   panelMessages: '[data-slot="chat-tabs-messages"]', // the strip's trailing Messages button
   panelListRow: "[data-slot=conversation-history-item]", // a row of the panel's Messages list
   panelComposer: '.nessa-panel [data-slot="chat-composer-editor"]', // the panel composer's editor
+  panelPlus: ".nessa-panel [data-composer-tray-trigger]", // the composer's +, opening its tray
+  panelTray: '.nessa-panel .nessa-composer-tray[role="dialog"]', // the + tray while open (a closed one leaves unnamed)
+  panelModelMark: ".nessa-panel .nessa-model-hint button", // the composer's model mark, the picker's trigger
+  panelModelName: '.nessa-panel [data-slot="model-hint"]', // the model's name drawn above its mark after a wait
+  agentDownloadRow: "[data-agent-download]", // one agent's row in Agent downloads: its name and one word
   sentBubble: '[data-slot="chat-bubble"][data-tone="sent"]', // a message the person sent, drawn in the chat accent
   undoCard: '[data-slot="undo-card"]', // the row card an archive leaves, with Undo
   randomAvatar: '[data-slot="random-avatar"]', // a conversation's painted avatar
@@ -225,7 +231,7 @@ export const css = {
   messageAuthor: ".workspace-message-author", // class: which app wrote it, above its bubble
   bubble: ".workspace-bubble", // class: a message of the person's
 
-  // Agents overview (always offered: the sidebar's entry and ⌘0)
+  // Agents overview (always offered: the sidebar's entry and ⇧⌘A)
   overviewEntry: ".workspace-sidebar .agents-overview-entry", // class: the sidebar's "Agents"
   overview: ".agents-overview", // class
   overviewItem: "[data-overview-item]",
@@ -575,7 +581,11 @@ export const keys = {
   focusNext: "Meta+Shift+BracketRight",
   moveLeft: "Control+Alt+ArrowLeft",
   moveRight: "Control+Alt+ArrowRight",
-  overview: "Meta+Digit0",
+  overview: "Meta+Shift+KeyA",
+  // The window's zoom, where its host zooms it (`adapters/window-zoom.ts`).
+  zoomIn: "Meta+Equal",
+  zoomOut: "Meta+Minus",
+  zoomReset: "Meta+Digit0",
   settings: "Meta+Comma",
   allow: "Meta+Enter",
   /** ⌘↩ as its two keys, for holding it down (`keyboard.down` repeats). */

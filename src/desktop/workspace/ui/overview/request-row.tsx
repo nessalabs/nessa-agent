@@ -6,7 +6,7 @@ import {
 import { useNow } from "../../../../clock"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
-import { shortcutOf } from "../../adapters/dom/shortcuts"
+import { shortcutOf } from "../../../adapters/key-bindings"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectAnswer,

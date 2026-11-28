@@ -16,7 +16,14 @@ import { version as appVersion } from "../../../../package.json"
 import { desktopThemes } from "../../model/theme"
 import { workspaceLayouts, type WorkspaceLayoutId } from "../../model/workspace-layout"
 import { useWorkspaceLayoutPreference } from "../../adapters/workspace-layout-preference"
+import { labelOf } from "../../adapters/key-bindings"
 import { useMotionPreference } from "../../adapters/motion-preference"
+import {
+  useZoomAvailable,
+  zoomNames,
+  zoomShortcuts,
+  type ZoomCommand,
+} from "../../adapters/window-zoom"
 import {
   useBesidePreference,
   useDriftPreference,
@@ -274,6 +281,7 @@ function SessionsTab() {
  * (`workspaceShortcuts`), so what Settings lists is what the keys do.
  */
 function KeyboardTab() {
+  const zooms = useZoomAvailable()
   return (
     <>
       <Group title="Window">
@@ -285,6 +293,18 @@ function KeyboardTab() {
             </kbd>
           }
         />
+        {/* The zoom's keys, where the window zooms itself: in a browser they are the browser's. */}
+        {zooms
+          ? (Object.keys(zoomNames) as ZoomCommand[]).map((command) => (
+              <ItemRow
+                key={command}
+                label={zoomNames[command]}
+                control={
+                  <kbd className="settings-kbd">{labelOf(zoomShortcuts, command)}</kbd>
+                }
+              />
+            ))
+          : null}
       </Group>
       <Group title="Panes and sessions">
         {workspaceShortcuts.map((binding) => (

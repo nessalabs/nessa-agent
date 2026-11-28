@@ -19,14 +19,21 @@
  * surface of the control it names, so it wears that surface's theme.
  */
 import { useEffect } from "react"
-import { placeTooltip, type Box, type TooltipSide } from "../model/tooltip-placement"
+import {
+  placeTooltip,
+  trafficLightsBox,
+  type Box,
+  type TooltipSide,
+} from "../model/tooltip-placement"
 
 /** How long the pointer rests on a control before its tooltip shows. */
 const restMs = 500
 /** How long after one tooltip hides the next shows at once. */
 const warmMs = 300
-/** Where the traffic lights sit in a macOS window, which no tooltip covers. */
-const trafficLights: Box = { left: 0, top: 0, width: 84, height: 36 }
+/** The traffic lights' box at the zoom the host last applied (`window-zoom.ts` puts it on the root). */
+function trafficLights(): Box {
+  return trafficLightsBox(Number(document.documentElement.dataset.zoom) || 1)
+}
 
 /** The box a control is drawn in; a wrapper that only groups its child is measured by the child. */
 function boxOf(target: HTMLElement): DOMRect {
@@ -78,7 +85,7 @@ export function useWindowTooltips(): void {
       tip.hidden = false
       const lights =
         surface?.dataset.host === "macos" && surface.dataset.surface === "window"
-          ? trafficLights
+          ? trafficLights()
           : undefined
       const placed = placeTooltip(
         boxOf(target),

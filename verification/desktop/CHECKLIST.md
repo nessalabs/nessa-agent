@@ -242,7 +242,7 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   not run — check that release by hand in the app.
 - [ ] **A lost pointer ends the press and the drag**: a move and a release
   over a zone after it start and drop nothing. _Check:_ `drag.mjs` (`lost-capture-then-move`).
-- [ ] **Any change while carrying cancels at once** — a resize, ⌘W, ⌘0 (and
+- [ ] **Any change while carrying cancels at once** — a resize, ⌘W, ⇧⌘A (and
   every other command key, the store changing, Settings): nothing is left
   lifted right after, every pane stays inside the window every frame, nothing
   is painted under the controls, and the release drops nothing. _Check:_
@@ -399,7 +399,7 @@ Experimental turns it on; the rail stands beside the workspace in
   the toggle. Devices draws it in the same place, and the toggle does not move.
   _Check:_ `columns.mjs --only shell-chrome,rail-corner` (Chromium and
   WebKit, both layouts; coding standards gate 17).
-- [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
+- [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⇧⌘A and
   ⌥⌘S change nothing behind it. Its opaque view covers the workspace from the
   rail's edge to the window's other edges, top included. The titlebar stays
   above that view: its free room is the window's drag region, and its one
@@ -502,9 +502,9 @@ deferred rows have all mounted. The sampling order is in
 _ADR 238 › What fills the content region_ (the overview is workspace state).
 
 - [ ] **It is always offered**: on a fresh profile, with nothing stored, the
-  sidebar shows "Agents" (and no separate Needs you or Running rows) and ⌘0
+  sidebar shows "Agents" (and no separate Needs you or Running rows) and ⇧⌘A
   opens it. _Check:_ `smoke.mjs` (`overview`); unit test `layouts.test.tsx`.
-- [ ] **⌘0 and the sidebar's Agents entry open it; asked again, it stays.**
+- [ ] **⇧⌘A and the sidebar's Agents entry open it; asked again, it stays.**
   _Check:_ `focus.mjs` (`focus-overview`), `smoke.mjs` (`overview`).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
@@ -566,9 +566,9 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   (`focus-answers-overview`, `focus-answers-card`); unit tests `walk.test.ts`,
   `overview.test.tsx`, `approval-request.test.tsx`, `composer.test.tsx`.
 - [ ] **Escape, or anywhere else chosen, goes back to the panes** with the
-  caret in the focused pane's composer — Escape straight after ⌘0 too, before
+  caret in the focused pane's composer — Escape straight after ⇧⌘A too, before
   the keyboard has landed on a row. _Check:_ `focus.mjs` (`focus-overview`,
-  "⌘0 then Escape at once").
+  "⇧⌘A then Escape at once").
 - [ ] **⌘R keeps the keyboard in the reply pill**: straight after ↓, with
   the words typed at once, every key lands in the pill of the row ↓ went to;
   sending, which moves the row from Needs you to Working and draws its pill
@@ -650,7 +650,7 @@ scripts drive the sample plugin the sample workspace registers
   caret back in the chat's composer.
   _Check:_ `widgets.mjs --only card-panel-window`.
 - [ ] **The window is left as the overview is, with ⌘W its own**: its close,
-  ⌘W (no pane beneath it closes), a session chosen; ⌘0 from it opens the
+  ⌘W (no pane beneath it closes), a session chosen; ⇧⌘A from it opens the
   overview. _ADR 326 › Places._ _Check:_ `widgets.mjs --only window-left`.
 - [ ] **Escape steps back in a view first, and the caret stays in the widget**:
   a detail open in the panel or the window is closed by Escape, the caret falls
@@ -1579,8 +1579,26 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
 - [ ] **At a small window (960 × 600) nothing is clipped or under the
   controls**, overview and Settings included. _Check:_
   `safe-area.mjs --sizes 960x600`.
-- [ ] **Browser zoom / larger text** does not break the titlebar row.
-  _Check:_ manual (⌘+ twice in the app).
+- [ ] **The app zooms its own page: ⌘= (or ⌘+) and ⌘- step it, ⌘0 puts it
+  back to 100%.** The steps are `src/host/window-zoom.json` (80% to 150%), the
+  one list the page steps through and the host takes. The host is asked for
+  each zoom once, and again at launch for the one remembered
+  (`nessa.desktop.zoom`); the root says a zoom (`data-zoom`, `--desktop-zoom`)
+  only once the host has applied it. Nothing runs past the window's edge at
+  any step, and the titlebar's first control stays clear of the traffic
+  lights, whose room in the page's pixels is divided by the zoom. In a
+  browser the keys are the browser's: the window binds none of them.
+  _Check:_ `pnpm test:e2e:stress -- --only zoom`; `adapters/window-zoom.test.tsx`;
+  `styles.test.ts` (the lights' room). The traffic lights on the zoomed row
+  are `src-tauri/tests/traffic_lights.rs` (macOS). _Manual, in the app:_ ⌘=
+  three times, then ⌘- back down to 80%: the traffic lights stay on the
+  titlebar row's centre at every step, and the window cannot be dragged
+  narrower than its layout holds.
+- [ ] **Every sidebar row is the one row.** The workspace's channels, Agents
+  entry, section labels and the sessions under a channel, and Settings' navigation, take their
+  height, icon and type from `--desktop-row-*` (`styles.css`): 32px tall,
+  16px icons, 14px words. _Check:_ `styles.test.ts`;
+  `pnpm test:e2e:stress -- --only zoom` (the rows as drawn, at 100% and zoomed).
 
 ## WebKit parity
 

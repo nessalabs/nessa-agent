@@ -193,6 +193,10 @@ export const KNOBS = {
     default: 1,
     what: "gateway restarts onto conversation metadata turned back into an older build's file, which it upgrades and keeps, and onto every place record turned back into an older build's placement and binding files",
   },
+  zooms: {
+    default: 1,
+    what: "times the window is zoomed in twice with ⌘=, a message sent at that zoom, the window reloaded, then zoomed out with ⌘- and back to 100% with ⌘0: the host is asked for each zoom once and again at launch, the sidebar's rows and icons keep the one row's size, the titlebar's controls stay clear of the traffic lights, nothing runs past the window's edge, and ⇧⌘A still opens the Agents overview",
+  },
   terminals: {
     default: 1,
     what: "terminals opened with ⌘J in the channel in front: a real shell in the pane that runs what is typed, listed in the session list and by the gateway, its details naming its folder, ended by its pane's ×",
@@ -219,7 +223,7 @@ export const KNOBS = {
   },
   menuPanels: {
     default: 1,
-    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, and a chat archived from Messages leaves a row card whose Undo brings it back",
+    what: "times the menu-bar panel is opened over the run: its tabs are page dots after the chat's name, a message sent there wears the chat accent and its rim, the model's name shows only after a 2 s hover, the + tray grows out of + and its Agent downloads page is rows of a name and one word, the chat's Details sheet has no Approvals group, and a chat archived from Messages leaves a row card whose Undo brings it back",
   },
   passphrases: {
     default: 1,
@@ -449,6 +453,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.apps, () => ({ kind: "apps" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.appCredentials, () => ({ kind: "appCredentials" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.zooms, () => ({ kind: "zoom" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.dynamicApps, () => ({ kind: "dynamicApps" }))
   if (knobs.pairedCatalogues > 0)

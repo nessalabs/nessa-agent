@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactElement, type ReactNode } from "react"
+import { useId, useState, type ReactElement, type ReactNode } from "react"
 import { conversationLeasePlace, conversationLeaseStatus } from "@nessa/client"
 import { Info, Pencil } from "lucide-react"
 import {
@@ -21,62 +21,7 @@ import {
 // carries the setup gate and with it the host.
 import { AGENT_CHOICES } from "../../onboarding/model/onboarding"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
-import type { AgentFeatures, Conversation, ConversationLease } from "../model"
-
-type FeatureSupport = Exclude<AgentFeatures[keyof AgentFeatures], "off" | "on">
-
-const TRUST =
-  "This also applies the repo's .claude settings, including its allow rules and startup hooks, so turn it on only for projects you trust."
-
-/** What this process started with, and, when the switch has since changed, the value the next start will use. */
-function nativeHooksCopy(
-  started: "off" | "on",
-  agent: string | undefined,
-  current: "off" | "on" | undefined,
-) {
-  const start =
-    started === "on"
-      ? agent === "claude"
-        ? `For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts. ${TRUST}`
-        : "For this run, hooks can approve, deny, or change a tool call and its result without Nessa asking, and can run commands when the agent starts."
-      : "For this run, Nessa asks this agent to leave its own hooks off."
-  if (current === undefined || current === started) return start
-  // Name the value that applies next, so the sentence cannot be read as the
-  // run's own value carrying over.
-  const next =
-    current === "on"
-      ? agent === "claude"
-        ? `The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run. ${TRUST}`
-        : "The next time this agent starts, Nessa no longer asks it to leave its own hooks off, so they can run."
-      : "The next time this agent starts, Nessa asks it to leave its own hooks off."
-  return `${start} ${next}`
-}
-
-/** One capability in a word or two: whether it works here, not how. */
-function support(value: FeatureSupport) {
-  switch (value) {
-    case "unknown":
-      return "Not verified"
-    case "unsupported":
-      return "Not available"
-    case "unsupported_not_implemented":
-      return "Not yet in Nessa"
-    case "supported_for_offered_permission_reviews":
-    case "supported_for_user_configured_hooks":
-    case "supported_with_invocation_correlation":
-    case "supported_after_validated_switch":
-    case "supported_with_nonterminal_outcome":
-    case "supported_with_correlated_round_trip":
-    case "supported_at_permission_gate":
-    case "supported_for_current_invocation":
-    case "supported_for_session":
-      return "Supported"
-    default: {
-      const exhaustive: never = value
-      return exhaustive
-    }
-  }
-}
+import type { Conversation, ConversationLease } from "../model"
 
 const tokenCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 })
 
@@ -121,19 +66,12 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
 }
 
 /**
- * What a conversation runs on and how its tools are approved. Read-only: the
- * composer is where the model and the approval mode are chosen.
+ * What a conversation runs on and where. Read-only: the composer is where the
+ * model and the approval mode are chosen, so the sheet does not repeat them.
  */
-function ConversationFacts({
-  conversation,
-  nativeHooksSwitch,
-}: {
-  conversation: Conversation
-  nativeHooksSwitch?: "off" | "on"
-}) {
+function ConversationFacts({ conversation }: { conversation: Conversation }) {
   const remote = conversation.remote
   const runtime = remote?.runtime
-  const features = remote?.capabilities.agentFeatures
   // Narrowed by asking setup's list, which owns what an agent is called.
   const agent = AGENT_CHOICES.find((choice) => choice.id === runtime?.agent)
   return (
@@ -165,37 +103,6 @@ function ConversationFacts({
             label="Images"
             value={remote.capabilities.imageInput ? "Supported" : "Not supported"}
           />
-        </FactGroup>
-      ) : null}
-      {remote ? (
-        <FactGroup title="Approvals">
-          <Fact
-            label="Tool calls"
-            value={
-              remote.approvalModes.find((choice) => choice.id === remote.approvalMode)
-                ?.name ?? remote.approvalMode
-            }
-          />
-          {features ? (
-            <>
-              <Fact label="Deny a request" value={support(features.permissionDenial)} />
-              <Fact label="Answer later" value={support(features.permissionDeferral)} />
-              {/* A run's hooks are a fact about its process. With none started,
-                  the default capabilities say off whatever the last run used. */}
-              {runtime ? (
-                <Fact
-                  label="Native hooks"
-                  value={nativeHooksCopy(
-                    features.nativeHooks,
-                    runtime.agent,
-                    nativeHooksSwitch,
-                  )}
-                />
-              ) : null}
-            </>
-          ) : (
-            <Fact label="Deny a request" value="Not verified" />
-          )}
         </FactGroup>
       ) : null}
       {remote?.lease ? <LeaseFacts lease={remote.lease} /> : null}
@@ -275,55 +182,13 @@ export function ConversationDetails({
   rename,
   onClose,
   onRename,
-  readNativeHooks,
 }: {
   conversation: Conversation
   rename: boolean
   onClose: () => void
   onRename: (title: string) => void
-  /** The switch as it stands now, for this conversation's harness. Absent when it cannot be read. */
-  readNativeHooks?: () => Promise<"off" | "on" | undefined>
 }) {
   const [title, setTitle] = useState(conversation.title)
-  const [nativeHooksSwitch, setNativeHooksSwitch] = useState<"off" | "on" | undefined>(
-    undefined,
-  )
-  useEffect(() => {
-    // Drop the previous conversation's switch before this read answers, so a
-    // difference that belonged to the last one is not shown on this one.
-    // A later focus reads again: Settings lives in the other window, and the
-    // sheet stays open while the switch moves.
-    if (!readNativeHooks) {
-      setNativeHooksSwitch(undefined)
-      return
-    }
-    // Focus and visibility can start reads that overlap. Only the latest read
-    // may answer, so an older one that settles last cannot undo a newer one.
-    let latest = 0
-    let current = true
-    const read = () => {
-      const generation = ++latest
-      const apply = (choice: "off" | "on" | undefined) => {
-        if (current && generation === latest) setNativeHooksSwitch(choice)
-      }
-      void readNativeHooks()
-        .then(apply)
-        .catch(() => apply(undefined))
-    }
-    setNativeHooksSwitch(undefined)
-    read()
-    const onFocus = () => read()
-    const onVisible = () => {
-      if (document.visibilityState === "visible") read()
-    }
-    window.addEventListener("focus", onFocus)
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      current = false
-      window.removeEventListener("focus", onFocus)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [readNativeHooks])
   return (
     <Sheet
       className="nessa-detail-sheet"
@@ -367,10 +232,7 @@ export function ConversationDetails({
             </button>
           </form>
         ) : (
-          <ConversationFacts
-            conversation={conversation}
-            nativeHooksSwitch={nativeHooksSwitch}
-          />
+          <ConversationFacts conversation={conversation} />
         )}
       </SheetBody>
     </Sheet>

@@ -4,6 +4,7 @@ import { useThemeOnDocument } from "../adapters/theme-preference"
 import { useWebviewMenu } from "../adapters/use-webview-menu"
 import { useWindowTooltips } from "../adapters/use-window-tooltips"
 import { useDriftInEffect } from "../adapters/window-preferences"
+import { useWindowZoomInEffect } from "../adapters/window-zoom"
 import { useWorkspaceLayoutPreference } from "../adapters/workspace-layout-preference"
 import { SettingsHost, useSettingsOpening } from "../settings"
 import { DevicesView } from "../devices"
@@ -49,6 +50,8 @@ export function DesktopWindow({
   // The motion chosen in Settings, or the system's, on the root for everything that moves.
   useMotionInEffect()
   useDriftInEffect()
+  // The zoom chosen with ⌘=, ⌘- and ⌘0, applied by the host, and those keys.
+  useWindowZoomInEffect()
   const settings = useSettingsOpening()
   const decisions = useDecisionsOpening()
   const startup = startupFailureCode(useWorkspaceSelector(selectFailure))

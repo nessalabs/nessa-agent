@@ -281,6 +281,19 @@ export async function setFrosted(frosted: boolean) {
 }
 
 /**
+ * Zooms the desktop window's page, as a browser zooms one, and moves what the
+ * host lines up with it (the traffic lights, the window's smallest size). The
+ * host takes only a step of `window-zoom.json` and refuses anything else. A
+ * browser has its own zoom, so this is never bound there
+ * (`src/desktop/main.tsx`).
+ */
+export async function setDesktopZoom(zoom: number): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("desktop_zoom", { zoom })
+}
+
+/**
  * Subscribes to the tray menu's surface request. Returns a promise for the
  * unsubscribe, and a no-op outside Tauri where there is no tray.
  */

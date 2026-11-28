@@ -248,6 +248,36 @@ it("rises clear of the whole composer, attachments included, when it has a box",
   expect(style.bottom).toBe(`${596 - 480 + 10}px`)
   expect(style.left).toBe("-6px")
   expect(style.width).toBe("336px")
+  // It grows out of +: the origin is the button's centre, 24 px in from the
+  // tray's left and 108 px below its bottom (10 px gap, 80 px of attachments
+  // and the row, 18 px down the button).
+  expect(style.transformOrigin).toBe("24px calc(100% + 108px)")
+})
+
+it("shrinks back into + when it closes: drawn briefly, unnamed and inert", () => {
+  vi.useFakeTimers()
+  try {
+    render()
+    click(plus())
+    const opened = tray()
+    click(plus())
+    expect(tray()).toBeNull()
+    const leaving = container.querySelector<HTMLElement>(".nessa-composer-tray")
+    // The same element, never unmounted and drawn again, so the page it
+    // shows keeps its state through the exit.
+    expect(leaving).toBe(opened)
+    expect(leaving?.hasAttribute("data-leaving")).toBe(true)
+    expect(leaving?.hasAttribute("inert")).toBe(true)
+    expect(leaving?.getAttribute("aria-hidden")).toBe("true")
+    // Reopened mid-exit: a live tray again, not the leaving one.
+    click(plus())
+    expect(tray()?.hasAttribute("data-leaving")).toBe(false)
+    click(plus())
+    act(() => vi.advanceTimersByTime(120))
+    expect(container.querySelector(".nessa-composer-tray")).toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it("measures the row when the composer is unwrapped on a layout compositor", () => {
@@ -460,6 +490,8 @@ it("names and exposes agent downloads without approval or sign-out controls", as
   click(plus())
   await act(async () => row("Agent downloads").click())
   expect(container.querySelector('[aria-label="Download Claude · 87 MB"]')).not.toBeNull()
+  // The page is the rows: no paragraph above them, no Check downloads under.
+  expect(tray()?.textContent).toBe("Agent downloadsClaudeDownload")
   key("Escape")
   expect(row("Agent downloads")).toBe(document.activeElement)
 })

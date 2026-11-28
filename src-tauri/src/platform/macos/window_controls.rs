@@ -29,3 +29,28 @@ pub fn hold(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
     watched
 }
+
+/// Moves the buttons to the titlebar row of a page drawn at `zoom`. Recorded
+/// from any thread; placed on the main thread, where AppKit is asked.
+pub fn zoom(window: &tauri::WebviewWindow, zoom: f64) -> Result<(), String> {
+    traffic_lights::set_zoom(zoom);
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            // Before the window is first shown there is nothing to place:
+            // `hold` places the buttons, at this zoom, when it is.
+            if let Err(error) = place(&target) {
+                eprintln!("[nessa] could not place the traffic lights: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn place(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let main = MainThreadMarker::new()
+        .ok_or_else(|| String::from("the traffic lights are placed on the main thread only"))?;
+    let handle = window.ns_window().map_err(|error| error.to_string())?;
+    // SAFETY: Tauri hands back the live window's NSWindow, borrowed for this call.
+    let ns_window = unsafe { &*handle.cast::<NSWindow>() };
+    traffic_lights::place(ns_window, main)
+}

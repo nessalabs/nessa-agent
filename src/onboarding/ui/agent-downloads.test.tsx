@@ -7,7 +7,7 @@ import type { InstallationOutcome } from "../application/agent-installations"
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-it("offers measured downloads, coalesces clicks, and refreshes after confirmed install", async () => {
+it("lists each agent with a one-word status, coalesces clicks, and refreshes after confirmed install", async () => {
   const container = document.createElement("div")
   const root = createRoot(container)
   let resolve!: (outcome: InstallationOutcome) => void
@@ -29,27 +29,34 @@ it("offers measured downloads, coalesces clicks, and refreshes after confirmed i
   await React.act(async () =>
     root.render(<AgentDownloads source={source} onChanged={onChanged} />),
   )
-  const download = [...container.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Download ·"),
+  const download = requiredElement(
+    container,
+    'button[aria-label="Download Claude · 87 MB"]',
   )
-  if (!download) throw new Error("Missing download button")
-  expect(download.textContent).toContain("87 MB")
+  // The row says one word; the size is the button's tooltip and name.
+  expect(download.textContent).toBe("Download")
+  expect(download.title).toBe("87 MB")
   await React.act(async () => {
     download.click()
     download.click()
   })
   expect(source.install).toHaveBeenCalledTimes(1)
-  expect(container.textContent).toContain("installation will continue")
-  expect(container.textContent).toContain("Archive size · 87 MB")
-  expect(
-    requiredElement(container, '[role="progressbar"]').hasAttribute("aria-valuenow"),
-  ).toBe(false)
+  // Downloading, and nothing more: no paragraph, size or second button.
+  const row = requiredElement(container, '[data-agent-download="claude"]')
+  expect(row.textContent).toBe("ClaudeDownloading")
+  const progress = requiredElement(container, '[role="progressbar"]')
+  expect(progress.getAttribute("aria-label")).toBe("Downloading Claude")
+  expect(progress.hasAttribute("aria-valuenow")).toBe(false)
+  expect(container.querySelectorAll("button")).toHaveLength(0)
+  expect(requiredElement(container, '[role="status"]').textContent).toBe(
+    "Downloading Claude",
+  )
   source.offers.mockResolvedValue([
     { agent: "claude", archiveBytes: 86_966_377, installed: true },
   ])
   await React.act(async () => resolve({ status: "installed", cleanupPending: false }))
   expect(container.querySelector('[role="progressbar"]')).toBeNull()
-  expect(container.textContent).toContain("Installed")
+  expect(row.textContent).toBe("ClaudeInstalled")
   expect(onChanged).toHaveBeenCalledTimes(1)
   await React.act(async () => root.unmount())
 })
@@ -106,6 +113,16 @@ it.each(["download", "refused", "verification", "busy", "not-confirmed"] as cons
       expect(status).not.toMatch(/connection|try again/i)
     }
     if (reason === "download") expect(status).toContain("Check your connection")
+    // Where the download itself failed, the row offers Retry with the reason
+    // as its tooltip; where it may still be running, a fresh check comes first.
+    if (["download", "refused", "verification"].includes(reason)) {
+      const retry = requiredElement(container, 'button[aria-label^="Retry Claude"]')
+      expect(retry.textContent).toBe("Retry")
+      expect(retry.title).toBe(status)
+    } else {
+      expect(container.querySelector("[data-agent-download]")).toBeNull()
+      expect(requiredElement(container, "button").textContent).toBe("Check again")
+    }
     await React.act(async () => root.unmount())
   },
 )
@@ -130,12 +147,15 @@ it("refreshes offers when setup's authenticated session becomes available", asyn
     install: vi.fn(),
   }
   await React.act(async () => root.render(<AgentDownloads source={source} />))
-  expect(container.textContent).toContain("Cannot check downloads")
+  expect(container.textContent).toContain("Can’t check downloads")
+  expect(requiredElement(container, "button").textContent).toBe("Check again")
   source.offers.mockResolvedValue([
     { agent: "claude", archiveBytes: 1, installed: false },
   ])
   await React.act(async () => notify())
-  expect(container.textContent).toContain("Download · 1 MB")
+  expect(
+    container.querySelector('button[aria-label="Download Claude · 1 MB"]'),
+  ).not.toBeNull()
   await React.act(async () => root.unmount())
   expect(unsubscribe).toHaveBeenCalledTimes(1)
 })
@@ -227,3 +247,28 @@ it.each(["busy", "not-confirmed"] as const)(
     }
   },
 )
+
+it("keeps the rows and offers Check again when a later check fails", async () => {
+  const container = document.createElement("div")
+  const root = createRoot(container)
+  let notify = () => {}
+  const source = {
+    subscribe: (listener: () => void) => {
+      notify = listener
+      return () => {}
+    },
+    offers: vi
+      .fn()
+      .mockResolvedValueOnce([{ agent: "claude", archiveBytes: 1, installed: true }])
+      .mockRejectedValue(new Error("disconnected")),
+    install: vi.fn(),
+  }
+  await React.act(async () => root.render(<AgentDownloads source={source} />))
+  await React.act(async () => notify())
+  expect(requiredElement(container, '[data-agent-download="claude"]').textContent).toBe(
+    "ClaudeInstalled",
+  )
+  expect(container.textContent).toContain("Can’t check downloads")
+  expect(requiredElement(container, "button").textContent).toBe("Check again")
+  await React.act(async () => root.unmount())
+})

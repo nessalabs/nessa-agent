@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { workspaceShortcuts } from "../../ui/layouts/shortcuts"
-import { labelOf } from "./shortcuts"
+import { labelOf } from "../../../adapters/key-bindings"
 
 // The platform the window read, as each test says: a Mac unless it says otherwise.
 const platform = vi.hoisted(() => ({ mac: true }))

@@ -141,6 +141,19 @@ import {
  *               and turned off while open, the titlebar's controls go back to
  *               starting where the lights end; the chat's title in the pane's
  *               bar goes only between where it stood and where it lands
+ *   zoom        the sidebar's channels, section labels and Agents entry are
+ *               each one row tall, their icons one icon wide and their words
+ *               the row's size (the one row, `styles.css`), no smaller than
+ *               32px, 16px and 14px; ⌘= twice asks the host for 110% then
+ *               125%, once each, and the root says 125% only once the host
+ *               has; the window, laid out as the webview lays a page out at
+ *               that zoom, runs nothing past its edge, keeps the titlebar's
+ *               first control clear of the traffic lights (which the zoom
+ *               does not scale) and the rows their size; a message sent at
+ *               that zoom is answered; a reload asks the host for 125%
+ *               again and nothing else; ⌘- steps back to 110% and ⌘0 to
+ *               100%, where the titlebar starts where it did; and ⇧⌘A, the
+ *               Agents overview's key now ⌘0 is the zoom's, opens it
  *   onboarding  setup is replayed from Settings › Advanced › Setup: the host
  *               is asked once; in the setup window that ask opens, over a
  *               locked vault, no passphrase is asked for, nothing
@@ -473,6 +486,7 @@ import { browse } from "./lib/mdns-probe.mjs"
 import { noteLiveMountResourceAbort, openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
 import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
+import windowZoom from "../../../src/host/window-zoom.json" with { type: "json" }
 import {
   connectApp,
   connectClient,
@@ -1132,6 +1146,118 @@ async function studioWithTheCorner(page, failures) {
 
 /** The macOS traffic lights end at x=76 (`traffic_lights.rs`). */
 const LIGHTS_END = 76
+
+/**
+ * The window's zoom as each of its three holders has it: the page's root
+ * (what the host has applied), the webview's storage (what is remembered),
+ * and the host (every zoom it was asked for since this page loaded).
+ */
+function zoomNow(page) {
+  return page.evaluate(() => ({
+    root: document.documentElement.dataset.zoom ?? null,
+    stored: window.localStorage.getItem("nessa.desktop.zoom"),
+    asked: [...window.__fakeHostZooms],
+  }))
+}
+
+/**
+ * The window at `zoom`, laid out in that many times fewer of its own pixels:
+ * nothing runs past its edges, and the titlebar's first control starts at
+ * the window controls' inset, which is the traffic lights' room in the
+ * page's pixels (the host draws them in screen points, whatever the zoom).
+ */
+async function zoomedWindowHolds(page, zoom, failures) {
+  const holds = async () => {
+    const edges = await page.evaluate((frame) => {
+      const box = document.querySelector(frame)?.getBoundingClientRect()
+      return {
+        scroll: [
+          document.documentElement.scrollWidth,
+          document.documentElement.scrollHeight,
+        ],
+        window: [innerWidth, innerHeight],
+        frame: box ? [box.right, box.bottom] : null,
+      }
+    }, css.workspaceWindow)
+    const { at } = await railLayout(page)
+    const fits =
+      edges.frame !== null &&
+      edges.scroll[0] <= edges.window[0] &&
+      edges.scroll[1] <= edges.window[1] &&
+      edges.frame[0] <= edges.window[0] + 0.5 &&
+      edges.frame[1] <= edges.window[1] + 0.5
+    const clear =
+      Math.abs(at.control - at.inset) <= 0.5 && at.control >= LIGHTS_END / zoom - 0.5
+    return { ok: fits && clear, edges, control: at.control, inset: at.inset }
+  }
+  if (await waitFor(async () => (await holds()).ok, 5_000)) return
+  failures.push(
+    `at ${zoom * 100}% the window does not hold: ${JSON.stringify(await holds())} (the lights end at ${LIGHTS_END / zoom})`,
+  )
+}
+
+/**
+ * Every row of the sidebar is the one row (`--desktop-row-*`, `styles.css`):
+ * each channel, the Agents entry and each section's label one row tall, each
+ * row's icon one icon wide and tall, and each row's words the row's size. The
+ * row itself is no smaller than the size this was made for.
+ */
+async function sidebarOnTheRow(page, when, failures) {
+  const read = await page.evaluate((sidebar) => {
+    const side = document.querySelector(sidebar)
+    if (!side) return null
+    // A token may be a calc() or another token: resolved by laying it out.
+    const probe = document.createElement("div")
+    probe.style.cssText =
+      "position:absolute;visibility:hidden;height:var(--desktop-row-height);" +
+      "width:var(--desktop-row-icon);font-size:var(--desktop-row-text)"
+    side.append(probe)
+    const row = {
+      height: probe.getBoundingClientRect().height,
+      icon: probe.getBoundingClientRect().width,
+      text: parseFloat(getComputedStyle(probe).fontSize),
+    }
+    probe.remove()
+    const shown = (element) => element.getBoundingClientRect().height > 0
+    const rows = [
+      ...side.querySelectorAll(
+        '[data-slot="sidebar-menu-item-row"] > [data-size], .workspace-section-head',
+      ),
+    ].filter(shown)
+    const controls = [
+      ...side.querySelectorAll('[data-slot="sidebar-menu-item-row"] > [data-size]'),
+    ].filter(shown)
+    const icons = [...side.querySelectorAll(".workspace-row-icon svg")].filter(shown)
+    return {
+      row,
+      heights: [...new Set(rows.map((each) => each.getBoundingClientRect().height))],
+      texts: [
+        ...new Set(controls.map((each) => parseFloat(getComputedStyle(each).fontSize))),
+      ],
+      icons: [
+        ...new Set(
+          icons.flatMap((each) => {
+            const box = each.getBoundingClientRect()
+            return [box.width, box.height]
+          }),
+        ),
+      ],
+      counts: [rows.length, controls.length, icons.length],
+    }
+  }, css.sidebar)
+  const only = (list, value) =>
+    list.length > 0 && list.every((each) => Math.abs(each - value) <= 0.01)
+  if (
+    read === null ||
+    !(read.row.height >= 32 && read.row.icon >= 16 && read.row.text >= 14) ||
+    !only(read.heights, read.row.height) ||
+    !only(read.texts, read.row.text) ||
+    !only(read.icons, read.row.icon)
+  )
+    failures.push(
+      `${when} the sidebar's rows are not the one row: ${JSON.stringify(read)}`,
+    )
+}
 
 /**
  * The folded sidebar parks once its slide has ended (#1177): hidden from
@@ -7425,6 +7551,8 @@ const steps = {
           ))
       )
         failures.push(`the panel does not show ${JSON.stringify(echo)}`)
+      await panelComposerControls(page, failures)
+      await panelDetailsSheet(page, failures)
       // A chat archived from Messages leaves a row card with its avatar,
       // and the card's Undo brings it back, in the list and the gateway.
       const conversationId = randomUUID()
@@ -7557,6 +7685,134 @@ const steps = {
       // the titlebar's controls start where the lights end again.
       await setSideRail(run.page, false, failures)
       await aroundTheLights(run.page, "off", failures)
+    })
+  },
+
+  async zoom(run, step, failures) {
+    await run.exclusive(async () => {
+      const page = run.page
+      const size = page.viewportSize()
+      if (!size) throw new Error("the window has no viewport to zoom")
+      // The sidebar open, as a person sizing it up has it.
+      const folded = await page.evaluate(
+        (workspace) => document.querySelector(workspace)?.dataset.sidebar !== "open",
+        css.workspace,
+      )
+      if (folded) await page.keyboard.press(keys.toggleSidebar)
+      await sidebarOnTheRow(page, "at 100%", failures)
+      const start = await zoomNow(page)
+      // Never zoomed, or back at 100% after an earlier zoom step.
+      if (start.root !== "1" || (start.stored !== null && start.stored !== "1"))
+        failures.push(`the window started zoomed: ${JSON.stringify(start)}`)
+      const rest = (await railLayout(page)).at
+      // Zoomed to `zoom` by its key: the host is asked for it once, the root
+      // says it once the host has, and it is remembered.
+      const zoomed = async (key, zoom, asked) => {
+        await page.keyboard.press(key)
+        const want = { root: String(zoom), stored: String(zoom), asked }
+        const came = await waitFor(
+          async () => JSON.stringify(await zoomNow(page)) === JSON.stringify(want),
+          5_000,
+        )
+        if (!came)
+          failures.push(
+            `${key}: the zoom is ${JSON.stringify(await zoomNow(page))}, not ${JSON.stringify(want)}`,
+          )
+        // The page as the webview lays it out at that zoom: the same window,
+        // that many times fewer of the page's own pixels across and down.
+        await page.setViewportSize({
+          width: Math.round(size.width / zoom),
+          height: Math.round(size.height / zoom),
+        })
+        return came
+      }
+      try {
+        const [, up, upAgain] = windowZoom.steps.filter(
+          (each) => each >= windowZoom.default,
+        )
+        if (!(await zoomed(keys.zoomIn, up, [...start.asked, up]))) return
+        if (!(await zoomed(keys.zoomIn, upAgain, [...start.asked, up, upAgain]))) return
+        await zoomedWindowHolds(page, upAgain, failures)
+        await sidebarOnTheRow(page, `at ${upAgain * 100}%`, failures)
+        // The workspace still takes a message at that zoom.
+        await steps.reply(run, step, failures)
+        if (failures.length) return
+        // Remembered: a launch asks the host for it again, and for nothing else.
+        await page.reload()
+        await page
+          .locator(selectorFor.sessionListRowFor(run.main.id))
+          .waitFor({ timeout: 30_000 })
+        await unlockRequestedVault(run.client, run.page)
+        await openStressConversation(run.page, run.main.id, run.main.title)
+        const relaunched = { root: String(upAgain), stored: String(upAgain) }
+        const again = await waitFor(async () => {
+          const now = await zoomNow(page)
+          return (
+            now.root === relaunched.root &&
+            now.stored === relaunched.stored &&
+            now.asked.join() === String(upAgain)
+          )
+        }, 10_000)
+        if (!again)
+          failures.push(
+            `after a reload the zoom is ${JSON.stringify(await zoomNow(page))}, not ${upAgain} asked of the host once`,
+          )
+        await zoomedWindowHolds(page, upAgain, failures)
+        if (!(await zoomed(keys.zoomOut, up, [upAgain, up]))) return
+        if (
+          !(await zoomed(keys.zoomReset, windowZoom.default, [
+            upAgain,
+            up,
+            windowZoom.default,
+          ]))
+        )
+          return
+        await sidebarOnTheRow(page, "back at 100%", failures)
+        const back = (await railLayout(page)).at
+        if (Math.abs(back.control - rest.control) > 0.5)
+          failures.push(
+            `back at 100% the titlebar's first control starts at ${back.control}, not ${rest.control}`,
+          )
+        // Settings holds the workspace's keys back while it is open, and
+        // lets the window's zoom by.
+        const asked = [upAgain, up, windowZoom.default]
+        await page.keyboard.press(keys.settings)
+        await page.locator(css.settings).waitFor({ timeout: 5_000 })
+        const inSettings =
+          (await zoomed(keys.zoomIn, up, [...asked, up])) &&
+          (await zoomed(keys.zoomReset, windowZoom.default, [
+            ...asked,
+            up,
+            windowZoom.default,
+          ]))
+        await closeSettings(page)
+        if (!inSettings) return
+        // ⌘0 is the zoom's now; the Agents overview answers to ⇧⌘A.
+        await page.keyboard.press(keys.overview)
+        const content = () =>
+          page.evaluate(
+            (workspace) => document.querySelector(workspace)?.dataset.content,
+            css.workspace,
+          )
+        if (!(await waitFor(async () => (await content()) === "agents", 5_000)))
+          failures.push(
+            `⇧⌘A did not open the Agents overview (content ${await content()})`,
+          )
+        // Escape goes back to the panes; with one group shown alone the
+        // first shows every group again and the next leaves.
+        await page.keyboard.press("Escape")
+        if (!(await waitFor(async () => (await content()) !== "agents", 1_000)))
+          await page.keyboard.press("Escape")
+        if (!(await waitFor(async () => (await content()) !== "agents", 5_000)))
+          failures.push("Escape, pressed twice, did not leave the Agents overview")
+      } finally {
+        // Whatever failed, the next step gets the window at 100% and full size.
+        await page.setViewportSize(size)
+        const end = await zoomNow(page)
+        if (end.root !== "1" || (end.stored !== null && end.stored !== "1"))
+          await page.keyboard.press(keys.zoomReset)
+        if (folded) await page.keyboard.press(keys.toggleSidebar)
+      }
     })
   },
 
@@ -13455,6 +13711,203 @@ async function panelWindow(run) {
   return page
 }
 
+/** How long the model's name waits under a resting pointer (styles.css). */
+const MODEL_NAME_WAIT_MS = 2_000
+/** What an Agent downloads row may say beside the agent's name. */
+const DOWNLOAD_WORDS = new Set(["Installed", "Downloading", "Download", "Retry"])
+
+/**
+ * The panel composer's two quiet controls. The model's name shows only after
+ * the pointer rests on its mark for two seconds, and goes when it leaves. The
+ * + tray grows out of + (its transform origin is the button's centre), its
+ * Agent downloads page is rows of a name and one word with nothing printed
+ * around them, and on close it shrinks back, unnamed, and is gone.
+ */
+async function panelComposerControls(page, failures) {
+  const mark = page.locator(css.panelModelMark).first()
+  const name = page.locator(css.panelModelName).first()
+  if ((await mark.count()) === 0 || (await name.count()) === 0) {
+    failures.push("the panel composer draws no model mark with its name")
+  } else {
+    const opacity = () => name.evaluate((node) => Number(getComputedStyle(node).opacity))
+    await page.mouse.move(1, 1)
+    await mark.hover()
+    const hovered = Date.now()
+    await sleep(MODEL_NAME_WAIT_MS / 3)
+    if ((await opacity()) > 0.01)
+      failures.push(
+        `the model's name shows ${Date.now() - hovered} ms into a hover, before its ${MODEL_NAME_WAIT_MS} ms wait`,
+      )
+    if (
+      !(await waitFor(async () => (await opacity()) >= 0.99, MODEL_NAME_WAIT_MS + 3_000))
+    )
+      failures.push("the model's name never showed under a resting pointer")
+    // It goes at once: no wait on the way out, only the short fade.
+    await page.mouse.move(1, 1)
+    if (!(await waitFor(async () => (await opacity()) < 1, 300)))
+      failures.push("the model's name waited after the pointer left its mark")
+    if (!(await waitFor(async () => (await opacity()) <= 0.01, 1_000)))
+      failures.push("the model's name stayed after the pointer left its mark")
+  }
+
+  const plus = page.locator(css.panelPlus).first()
+  await plus.click()
+  const tray = page.locator(css.panelTray)
+  if (
+    !(await tray.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("+ opened no tray")
+    // Whatever opened instead must not cover the panel for the steps after.
+    await page.keyboard.press("Escape")
+    return
+  }
+  // Once its entrance has played, where it grew from: the origin as the
+  // browser resolved it, in the page, against +'s centre.
+  await sleep(400)
+  const grown = await page.evaluate(
+    ([traySelector, plusSelector]) => {
+      const tray = document.querySelector(traySelector)
+      const plus = document.querySelector(plusSelector)
+      if (!tray || !plus) return null
+      const style = getComputedStyle(tray)
+      const [x, y] = style.transformOrigin.split(" ").map(parseFloat)
+      const box = tray.getBoundingClientRect()
+      const button = plus.getBoundingClientRect()
+      return {
+        animation: style.animationName,
+        dx: Math.round(box.left + x - (button.left + button.width / 2)),
+        dy: Math.round(box.top + y - (button.top + button.height / 2)),
+      }
+    },
+    [css.panelTray, css.panelPlus],
+  )
+  if (!grown) failures.push("the tray or + went while the tray was open")
+  else {
+    if (!grown.animation.includes("nessa-composer-tray-rise"))
+      failures.push(`the tray opens without growing: animation ${grown.animation}`)
+    if (Math.abs(grown.dx) > 2 || Math.abs(grown.dy) > 2)
+      failures.push(
+        `the tray grows from ${grown.dx},${grown.dy} px off +'s centre, not from +`,
+      )
+  }
+
+  const downloads = tray.getByRole("button", { name: /^Agent downloads/ })
+  if ((await downloads.count()) === 0) {
+    failures.push("the tray offers no Agent downloads")
+  } else {
+    await downloads.click()
+    // Settled: rows, or the one line that says they could not be read.
+    const section = tray.getByRole("region", { name: "Agent downloads" })
+    const settledPage = await waitFor(async () => {
+      const text = await section.innerText().catch(() => "")
+      return text !== "" && !text.includes("Checking")
+    }, 15_000)
+    if (!settledPage) failures.push("Agent downloads still says Checking after 15 s")
+    const shown = await tray.innerText()
+    for (const extra of [
+      "Download only",
+      "account is still required",
+      "verifying",
+      "Archive size",
+      "Check downloads",
+    ])
+      if (shown.includes(extra))
+        failures.push(`Agent downloads still prints ${JSON.stringify(extra)}`)
+    const rows = await tray.locator(css.agentDownloadRow).evaluateAll((all) =>
+      all.map((row) => ({
+        name: row.firstElementChild?.textContent ?? "",
+        word: (row.lastElementChild?.textContent ?? "").trim(),
+      })),
+    )
+    if (rows.length === 0 && !shown.includes("Check again"))
+      failures.push(`Agent downloads lists no agent: ${JSON.stringify(shown)}`)
+    for (const row of rows)
+      if (!DOWNLOAD_WORDS.has(row.word))
+        failures.push(
+          `Agent downloads says ${JSON.stringify(row.word)} beside ${row.name}, not one word`,
+        )
+    // Escape steps back to the first page, then closes.
+    await page.keyboard.press("Escape")
+  }
+  await page.evaluate(() => {
+    window.__trayLeft = false
+    const observer = new MutationObserver(() => {
+      if (document.querySelector(".nessa-composer-tray[data-leaving]")) {
+        window.__trayLeft = true
+        observer.disconnect()
+      }
+    })
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+  })
+  await page.keyboard.press("Escape")
+  const gone = await waitFor(
+    () => page.evaluate(() => !document.querySelector(".nessa-composer-tray")),
+    2_000,
+  )
+  if (!gone) failures.push("the tray is still drawn a second after it closed")
+  if (!(await page.evaluate(() => window.__trayLeft)))
+    failures.push("the tray vanished on close instead of shrinking back into +")
+  if (
+    !(await plus.evaluate(
+      (node) =>
+        document.activeElement === node && node.getAttribute("aria-expanded") === "false",
+    ))
+  )
+    failures.push("closing the tray with Escape did not hand focus back to +")
+}
+
+/**
+ * The chat's Details sheet, opened from its tab's menu: what the chat runs on
+ * and where, and no Approvals group (the composer owns the approval mode).
+ */
+async function panelDetailsSheet(page, failures) {
+  // The selected tab's dot: its menu holds View details.
+  const target = page.locator(css.panelActiveTab).first()
+  await target.click({ button: "right" })
+  const item = page.getByRole("menuitem", { name: "View details" })
+  if (
+    !(await item.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("the chat's tab menu offers no View details")
+    await page.keyboard.press("Escape")
+    return
+  }
+  await item.click()
+  const sheet = page.getByRole("dialog", { name: "Conversation details" })
+  if (
+    !(await sheet.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    failures.push("View details opened no Details sheet")
+    return
+  }
+  const groups = await sheet.locator("section > h3").allInnerTexts()
+  if (!groups.includes("Model"))
+    failures.push(`the Details sheet has no Model group: ${JSON.stringify(groups)}`)
+  if (groups.includes("Approvals"))
+    failures.push("the Details sheet still has an Approvals group")
+  const text = await sheet.innerText()
+  for (const gone of ["Tool calls", "Deny a request", "Answer later", "Native hooks"])
+    if (text.includes(gone))
+      failures.push(`the Details sheet still says ${JSON.stringify(gone)}`)
+  await sheet.getByRole("button", { name: "Done" }).click()
+  if (
+    !(await sheet.waitFor({ state: "detached", timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
+    failures.push("Done left the Details sheet open")
+}
+
 /** Waits until the panel's strip leads with `title`, the selected tab's name. */
 async function panelNamed(page, title, failures) {
   const named = await waitFor(
@@ -15744,6 +16197,7 @@ await main(
               credential: stack.credential,
               notices: true,
               starting: STARTING,
+              zoomSteps: windowZoom.steps,
             },
           ],
         ],

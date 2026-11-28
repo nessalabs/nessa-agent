@@ -33,7 +33,7 @@ import {
   useFocusFollowsPane,
 } from "../../adapters/dom/focus"
 import { useWidgetEscape, type EscapeScopes } from "../../adapters/dom/widget-escape"
-import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
+import { labelOf, useKeyBindings, type Binding } from "../../../adapters/key-bindings"
 import { drawn } from "../../../model/side-column"
 import {
   arrangementShown,

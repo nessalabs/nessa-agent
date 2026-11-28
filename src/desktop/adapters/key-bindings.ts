@@ -1,18 +1,15 @@
 /**
- * The workspace's keyboard: chords as data, bound to commands. A layout lists
- * the chords it binds to which commands (`ui/layouts/shortcuts.ts`); the
- * keyboard hook and every label read that one list, so a menu never names a
- * chord that does something else. How a chord is matched and written on this
- * platform is the window's (`src/desktop/model/keyboard.ts`), not this file's.
+ * The window's keyboard: chords as data, bound to commands. Whoever owns
+ * some keys lists the chords it binds to which commands (the workspace's
+ * `workspace/ui/layouts/shortcuts.ts`, the window's zoom in
+ * `window-zoom.ts`); the keyboard hook and every label read that one list,
+ * so a menu never names a chord that does something else. How a chord is
+ * matched and written on this platform is `model/keyboard.ts`'s, not this
+ * file's.
  */
 import { useEffect, useRef } from "react"
-import { isMac } from "../../../adapters/platform"
-import {
-  chordLabel,
-  chordShortcut,
-  matchesChord,
-  type Chord,
-} from "../../../model/keyboard"
+import { isMac } from "./platform"
+import { chordLabel, chordShortcut, matchesChord, type Chord } from "../model/keyboard"
 
 export interface Binding<Command extends string> {
   readonly chord: Chord

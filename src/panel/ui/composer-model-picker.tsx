@@ -75,8 +75,8 @@ function groups(
  * The composer's model: the agent's mark beside voice, opening one picker with
  * a tab per agent. The trigger shows only the mark, so its name is the
  * accessible label and a tooltip. The tooltip is drawn here, not left to
- * `title`: a native tooltip waits about a second before it appears, which is
- * too long for the one place the model is named.
+ * `title`, so its wait is ours: two seconds of resting on the mark
+ * (styles.css), long enough that passing over the composer never shows it.
  *
  * Choosing for a conversation that already exists opens a new tab with the
  * choice; the caller's `onChoose` owns that rule.
@@ -104,9 +104,11 @@ export function ComposerModelPicker({
     .find((group) => group.id === value.agent)
     ?.models.find((model) => model.id === value.model)
   const name = current?.label ?? value.model
-  // Escape hides the hover label until the pointer or focus leaves, so it can
-  // be dismissed without moving away.
+  // Escape or a press hides the hover label until the pointer leaves (or, for
+  // the keyboard, focus does), so it neither needs moving away from nor comes
+  // back over the picker's trigger after the picker closes.
   const [dismissed, setDismissed] = React.useState(false)
+  const hovered = React.useRef(false)
   return (
     <span
       className="nessa-model-hint relative flex shrink-0"
@@ -114,8 +116,21 @@ export function ComposerModelPicker({
       onKeyDown={(event) => {
         if (event.key === "Escape") setDismissed(true)
       }}
-      onPointerLeave={() => setDismissed(false)}
-      onBlur={() => setDismissed(false)}
+      onPointerDown={() => setDismissed(true)}
+      onPointerEnter={() => {
+        // A fresh arrival: the picker it was pressed for may have closed with
+        // the pointer elsewhere, which no leave reports (the picker is a
+        // portal, inside this span to React).
+        hovered.current = true
+        setDismissed(false)
+      }}
+      onPointerLeave={() => {
+        hovered.current = false
+        setDismissed(false)
+      }}
+      onBlur={() => {
+        if (!hovered.current) setDismissed(false)
+      }}
     >
       <ModelPicker
         groups={choices}

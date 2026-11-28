@@ -153,9 +153,13 @@ export function HeaderPicture({
             ArrowUp: [0, keyStep],
             ArrowDown: [0, -keyStep],
           }
+          // With ⌘ or Ctrl held, + and - are the window's (its zoom), not the picture's.
+          const windows = event.metaKey || event.ctrlKey
           if (Object.hasOwn(moves, event.key)) {
             event.preventDefault()
             pan(...moves[event.key])
+          } else if (windows && ["+", "=", "-"].includes(event.key)) {
+            return
           } else if (event.key === "+" || event.key === "=") {
             event.preventDefault()
             zoomBy(zoomStep)

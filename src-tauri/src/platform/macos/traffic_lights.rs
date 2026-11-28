@@ -3,7 +3,9 @@
 //! The page draws its titlebar controls (the sidebar toggle, Back, Forward)
 //! on a row whose centre is [`ROW_CENTRE`] below the window's top
 //! (`--desktop-titlebar-height` in `src/desktop/styles.css`, halved). The
-//! native buttons have to sit on that same line.
+//! native buttons have to sit on that same line. The page's zoom scales its
+//! row and not the native buttons, so the line is [`row_centre`]: the row's
+//! centre at the zoom the host last applied ([`set_zoom`]).
 //!
 //! Tauri's `trafficLightPosition` cannot hold them there. It grows the
 //! titlebar container by a fixed offset and leaves each button where AppKit
@@ -28,6 +30,7 @@
 //! plain `NSWindow` (`window_controls.rs` is the Tauri side).
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use objc2::msg_send;
 use objc2::rc::Retained;
@@ -49,10 +52,29 @@ use objc2_foundation::{
 
 include!(concat!(env!("OUT_DIR"), "/titlebar.rs"));
 
-/// The titlebar row's centre, in points below the window's top edge: half of
-/// the page's `--desktop-titlebar-height`, which the build script reads from
-/// the stylesheet (`titlebar_geometry.rs`).
+/// The titlebar row's centre at 100%, in points below the window's top edge:
+/// half of the page's `--desktop-titlebar-height`, which the build script
+/// reads from the stylesheet (`titlebar_geometry.rs`).
 pub const ROW_CENTRE: f64 = TITLEBAR_HEIGHT / 2.0;
+
+/// The page's zoom, as `f64` bits (1.0 until the host applies another). An
+/// atomic and not a main-thread cell: the command that zooms the page runs
+/// off the main thread, and the run loop's check reads it on it.
+static ZOOM: AtomicU64 = AtomicU64::new(0x3FF0_0000_0000_0000);
+
+/// Says the page is now drawn at `zoom`, so its titlebar row is that much
+/// taller. The buttons move to the row's new centre the next time they are
+/// placed: by [`place`], or by the run loop's check before it next sleeps.
+pub fn set_zoom(zoom: f64) {
+    ZOOM.store(zoom.to_bits(), Ordering::SeqCst);
+}
+
+/// The titlebar row's centre now, in points below the window's top edge: the
+/// page's row is [`ROW_CENTRE`] at 100% and scales with its zoom.
+pub fn row_centre() -> f64 {
+    ROW_CENTRE * f64::from_bits(ZOOM.load(Ordering::SeqCst))
+}
+
 /// The close button's left edge, in points from the window's left edge. The
 /// page leaves the buttons room up to `--desktop-window-controls-inset`.
 pub const LEFT: f64 = 16.0;
@@ -119,7 +141,8 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
     // The container spans the row from the window's top, twice the centre
     // tall, so the buttons can be centred inside it rather than offset from
     // wherever AppKit left its bottom edge.
-    let height = 2.0 * ROW_CENTRE;
+    let row_centre = row_centre();
+    let height = 2.0 * row_centre;
     let frame = container.frame();
     set_frame(
         &container,
@@ -132,9 +155,9 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
     // The row's centre, in the container, then in the buttons' own view:
     // wherever AppKit put that view, and whichever way each counts its y.
     let centre_y = if container.isFlipped() {
-        ROW_CENTRE
+        row_centre
     } else {
-        height - ROW_CENTRE
+        height - row_centre
     };
     let centre_in_row = || row.convertPoint_fromView(NSPoint::new(0.0, centre_y), Some(&container));
     let tallest = buttons

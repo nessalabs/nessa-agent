@@ -123,7 +123,7 @@ function overviewSteps() {
     // Escape leaves whenever the overview is open, before the keyboard has
     // landed on its row too.
     [
-      "⌘0 then Escape at once",
+      "⇧⌘A then Escape at once",
       async (p) => {
         await p.keyboard.press(keys.overview)
         await p.keyboard.press(keys.escape)
@@ -131,7 +131,7 @@ function overviewSteps() {
       backInComposer,
     ],
     [
-      "⌘0 opens",
+      "⇧⌘A opens",
       async (p) => {
         await p.keyboard.press(keys.overview)
         await onOverviewRow(p, true)
@@ -147,7 +147,7 @@ function overviewSteps() {
           ? ((last = s.activeOverviewItem), null)
           : "↓ did not move"),
     ],
-    ["⌘0 again keeps it", (p) => p.keyboard.press(keys.overview), onItem],
+    ["⇧⌘A again keeps it", (p) => p.keyboard.press(keys.overview), onItem],
     [
       "Escape leaves",
       (p) => p.keyboard.press(keys.escape),
@@ -1088,8 +1088,8 @@ Usage: node verification/desktop/scripts/focus.mjs [options]
 Steps (each asserts where the caret is afterwards):
   ⌘N, ⇧⌘N, ⌘\\ + pick, ⇧⌘\\, ⌘1–4, ⇧⌘], ⇧⌘[, ⌘W, ⌘K + Escape, Settings + Back
   → the caret is in the focused pane's composer
-  ⌘0 then Escape at once → back to the panes, caret in the composer
-  ⌘0, ↓, ⌘0 again → the caret is on an overview item, and ↓ moves it
+  ⇧⌘A then Escape at once → back to the panes, caret in the composer
+  ⇧⌘A, ↓, ⇧⌘A again → the caret is on an overview item, and ↓ moves it
   Escape → back to the panes, caret in the focused pane's composer
   from the overview: ⌘1 on the focused pane, ⇧⌘[ at the first → back to the
   panes, caret in the composer; ⌃⌥← at the edge → the overview stays

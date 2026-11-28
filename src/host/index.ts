@@ -106,6 +106,7 @@ export {
   type NotSavedReason,
   revealSetupWindow,
   sandboxSchemeRegistered,
+  setDesktopZoom,
   setFrosted,
   startResizeFromLeftEdge,
   windowSize,

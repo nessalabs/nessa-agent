@@ -375,7 +375,7 @@ is kept between launches by composition
 (`RememberedFilter`, read once into the store's first state and written by an
 effect on each change — storage never speaks for it while the window is
 open). **The overview is always offered**: the sidebar's "Agents" entry, at
-its top in both workspace layouts, and ⌘0 open it, with no preference to
+its top in both workspace layouts, and ⇧⌘A open it, with no preference to
 turn on (`layouts.test.tsx`). It began as a preview behind a setting; that
 setting is gone, and with it the sidebar's separate "Needs you" and "Running"
 views, which the overview holds — the session list shows one channel's
@@ -400,7 +400,7 @@ go at nought, or emptied by the source — gives the keyboard to the list, on
 its current row or at its top, never to the page. The line under
 the list — "N more sessions outside this view · Show All" — counts only what
 the filter keeps out *of the group shown*, and Show All chooses every session
-at any time under any tag, so it always lists what it counted. Its header — the title, its counts and the filter — holds its place; only the list under it scrolls, fading out at its top edge. The entry and ⌘0 are a place like a channel:
+at any time under any tag, so it always lists what it counted. Its header — the title, its counts and the filter — holds its place; only the list under it scrolls, fading out at its top edge. The entry and ⇧⌘A are a place like a channel:
 choosing it again keeps it, and Escape leaves it whenever it is open —
 wherever the keyboard is, even before the keyboard has landed on its row —
 but for Escape in a menu or dialog over it, which is theirs, Escape in a
@@ -600,7 +600,7 @@ button carries**; and **the zone settles at rest**.
 | carrying | release of another pointer | carrying | — (no click is swallowed for it) |
 | carrying | Escape | cancelling (home) | as above; Escape goes no further |
 | carrying | another button, `lostpointercapture`, `pointercancel`, the window's blur | cancelling (home) | as above; with the press let go, a later move starts nothing |
-| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⌘0, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
+| carrying | a change: any key but Escape or a lone modifier (a command — ⌘W, ⇧⌘A, ⌘B, ⌘,, ⌘K, an arrow — ends the drag before it runs); a resize; the panes, the content view or the side columns changing in the store (an agent's dispatch, a session removed); the carried session no longer listed; the window going inert under Settings, seen as it happens (a `MutationObserver` on `inert`). A layout switch unmounts the shell, and the drag with it, taking everything it drew | cancelling (at once) | the copy and the preview go at once, nothing read again, and the change plays as it would with no drag; a key that reaches the window while it is inert is never the drag's, so Settings keeps its Escape |
 | dropping | its flight finishes before the deferred commit/preview release | dropping | retain the resource owner until both finish, including reduced motion (#616) |
 | dropping | the drop's own change to the panes | dropping | (it is the drop) |
 | cancelling (home) | a change of room/view before its return flight ends | cancelling (at once) | remove the retained copy and preview immediately, including a lost pointer followed by resize; keep the resource owner through the flight (#616) |

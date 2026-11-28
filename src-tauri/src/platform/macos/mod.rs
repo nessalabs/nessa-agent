@@ -77,6 +77,10 @@ impl Host for Macos {
         window_controls::hold(window)
     }
 
+    fn zoom_window_controls(&self, window: &WebviewWindow, zoom: f64) -> Result<(), String> {
+        window_controls::zoom(window, zoom)
+    }
+
     fn float_beside_fullscreen(&self, window: &WebviewWindow) {
         // Called from setup, on the main thread. The live WebviewWindow owns
         // this NSWindow; it is borrowed only for this configuration.
