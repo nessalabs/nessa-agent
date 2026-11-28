@@ -34,6 +34,7 @@
 //! database. A write on that chat is refused here; the grantor is not called.
 
 mod admission;
+mod app_session;
 mod attachment;
 pub mod catalogue_read;
 mod event_sequence;

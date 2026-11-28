@@ -71,6 +71,10 @@
             "ownerMembershipId": {
               "type": "String",
               "required": false
+            },
+            "panelMembershipId": {
+              "type": "String",
+              "required": false
             }
           },
           "additionalAttributes": false

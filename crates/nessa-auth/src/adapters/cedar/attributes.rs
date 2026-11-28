@@ -132,6 +132,12 @@ impl ResourceAttributes<'_> {
                 RestrictedExpression::new_string(owner.as_str().to_owned()),
             );
         }
+        if let Some(panel) = self.resource.panel_membership() {
+            attrs.insert(
+                "panelMembershipId".to_owned(),
+                RestrictedExpression::new_string(panel.as_str().to_owned()),
+            );
+        }
         attrs
     }
 }

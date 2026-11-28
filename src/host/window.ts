@@ -1485,13 +1485,15 @@ export interface HostAppPackage {
 
 /**
  * Asks the person, in the system's own dialog, whether to install the app
- * whose package digest they were shown. Answers false for Cancel, for a
+ * whose package digest they were shown, naming what it may do in Nessa
+ * (its requested capabilities). Answers false for Cancel, for a
  * dismissal, and where there is no host to ask.
  */
 export async function confirmAppInstall(review: {
   readonly appId: string
   readonly packageVersion: string
   readonly digest: string
+  readonly requestedCapabilities: readonly string[]
 }): Promise<boolean> {
   if (!inTauri) return false
   const { invoke } = await import("@tauri-apps/api/core")
@@ -1500,6 +1502,7 @@ export async function confirmAppInstall(review: {
       appId: review.appId,
       packageVersion: review.packageVersion,
       digest: review.digest,
+      capabilities: review.requestedCapabilities,
     })) === true
   )
 }

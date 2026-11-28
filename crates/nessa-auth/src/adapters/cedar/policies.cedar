@@ -36,7 +36,13 @@ forbid (
     action == Nessa::Action::"appCredential.issue",
     resource is Nessa::Resource
 )
-unless { resource has ownerMembershipId && principal.membershipId == resource.ownerMembershipId };
+// The owner's desktop window (the provisioned panel surface) is the owner's
+// own: Settings issues an installed app its credential from there.
+unless {
+    resource has ownerMembershipId &&
+    (principal.membershipId == resource.ownerMembershipId ||
+     (resource has panelMembershipId && principal.membershipId == resource.panelMembershipId))
+};
 
 @id("conversation.read")
 permit (

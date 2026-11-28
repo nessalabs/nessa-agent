@@ -4204,6 +4204,7 @@ dependencies = [
  "nessa-sync",
  "nessa-telemetry",
  "nessa-timer",
+ "nessa-types",
  "nessa-vault",
  "nessa-webhooks",
  "reqwest 0.13.4",

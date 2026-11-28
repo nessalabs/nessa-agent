@@ -35,6 +35,21 @@ impl ScopedAppSession {
     pub fn auth_revision(&self) -> u64 {
         self.identity.auth_revision()
     }
+
+    /// The app and the capabilities approved at entry. Ask
+    /// [`ReadCurrentAppSession`] before acting on them.
+    pub fn binding(&self) -> &AppCredentialBinding {
+        &self.binding
+    }
+
+    /// The app's own identity as a session, for the one dispatcher that
+    /// serves an app: it checks [`ReadCurrentAppSession`] and the method's
+    /// capability first, and acts only on conversations this principal
+    /// owns. Never hand it to the ordinary Product dispatcher, which
+    /// authorizes by grants this identity does not hold.
+    pub fn app_identity(&self) -> &AuthenticatedSession {
+        &self.identity
+    }
 }
 
 /// Authenticate app proof for a trusted app composition, not a mounted route.

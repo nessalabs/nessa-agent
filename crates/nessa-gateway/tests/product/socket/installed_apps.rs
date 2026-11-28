@@ -226,3 +226,281 @@ async fn shapes_are_checked_before_anything_is_kept() {
     }
     assert!(kept.0.lock().unwrap().is_empty());
 }
+
+mod credentials {
+    use super::*;
+    use crate::installed_apps::application::{
+        AppCredentialAuthority, AppsEvent, CredentialRefusal, IssuedAppCredential,
+    };
+    use nessa_auth::application::app_credential::{
+        AppCapabilities, AppCapability, AppCredentialSnapshot, AppCredentials,
+    };
+    use nessa_auth::application::ports::{AccessError, CredentialEvidence, PortFuture};
+    use nessa_auth::domain::{AudienceId, CredentialId};
+    use nessa_types::app_identity::ExtensionAppId;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A credential store that records what it was asked.
+    #[derive(Default)]
+    struct Store {
+        issued: Mutex<Vec<(String, Vec<AppCapability>)>>,
+        revoked: Mutex<Vec<String>>,
+        revoke_fails: AtomicBool,
+    }
+
+    impl AppCredentials for Store {
+        fn verify_app<'a>(
+            &'a self,
+            _: &'a CredentialEvidence,
+            _: &'a AudienceId,
+        ) -> PortFuture<'a, AppCredentialSnapshot> {
+            Box::pin(async { Err(AccessError::InvalidCredential) })
+        }
+        fn read_app<'a>(&'a self, _: &'a CredentialId) -> PortFuture<'a, AppCredentialSnapshot> {
+            Box::pin(async { Err(AccessError::InvalidCredential) })
+        }
+    }
+
+    impl AppCredentialAuthority for Store {
+        fn issue<'a>(
+            &'a self,
+            _: &'a AuthenticatedSession,
+            _: String,
+            app: ExtensionAppId,
+            capabilities: AppCapabilities,
+        ) -> PortFuture<'a, IssuedAppCredential, CredentialRefusal> {
+            let capabilities: Vec<_> = capabilities.iter().collect();
+            self.issued
+                .lock()
+                .unwrap()
+                .push((app.as_str().to_owned(), capabilities.clone()));
+            Box::pin(async move {
+                Ok(IssuedAppCredential {
+                    credential_id: "app-1".into(),
+                    secret: "app-1.secret".into(),
+                    expires_at: 99,
+                    capabilities,
+                })
+            })
+        }
+        fn revoke_all<'a>(
+            &'a self,
+            _: String,
+            _: String,
+            _: String,
+            app: ExtensionAppId,
+        ) -> PortFuture<'a, usize, CredentialRefusal> {
+            let fails = self.revoke_fails.load(Ordering::SeqCst);
+            if !fails {
+                self.revoked.lock().unwrap().push(app.as_str().to_owned());
+            }
+            Box::pin(async move {
+                if fails {
+                    Err(CredentialRefusal::Unavailable)
+                } else {
+                    Ok(1)
+                }
+            })
+        }
+        fn sessions(&self) -> &dyn AppCredentials {
+            self
+        }
+    }
+
+    struct Fixture {
+        state: ProductRouteState,
+        session: AuthenticatedSession,
+        kept: Arc<Kept>,
+        store: Arc<Store>,
+        _folder: tempfile::TempDir,
+    }
+
+    async fn fixture() -> Fixture {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("private");
+        nessa_local_storage::create_directory(&root).unwrap();
+        let kept = Arc::new(Kept::default());
+        let store = Arc::new(Store::default());
+        let apps = InstalledApps::new(
+            Box::new(SqliteAppStore::open(&root.join("apps.sqlite3")).unwrap()),
+            kept.clone(),
+        )
+        .with_credentials(store.clone());
+        let (state, authority) = super::fixture(MembershipRole::Admin);
+        *authority.snapshot.lock().unwrap() = snapshot_with(
+            MembershipRole::Admin,
+            MembershipStatus::Active,
+            &["credential.manage"],
+        );
+        let state = state.with_apps(Arc::new(apps));
+        let session = authenticate(&state).await;
+        Fixture {
+            state,
+            session,
+            kept,
+            store,
+            _folder: folder,
+        }
+    }
+
+    impl Fixture {
+        async fn call(&self, method: &str, params: Value) -> OutgoingMessage {
+            dispatch(&self.state, &self.session, with("1", method, params)).await
+        }
+
+        /// Install the starter for `app`, its manifest asking `requested`.
+        async fn install(&self, app: &str, requested: &[&str]) -> Value {
+            let made = payload(
+                self.call(
+                    "apps.starter",
+                    json!({ "appId": app, "packageVersion": "1.0.0" }),
+                )
+                .await,
+            );
+            let engine = base64::engine::general_purpose::STANDARD;
+            let mut manifest: Value = serde_json::from_slice(
+                &engine
+                    .decode(made["package"]["manifest"].as_str().unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            manifest["requestedCapabilities"] = json!(requested);
+            let mut package = made["package"].clone();
+            package["manifest"] = json!(engine.encode(serde_json::to_vec(&manifest).unwrap()));
+            let review = payload(self.call("apps.review", json!({ "package": package })).await);
+            payload(
+                self.call(
+                    "apps.install",
+                    json!({ "requestId": format!("i-{app}"), "package": package, "reviewedDigest": review["digest"] }),
+                )
+                .await,
+            );
+            review
+        }
+    }
+
+    #[test]
+    fn the_credential_methods_are_admitted_as_credential_manage() {
+        for method in ["apps.issueCredential", "apps.revokeCredentials"] {
+            assert_eq!(
+                nessa_protocol::product::generated::action_for_method(method),
+                Some("credential.manage"),
+                "{method}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_installed_app_is_issued_exactly_what_its_package_requests() {
+        let fixture = fixture().await;
+        let review = fixture.install("notes", &["send", "list", "create"]).await;
+        // The review names them in a fixed order, as the owner approves them.
+        assert_eq!(
+            review["requestedCapabilities"],
+            json!(["list", "create", "send"])
+        );
+        let issued = payload(
+            fixture
+                .call(
+                    "apps.issueCredential",
+                    json!({ "requestId": "c1", "appId": "notes" }),
+                )
+                .await,
+        );
+        assert_eq!(
+            issued,
+            json!({
+                "requestId": "c1",
+                "appId": "notes",
+                "credentialId": "app-1",
+                "credential": "app-1.secret",
+                "expiresAt": 99,
+                "capabilities": ["list", "create", "send"],
+            })
+        );
+        assert_eq!(
+            *fixture.store.issued.lock().unwrap(),
+            vec![(
+                "notes".to_owned(),
+                vec![AppCapability::List, AppCapability::Create, AppCapability::Send]
+            )]
+        );
+        assert!(fixture.kept.0.lock().unwrap().iter().any(|record| matches!(
+            &record.event,
+            AppsEvent::CredentialIssued { credential_id, .. } if credential_id == "app-1"
+        )));
+    }
+
+    #[tokio::test]
+    async fn an_app_not_installed_or_asking_nothing_is_issued_nothing() {
+        let fixture = fixture().await;
+        assert_eq!(
+            code_of(
+                fixture
+                    .call(
+                        "apps.issueCredential",
+                        json!({ "requestId": "c1", "appId": "notes" }),
+                    )
+                    .await
+            ),
+            "app_not_installed"
+        );
+        fixture.install("notes", &[]).await;
+        assert_eq!(
+            code_of(
+                fixture
+                    .call(
+                        "apps.issueCredential",
+                        json!({ "requestId": "c2", "appId": "notes" }),
+                    )
+                    .await
+            ),
+            "app_requests_nothing"
+        );
+        assert!(fixture.store.issued.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn uninstalling_revokes_first_and_a_failed_revoke_keeps_the_app() {
+        let fixture = fixture().await;
+        fixture.install("notes", &["list"]).await;
+        fixture.store.revoke_fails.store(true, Ordering::SeqCst);
+        assert_eq!(
+            code_of(
+                fixture
+                    .call(
+                        "apps.uninstall",
+                        json!({ "requestId": "u1", "appId": "notes" }),
+                    )
+                    .await
+            ),
+            "app_credentials_unavailable"
+        );
+        assert_eq!(
+            payload(fixture.call("apps.installed", json!({})).await),
+            json!({ "apps": [{ "appId": "notes", "packageVersion": "1.0.0" }] }),
+            "an app that could still sign in is not removed"
+        );
+        fixture.store.revoke_fails.store(false, Ordering::SeqCst);
+        payload(
+            fixture
+                .call(
+                    "apps.uninstall",
+                    json!({ "requestId": "u2", "appId": "notes" }),
+                )
+                .await,
+        );
+        assert_eq!(*fixture.store.revoked.lock().unwrap(), vec!["notes"]);
+        assert_eq!(
+            payload(
+                fixture
+                    .call(
+                        "apps.revokeCredentials",
+                        json!({ "requestId": "r1", "appId": "calendar" }),
+                    )
+                    .await
+            ),
+            json!({ "requestId": "r1", "appId": "calendar", "revoked": 1 })
+        );
+    }
+}

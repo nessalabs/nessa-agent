@@ -42,6 +42,8 @@ pub enum RequestedCapability {
     Create,
     Subscribe,
     Stop,
+    /// Send a message in, or steer, one of the app's own conversations.
+    Send,
 }
 
 impl RequestedCapability {
@@ -52,6 +54,7 @@ impl RequestedCapability {
             "create" => Some(Self::Create),
             "subscribe" => Some(Self::Subscribe),
             "stop" => Some(Self::Stop),
+            "send" => Some(Self::Send),
             _ => None,
         }
     }

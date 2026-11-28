@@ -349,6 +349,25 @@ export async function connectClient(gateway, instance, as = "owner") {
   })
 }
 
+/**
+ * Connects to `gateway` as an installed app, with the `credential` the owner
+ * issued it (`apps.issueCredential`), the way an app's own code would.
+ */
+export async function connectApp(gateway, instance, credential) {
+  const { register } = await import("tsx/esm/api")
+  register()
+  const { NessaClient } = await import("@nessa/client")
+  return NessaClient.connect({
+    stage: "ci",
+    url: gateway.url.replace(/^http/, "ws"),
+    role: "surface",
+    surface: { kind: "panel", instance: `${instance}-app` },
+    client: { id: `${instance}-app`, version: "0.1.0", platform: "node" },
+    profile: "product",
+    auth: { credential },
+  })
+}
+
 /** Waits up to `ms` for `check()` to be truthy, and says what it last was. */
 export async function waitFor(check, ms) {
   const end = Date.now() + ms

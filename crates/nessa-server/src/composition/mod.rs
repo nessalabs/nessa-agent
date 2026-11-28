@@ -43,6 +43,7 @@ pub(crate) use serving_restore::{
 
 pub use root::CompositionRoot;
 
+mod app_credentials;
 mod auth_command;
 mod credential_registry;
 #[cfg(unix)]

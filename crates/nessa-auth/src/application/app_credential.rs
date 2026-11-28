@@ -23,6 +23,8 @@ pub enum AppCapability {
     Create,
     Subscribe,
     Stop,
+    /// Send a message in, or steer, one of the app's own conversations.
+    Send,
 }
 
 /// Nonempty, bounded set of typed operations. No dynamic operation names.

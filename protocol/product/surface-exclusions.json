@@ -23,5 +23,7 @@
   "terminal.setResumeSettings": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it.",
   "terminal.forgetSaved": "Which terminal programs come back after a restart, and which kept ones are forgotten, is the person's own choice in Settings. No agent, CLI or MCP call reads or changes it.",
   "apps.install": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one.",
-  "apps.uninstall": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one."
+  "apps.uninstall": "Installing or removing an app is the owner's own choice, made in Nessa's Settings behind a native confirmation that shows the reviewed package. No agent, CLI or MCP call installs or removes one.",
+  "apps.issueCredential": "An app's credential is a secret handed to that app's own launcher by Nessa's Settings. No agent, CLI or MCP call is answered one.",
+  "apps.revokeCredentials": "Revoking an app's credentials is the owner's choice in Nessa's Settings, and uninstalling does it. No agent, CLI or MCP call revokes them."
 }

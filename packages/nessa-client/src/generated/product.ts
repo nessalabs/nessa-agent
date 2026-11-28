@@ -1794,7 +1794,19 @@ export interface AppReview {
   assetCount: number
   /** Lowercase hex SHA-256 of the package's exact manifest bytes. The manifest declares every asset's size and digest, so this names the whole package. */
   digest: string
+  /** What the app asks to do in Nessa, in a fixed order. Empty for an app that asks for nothing. Installing the app approves exactly these: apps.issueCredential issues a credential that holds them and nothing else. */
+  requestedCapabilities: AppCapability[]
 }
+/** One thing an app may do with its own conversations. list: list them (conversation.list). read: read one (conversation.read, conversation.readEarlier, conversation.receipt, conversation.messageStatus). create: start one (conversation.create). subscribe: page through its catalogue (conversation.observe). stop: stop a turn (conversation.stop). send: send a message or steer (conversation.send, conversation.steer). An app sees only conversations it created, never the owner's. */
+export const AppCapability = {
+  List: "list",
+  Read: "read",
+  Create: "create",
+  Subscribe: "subscribe",
+  Stop: "stop",
+  Send: "send",
+} as const
+export type AppCapability = (typeof AppCapability)[keyof typeof AppCapability]
 /** Make the starter static app package for a new app (apps.starter). Nothing is installed or kept. */
 export interface AppsStarterParams {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
@@ -1856,7 +1868,45 @@ export interface AppsUninstallResult {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
   appId: string
 }
-/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. */
+/** Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and any credential issued to that app before is revoked first. */
+export interface AppsIssueCredentialParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
+  appId: string
+}
+/** The credential apps.issueCredential issued. The secret is answered only here, once: a retry of the same request is refused app_credential_conflict. */
+export interface AppsIssueCredentialResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+  /** The issued credential's id. */
+  credentialId: string
+  /** The bearer credential the app passes to session.authenticate. Keep it secret. */
+  credential: string
+  /** When the credential stops working, in Unix seconds. */
+  expiresAt: number
+  /** What the credential lets the app do, in a fixed order. */
+  capabilities: AppCapability[]
+}
+/** Revoke every credential issued to one app (apps.revokeCredentials). A session signed in with one is ended at its next request. apps.uninstall does this too. */
+export interface AppsRevokeCredentialsParams {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+}
+/** How many live credentials apps.revokeCredentials revoked. Zero when the app held none. */
+export interface AppsRevokeCredentialsResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The app's identity. */
+  appId: string
+  /** Live credentials revoked. */
+  revoked: number
+}
+/** Why the gateway refused an apps method. apps_not_configured: this gateway keeps no installed apps. app_package_invalid: the package's manifest or files do not verify. app_package_too_large: the package is outside the inline limits. app_review_stale: the package's digest is not the one reviewed, so nothing was installed. app_already_installed: an app with that identity is installed; uninstall it first. apps_limit_reached: 256 apps are installed, as many as apps.installed lists; uninstall one first. app_not_installed: no app with that identity is installed. apps_storage_unavailable: the installed-app store could not be read or changed; what was kept still is. apps_audit_unavailable: the change could not be recorded, so it was not made. app_requests_nothing: the installed package requests no capability, so it has nothing to sign in for. app_credential_conflict: this request already issued a credential, whose secret is not answered twice; issue again with a new request id. app_credentials_unavailable: the credential store could not issue or revoke; nothing was issued. */
 export const AppsErrorCode = {
   AppsNotConfigured: "apps_not_configured",
   AppPackageInvalid: "app_package_invalid",
@@ -1867,6 +1917,9 @@ export const AppsErrorCode = {
   AppNotInstalled: "app_not_installed",
   AppsStorageUnavailable: "apps_storage_unavailable",
   AppsAuditUnavailable: "apps_audit_unavailable",
+  AppRequestsNothing: "app_requests_nothing",
+  AppCredentialConflict: "app_credential_conflict",
+  AppCredentialsUnavailable: "app_credentials_unavailable",
 } as const
 export type AppsErrorCode = (typeof AppsErrorCode)[keyof typeof AppsErrorCode]
 /** Wire input for mcpServers.revoke: fence the remote server id at the listed revision. Local sessions of that server are closed. The result keeps drain, secret deletion, remote observation and evidence apart; an incomplete revoke is not reported as settled. */
@@ -4488,7 +4541,7 @@ export const channelRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 154,
+  maxReadyMethods: 156,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -4775,6 +4828,8 @@ export const ProductMethod = {
   AppsInstalled: "apps.installed",
   AppsRead: "apps.read",
   AppsUninstall: "apps.uninstall",
+  AppsIssueCredential: "apps.issueCredential",
+  AppsRevokeCredentials: "apps.revokeCredentials",
   PhoneEndpoint: "phone.endpoint",
   PhoneAuthorize: "phone.authorize",
   PhoneStatus: "phone.status",
@@ -4947,6 +5002,8 @@ export const productReadyMethods = [
   "apps.installed",
   "apps.read",
   "apps.uninstall",
+  "apps.issueCredential",
+  "apps.revokeCredentials",
   "phone.endpoint",
   "phone.authorize",
   "phone.status",
@@ -5105,6 +5162,8 @@ export const productMethodGrants = {
   "apps.installed": "credential.manage",
   "apps.read": "credential.manage",
   "apps.uninstall": "credential.manage",
+  "apps.issueCredential": "credential.manage",
+  "apps.revokeCredentials": "credential.manage",
   "phone.endpoint": "server.read",
   "phone.authorize": "credential.manage",
   "phone.status": "credential.manage",

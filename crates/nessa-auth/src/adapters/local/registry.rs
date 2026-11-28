@@ -311,6 +311,9 @@ impl Drop for RegistryLock {
         let _ = self.0.unlock();
     }
 }
+/// The principal the desktop window signs in as: the owner's own surface.
+pub(crate) const PANEL_PRINCIPAL: &str = "surface:nessa-panel";
+
 pub struct LocalCredentialStore {
     config: LocalStoreConfig,
     /// Which grants a credential may carry (`GrantPolicyEvaluator`), asked on
@@ -532,11 +535,10 @@ impl LocalCredentialStore {
         let (organization, owner) = self.personal_owner()?;
         let registry = self.registry()?;
         let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;
-        let panel = "surface:nessa-panel";
         if registry.memberships.iter().any(|membership| {
-            membership.organization_id == organization && membership.principal_id == panel
+            membership.organization_id == organization && membership.principal_id == PANEL_PRINCIPAL
         }) {
-            return Ok((organization, panel.to_owned()));
+            return Ok((organization, PANEL_PRINCIPAL.to_owned()));
         }
         Ok((organization, owner))
     }

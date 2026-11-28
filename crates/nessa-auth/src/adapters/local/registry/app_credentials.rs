@@ -76,22 +76,30 @@ impl LocalCredentialStore {
         .await
         .map_err(|_| LocalStoreError::Conflict)?;
         let context = session.context();
-        let owner_membership = self
+        let (owner_membership, panel_membership) = self
             .with_published_registry(|registry| {
                 if registry.revision != snapshot.revision {
                     return Err(AccessError::StaleRevision);
                 }
-                MembershipId::new(&registry.owner_membership_id)
-                    .map_err(|_| AccessError::Unavailable)
+                let owner = MembershipId::new(&registry.owner_membership_id)
+                    .map_err(|_| AccessError::Unavailable)?;
+                let panel = owner_panel(registry)
+                    .map(|panel| MembershipId::new(&panel.id))
+                    .transpose()
+                    .map_err(|_| AccessError::Unavailable)?;
+                Ok((owner, panel))
             })
             .map_err(|_| LocalStoreError::Conflict)?;
         let action = Action::new("appCredential.issue").map_err(|_| LocalStoreError::Corrupt)?;
-        let resource = Resource::new(
+        let mut resource = Resource::new(
             context.organization_id().clone(),
             ResourceId::new(context.audience_id().as_str())
                 .map_err(|_| LocalStoreError::Corrupt)?,
         )
         .with_owner_membership(owner_membership);
+        if let Some(panel) = panel_membership {
+            resource = resource.with_panel_membership(panel);
+        }
         if policy.evaluate(context, &action, &resource, &snapshot) != Ok(Decision::Allow) {
             return Err(LocalStoreError::Conflict);
         }
@@ -244,6 +252,20 @@ fn scoped_snapshot(
     Ok(AppCredentialSnapshot { access, binding })
 }
 
+/// The owner's desktop window membership: the active panel surface in the
+/// owner's organization, when one is provisioned.
+fn owner_panel(registry: &Registry) -> Option<&MembershipInputDto> {
+    let owner = registry
+        .memberships
+        .iter()
+        .find(|member| member.id == registry.owner_membership_id)?;
+    registry.memberships.iter().find(|member| {
+        member.principal_id == super::PANEL_PRINCIPAL
+            && member.organization_id == owner.organization_id
+            && member.state == MembershipStateDto::Active
+    })
+}
+
 /// Registration is stable across credentials and scoped to this owner and
 /// deployment. A length-prefixed tuple keeps the derived ID bounded and
 /// separates its fields without imposing syntax on the opaque IDs.
@@ -321,7 +343,6 @@ pub(super) fn approved_app_binding(
         .ok_or(AccessError::Unavailable)?;
     let credential = &snapshot.credential;
     let app = ExtensionAppId::new(&scope.app_id).map_err(|_| AccessError::Unavailable)?;
-    let approver = PrincipalId::new(&owner.principal_id).map_err(|_| AccessError::Unavailable)?;
     let request_id = snapshot
         .origin
         .correlation()
@@ -331,6 +352,16 @@ pub(super) fn approved_app_binding(
         .iter()
         .filter(|r| r.credential_id == credential.id().as_str());
     let receipt = receipts.next().ok_or(AccessError::Unavailable)?;
+    // The owner approved it, at their own credential or at their desktop
+    // window (the panel surface in the owner's organization); nobody else.
+    let approved_by_owner = receipt.issuer_principal_id == owner.principal_id
+        || owner_panel(registry)
+            .is_some_and(|panel| receipt.issuer_principal_id == panel.principal_id);
+    if !approved_by_owner {
+        return Err(AccessError::IdentityMismatch);
+    }
+    let approver =
+        PrincipalId::new(&receipt.issuer_principal_id).map_err(|_| AccessError::Unavailable)?;
     let principal = registry
         .principals
         .iter()
@@ -444,6 +475,71 @@ mod tests {
             capabilities: AppCapabilities::new(capability, &[]),
             expires_at: 180,
         }
+    }
+
+    /// The desktop window is the owner's own surface: Settings issues an
+    /// installed app its credential from there. Another admin surface may
+    /// not, and the binding names who approved it.
+    #[test]
+    fn the_owners_desktop_window_issues_and_no_other_surface_does() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let surface = |name: &str, id: &str| {
+            let IssueCredentialOutcome::Issued { evidence, .. } = store
+                .provision_surface(
+                    name,
+                    format!("request-{id}"),
+                    id.into(),
+                    vec!["server.read".into(), "credential.manage".into()],
+                    100,
+                    None,
+                )
+                .unwrap()
+            else {
+                panic!("new surface credential")
+            };
+            let auth = AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            };
+            ready(auth.execute(&evidence, &audience)).unwrap()
+        };
+        let panel = surface("nessa-panel", "panel-one");
+        let other = surface("helper", "helper-one");
+        assert!(matches!(
+            ready(store.issue_app(
+                &other,
+                request("app-from-helper", "notes", AppCapability::List),
+                &clock,
+                &policy,
+            )),
+            Err(LocalStoreError::Conflict)
+        ));
+        let IssueCredentialOutcome::Issued { evidence, .. } = ready(store.issue_app(
+            &panel,
+            request("app-from-panel", "notes", AppCapability::List),
+            &clock,
+            &policy,
+        ))
+        .unwrap() else {
+            panic!("the panel issues once")
+        };
+        let app = ready(
+            AuthenticateAppSession {
+                credentials: &store,
+                clock: &clock,
+                policy: &policy,
+            }
+            .execute(&evidence, &audience),
+        )
+        .unwrap();
+        assert_eq!(app.binding().app().as_str(), "notes");
     }
 
     #[test]

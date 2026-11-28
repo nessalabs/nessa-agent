@@ -512,6 +512,17 @@ pub(super) async fn product_state(
         store: store.clone(),
         inventory: Some(inventory.clone()),
     });
+    // Installed apps issue and revoke their own credentials in this same
+    // registry, and an app signs in against it.
+    let apps = apps.map(|apps| {
+        Arc::new(
+            apps.with_credentials(Arc::new(super::app_credentials::LocalAppCredentials {
+                store: store.clone(),
+                admin: admin.clone(),
+                policy: policy.clone(),
+            })),
+        )
+    });
     let webhooks = super::webhooks::prepare(
         &settings,
         directory,
