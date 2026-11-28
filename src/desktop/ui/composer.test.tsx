@@ -371,7 +371,7 @@ it("offers Fast and the levels only where the catalogue records them for the mod
   await act(async () => root.unmount())
 })
 
-it("chooses a model and its level with one press of a bar, and a name keeps the level", async () => {
+it("chooses a model and its level with one press of a bar, which keeps the picker open, and a name keeps the level", async () => {
   const root = createRoot(host)
   const picks: { provider: string; modelId: string }[] = []
   let model = { provider: "anthropic", modelId: "claude-opus-5" }
@@ -407,6 +407,14 @@ it("chooses a model and its level with one press of a bar, and a name keeps the 
     )
     await render()
     expect(picks).toEqual([{ provider: "anthropic", modelId: "claude-sonnet-5" }])
+    // A bar keeps the picker open so another level can be tried; Escape
+    // leaves with the choice made.
+    expect(dialog()).not.toBeNull()
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      )
+    })
     expect(dialog()).toBeNull()
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently Claude Sonnet 5, High",

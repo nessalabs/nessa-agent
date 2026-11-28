@@ -3100,11 +3100,15 @@ async function pickerStep(run, step, failures) {
   if ((await page.locator(css.modelPicker).count()) === 0)
     failures.push("a sideways swipe closed the model picker")
 
-  // One press of a bar: that model at that level, and the picker closes.
+  // One press of a bar: that model at that level, and the picker stays open
+  // so another level can be tried; Escape leaves with the choice made.
   const bar = row().locator(css.modelBar).nth(1)
   const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
   await bar.click()
-  if (!(await closed())) failures.push("a bar left the model picker open")
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a bar closed the model picker")
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape after a bar left the model picker open")
   const named = `Change model, currently ${target.displayName}, ${level}`
   if (
     !(await waitFor(async () => (await chip.getAttribute("aria-label")) === named, 5_000))
