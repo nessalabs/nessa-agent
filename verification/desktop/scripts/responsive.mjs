@@ -1041,14 +1041,17 @@ async function modelPicker({ page, engine, options }) {
   }
   await closes()
 
-  // A bar chooses the model at that level, in one press, and closes the picker.
+  // A bar chooses the model at that level, in one press, and keeps the
+  // picker open so another level can be tried; Escape then closes it.
   await opens()
   const withFast = await find(names.modelWithFast)
   const second = withFast.locator(css.modelBar).nth(1)
   const secondLevel = (await second.getAttribute("aria-label")).split(", ").at(-1)
   await second.click()
-  if (!(await until(page, (sel) => !document.querySelector(sel), css.modelPicker)))
-    failures.push("a bar left the picker open")
+  await settled(page)
+  if (!(await page.locator(css.modelPicker).count()))
+    failures.push("a bar closed the picker")
+  await closes()
   await settled(page)
   const barred = await pickerState(page, chip)
   if (barred.label !== `Change model, currently ${names.modelWithFast}, ${secondLevel}`)

@@ -3060,17 +3060,48 @@ async function pickerStep(run, step, failures) {
   if ((await page.locator(css.modelPicker).count()) === 0)
     failures.push("a sideways swipe closed the model picker")
 
-  // One press of a bar: that model at that level, and the picker closes.
-  const bar = row().locator(css.modelBar).nth(1)
-  const level = (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
-  await bar.click()
-  if (!(await closed())) failures.push("a bar left the model picker open")
-  const named = `Change model, currently ${target.displayName}, ${level}`
-  if (
-    !(await waitFor(async () => (await chip.getAttribute("aria-label")) === named, 5_000))
-  )
+  // One press of a bar: that model at that level, and the picker stays open
+  // so another level can be tried. A second bar moves the level again; the
+  // model's name then closes the picker and keeps the level last pressed.
+  const barLevel = async (bar) =>
+    (await bar.getAttribute("aria-label"))?.split(", ").at(-1)
+  const chipSays = (level) => `Change model, currently ${target.displayName}, ${level}`
+  const chipBecomes = (label) =>
+    waitFor(async () => (await chip.getAttribute("aria-label")) === label, 5_000)
+  const tried = row().locator(css.modelBar).last()
+  const triedLevel = await barLevel(tried)
+  await tried.click()
+  if (!(await chipBecomes(chipSays(triedLevel))))
     failures.push(
-      `a bar left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
+      `a bar at ${triedLevel} left the chip "${await chip.getAttribute("aria-label")}"`,
+    )
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a bar closed the model picker")
+  if ((await row().getAttribute("aria-selected")) !== "true")
+    failures.push(`after a bar, ${target.displayName}'s row is not the one chosen`)
+  // The first bar, a level below the last (every model here has two or
+  // more), so this check cannot pass on the first press alone. With every
+  // bar lit it is a plain level, not the toggle that turns thinking off.
+  const bar = row().locator(css.modelBar).first()
+  const level = await barLevel(bar)
+  await bar.click()
+  const named = chipSays(level)
+  if (!(await chipBecomes(named)))
+    failures.push(
+      `a second bar left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
+    )
+  if ((await page.locator(css.modelPicker).count()) === 0)
+    failures.push("a second bar closed the model picker")
+  if (run.evidence)
+    await page
+      .locator(css.modelPicker)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-bar-kept-open.png`) })
+      .catch(() => {})
+  await row().locator(css.modelOptionLabel).click()
+  if (!(await closed())) failures.push("the model's name left the model picker open")
+  if (!(await chipBecomes(named)))
+    failures.push(
+      `the model's name left the chip "${await chip.getAttribute("aria-label")}", not "${named}"`,
     )
   const fast = dock(page).locator(css.composerFast)
   if ((await fast.isDisabled()) === target.fastMode)
@@ -3126,19 +3157,52 @@ async function pickerStep(run, step, failures) {
       `after the send the chip says "${await chip.getAttribute("aria-label")}"`,
     )
 
-  // The star off again, so later runs open where the model is.
+  // The star off again, so later runs open where the model is. On Starred
+  // the model stays as its star comes off, shown unstarred, so a slip can be
+  // undone there; it leaves the next time Starred is shown.
   await chip.click()
   await opened()
-  // On Starred, the model leaves the list as its star comes off.
+  const starButton = () => row().locator(css.modelStar)
+  const starIs = async (pressed, when) => {
+    if (
+      !(await waitFor(
+        async () => (await starButton().getAttribute("aria-pressed")) === pressed,
+        5_000,
+      ))
+    )
+      failures.push(
+        `${when}, ${target.displayName}'s star is ${pressed === "true" ? "off" : "on"}`,
+      )
+  }
   await row().hover()
-  await row().locator(css.modelStar).click()
-  if (
-    !(await row()
-      .waitFor({ state: "detached", timeout: 5_000 })
-      .then(() => true)
-      .catch(() => false))
-  )
-    failures.push(`unstarred, ${target.displayName} stayed under Starred`)
+  await starButton().click()
+  await starIs("false", "unstarred on Starred")
+  if ((await row().count()) !== 1)
+    failures.push(`unstarred, ${target.displayName} left Starred at once`)
+  else if (!(await starButton().isVisible()))
+    failures.push(`unstarred on Starred, ${target.displayName}'s hollow star is hidden`)
+  const starredCount = await page
+    .locator(`${css.modelRail}[data-filter="starred"]`)
+    .textContent()
+  if (!/\D0\s*$/.test(starredCount ?? ""))
+    failures.push(`unstarred, Starred still counts "${starredCount}"`)
+  if (run.evidence)
+    await page
+      .locator(css.modelPicker)
+      .screenshot({ path: join(run.evidence, `picker-${run.engine}-unstarred-kept.png`) })
+      .catch(() => {})
+  // Starred again where it stayed, then off for good.
+  await starButton().click()
+  await starIs("true", "starred again on Starred")
+  await starButton().click()
+  await starIs("false", "unstarred a second time")
+  await page.keyboard.press(keys.escape)
+  if (!(await closed())) failures.push("Escape did not close the model picker")
+  await chip.click()
+  await opened()
+  await page.locator(`${css.modelRail}[data-filter="starred"]`).click()
+  if ((await row().count()) !== 0)
+    failures.push(`reopened, Starred still lists ${target.displayName}`)
   await page.keyboard.press(keys.escape)
   if (!(await closed())) failures.push("Escape did not close the model picker")
   if (run.evidence)
@@ -4731,9 +4795,11 @@ const steps = {
   /**
    * The model and thinking picker: a star lists a model under Starred, where
    * the picker then opens; one press of a bar stages that model at that
-   * level, which the chip names, and closes the picker; Fast beside the chip
+   * level, which the chip names, and keeps the picker open for another
+   * level, while the model's name closes it; Fast beside the chip
    * is offered only for a model that has it; and the next message runs on
-   * the model chosen. The star is taken off again.
+   * the model chosen. The star is taken off again: on Starred the row stays,
+   * unstarred, until Starred is next shown.
    */
   async picker(run, step, failures) {
     await clearStarredModels(run.page)

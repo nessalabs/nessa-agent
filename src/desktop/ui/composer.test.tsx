@@ -371,7 +371,7 @@ it("offers Fast and the levels only where the catalogue records them for the mod
   await act(async () => root.unmount())
 })
 
-it("chooses a model and its level with one press of a bar, and a name keeps the level", async () => {
+it("chooses a model and its level with one press of a bar, which keeps the picker open, and a name keeps the level", async () => {
   const root = createRoot(host)
   const picks: { provider: string; modelId: string }[] = []
   let model = { provider: "anthropic", modelId: "claude-opus-5" }
@@ -407,15 +407,12 @@ it("chooses a model and its level with one press of a bar, and a name keeps the 
     )
     await render()
     expect(picks).toEqual([{ provider: "anthropic", modelId: "claude-sonnet-5" }])
-    expect(dialog()).toBeNull()
+    // A bar leaves the picker open, so another level can be tried.
+    expect(dialog()).not.toBeNull()
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently Claude Sonnet 5, High",
     )
     // GPT-5.6 Sol lists the same High, so choosing it by name keeps it.
-    await act(async () => chip()?.click())
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
-    )
     await act(async () =>
       document
         .querySelector<HTMLElement>(
@@ -424,6 +421,7 @@ it("chooses a model and its level with one press of a bar, and a name keeps the 
         ?.click(),
     )
     await render()
+    expect(dialog()).toBeNull()
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently GPT-5.6 Sol, High",
     )
