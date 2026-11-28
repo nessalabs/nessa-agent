@@ -389,12 +389,12 @@ fn capability_sentence(capabilities: &[String]) -> Result<String, String> {
         .iter()
         .any(|capability| capability == "create" || capability == "send")
     {
-        ", which run agents on this computer"
+        " Agents in them can read and change files on this computer."
     } else {
         ""
     };
     Ok(format!(
-        "\n\nIt can also {joined} its own Nessa conversations{runs}. It never sees yours."
+        "\n\nIt can also {joined} its own Nessa conversations.{runs} It never sees yours."
     ))
 }
 
@@ -614,7 +614,7 @@ mod tests {
             Ok(true)
         );
         assert!(system.asked.lock().unwrap()[3].ends_with(
-            "It can also list, start and send messages in its own Nessa conversations, which run agents on this computer. It never sees yours."
+            "It can also list, start and send messages in its own Nessa conversations. Agents in them can read and change files on this computer. It never sees yours."
         ));
         assert_eq!(
             apps.confirm("notes", "1.0.0", &digest, &asks(&["read"]))

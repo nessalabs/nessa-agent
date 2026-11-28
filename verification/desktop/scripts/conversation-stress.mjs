@@ -10282,6 +10282,29 @@ const steps = {
         failures.push("the app lists the owner's conversation")
       const read = await refusal(app.conversation.read(run.main.id))
       if (read === "allowed") failures.push("the app read the owner's conversation")
+      // Nor can it act on the owner's chat with ids it learned elsewhere:
+      // stop the owner's turn, message the chat, or ask after a message.
+      const { executionTargets } = await import("@nessa/client")
+      const [target] = executionTargets(await run.client.conversation.read(run.main.id))
+      for (const [what, attempt] of [
+        ["stop", () => app.conversation.stop(target)],
+        [
+          "send",
+          () =>
+            app.conversation.submit(
+              app.conversation.prepare(run.main.id, "an app writing in the owner's chat"),
+            ),
+        ],
+        [
+          "messageStatus",
+          () => app.conversation.messageStatus(run.main.id, randomUUID()),
+        ],
+      ]) {
+        if (!target && what === "stop") continue
+        const answer = await refusal(attempt())
+        if (answer === "allowed")
+          failures.push(`the app's ${what} on the owner's chat was allowed`)
+      }
 
       // Its own conversation: started in auto, never full, and it runs.
       const own = randomUUID()

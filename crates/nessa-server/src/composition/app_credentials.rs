@@ -16,7 +16,7 @@ use nessa_auth::application::credential_admin::{
 };
 use nessa_auth::application::ports::{Clock, PortFuture};
 use nessa_auth::application::session::AuthenticatedSession;
-use nessa_auth::domain::CredentialId;
+use nessa_auth::domain::{CredentialId, PrincipalId};
 use nessa_types::app_identity::ExtensionAppId;
 use uuid::Uuid;
 
@@ -62,18 +62,34 @@ impl LocalAppCredentials {
             .collect())
     }
 
+    /// Revoke every live credential of `app` but `keep`, each under its own
+    /// key `<request_id>:<credential id>`. A command that already revoked
+    /// answers with what it revoked then and revokes nothing more, so a late
+    /// retry cannot reach a credential issued after it.
     async fn revoke_live(
         &self,
         organization: &str,
         issuer: &str,
         request_id: &str,
         app: &ExtensionAppId,
+        keep: Option<&str>,
     ) -> Result<usize, CredentialRefusal> {
-        let live = self.live(organization, app)?;
+        let issuer_id = PrincipalId::new(issuer).map_err(|_| CredentialRefusal::Unavailable)?;
+        let earlier = self
+            .store
+            .revoked_under(&issuer_id, request_id)
+            .map_err(|_| CredentialRefusal::Unavailable)?;
+        if earlier > 0 {
+            return Ok(earlier);
+        }
+        let live = self
+            .live(organization, app)?
+            .into_iter()
+            .filter(|id| Some(id.as_str()) != keep)
+            .collect::<Vec<_>>();
         for credential_id in &live {
             self.admin
                 .revoke(RevokeCredentialRequest {
-                    // One key per credential, so a retry replays each.
                     request_id: format!("{request_id}:{credential_id}"),
                     issuer_principal_id: issuer.to_owned(),
                     credential_id: credential_id.clone(),
@@ -99,13 +115,11 @@ impl AppCredentialAuthority for LocalAppCredentials {
     ) -> PortFuture<'a, IssuedAppCredential, CredentialRefusal> {
         Box::pin(async move {
             let context = owner.context();
-            self.revoke_live(
-                context.organization_id().as_str(),
-                context.principal_id().as_str(),
-                &request_id,
-                &app,
-            )
-            .await?;
+            let organization = context.organization_id().as_str().to_owned();
+            let issuer = context.principal_id().as_str().to_owned();
+            // Issue first: a refusal (a replayed request, a stale session,
+            // a full registry) then leaves the app's working credential as
+            // it was. Only once the new one exists are the others revoked.
             let credential_id = CredentialId::new(format!("app-{}", Uuid::new_v4().simple()))
                 .map_err(|_| CredentialRefusal::Unavailable)?;
             let expires_at = SystemClock.unix_seconds() + APP_CREDENTIAL_LIFETIME_SECONDS;
@@ -115,9 +129,9 @@ impl AppCredentialAuthority for LocalAppCredentials {
                 .issue_app(
                     owner,
                     IssueAppCredential {
-                        request_id,
+                        request_id: request_id.clone(),
                         credential_id,
-                        app,
+                        app: app.clone(),
                         capabilities,
                         expires_at,
                     },
@@ -129,20 +143,48 @@ impl AppCredentialAuthority for LocalAppCredentials {
                     LocalStoreError::Conflict => CredentialRefusal::Conflict,
                     _ => CredentialRefusal::Unavailable,
                 })?;
-            match outcome {
-                IssueCredentialOutcome::Issued {
-                    metadata, evidence, ..
-                } => Ok(IssuedAppCredential {
-                    credential_id: metadata.id,
-                    secret: String::from_utf8(evidence.expose_bytes().to_vec())
-                        .map_err(|_| CredentialRefusal::Unavailable)?,
-                    expires_at: metadata.expires_at.unwrap_or(expires_at),
-                    capabilities: granted,
-                }),
-                IssueCredentialOutcome::ExistingSecretUnavailable { .. } => {
-                    Err(CredentialRefusal::Conflict)
+            let IssueCredentialOutcome::Issued {
+                metadata, evidence, ..
+            } = outcome
+            else {
+                return Err(CredentialRefusal::Conflict);
+            };
+            let issued = match String::from_utf8(evidence.expose_bytes().to_vec()) {
+                Ok(secret) => self
+                    .revoke_live(
+                        &organization,
+                        &issuer,
+                        &request_id,
+                        &app,
+                        Some(&metadata.id),
+                    )
+                    .await
+                    .map(|_| secret),
+                Err(_) => Err(CredentialRefusal::Unavailable),
+            };
+            let secret = match issued {
+                Ok(secret) => secret,
+                Err(refusal) => {
+                    // Nobody will hold the new secret: take it back, so the app
+                    // keeps at most the one it had.
+                    let _ = self
+                        .admin
+                        .revoke(RevokeCredentialRequest {
+                            request_id: format!("{request_id}:undo:{}", metadata.id),
+                            issuer_principal_id: issuer.clone(),
+                            credential_id: metadata.id.clone(),
+                            revoked_at: SystemClock.unix_seconds(),
+                        })
+                        .await;
+                    return Err(refusal);
                 }
-            }
+            };
+            Ok(IssuedAppCredential {
+                credential_id: metadata.id,
+                secret,
+                expires_at: metadata.expires_at.unwrap_or(expires_at),
+                capabilities: granted,
+            })
         })
     }
 
@@ -154,7 +196,7 @@ impl AppCredentialAuthority for LocalAppCredentials {
         app: ExtensionAppId,
     ) -> PortFuture<'a, usize, CredentialRefusal> {
         Box::pin(async move {
-            self.revoke_live(&organization, &issuer, &request_id, &app)
+            self.revoke_live(&organization, &issuer, &request_id, &app, None)
                 .await
         })
     }

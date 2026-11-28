@@ -196,6 +196,24 @@ async fn issuing_again_revokes_the_one_before_and_a_replay_is_a_conflict() {
         )
         .await;
     assert!(matches!(replay, Err(CredentialRefusal::Conflict)));
+    // A refused replay leaves the app's working credential alone.
+    assert_eq!(registry.sign_in(&second.secret).await.unwrap(), "notes");
+}
+
+#[tokio::test]
+async fn a_late_retry_of_a_revoke_never_reaches_a_credential_issued_after_it() {
+    let registry = registry().await;
+    registry.issue("r1", "notes").await;
+    let revoke = |request: &'static str| {
+        registry
+            .credentials
+            .revoke_all("org".into(), "owner".into(), request.into(), app("notes"))
+    };
+    assert_eq!(revoke("r2").await.unwrap(), 1);
+    let fresh = registry.issue("r3", "notes").await;
+    // The retry answers what it revoked the first time, and nothing more.
+    assert_eq!(revoke("r2").await.unwrap(), 1);
+    assert_eq!(registry.sign_in(&fresh.secret).await.unwrap(), "notes");
 }
 
 #[tokio::test]
