@@ -2348,9 +2348,11 @@ async fn dispatch_authorized(
         | ProductMethod::CloudBoxesDelete => {
             super::cloud_boxes::dispatch(state, session, frame).await
         }
-        ProductMethod::BoatStatus | ProductMethod::BoatSave | ProductMethod::BoatDisconnect => {
-            super::boat::dispatch(state, session, frame).await
-        }
+        ProductMethod::BoatStatus
+        | ProductMethod::BoatSave
+        | ProductMethod::BoatSignIn
+        | ProductMethod::BoatCancelSignIn
+        | ProductMethod::BoatDisconnect => super::boat::dispatch(state, session, frame).await,
         ProductMethod::VaultStatus
         | ProductMethod::VaultSetup
         | ProductMethod::VaultUnlock

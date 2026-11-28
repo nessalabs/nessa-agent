@@ -8,12 +8,16 @@ use crate::{
         infrastructure::{LocalChannelStore, ShepherdBackgroundTasks},
     },
     workspaces::{
-        application::{CloudBoxBackend, CloudBoxes, Workspaces},
+        application::{
+            BoatAuthorization, BoatSignIn, CloudBoxBackend, CloudBoxes, RenewedBoatSettings,
+            Settings, Workspaces,
+        },
         domain::Cloud,
         infrastructure::{
-            agent37_template, boat_image, Agent37Provider, Agent37VaultSettings, BoatProvider,
-            FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice, ProviderActiveWorkChecker,
-            SdkAgent37Enrollment, VaultSettings, WorkspaceCloudBoxProvider,
+            agent37_template, boat_image, Agent37Provider, Agent37VaultSettings, BoatApp,
+            BoatOAuthHttps, BoatProvider, FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice,
+            LoopbackCallbacks, ProviderActiveWorkChecker, SdkAgent37Enrollment, VaultSettings,
+            WorkspaceCloudBoxProvider,
         },
     },
 };
@@ -278,9 +282,18 @@ pub(super) async fn product_state(
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(unix)]
     let (workspace_service, cloud_boxes_service) = {
-        let boat_settings = Arc::new(VaultSettings(vault.vault.clone()));
+        let boat_app = boat_app();
+        let boat_oauth: Option<Arc<dyn BoatAuthorization>> = BoatOAuthHttps::new(boat_app.clone())
+            .map(|oauth| Arc::new(oauth) as Arc<dyn BoatAuthorization>);
+        let vault_settings: Arc<dyn Settings> = Arc::new(VaultSettings(vault.vault.clone()));
+        // Every reader of the Boat connection goes through the renewal, so a
+        // Sign in with Boat grant is spent in one place only.
+        let boat_settings: Arc<dyn Settings> = match &boat_oauth {
+            Some(oauth) => Arc::new(RenewedBoatSettings::new(vault_settings, oauth.clone())),
+            None => vault_settings,
+        };
         let boat_provider = Arc::new(BoatProvider {
-            api_base: workspace_sdk::boat_client::ClientConfig::DEFAULT_BASE_PATH.into(),
+            api_base: boat_app.api_base(),
         });
         let agent37_settings = Arc::new(Agent37VaultSettings(vault.vault.clone()));
         let agent37_provider = Arc::new(Agent37Provider { endpoints: None });
@@ -298,6 +311,17 @@ pub(super) async fn product_state(
                     template: agent37_template(),
                 })),
         );
+        let workspaces = match boat_oauth {
+            Some(oauth) => {
+                let sign_in = Arc::new(BoatSignIn::new(
+                    oauth,
+                    Arc::new(LoopbackCallbacks),
+                    (*workspaces).clone(),
+                ));
+                Arc::new((*workspaces).clone().with_boat_sign_in(sign_in))
+            }
+            None => workspaces,
+        };
         let cloud_boxes = Arc::new(CloudBoxes::new(
             vec![
                 CloudBoxBackend {
@@ -1954,4 +1978,29 @@ mod tests;
 #[cfg(unix)]
 fn child_program() -> io::Result<PathBuf> {
     std::env::current_exe()
+}
+
+/// The Boat OAuth app this run signs in through: the released one, or the
+/// one `NESSA_BOAT_APP` names (a check's fake Boat on this machine). A file
+/// that cannot be read or does not describe an app is logged and the
+/// released app is used.
+#[cfg(unix)]
+fn boat_app() -> BoatApp {
+    let Some(path) = std::env::var_os("NESSA_BOAT_APP") else {
+        return BoatApp::released();
+    };
+    match std::fs::read(&path).map(|bytes| BoatApp::parse(&bytes)) {
+        Ok(Ok(app)) => app,
+        Ok(Err(problem)) => {
+            tracing::error!(
+                ?problem,
+                "NESSA_BOAT_APP does not describe a Boat app; using the released one"
+            );
+            BoatApp::released()
+        }
+        Err(error) => {
+            tracing::error!(%error, "NESSA_BOAT_APP could not be read; using the released one");
+            BoatApp::released()
+        }
+    }
 }

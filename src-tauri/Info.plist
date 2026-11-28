@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>so.nessa.app</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>nessa</string>
+      </array>
+    </dict>
+  </array>
   <key>NSAppleEventsUsageDescription</key>
   <string>Nessa opens Terminal so you can sign in to your agent provider.</string>
   <key>NSMicrophoneUsageDescription</key>

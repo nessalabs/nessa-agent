@@ -161,6 +161,8 @@ pub struct Workspaces {
     agent37: Option<Arc<dyn Agent37Enrollment>>,
     recovery: Arc<dyn RecoveryAudit>,
     image: Option<String>,
+    /// Sign in with Boat, when composition offers it.
+    boat_sign_in: Option<Arc<super::BoatSignIn>>,
 }
 impl Workspaces {
     pub fn new(
@@ -179,6 +181,7 @@ impl Workspaces {
             choosing: Arc::default(),
             agent37: None,
             recovery,
+            boat_sign_in: None,
         }
     }
     /// The same workspaces, also on `cloud`, with new boxes made on whichever
@@ -253,6 +256,10 @@ impl Workspaces {
         catch_unwind(AssertUnwindSafe(|| self.recovery.record(event)))
             .unwrap_or(Err(Failure::Storage))
     }
+    /// The worker image this build makes Boat VMs from, if it pins one.
+    pub(crate) fn image(&self) -> Option<String> {
+        self.image.clone()
+    }
     pub fn with_image(mut self, image: Option<&str>) -> Self {
         self.image = image.map(str::to_owned);
         self
@@ -264,12 +271,21 @@ impl Workspaces {
         let connection = enrollment.connection(key).await?;
         self.save(CloudConnection::Agent37(connection)).await
     }
+    /// The same workspaces, signing in to Boat through `sign_in`, which was
+    /// made from a copy of these.
+    pub fn with_boat_sign_in(mut self, sign_in: Arc<super::BoatSignIn>) -> Self {
+        self.boat_sign_in = Some(sign_in);
+        self
+    }
+    pub fn boat_sign_in(&self) -> Option<&Arc<super::BoatSignIn>> {
+        self.boat_sign_in.as_ref()
+    }
     pub fn with_agent37_enrollment(mut self, enrollment: Arc<dyn Agent37Enrollment>) -> Self {
         self.agent37 = Some(enrollment);
         self
     }
     pub async fn save_token(&self, token: String) -> Result<(), Failure> {
-        let image = self.image.clone().ok_or(Failure::WorkerUnavailable)?;
+        let image = self.image().ok_or(Failure::WorkerUnavailable)?;
         self.save(CloudConnection::Boat(BoatConnection::new(
             token,
             "nessa".into(),

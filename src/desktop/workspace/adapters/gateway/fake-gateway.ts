@@ -700,6 +700,10 @@ export function fakeGateway(
       save: async () => {
         throw new Error("Boat provisioning is unavailable in this fixture")
       },
+      signIn: async () => {
+        throw new Error("Boat sign-in is unavailable in this fixture")
+      },
+      cancelSignIn: async () => ({ state: "disconnected" as const }),
       disconnect: async () => ({ state: "disconnected" as const }),
     },
     agent37: {

@@ -219,7 +219,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 154,
+          "maxItems": 156,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -9624,7 +9624,7 @@
       "description": "Connect a user-owned Boat account. The gateway validates the token and its release worker image, configures its dedicated agent environment, then encrypts the token in the unlocked vault. Does not authenticate a model subscription."
     },
     "BoatErrorCode": {
-      "description": "Typed Boat connection refusals. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
+      "description": "Typed Boat connection refusals. boat_sign_in_unavailable: this build names no Boat OAuth app, so boat.signIn is not offered; a pasted token still is. Worker unavailable requires a matching Nessa release image; environment blocks credentials requires allowing connected agents in the dedicated Boat environment. Provisioning and cleanup uncertainty require reconciliation, not automatic replacement. No code or diagnostic contains credential values.",
       "type": "string",
       "enum": [
         "vault_locked",
@@ -9636,7 +9636,8 @@
         "boat_worker_unavailable",
         "boat_environment_blocks_credentials",
         "boat_provisioning_uncertain",
-        "boat_cleanup_uncertain"
+        "boat_cleanup_uncertain",
+        "boat_sign_in_unavailable"
       ]
     },
     "BoatStatus": {
@@ -9655,10 +9656,51 @@
         "image": {
           "type": "string",
           "description": "The release-owned shared worker image saved with this connection; present only while connected."
+        },
+        "via": {
+          "type": "string",
+          "enum": ["signIn", "token"],
+          "description": "How the saved connection was made: Sign in with Boat, whose access token the gateway renews itself, or a pasted API token. Present only while connected."
+        },
+        "login": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "The Boat account Sign in with Boat signed in as; present only while connected via signIn."
+        },
+        "signInAvailable": {
+          "type": "boolean",
+          "description": "Whether boat.signIn is offered: this build names a Boat OAuth app."
+        },
+        "signIn": {
+          "$ref": "#/$defs/BoatSignInState",
+          "description": "The Sign in with Boat in progress, or the one that last failed; absent when none is running and none failed."
         }
       },
       "required": ["state"],
       "description": "Secret-free saved Boat connection state. Connected means validation succeeded when saved; it does not attest a current model turn or revoke credentials in existing VMs."
+    },
+    "BoatSignInState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["waiting", "failed"],
+          "description": "Waiting for the browser to come back from Boat, or the last sign-in ended without a connection. Absent (no signIn) when no sign-in is running and none failed."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "While waiting: the Boat page where the person approves Nessa. Holds no secret: the code it leads to is useless without the verifier the gateway keeps."
+        },
+        "cause": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "When failed: denied (the person chose Cancel on Boat), expired (no answer in 10 minutes), rejected (the redirect was not Boat's), boat_unreachable (Boat refused or did not answer the code exchange), or a BoatErrorCode from saving the connection."
+        }
+      },
+      "required": ["state"],
+      "description": "Where the gateway's Sign in with Boat stands. boat.signIn starts one (ending any earlier one): the gateway listens on this machine's loopback for Boat's redirect, exchanges the code with PKCE, reads the account, validates and saves the connection like boat.save, and renews the one-hour access token itself from then on. boat.cancelSignIn stops waiting."
     },
     "Agent37SaveParams": {
       "type": "object",
