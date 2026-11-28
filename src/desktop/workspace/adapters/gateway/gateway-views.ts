@@ -126,8 +126,14 @@ export function channelFrom(wire: WireChannel): Channel {
       : {}),
     coordinatorOn: wire.coordinatorOn,
   }
+  // A gateway that keeps no channels names no coordinator for its default
+  // one, and there is no switch to show.
   if (wire.channelId === defaultChannelId)
-    return { ...gatewayChannel, folder: wire.folder, ...coordinator }
+    return {
+      ...gatewayChannel,
+      folder: wire.folder,
+      ...(wire.coordinatorConversationId ? coordinator : {}),
+    }
   const model =
     wire.agent && wire.model ? catalogueModel(wire.agent, wire.model) : undefined
   return {

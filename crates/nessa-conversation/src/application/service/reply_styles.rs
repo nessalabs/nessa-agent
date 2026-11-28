@@ -230,6 +230,20 @@ impl ConversationService {
         store.pin(id, PinnedStart { role, style, job }).await
     }
 
+    /// Whether `id` was started in its coordinator's role.
+    pub(super) async fn started_as_coordinator(
+        &self,
+        id: &ConversationId,
+    ) -> Result<bool, ConversationError> {
+        let Some(store) = self.reply_style_store() else {
+            return Ok(false);
+        };
+        Ok(store
+            .pinned(id)
+            .await?
+            .is_some_and(|start| start.role == StyleRole::Coordinator))
+    }
+
     /// What `id`'s agent is told of its job and how to write, from the role
     /// and style it was started with. With no store bound, or for a
     /// conversation from before styles were kept, nothing: nothing was

@@ -1366,6 +1366,23 @@ async fn the_default_channel_has_its_owners_own_coordinator_switched_as_a_made_o
         .is_default_coordinator_of(&id, &caller("other", "create"))
         .await
         .unwrap());
+    // Created first by someone else, another person's coordinator id is an
+    // ordinary thread for them: no job, and not told it is the main agent.
+    let squatted = theirs.coordinator_id();
+    fixture
+        .service
+        .create(
+            squatted.clone(),
+            caller("person", "squat"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.role_and_style(&squatted).await.unwrap().0,
+        None
+    );
+    assert_eq!(fixture.service.agent_place(&squatted).await.unwrap(), None);
     assert!(!fixture
         .service
         .is_default_coordinator_of(&theirs.coordinator_id(), &caller("person", "create"))

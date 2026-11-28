@@ -451,6 +451,10 @@ impl ChannelStore for LocalChannelStore {
     ) -> ConversationFuture<'_, DefaultCoordinator> {
         let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
         self.run(move |connection| {
+            // Read first, so a list only writes the once.
+            if let Some(kept) = default_coordinator(connection, &organization, &owner)? {
+                return Ok(kept);
+            }
             // Two first reads at once both try; the first row stays.
             connection
                 .execute(

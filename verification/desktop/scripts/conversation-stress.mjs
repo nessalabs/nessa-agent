@@ -8295,6 +8295,8 @@ const steps = {
     await unfolded(failures)
     await channelShowsList(run.page, failures)
     if (failures.length) return
+    // Conversations opens at its coordinator, so the main chat is opened again.
+    await openStressConversation(run.page, run.main.id, run.main.title)
     // The main conversation is the pane left. Not opened from its row: the
     // row beside it quotes the window, the main conversation's title with it.
     // Asked from the main conversation's composer: it is the whole window now,
@@ -9657,15 +9659,15 @@ const steps = {
           .getByText("Conversations", { exact: true })
           .first()
           .click({ timeout: 15_000 })
-        const begun = await run.page
-          .locator(`[data-list-group="coordinator"] [data-session-row="${main}"]`)
-          .count()
+        const begun = run.page.locator(
+          `[data-list-group="coordinator"] [data-session-row="${main}"]`,
+        )
         const start = run.page.locator(
           `[data-list-group="coordinator"] [data-coordinator-start="${main}"]`,
         )
         const offered = await waitFor(
           async () =>
-            ((await start.count()) === 1 || begun > 0) &&
+            ((await start.count()) === 1 || (await begun.count()) > 0) &&
             (await run.page
               .locator("[data-list-group]")
               .first()

@@ -775,10 +775,13 @@ impl ConversationService {
         let Some(channel) = store.channel_of(id).await? else {
             // The default channel's coordinator works in the gateway's
             // workspace, as every conversation there does, and is told it is
-            // the main agent as a made channel's is.
+            // the main agent as a made channel's is. Which conversation that
+            // is was settled once, by its owner, when it was created: its
+            // pinned role says so, so the same id created by anyone else is
+            // told nothing more.
             let workspace = self.inner.workspace.as_ref();
             return Ok(match workspace {
-                Some(folder) if store.default_coordinator_of(id).await?.is_some() => {
+                Some(folder) if self.started_as_coordinator(id).await? => {
                     Some(AgentPlace {
                         folder: PathBuf::from(folder),
                         instructions: format!(

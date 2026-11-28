@@ -9233,7 +9233,7 @@
         },
         "coordinatorOn": {
           "type": "boolean",
-          "description": "Whether the channel's coordinator is on; a made channel and the default one start with it on, and the default one is false only when it has no coordinatorConversationId. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator)."
+          "description": "Whether the channel's coordinator is on; a made channel and the default one start with it on, and the default one is also false when it has no coordinatorConversationId. Off keeps coordinatorConversationId and its threads, but the channel is not opened at that conversation; on again, the same conversation is its coordinator (channel.setCoordinator)."
         }
       },
       "required": [
