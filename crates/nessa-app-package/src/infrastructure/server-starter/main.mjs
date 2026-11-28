@@ -50,11 +50,16 @@ const routes = {
 const MAX_BODY = 64 * 1024
 
 async function body(request) {
-  let text = ""
+  // Bytes first, decoded once whole, so a character split between two
+  // chunks is never decoded in halves.
+  const chunks = []
+  let size = 0
   for await (const chunk of request) {
-    text += chunk
-    if (text.length > MAX_BODY) throw new Error("too large")
+    size += chunk.length
+    if (size > MAX_BODY) throw new Error("too large")
+    chunks.push(chunk)
   }
+  const text = Buffer.concat(chunks).toString("utf8")
   return text ? JSON.parse(text) : {}
 }
 

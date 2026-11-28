@@ -30,8 +30,12 @@ export async function bundleAppClient(outFile) {
       },
       outDir: dirname(outFile),
       emptyOutDir: false,
-      // Node 20 and bun both run ES2022.
+      // Node 22 and bun both run ES2022.
       target: "es2022",
+      // One file: the app host embeds and writes only this one, so a chunk
+      // split out for a dynamic import (Windows' private file reader) would
+      // never reach the app.
+      rollupOptions: { output: { inlineDynamicImports: true } },
       minify: true,
       copyPublicDir: false,
       reportCompressedSize: false,
