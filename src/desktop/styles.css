@@ -274,7 +274,12 @@ html:not(.dark) [data-surface] {
  * the host puts them (`src-tauri/src/platform/macos/traffic_lights.rs`).
  */
 [data-host="macos"][data-surface="window"] {
-  --desktop-window-controls-inset: 79px;
+  /*
+   * The host's, in screen points: the page's zoom does not scale the buttons
+   * (`--desktop-zoom`, which `adapters/window-zoom.ts` keeps on the root), so
+   * their room in the page's own pixels is divided by it.
+   */
+  --desktop-window-controls-inset: calc(79px / var(--desktop-zoom, 1));
 }
 
 /* A slow, faint light behind everything, so the glass has something to hold.

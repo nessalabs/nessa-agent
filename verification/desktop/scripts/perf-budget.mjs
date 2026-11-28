@@ -142,7 +142,7 @@ async function openOverview(page) {
   await settled(page)
   if ((await state(page)).content !== content.overview)
     throw new CannotRun(
-      `⌘0 did not show the Agents overview (data-content ≠ ${content.overview})`,
+      `⇧⌘A did not show the Agents overview (data-content ≠ ${content.overview})`,
     )
 }
 

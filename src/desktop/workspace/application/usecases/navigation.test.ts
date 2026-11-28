@@ -356,7 +356,7 @@ describe("a widget over the panes: the window place", () => {
     expect(last.content).toEqual({ widget: run })
   })
 
-  it("gives way to the overview on ⌘0, and the overview to it", () => {
+  it("gives way to the overview on ⇧⌘A, and the overview to it", () => {
     const agents = showContent(over(loaded()), { content: "agents" })
     expect(agents.content).toBe("agents")
     expect(over(agents).content).toEqual({ widget: run })

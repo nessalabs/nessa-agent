@@ -794,3 +794,10 @@ it("sizes every sidebar's row from the one row, never a length of its own", () =
     /var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
   )
 })
+
+it("divides the host's room for the traffic lights by the page's zoom", () => {
+  // The host's buttons are in screen points, which the page's zoom does not scale.
+  expect(styles).toMatch(
+    /\[data-host="macos"\]\[data-surface="window"\] \{[^}]*--desktop-window-controls-inset: calc\(79px \/ var\(--desktop-zoom, 1\)\);/,
+  )
+})

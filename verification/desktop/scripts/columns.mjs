@@ -28,7 +28,7 @@
  *                    keeps those words clear of the toggle. Devices leaves
  *                    that corner empty, and the toggle does not move.
  *   rail-view-inert  under an item's full view the workspace takes no keys:
- *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
+ *                    ⌘B, ⇧⌘A and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left. The view covers the
  *                    workspace to the window's edges. The titlebar's free
  *                    room is the window's drag region, not a workspace card.
@@ -155,7 +155,7 @@ Checks, per engine, layout and size:
   rail-corner      the bottom-left toggle never moves as the rail or sidebar
                    toggles; "nessa Studio" stays clear of it in Agents; Devices
                    leaves that corner empty
-  rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it;
+  rail-view-inert  ⌘B, ⇧⌘A and ⌥⌘S under a full view change nothing behind it;
                    the view covers the workspace, and the titlebar's free room
                    is the window's drag region
   rail-loading     Devices opens with no loader; still loading at 3 s it shows

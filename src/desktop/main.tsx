@@ -30,6 +30,7 @@ import {
   reviewNoticeAccess,
   syncReviewNotices,
   sandboxSchemeRegistered,
+  setDesktopZoom,
   signInToProvider,
   providerLoginAvailable,
   saveFile,
@@ -44,6 +45,7 @@ import { createDesktopDependencies } from "./dependencies"
 import { faviconSiteIcon } from "./workspace/adapters/favicon-site-icon"
 import { SiteIconProvider } from "./workspace/ui/transcript/site-icon"
 import { hostGateway } from "./adapters/host-gateway"
+import { bindWindowZoom } from "./adapters/window-zoom"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
 import {
@@ -140,6 +142,9 @@ function windowGateway(
       return undefined
   }
 }
+// The app zooms its own page with ⌘=, ⌘- and ⌘0. A
+// browser's zoom is the browser's, so there the window binds none of it.
+if (hasNativeHost()) bindWindowZoom({ apply: setDesktopZoom })
 // In the app on macOS and Linux, a waiting review is the system's notice,
 // which the host shows and takes back: the webview has no notifications of
 // its own there. Opening one brings this window forward on its conversation.

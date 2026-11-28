@@ -2,9 +2,9 @@
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { expect, it, vi } from "vitest"
-import { useKeyBindings } from "./shortcuts"
+import { useKeyBindings } from "./key-bindings"
 
-vi.mock("../../../adapters/platform", () => ({ isMac: true }))
+vi.mock("./platform", () => ({ isMac: true }))
 
 const bindings = [{ chord: { code: "KeyN", command: true }, command: "new" }] as const
 

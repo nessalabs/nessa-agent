@@ -75,7 +75,7 @@ mod on_a_real_window {
     use objc2_app_kit::{NSApplication, NSWindow};
     use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-    use super::traffic_lights::{buttons, watch, LEFT, ROW_CENTRE};
+    use super::traffic_lights::{buttons, row_centre, set_zoom, watch, LEFT, ROW_CENTRE};
 
     // NSWindowStyleMask, as `"titleBarStyle": "Overlay"` builds the window.
     const TITLED: usize = 1;
@@ -152,6 +152,19 @@ mod on_a_real_window {
         spin();
         expect_on_row(&window, "after the frame view laid out again", &before);
 
+        // The page zoomed: its row is that much taller or shorter, and the
+        // buttons follow on the run loop's next check, with nothing else said.
+        for zoom in [1.5, 0.8, 1.0] {
+            set_zoom(zoom);
+            assert_eq!(row_centre(), ROW_CENTRE * zoom);
+            spin();
+            expect_on_row(
+                &window,
+                &format!("after the page zoomed to {zoom}"),
+                &before,
+            );
+        }
+
         window.close();
     }
 
@@ -194,9 +207,10 @@ mod on_a_real_window {
         );
         for (index, (centre, left)) in found.iter().enumerate() {
             assert!(
-                (centre - ROW_CENTRE).abs() <= 0.5,
-                "{when}: button {index} is centred {centre:.1}pt below the top, not {ROW_CENTRE} \
-                 (AppKit's own placement was {before}; now {found:?})"
+                (centre - row_centre()).abs() <= 0.5,
+                "{when}: button {index} is centred {centre:.1}pt below the top, not {} \
+                 (AppKit's own placement was {before}; now {found:?})",
+                row_centre()
             );
             if index == 0 {
                 assert!(

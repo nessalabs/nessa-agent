@@ -118,7 +118,7 @@ const scenarios = {
   },
   overview: async ({ page, watch }) => {
     await page.locator(css.composer).first().click()
-    await watch("⌘0 open", () => page.keyboard.press(keys.overview), 1000)
+    await watch("⇧⌘A open", () => page.keyboard.press(keys.overview), 1000)
     await watch("⌘B in overview", () => page.keyboard.press(keys.toggleSidebar))
     await watch("⌘B in overview", () => page.keyboard.press(keys.toggleSidebar))
     await watch("Esc leave", () => page.keyboard.press(keys.escape), 1000)

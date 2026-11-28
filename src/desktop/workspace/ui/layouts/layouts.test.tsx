@@ -581,7 +581,7 @@ describe("the Agents entry is not marked on the open's own paint", () => {
   })
 })
 
-describe("⌘0 and the sidebar's Agents entry always open the overview, with nothing to turn on", () => {
+describe("⇧⌘A and the sidebar's Agents entry always open the overview, with nothing to turn on", () => {
   for (const [name, Layout] of [
     ["three columns", ThreeColumns],
     ["sessions in the sidebar", SessionsInSidebar],

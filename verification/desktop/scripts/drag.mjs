@@ -18,7 +18,7 @@
  *                        over a zone after it start nothing and drop nothing
  *   resize-mid-drag      a resize while carrying ends the drag at once: nothing left lifted,
  *                        every pane inside the window every frame, nothing under the controls
- *   command-mid-drag     ⌘W and ⌘0 while carrying end the drag first, then run: the same
+ *   command-mid-drag     ⌘W and ⇧⌘A while carrying end the drag first, then run: the same
  *   overview-session-drop  (sessions in the sidebar) a session carried while the overview
  *                        covers the panes offers no zone and no placeholder; the release changes nothing
  *   flick                down, across and up in one task — before any copy, and again
@@ -821,12 +821,12 @@ const checks = {
       ...(await changeMidDrag(
         next,
         layout,
-        "⌘0",
+        "⇧⌘A",
         () => next.keyboard.press(keys.overview),
         (b, a, s) =>
           s.content === content.overview && a.join(",") === b.join(",")
             ? null
-            : `⌘0 mid-drag: content ${s.content}, panes ${b} → ${a}; expected the overview and no drop`,
+            : `⇧⌘A mid-drag: content ${s.content}, panes ${b} → ${a}; expected the overview and no drop`,
       )),
     )
     return { failures }

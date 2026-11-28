@@ -259,7 +259,7 @@ panes within that observer broadcast (#693). The overview's width observer also
 commits its arrangement in an animation frame, avoiding a synchronous React
 flush that could mount pending neighboring observers during delivery.
 
-The **Agents overview** (`ui/overview/`, ⌘0 or "Agents" at the top of the
+The **Agents overview** (`ui/overview/`, ⇧⌘A or "Agents" at the top of the
 sidebar, in both layouts, with nothing to turn on) takes the
 content region while open, as a layer over the session list and the panes,
 which stay laid out beneath it — so a pane command asked meanwhile measures

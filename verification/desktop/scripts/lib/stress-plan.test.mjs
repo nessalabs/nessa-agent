@@ -41,6 +41,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("mcp"), knobs.mcpServers)
   assert.equal(count("rail"), knobs.rails)
+  assert.equal(count("zoom"), knobs.zooms)
   assert.equal(count("panel"), knobs.panels)
   assert.equal(count("menuPanel"), knobs.menuPanels)
   assert.equal(count("menu"), knobs.menus)
@@ -205,6 +206,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         raises: "0",
         telemetries: "0",
         apps: "0",
+        zooms: "0",
         githubs: "0",
         voices: "0",
         passphrases: "0",

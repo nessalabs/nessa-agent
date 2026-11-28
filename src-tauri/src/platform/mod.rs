@@ -130,6 +130,12 @@ pub trait Host: Send + Sync {
         Ok(())
     }
 
+    /// Keep those controls on the titlebar row of a page drawn at `zoom`: the
+    /// page's zoom scales its row, and never the window's own controls.
+    fn zoom_window_controls(&self, _window: &WebviewWindow, _zoom: f64) -> Result<(), String> {
+        Ok(())
+    }
+
     /// After the shared attach (size, frost, watches). Linux uses this to put
     /// the panel on the taskbar and show it; macOS leaves it hidden until the
     /// tray summons it.

@@ -4,7 +4,7 @@
  * registers: the trail's card in a message opens a tab in its chat's right
  * panel, never a pane, and that tab the window over the panes, and Escape
  * goes back; the window is left by Escape, its close, ⌘W (the pane beneath
- * still there) and a session chosen, and ⌘0 from it goes to the overview;
+ * still there) and a session chosen, and ⇧⌘A from it goes to the overview;
  * Escape inside a view steps back first; the off and missing cards say so;
  * the card's Open puts the caret in the panel's body and ⌘1–4 in a
  * composer, and closing the last tab hands it back to the chat; Escape
@@ -52,7 +52,7 @@ Checks, per engine and layout (--only <names> to pick):
                      from its first frame; Escape goes back to the panes as they
                      were, the caret in the chat's composer
   window-left        the window is left by its close, ⌘W (no pane closed), a
-                     session chosen; ⌘0 from it opens the overview
+                     session chosen; ⇧⌘A from it opens the overview
   escape-steps       a detail open in the window or the panel: Escape closes it, the
                      caret staying in the widget; a second Escape still reaches
                      the view (the window: back to the panes)
@@ -360,7 +360,7 @@ const checks = {
     }
     await windowFromCard(page, failures)
     await page.keyboard.press(keys.overview)
-    await expectContent(page, content.overview, "⌘0 from the window", failures)
+    await expectContent(page, content.overview, "⇧⌘A from the window", failures)
     await escape(page)
     await expectContent(page, content.panes, "Escape from the overview", failures)
     return { failures }

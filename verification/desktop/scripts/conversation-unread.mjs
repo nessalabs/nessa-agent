@@ -195,7 +195,7 @@ async function openAgents(page) {
   }
   await focusComposer(page)
   const mac = await page.evaluate(() => /Mac/.test(navigator.userAgent))
-  await page.keyboard.press(mac ? keys.overview : "Control+Digit0")
+  await page.keyboard.press(mac ? keys.overview : "Control+Shift+KeyA")
 }
 
 function sentenceFailures(where, text) {

@@ -7,7 +7,7 @@ import {
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
 import { useNow } from "../../../../clock"
-import { labelOf } from "../../adapters/dom/shortcuts"
+import { labelOf } from "../../../adapters/key-bindings"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
   selectAnswer,
