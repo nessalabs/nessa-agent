@@ -315,12 +315,13 @@
 .settings-nav-item {
   display: flex;
   width: 100%;
-  min-height: 32px;
+  /* The window's sidebar row (`styles.css`), on Settings' wider pad and gap. */
+  min-height: var(--desktop-row-height);
   align-items: center;
   gap: 10px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--desktop-radius-sm);
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 78%, transparent);
   font: inherit;
@@ -343,8 +344,8 @@
 }
 
 .settings-nav-icon {
-  width: 16px;
-  height: 16px;
+  width: var(--desktop-row-icon);
+  height: var(--desktop-row-icon);
   flex: none;
   color: var(--desktop-muted);
   transition: color 120ms ease;

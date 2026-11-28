@@ -140,14 +140,14 @@
  * row's own class (a thread, "Show all") outranks the base and its states.
  */
 .workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {
-  height: 28px;
-  gap: 8px;
-  padding: 0 8px;
+  height: var(--desktop-row-height);
+  gap: var(--desktop-row-gap);
+  padding: 0 var(--desktop-row-pad);
   border-radius: var(--desktop-radius-sm);
   background: transparent;
   color: var(--desktop-ink-2);
   font: inherit;
-  font-size: var(--desktop-text-body);
+  font-size: var(--desktop-row-text);
   letter-spacing: inherit;
   transition:
     background-color var(--desktop-fast) ease,
@@ -220,7 +220,9 @@
  * row's padding ends; the label leaves it room by what it is (`trailingRoom`).
  */
 .workspace-sidebar [data-slot="sidebar-menu-item-trailing"] {
-  right: 8px;
+  right: var(--desktop-row-pad);
+  /* The kit's band is its own row's height; the count is centred on ours. */
+  height: var(--desktop-row-height);
 }
 
 /*
@@ -305,7 +307,7 @@
 
 .workspace-row-icon {
   display: inline-flex;
-  width: 16px;
+  width: var(--desktop-row-icon);
   flex: none;
   justify-content: center;
   color: var(--desktop-faint);
@@ -316,8 +318,8 @@
 }
 
 .workspace-row-icon svg {
-  width: 14px;
-  height: 14px;
+  width: var(--desktop-row-icon);
+  height: var(--desktop-row-icon);
   stroke-width: 1.75;
 }
 
@@ -360,7 +362,7 @@
 
 .workspace-section-head {
   display: flex;
-  height: 28px;
+  height: var(--desktop-row-height);
   align-items: center;
 }
 
@@ -371,12 +373,12 @@
   height: 100%;
   align-items: center;
   gap: 4px;
-  padding: 0 8px;
+  padding: 0 var(--desktop-row-pad);
   border: 0;
   border-radius: var(--desktop-radius-sm);
   background: transparent;
   color: var(--desktop-faint) !important;
-  font-size: var(--desktop-text-caption) !important;
+  font-size: var(--desktop-row-label-text) !important;
   font-weight: 600 !important;
   letter-spacing: 0.01em;
   text-align: left;
@@ -484,10 +486,10 @@
  * states, in a sidebar row's box.
  */
 .workspace-thread-row {
-  --list-row-gap: 8px;
+  --list-row-gap: var(--desktop-row-gap);
   width: 100%;
-  height: 28px;
-  padding: 0 8px;
+  height: var(--desktop-row-height);
+  padding: 0 var(--desktop-row-pad);
   border-radius: var(--desktop-radius-sm);
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);

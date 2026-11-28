@@ -163,6 +163,24 @@ body {
   --desktop-radius-md: 12px;
   --desktop-radius-lg: 16px;
   --desktop-radius-xl: 20px;
+  /*
+   * A sidebar's row, defined once: the workspace's channels, sessions and
+   * section labels (`source-list.css`, `channel-branch.css`) and Settings'
+   * navigation (`settings.css`) are this one row, so a sidebar is made roomier
+   * or denser here and nowhere else. The icon column's middle, which the side
+   * rail and the window's corner stand on (`--rail-column`), follows from the
+   * pad and the icon. `styles.test.ts` holds the sidebars to these.
+   */
+  --desktop-row-height: 32px;
+  /* From the row's edge to its icon, and from its label to its other edge. */
+  --desktop-row-pad: 8px;
+  /* Between the icon and the label. */
+  --desktop-row-gap: 8px;
+  /* The glyph, and the column it is centred in. */
+  --desktop-row-icon: 16px;
+  --desktop-row-text: var(--desktop-text-callout);
+  /* A section's label, above its rows. */
+  --desktop-row-label-text: var(--desktop-text-footnote);
   /* The room between a pane's composer and the pane's edges, the same in every pane. */
   --workspace-dock-gutter: 16px;
 
@@ -170,6 +188,8 @@ body {
   --desktop-text-caption: 11px;
   --desktop-text-footnote: 12px;
   --desktop-text-body: 13px;
+  /* A sidebar's rows: a step above the body, as a list read at a glance is. */
+  --desktop-text-callout: 14px;
   --desktop-text-read: 14.5px;
   --desktop-text-title: 17px;
   --desktop-text-display: 20px;

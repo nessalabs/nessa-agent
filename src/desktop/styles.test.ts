@@ -753,3 +753,44 @@ it("quiets a short pane's composer at the height the pane limits name", () => {
     `@container workspace-pane (max-height: ${paneLimits.quietComposerBelow - 1}px)`,
   )
 })
+
+it("sizes every sidebar's row from the one row, never a length of its own", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8")
+  // The row is defined once, with the window's other scales.
+  for (const name of ["height", "pad", "gap", "icon", "text", "label-text"])
+    expect(styles, name).toMatch(new RegExp(`\\n  --desktop-row-${name}: [^;]+;`))
+  const rule = (sheet: string, selector: string) => {
+    const start = sheet.indexOf(selector)
+    expect(start, selector).toBeGreaterThanOrEqual(0)
+    return sheet.slice(start, sheet.indexOf("}", start))
+  }
+  const sourceList = read("./workspace/ui/source-list/source-list.css")
+  const branch = read("./workspace/ui/source-list/channel-branch.css")
+  const settings = read("./settings/ui/settings.css")
+  const heights = [
+    // A channel, Agents, "Show all": the kit's row.
+    rule(
+      sourceList,
+      '.workspace-sidebar :where([data-slot="sidebar-menu-item-row"] > [data-size]) {',
+    ),
+    // The count laid over it, centred on the same height.
+    rule(sourceList, '.workspace-sidebar [data-slot="sidebar-menu-item-trailing"] {'),
+    rule(sourceList, ".workspace-section-head {"),
+    rule(sourceList, ".workspace-thread-row {"),
+    rule(branch, ".workspace-disclosure {"),
+    rule(branch, ".workspace-search-button {"),
+    rule(settings, ".settings-nav-item {"),
+  ]
+  for (const body of heights) expect(body).toMatch(/height: var\(--desktop-row-height\);/)
+  const icons = [
+    rule(sourceList, ".workspace-row-icon svg {"),
+    rule(branch, ".workspace-disclosure > svg {"),
+    rule(branch, ".workspace-search-button > svg {"),
+    rule(settings, ".settings-nav-icon {"),
+  ]
+  for (const body of icons) expect(body).toMatch(/width: var\(--desktop-row-icon\);/)
+  // The side rail stands on the rows' icon column, wherever the row puts it.
+  expect(rule(read("./workspace/ui/chrome/side-rail.css"), "--rail-column:")).toMatch(
+    /var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
+  )
+})
