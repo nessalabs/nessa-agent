@@ -789,9 +789,44 @@ it("sizes every sidebar's row from the one row, never a length of its own", () =
     rule(settings, ".settings-nav-icon {"),
   ]
   for (const body of icons) expect(body).toMatch(/width: var\(--desktop-row-icon\);/)
+  // The words, and the room around them.
+  expect(rule(settings, ".settings-nav-item {")).toMatch(
+    /font-size: var\(--desktop-row-text\);/,
+  )
+  expect(
+    rule(
+      branch,
+      ".workspace-branch-sessions :is(.workspace-thread-row, .workspace-more) {",
+    ),
+  ).toMatch(/font-size: var\(--desktop-row-text\);/)
+  expect(rule(sourceList, ".workspace-thread-row {")).toMatch(
+    /padding: 0 var\(--desktop-row-pad\);/,
+  )
+  // A row's label leaves room for what is laid over its end: the row's own
+  // pad and gap, never a copy of their sum.
+  expect(sourceList).not.toMatch(/padding-right: calc\(\s*\d/)
+  expect(
+    sourceList.match(/var\(--desktop-row-pad\) \+ var\(--desktop-row-gap\) \+/g),
+  ).toHaveLength(5)
+  // The guides under a channel, and its disclosure, stand on the icon column.
+  for (const sheet of [sourceList, branch])
+    expect(sheet).toMatch(
+      /left: calc\(var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2 - /,
+    )
+  expect(rule(branch, "--workspace-disclosure-width:").replace(/\s+/g, " ")).toMatch(
+    /var\(--desktop-row-icon\) \+ 2 \* \(var\(--desktop-row-pad\) - var\(--workspace-disclosure-inset\)\)/,
+  )
   // The side rail stands on the rows' icon column, wherever the row puts it.
-  expect(rule(read("./workspace/ui/chrome/side-rail.css"), "--rail-column:")).toMatch(
-    /var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
+  expect(
+    rule(read("./workspace/ui/chrome/side-rail.css"), "--rail-column:").replace(
+      /\s+/g,
+      " ",
+    ),
+  ).toMatch(
+    /var\(--desktop-list-pad\) \+ var\(--desktop-row-pad\) \+ var\(--desktop-row-icon\) \/ 2/,
+  )
+  expect(rule(sourceList, ".workspace-sidebar-scroll {")).toMatch(
+    /padding: 4px var\(--desktop-list-pad\) 12px;/,
   )
 })
 

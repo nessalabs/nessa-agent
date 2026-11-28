@@ -7457,7 +7457,8 @@ const steps = {
       if (folded) await page.keyboard.press(keys.toggleSidebar)
       await sidebarOnTheRow(page, "at 100%", failures)
       const start = await zoomNow(page)
-      if (start.root !== "1" || start.stored !== null)
+      // Never zoomed, or back at 100% after an earlier zoom step.
+      if (start.root !== "1" || (start.stored !== null && start.stored !== "1"))
         failures.push(`the window started zoomed: ${JSON.stringify(start)}`)
       const rest = (await railLayout(page)).at
       // Zoomed to `zoom` by its key: the host is asked for it once, the root
@@ -7549,8 +7550,7 @@ const steps = {
       } finally {
         // Whatever failed, the next step gets the window at 100% and full size.
         await page.setViewportSize(size)
-        if ((await zoomNow(page)).stored !== null)
-          await page.keyboard.press(keys.zoomReset)
+        if ((await zoomNow(page)).root !== "1") await page.keyboard.press(keys.zoomReset)
         if (folded) await page.keyboard.press(keys.toggleSidebar)
       }
     })

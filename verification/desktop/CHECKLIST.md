@@ -1595,7 +1595,7 @@ _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity o
   titlebar row's centre at every step, and the window cannot be dragged
   narrower than its layout holds.
 - [ ] **Every sidebar row is the one row.** The workspace's channels, Agents
-  entry, section labels and sessions, and Settings' navigation, take their
+  entry, section labels and the sessions under a channel, and Settings' navigation, take their
   height, icon and type from `--desktop-row-*` (`styles.css`): 32px tall,
   16px icons, 14px words. _Check:_ `styles.test.ts`;
   `pnpm test:e2e:stress -- --only zoom` (the rows as drawn, at 100% and zoomed).

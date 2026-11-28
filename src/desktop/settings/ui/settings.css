@@ -325,6 +325,7 @@
   background: transparent;
   color: color-mix(in oklab, var(--foreground) 78%, transparent);
   font: inherit;
+  font-size: var(--desktop-row-text);
   text-align: left;
   cursor: default;
   user-select: none;

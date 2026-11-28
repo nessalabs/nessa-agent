@@ -153,6 +153,8 @@ export function HeaderPicture({
             ArrowUp: [0, keyStep],
             ArrowDown: [0, -keyStep],
           }
+          // With ⌘ or Ctrl held the key is the window's (its zoom), not the picture's.
+          if (event.metaKey || event.ctrlKey) return
           if (Object.hasOwn(moves, event.key)) {
             event.preventDefault()
             pan(...moves[event.key])

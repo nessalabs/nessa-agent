@@ -57,6 +57,15 @@ fn zoom_steps() -> Vec<f64> {
         .collect()
 }
 
+/// Only the desktop window zooms: the panel and an app's window keep their size.
+fn may_zoom(label: &str) -> Result<(), String> {
+    if label == DESKTOP_WINDOW {
+        Ok(())
+    } else {
+        Err(String::from("only the desktop window zooms"))
+    }
+}
+
 /// `zoom` as the page may ask for it: exactly one of the steps.
 fn allowed_zoom(zoom: f64) -> Result<f64, String> {
     zoom_steps()
@@ -92,11 +101,13 @@ fn grown_to(size: (f64, f64), min: (f64, f64)) -> Option<(f64, f64)> {
 /// touched. The page remembers the zoom and asks for it again at each launch.
 #[tauri::command]
 pub fn desktop_zoom(window: WebviewWindow, zoom: f64) -> Result<(), String> {
-    if window.label() != DESKTOP_WINDOW {
-        return Err(String::from("only the desktop window zooms"));
-    }
+    may_zoom(window.label())?;
     let zoom = allowed_zoom(zoom)?;
     window.set_zoom(zoom).map_err(|error| error.to_string())?;
+    // The page is zoomed from here on, so the controls follow it before
+    // anything else can fail, and the page is told of the zoom whatever
+    // becomes of the window's size.
+    platform::current().zoom_window_controls(&window, zoom)?;
     let at_rest = window
         .config()
         .app
@@ -105,22 +116,25 @@ pub fn desktop_zoom(window: WebviewWindow, zoom: f64) -> Result<(), String> {
         .find(|declared| declared.label == DESKTOP_WINDOW)
         .and_then(|declared| declared.min_width.zip(declared.min_height));
     if let Some(at_rest) = at_rest {
-        let (width, height) = min_size_at(zoom, at_rest);
-        window
-            .set_min_size(Some(LogicalSize::new(width, height)))
-            .map_err(|error| error.to_string())?;
-        let scale = window.scale_factor().map_err(|error| error.to_string())?;
-        let size = window
-            .inner_size()
-            .map_err(|error| error.to_string())?
-            .to_logical::<f64>(scale);
-        if let Some((width, height)) = grown_to((size.width, size.height), (width, height)) {
-            window
-                .set_size(LogicalSize::new(width, height))
-                .map_err(|error| error.to_string())?;
+        if let Err(error) = keep_room(&window, min_size_at(zoom, at_rest)) {
+            crate::host_log::warn(format!(
+                "could not size the desktop window for its zoom: {error}"
+            ));
         }
     }
-    platform::current().zoom_window_controls(&window, zoom)
+    Ok(())
+}
+
+/// Makes `min` the window's smallest size, and grows a window under it to it.
+fn keep_room(window: &WebviewWindow, min: (f64, f64)) -> tauri::Result<()> {
+    window.set_min_size(Some(LogicalSize::new(min.0, min.1)))?;
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
+    if let Some((width, height)) = grown_to((size.width, size.height), min) {
+        window.set_size(LogicalSize::new(width, height))?;
+    }
+    Ok(())
 }
 
 /// What closing the desktop window does, by whether there is a menu bar item
@@ -165,6 +179,14 @@ mod tests {
         }
         for refused in [0.0, -1.0, 1.05, 3.0, f64::NAN, f64::INFINITY] {
             assert!(allowed_zoom(refused).is_err(), "{refused} is refused");
+        }
+    }
+
+    #[test]
+    fn only_the_desktop_window_zooms() {
+        assert_eq!(may_zoom(DESKTOP_WINDOW), Ok(()));
+        for other in ["panel", "", "desktop-2"] {
+            assert!(may_zoom(other).is_err(), "{other:?} is refused");
         }
     }
 

@@ -6,13 +6,13 @@
   /*
    * Where the rail's controls stand from the window's edge: on the sidebar's
    * icon column, so the toggle in the closed rail's corner stands under
-   * Agents' icon. That column's middle is the gutter, the list's 8px, a
+   * Agents' icon. That column's middle is the gutter, the list's pad, a
    * row's pad and half its icon in (`source-list.css`; the row is
    * `styles.css`'s).
    */
   --rail-column: calc(
-    var(--desktop-gutter) + 8px + var(--desktop-row-pad) + var(--desktop-row-icon) / 2 -
-      var(--desktop-control-size) / 2
+    var(--desktop-gutter) + var(--desktop-list-pad) + var(--desktop-row-pad) +
+      var(--desktop-row-icon) / 2 - var(--desktop-control-size) / 2
   );
   position: relative;
   isolation: isolate;

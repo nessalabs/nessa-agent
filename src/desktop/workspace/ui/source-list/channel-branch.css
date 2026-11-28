@@ -5,10 +5,22 @@
  */
 /* ——— The tree's channel row: its glyph turns into its disclosure under the pointer ——— */
 
+/*
+ * The disclosure is a square target around the row's icon, drawn 2px in from
+ * the row's edge, so its glyph stands on the icon column of every other row.
+ */
+.workspace-sidebar {
+  --workspace-disclosure-inset: 2px;
+  --workspace-disclosure-width: calc(
+    var(--desktop-row-icon) + 2 *
+      (var(--desktop-row-pad) - var(--workspace-disclosure-inset))
+  );
+}
+
 /* The kit's row (`channel-branch.tsx`); its base and states are the sidebar's (`source-list.css`). */
 .workspace-sidebar .workspace-branch [data-row="channel"] {
   gap: 6px;
-  padding: 0 60px 0 2px;
+  padding: 0 60px 0 var(--workspace-disclosure-inset);
   color: var(--desktop-muted);
 }
 
@@ -24,7 +36,7 @@
 
 .workspace-disclosure {
   display: grid;
-  width: 28px;
+  width: var(--workspace-disclosure-width);
   height: var(--desktop-row-height);
   flex: none;
   place-items: center;
@@ -99,14 +111,14 @@
   position: absolute;
   top: 2px;
   bottom: 8px;
-  left: 15.5px;
+  left: calc(var(--desktop-row-pad) + var(--desktop-row-icon) / 2 - 0.5px);
   width: 1px;
   background: color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
 /* Every row beneath a channel: its sessions, and "Show all" or "Start a session". */
 .workspace-branch-sessions :is(.workspace-thread-row, .workspace-more) {
-  padding-left: 28px;
+  padding-left: var(--workspace-disclosure-width);
   font-size: var(--desktop-row-text);
   color: var(--desktop-muted);
   letter-spacing: -0.004em;
@@ -122,7 +134,7 @@
 }
 
 .workspace-branch-sessions .workspace-more {
-  padding-left: 46px;
+  padding-left: calc(var(--workspace-disclosure-width) + 18px);
 }
 
 /* ——— The tree's search and "Needs you" ——— */

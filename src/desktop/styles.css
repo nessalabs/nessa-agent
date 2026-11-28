@@ -179,6 +179,8 @@ body {
   /* The glyph, and the column it is centred in. */
   --desktop-row-icon: 16px;
   --desktop-row-text: var(--desktop-text-callout);
+  /* Between a sidebar's edge and its rows. */
+  --desktop-list-pad: 8px;
   /* A section's label, above its rows. */
   --desktop-row-label-text: var(--desktop-text-footnote);
   /* The room between a pane's composer and the pane's edges, the same in every pane. */
