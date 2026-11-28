@@ -52,7 +52,7 @@ export function GatewaysTab() {
   const [error, setError] = useState<string | null>(null)
   const [rowError, setRowError] = useState<string | null>(null)
   const [boxName, setBoxName] = useState("")
-  const [boxCloud, setBoxCloud] = useState<"agent37" | "boat">("agent37")
+  const [boxCloud, setBoxCloud] = useState<"agent37" | "boat">("boat")
   const [creatingBox, setCreatingBox] = useState(false)
   const [boxError, setBoxError] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -274,8 +274,11 @@ export function GatewaysTab() {
                   }
                   disabled={creatingBox}
                 >
-                  <option value="agent37">Agent37</option>
                   <option value="boat">Boat</option>
+                  {/* No Agent37 image carries a Cloud Box gateway yet. */}
+                  <option value="agent37" disabled>
+                    Agent37 (coming later)
+                  </option>
                 </select>
               }
             />
