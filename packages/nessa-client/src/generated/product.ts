@@ -1803,6 +1803,7 @@ export interface AppReview {
 export interface AppServer {
   /** The package's script the runtime starts. */
   entry: string
+  /** The runtime that starts it. */
   runtime: AppServerRuntime
 }
 /** What runs a dynamic app's program: Node.js or Bun, as installed on this computer. */

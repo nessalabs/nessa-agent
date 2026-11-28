@@ -4734,7 +4734,10 @@
           "x-utf8MaxBytes": 240,
           "description": "The package's script the runtime starts."
         },
-        "runtime": { "$ref": "#/$defs/AppServerRuntime" }
+        "runtime": {
+          "$ref": "#/$defs/AppServerRuntime",
+          "description": "The runtime that starts it."
+        }
       },
       "required": ["entry", "runtime"]
     },
