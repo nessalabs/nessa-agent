@@ -4904,7 +4904,7 @@
     "AppsIssueCredentialParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and any credential issued to that app before is revoked first.",
+      "description": "Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and it ends any credential issued to that app before, in the same step.",
       "properties": {
         "requestId": {
           "type": "string",

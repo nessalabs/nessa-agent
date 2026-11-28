@@ -785,6 +785,23 @@ impl LocalCredentialStore {
                 Some(&request.request_id),
             )?;
         }
+        if path == IssuePath::AppIssue {
+            // An app holds one credential: the new one ends whatever the
+            // same app still holds, in this same commit, so a refused or
+            // replayed issue never leaves the app without its working one.
+            supersede_matching(
+                &mut next,
+                |existing| {
+                    existing.principal_id == request.principal.id
+                        && existing.organization_id == request.membership.organization_id
+                },
+                request.issued_at,
+                credential.id(),
+                Supersession::AppReissue,
+                &initiator,
+                Some(&request.request_id),
+            )?;
+        }
         let cause = match path {
             IssuePath::WebhookIssue => IssuanceCause::WebhookIssue,
             IssuePath::SurfaceProvision => IssuanceCause::SurfaceProvision,

@@ -211,8 +211,11 @@ async fn a_late_retry_of_a_revoke_never_reaches_a_credential_issued_after_it() {
     };
     assert_eq!(revoke("r2").await.unwrap(), 1);
     let fresh = registry.issue("r3", "notes").await;
-    // The retry answers what it revoked the first time, and nothing more.
-    assert_eq!(revoke("r2").await.unwrap(), 1);
+    // The retry is refused, and the credential issued after it still works.
+    assert!(matches!(
+        revoke("r2").await,
+        Err(CredentialRefusal::Conflict)
+    ));
     assert_eq!(registry.sign_in(&fresh.secret).await.unwrap(), "notes");
 }
 

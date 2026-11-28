@@ -11,9 +11,11 @@ fn frame(method: &str, params: Value) -> RequestFrame {
     frame
 }
 
+/// The app dispatcher routes only conversation methods; which of them an
+/// app may call is the `app_call.*` policies' (tested in `nessa-auth`).
 #[test]
-fn an_app_is_offered_only_conversation_methods_and_each_needs_one_capability() {
-    for (method, _) in APP_METHODS {
+fn an_app_is_routed_only_conversation_methods() {
+    for method in APP_METHODS {
         assert!(method.starts_with("conversation."), "{method}");
         // Each is a real Product method the conversation handler answers.
         assert_eq!(
@@ -33,16 +35,8 @@ fn an_app_is_offered_only_conversation_methods_and_each_needs_one_capability() {
         "terminal.open",
         "workspace.publish",
     ] {
-        assert_eq!(capability_for(method), None, "{method}");
+        assert!(!APP_METHODS.contains(&method), "{method}");
     }
-    assert_eq!(
-        capability_for("conversation.send"),
-        Some(AppCapability::Send)
-    );
-    assert_eq!(
-        capability_for("conversation.list"),
-        Some(AppCapability::List)
-    );
 }
 
 #[test]

@@ -234,3 +234,97 @@ when {
     principal.issuance == "app_issue" &&
     principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId })
 };
+
+// What an app session may call. The owner approved the app's operations at
+// install; each one admits these methods and nothing else, and only for a
+// registry-proven app at its own audience. Whose conversation it is stays
+// the conversation policy's to decide.
+@id("app_call.list")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("list") &&
+    resource.appMethod == "conversation.list"
+};
+
+@id("app_call.read")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("read") &&
+    ["conversation.read", "conversation.readEarlier", "conversation.receipt", "conversation.messageStatus"].contains(resource.appMethod)
+};
+
+@id("app_call.create")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("create") &&
+    resource.appMethod == "conversation.create"
+};
+
+@id("app_call.subscribe")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("subscribe") &&
+    resource.appMethod == "conversation.observe"
+};
+
+@id("app_call.stop")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("stop") &&
+    resource.appMethod == "conversation.stop"
+};
+
+@id("app_call.send")
+permit (
+    principal is Nessa::Actor,
+    action == Nessa::Action::"appCredential.call",
+    resource is Nessa::Resource
+)
+when {
+    principal.active &&
+    principal.issuance == "app_issue" &&
+    principal.grants.contains({ action: "app.identity", resourceId: resource.id, organizationId: resource.organizationId }) &&
+    resource has appCapabilities && resource has appMethod &&
+    resource.appCapabilities.contains("send") &&
+    ["conversation.send", "conversation.steer"].contains(resource.appMethod)
+};

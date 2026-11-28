@@ -1868,7 +1868,7 @@ export interface AppsUninstallResult {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
   appId: string
 }
-/** Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and any credential issued to that app before is revoked first. */
+/** Issue the credential an installed app signs in with (apps.issueCredential). It holds exactly the capabilities the installed package requests, and it ends any credential issued to that app before, in the same step. */
 export interface AppsIssueCredentialParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string

@@ -138,6 +138,20 @@ impl ResourceAttributes<'_> {
                 RestrictedExpression::new_string(panel.as_str().to_owned()),
             );
         }
+        if let Some(call) = self.resource.app_call() {
+            attrs.insert(
+                "appMethod".to_owned(),
+                RestrictedExpression::new_string(call.method.clone()),
+            );
+            attrs.insert(
+                "appCapabilities".to_owned(),
+                RestrictedExpression::new_set(
+                    call.capabilities
+                        .iter()
+                        .map(|capability| RestrictedExpression::new_string(capability.clone())),
+                ),
+            );
+        }
         attrs
     }
 }

@@ -8,7 +8,7 @@ use crate::{
         origin::CredentialOrigin,
         ports::{AccessError, Clock, CredentialEvidence, Decision, PolicyEvaluator},
     },
-    domain::{Action, AudienceId, AuthContext, Resource, ResourceId},
+    domain::{Action, AppCall, AudienceId, AuthContext, Resource, ResourceId},
 };
 
 /// Authenticated app identity. This is not an ordinary session and grants
@@ -126,5 +126,53 @@ impl ReadCurrentAppSession<'_> {
             return Err(AccessError::IdentityMismatch);
         }
         Ok(binding)
+    }
+}
+
+/// Whether an app session may call `method` now: its credential is still
+/// current, and policy admits the method for the operations its owner
+/// approved. `Denied` is a refusal of this one call; any other error ends the
+/// session.
+pub struct AdmitAppCall<'a> {
+    pub credentials: &'a dyn AppCredentials,
+    pub clock: &'a dyn Clock,
+    pub policy: &'a dyn PolicyEvaluator,
+}
+
+impl AdmitAppCall<'_> {
+    pub async fn execute(
+        &self,
+        session: &ScopedAppSession,
+        method: &str,
+    ) -> Result<AppCredentialBinding, AccessError> {
+        let AppCredentialSnapshot { access, binding } = self
+            .credentials
+            .read_app(session.context().credential_id())
+            .await?;
+        validate_current(&session.identity, &access, self.clock)?;
+        if access.origin != session.origin || binding != session.binding {
+            return Err(AccessError::IdentityMismatch);
+        }
+        let action = Action::new("appCredential.call").map_err(|_| AccessError::Unavailable)?;
+        let call = Resource::new(
+            session.context().organization_id().clone(),
+            ResourceId::new(session.context().audience_id().as_str())
+                .map_err(|_| AccessError::Unavailable)?,
+        )
+        .with_app_call(AppCall {
+            method: method.to_owned(),
+            capabilities: binding
+                .capabilities()
+                .iter()
+                .map(|capability| capability.as_str().to_owned())
+                .collect(),
+        });
+        match self
+            .policy
+            .evaluate(session.context(), &action, &call, &access)?
+        {
+            Decision::Allow => Ok(binding),
+            _ => Err(AccessError::Denied),
+        }
     }
 }

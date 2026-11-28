@@ -145,6 +145,7 @@ pub enum IssuanceCauseDto {
 pub enum SupersessionDto {
     Provision,
     OwnerRecovery,
+    AppReissue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

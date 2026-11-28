@@ -105,6 +105,7 @@ impl TryFrom<CredentialTransitionDto> for CredentialTransition {
                         kind: match supersession {
                             SupersessionDto::Provision => Supersession::Provision,
                             SupersessionDto::OwnerRecovery => Supersession::OwnerRecovery,
+                            SupersessionDto::AppReissue => Supersession::AppReissue,
                         },
                     }
                 }
@@ -166,6 +167,7 @@ impl CredentialTransitionDto {
                                 supersession: match kind {
                                     Supersession::Provision => SupersessionDto::Provision,
                                     Supersession::OwnerRecovery => SupersessionDto::OwnerRecovery,
+                                    Supersession::AppReissue => SupersessionDto::AppReissue,
                                 },
                             }
                         }

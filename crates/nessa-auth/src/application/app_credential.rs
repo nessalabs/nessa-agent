@@ -27,6 +27,20 @@ pub enum AppCapability {
     Send,
 }
 
+impl AppCapability {
+    /// The operation's name, as the owner approved it and policy reads it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Read => "read",
+            Self::Create => "create",
+            Self::Subscribe => "subscribe",
+            Self::Stop => "stop",
+            Self::Send => "send",
+        }
+    }
+}
+
 /// Nonempty, bounded set of typed operations. No dynamic operation names.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppCapabilities(BTreeSet<AppCapability>);

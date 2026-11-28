@@ -6,8 +6,10 @@
 //! decided here and nowhere else:
 //!
 //! ```text
-//! request ──▶ credential still current? (ReadCurrentAppSession) ── no ──▶ close
-//!         ──▶ method one of its capabilities'? ─────────────────── no ──▶ forbidden
+//! request ──▶ a method the app dispatcher routes at all? ────────── no ──▶ forbidden
+//!         ──▶ AdmitAppCall: credential still current? ──────────── no ──▶ close
+//!             Cedar `appCredential.call` admits the method for
+//!             the operations the owner approved? ─────────────── no ──▶ forbidden
 //!         ──▶ shape an app may ask for? ───────────────────────── no ──▶ forbidden
 //!         ──▶ conversation handler, as the app's own principal
 //! ```
@@ -22,10 +24,10 @@ use std::time::Duration;
 use axum::extract::ws::Message;
 use axum::Error;
 use futures_util::{Sink, Stream, StreamExt};
-use nessa_auth::application::app_credential::{AppCapability, AppCredentialBinding};
+use nessa_auth::application::app_credential::AppCredentialBinding;
 use nessa_auth::application::ports::{AccessError, CredentialEvidence};
 use nessa_auth::application::session::{
-    AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession,
+    AdmitAppCall, AuthenticateAppSession, ReadCurrentAppSession, ScopedAppSession,
 };
 use nessa_protocol::product::generated::{ApprovalMode, ConversationCreateParams};
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
@@ -38,28 +40,21 @@ use super::state::ProductRouteState;
 use super::wire::ready_frame;
 use nessa_protocol::product_contract::generated::SessionCloseReason;
 
-/// Every method an app may call, and the capability that admits it. Any
-/// other method is `forbidden`, whatever the credential holds.
-pub(super) const APP_METHODS: [(&str, AppCapability); 10] = [
-    ("conversation.list", AppCapability::List),
-    ("conversation.read", AppCapability::Read),
-    ("conversation.readEarlier", AppCapability::Read),
-    ("conversation.receipt", AppCapability::Read),
-    ("conversation.messageStatus", AppCapability::Read),
-    ("conversation.create", AppCapability::Create),
-    ("conversation.observe", AppCapability::Subscribe),
-    ("conversation.stop", AppCapability::Stop),
-    ("conversation.send", AppCapability::Send),
-    ("conversation.steer", AppCapability::Send),
+/// Every method the app dispatcher routes. Which of them a given app may
+/// call is Cedar's (`appCredential.call`, policy `app_call.*`), from the
+/// operations its owner approved; any other method is `forbidden`.
+pub(super) const APP_METHODS: [&str; 10] = [
+    "conversation.list",
+    "conversation.read",
+    "conversation.readEarlier",
+    "conversation.receipt",
+    "conversation.messageStatus",
+    "conversation.create",
+    "conversation.observe",
+    "conversation.stop",
+    "conversation.send",
+    "conversation.steer",
 ];
-
-/// The capability `method` needs, when an app may call it at all.
-pub(super) fn capability_for(method: &str) -> Option<AppCapability> {
-    APP_METHODS
-        .iter()
-        .find(|(name, _)| *name == method)
-        .map(|(_, capability)| *capability)
-}
 
 /// The app session `evidence` proves, when this gateway issues app
 /// credentials at all (`None` when it does not).
@@ -105,6 +100,40 @@ async fn current(
     .map_err(|_| AccessError::Unavailable)?
 }
 
+/// Whether the app may call `method` now: `Ok(true)` admitted, `Ok(false)`
+/// refused by policy, `Err` when the session must end.
+async fn admit(
+    state: &ProductRouteState,
+    session: &ScopedAppSession,
+    method: &str,
+) -> Result<bool, AccessError> {
+    let Some(credentials) = state
+        .accounts
+        .apps
+        .as_ref()
+        .and_then(|apps| apps.credentials())
+        .cloned()
+    else {
+        return Err(AccessError::CredentialRevoked);
+    };
+    let decided = timeout(
+        state.settings.handshake_timeout(),
+        AdmitAppCall {
+            credentials: credentials.sessions(),
+            clock: state.clock.as_ref(),
+            policy: state.policy.as_ref(),
+        }
+        .execute(session, method),
+    )
+    .await
+    .map_err(|_| AccessError::Unavailable)?;
+    match decided {
+        Ok(_) => Ok(true),
+        Err(AccessError::Denied) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// Serve one app session, one request at a time, until the app goes, its
 /// credential is revoked or expires, or the gateway closes.
 pub(super) async fn serve<S>(
@@ -117,23 +146,18 @@ pub(super) async fn serve<S>(
     S: Stream<Item = Result<Message, Error>> + Sink<Message> + Unpin + Send + 'static,
 {
     let write_timeout = state.settings.write_timeout();
-    let binding = match current(&state, &session).await {
-        Ok(binding) => binding,
-        Err(error) => {
-            close_session(write_timeout, &mut socket, close_reason(error)).await;
-            return;
+    // The methods it is offered are the ones policy admits now.
+    let mut methods = Vec::new();
+    for method in APP_METHODS {
+        match admit(&state, &session, method).await {
+            Ok(true) => methods.push(method.to_owned()),
+            Ok(false) => {}
+            Err(error) => {
+                close_session(write_timeout, &mut socket, close_reason(error)).await;
+                return;
+            }
         }
-    };
-    let methods = binding
-        .capabilities()
-        .iter()
-        .flat_map(|held| {
-            APP_METHODS
-                .iter()
-                .filter(move |(_, needs)| *needs == held)
-                .map(|(method, _)| (*method).to_owned())
-        })
-        .collect();
+    }
     let ready = ready_frame(
         state.gateway_id().as_str(),
         session.app_identity(),
@@ -192,13 +216,28 @@ pub(super) async fn serve<S>(
         let Ok(frame) = RequestFrame::decode(&text) else {
             continue;
         };
-        // Every request asks the credential store again: a revoked app is
-        // closed here, before anything it asked is done.
-        let binding = match current(&state, &session).await {
-            Ok(binding) => binding,
-            Err(error) => break Some(close_reason(error)),
+        // Every request asks the credential store and policy again: a
+        // revoked app is closed here, before anything it asked is done.
+        if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
+            let response = failure(&frame.id, "invalid_request");
+            if send(write_timeout, &mut socket, response).await.is_err() {
+                break None;
+            }
+            continue;
+        }
+        let admitted = if APP_METHODS.contains(&frame.method.as_str()) {
+            match admit(&state, &session, &frame.method).await {
+                Ok(admitted) => admitted,
+                Err(error) => break Some(close_reason(error)),
+            }
+        } else {
+            false
         };
-        let response = answer(&state, &session, &binding, frame, &client).await;
+        let response = if admitted {
+            answer(&state, &session, frame, &client).await
+        } else {
+            failure(&frame.id, "forbidden")
+        };
         if send(write_timeout, &mut socket, response).await.is_err() {
             break None;
         }
@@ -208,23 +247,13 @@ pub(super) async fn serve<S>(
     }
 }
 
-/// One request's answer, as the app's own principal.
+/// One admitted request's answer, as the app's own principal.
 async fn answer(
     state: &ProductRouteState,
     session: &ScopedAppSession,
-    binding: &AppCredentialBinding,
     mut frame: RequestFrame,
     client: &str,
 ) -> OutgoingMessage {
-    if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
-        return failure(&frame.id, "invalid_request");
-    }
-    let Some(needs) = capability_for(&frame.method) else {
-        return failure(&frame.id, "forbidden");
-    };
-    if !binding.capabilities().iter().any(|held| held == needs) {
-        return failure(&frame.id, "forbidden");
-    }
     if let Err(code) = admit_shape(&mut frame) {
         return failure(&frame.id, code);
     }

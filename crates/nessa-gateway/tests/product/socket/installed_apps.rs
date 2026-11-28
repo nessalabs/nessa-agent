@@ -8,11 +8,15 @@ use crate::installed_apps::application::{
 };
 use crate::installed_apps::infrastructure::SqliteAppStore;
 
+/// The apps audit; refuses every record while `.1` is set.
 #[derive(Default)]
-struct Kept(Mutex<Vec<AppsRecord>>);
+struct Kept(Mutex<Vec<AppsRecord>>, std::sync::atomic::AtomicBool);
 
 impl AppsAudit for Kept {
     fn record(&self, record: &AppsRecord) -> Result<(), AuditUnavailable> {
+        if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AuditUnavailable);
+        }
         self.0.lock().unwrap().push(record.clone());
         Ok(())
     }
@@ -429,6 +433,40 @@ mod credentials {
             &record.event,
             AppsEvent::CredentialIssued { credential_id, .. } if credential_id == "app-1"
         )));
+    }
+
+    #[tokio::test]
+    async fn a_credential_whose_record_is_lost_is_taken_back_and_reported() {
+        let fixture = fixture().await;
+        fixture.install("notes", &["list"]).await;
+        fixture.kept.1.store(true, Ordering::SeqCst);
+        assert_eq!(
+            code_of(
+                fixture
+                    .call(
+                        "apps.issueCredential",
+                        json!({ "requestId": "c1", "appId": "notes" }),
+                    )
+                    .await
+            ),
+            "apps_audit_unavailable"
+        );
+        // Issued, then revoked again: nobody holds a credential with no record.
+        assert_eq!(fixture.store.issued.lock().unwrap().len(), 1);
+        assert_eq!(*fixture.store.revoked.lock().unwrap(), vec!["notes"]);
+        // A revoke whose record is lost is reported too; it still revoked.
+        assert_eq!(
+            code_of(
+                fixture
+                    .call(
+                        "apps.revokeCredentials",
+                        json!({ "requestId": "r1", "appId": "notes" }),
+                    )
+                    .await
+            ),
+            "apps_audit_unavailable"
+        );
+        assert_eq!(fixture.store.revoked.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

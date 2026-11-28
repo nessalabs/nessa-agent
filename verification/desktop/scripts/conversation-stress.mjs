@@ -349,8 +349,8 @@ import {
  *               it, and Uninstall removes it and its launcher while a second
  *               app stays. The app's own process is nessa-app-host, which the
  *               Linux native smoke runs
- *   appCredentials an installed app that asks for list, read, create and
- *               send is issued a credential holding exactly those (the
+ *   appCredentials an installed app that asks for list, read, create,
+ *               stop and send is issued a credential holding exactly those (the
  *               audit records it), connects with @nessa/client, and sees
  *               none of the owner's conversations, cannot read the main
  *               one, starts its own (in auto, never full) and runs a turn in
@@ -10256,11 +10256,11 @@ const steps = {
         },
       )
     const appId = `${base}-full`
-    const review = await install(appId, ["send", "list", "read", "create"])
-    if (review.requestedCapabilities.join() !== "list,read,create,send")
+    const review = await install(appId, ["send", "stop", "list", "read", "create"])
+    if (review.requestedCapabilities.join() !== "list,read,create,stop,send")
       failures.push(`the review names ${review.requestedCapabilities} in its fixed order`)
     const issued = await run.client.apps.issueCredential(appId, randomUUID())
-    if (issued.capabilities.join() !== "list,read,create,send")
+    if (issued.capabilities.join() !== "list,read,create,stop,send")
       failures.push(`the credential holds ${issued.capabilities}, not what was requested`)
     if (
       !audit().some(
@@ -10301,9 +10301,15 @@ const steps = {
         ],
       ]) {
         if (!target && what === "stop") continue
+        // Refused the way reading it is, not for some other reason (a
+        // finished turn, say) that would pass whether or not it may.
+        // The gateway's own code is the last in the chain.
+        const code = (said) => said.split(" · ").at(-1)
         const answer = await refusal(attempt())
-        if (answer === "allowed")
-          failures.push(`the app's ${what} on the owner's chat was allowed`)
+        if (code(answer) !== code(read))
+          failures.push(
+            `the app's ${what} on the owner's chat was ${answer}, not ${read}`,
+          )
       }
 
       // Its own conversation: started in auto, never full, and it runs.

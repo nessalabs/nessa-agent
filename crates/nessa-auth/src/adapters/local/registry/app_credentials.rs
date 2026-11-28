@@ -203,26 +203,6 @@ impl LocalCredentialStore {
     }
 }
 
-impl LocalCredentialStore {
-    /// How many credentials `issuer` already revoked under the command
-    /// `command`, when it revoked each as `<command>:<credential id>`. A
-    /// retried command answers from this instead of revoking again, so a
-    /// late retry never reaches a credential issued after it.
-    pub fn revoked_under(&self, issuer: &PrincipalId, command: &str) -> Result<usize, AccessError> {
-        let prefix = format!("{command}:");
-        self.with_published_registry(|registry| {
-            Ok(registry
-                .revoke_receipts
-                .iter()
-                .filter(|receipt| {
-                    receipt.issuer_principal_id == issuer.as_str()
-                        && receipt.request_id.starts_with(&prefix)
-                })
-                .count())
-        })
-    }
-}
-
 impl AppCredentials for LocalCredentialStore {
     fn verify_app<'a>(
         &'a self,
@@ -467,7 +447,8 @@ mod tests {
     use crate::application::{
         ports::{PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential},
         session::{
-            AuthenticateAppSession, AuthenticateSession, ReadCurrentAppSession, ResumeSession,
+            AdmitAppCall, AuthenticateAppSession, AuthenticateSession, ReadCurrentAppSession,
+            ResumeSession,
         },
     };
     use crate::{
@@ -769,6 +750,84 @@ mod tests {
         let reopened = open_store(&path).unwrap();
         assert!(matches!(
             reopened.app_binding(&app_a, 130),
+            Err(AccessError::CredentialRevoked)
+        ));
+    }
+
+    /// Which methods an app may call is policy's, from the operations its
+    /// owner approved; a revoked credential ends the session instead.
+    #[test]
+    fn policy_admits_an_app_only_the_methods_its_operations_name() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        let bootstrap = store.bootstrap(bootstrap()).unwrap();
+        let policy = CedarPolicyEvaluator::new().unwrap();
+        let audience = AudienceId::new("gateway-1").unwrap();
+        let clock = Time(110);
+        let owner = ready(
+            AuthenticateSession {
+                policy: &policy,
+                verifier: &store,
+                access: &store,
+                clock: &clock,
+            }
+            .execute(&bootstrap.evidence, &audience),
+        )
+        .unwrap();
+        let mut approval = request("app-call", "notes", AppCapability::List);
+        approval.capabilities = AppCapabilities::new(AppCapability::List, &[AppCapability::Send]);
+        let IssueCredentialOutcome::Issued { evidence, .. } =
+            ready(store.issue_app(&owner, approval, &clock, &policy)).unwrap()
+        else {
+            panic!("one new app credential")
+        };
+        let session = ready(
+            AuthenticateAppSession {
+                credentials: &store,
+                clock: &clock,
+                policy: &policy,
+            }
+            .execute(&evidence, &audience),
+        )
+        .unwrap();
+        let admit = AdmitAppCall {
+            credentials: &store,
+            clock: &clock,
+            policy: &policy,
+        };
+        for method in [
+            "conversation.list",
+            "conversation.send",
+            "conversation.steer",
+        ] {
+            assert!(ready(admit.execute(&session, method)).is_ok(), "{method}");
+        }
+        for method in [
+            "conversation.create",
+            "conversation.read",
+            "conversation.stop",
+            "conversation.delete",
+            "apps.installed",
+            "credential.list",
+        ] {
+            assert!(
+                matches!(
+                    ready(admit.execute(&session, method)),
+                    Err(AccessError::Denied)
+                ),
+                "{method}"
+            );
+        }
+        store
+            .revoke_sync(RevokeCredentialRequest {
+                request_id: "revoke-app-call".into(),
+                issuer_principal_id: "owner".into(),
+                credential_id: "app-call".into(),
+                revoked_at: 111,
+            })
+            .unwrap();
+        assert!(matches!(
+            ready(admit.execute(&session, "conversation.list")),
             Err(AccessError::CredentialRevoked)
         ));
     }

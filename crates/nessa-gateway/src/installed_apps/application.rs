@@ -295,7 +295,9 @@ impl InstalledApps {
             .issue(owner, request_id.clone(), app.clone(), capabilities)
             .await
             .map_err(credential_error)?;
-        self.record_or_log(
+        // A credential with no issued record is not handed out: take it back
+        // (the app keeps nothing live) and say the audit is unavailable.
+        let recorded = self.record(
             &Uuid::new_v4().to_string(),
             &request_id,
             app.as_str(),
@@ -309,6 +311,24 @@ impl InstalledApps {
                     .collect(),
             },
         );
+        if let Err(error) = recorded {
+            if let Err(refusal) = credentials
+                .revoke_all(
+                    caller.organization_id.clone(),
+                    caller.principal_id.clone(),
+                    format!("{request_id}:unrecorded"),
+                    app.clone(),
+                )
+                .await
+            {
+                tracing::error!(
+                    app = app.as_str(),
+                    ?refusal,
+                    "an app credential with no issued record could not be revoked"
+                );
+            }
+            return Err(error);
+        }
         Ok(issued)
     }
 
@@ -341,14 +361,16 @@ impl InstalledApps {
             )
             .await
             .map_err(credential_error)?;
+        // The revocation stands either way; a lost record is reported, and a
+        // retry under the same request id replays the count and records it.
         if revoked > 0 {
-            self.record_or_log(
+            self.record(
                 &Uuid::new_v4().to_string(),
                 &request_id,
                 app.as_str(),
                 caller,
                 AppsEvent::CredentialsRevoked { revoked },
-            );
+            )?;
         }
         Ok(revoked)
     }
@@ -397,9 +419,8 @@ impl InstalledApps {
             .map_err(|_| AppsError::AuditUnavailable)
     }
 
-    /// A record of what already happened: a refused change, or a credential
-    /// the store already committed (its own journal holds it too). What the
-    /// caller hears does not change; a record that cannot be kept is logged.
+    /// A record of a refused change. What the caller hears does not change;
+    /// a record that cannot be kept is logged.
     fn record_or_log(
         &self,
         operation_id: &str,
