@@ -51,14 +51,26 @@
   /* No width transition: the width lands at once and what moves beside it
      plays back by transform (FlipScope). */
   opacity: 0;
+  /* The sidebar's material, so the rail and the sidebar beside it are one
+     surface with no seam between them. Worn closed too (no width, unseen),
+     so opening the rail lands it at once: only the sidebar's leaving and
+     coming back changes it, over that slide's own time. */
+  background: var(--desktop-sidebar-material);
+  transition: background-color var(--desktop-drawer) var(--desktop-ease);
 }
 
 .side-rail[data-open] {
   width: var(--rail-width);
   opacity: 1;
-  /* The sidebar's material, so the rail and the sidebar beside it are one
-     surface with no seam between them. */
-  background: var(--desktop-sidebar-material);
+}
+
+/* With the sidebar closed the rail stands beside the content instead (the
+   panes, the Agents overview), on the window's own ground: the sidebar's
+   material there would draw a lighter strip down the window's edge. The pill
+   is the rail's surface then. While the sidebar is peeked it is beside the
+   rail again, so the rail keeps its material. */
+.workspace-window[data-sidebar="closed"]:not(:has(.workspace[data-peek])) .side-rail {
+  background-color: transparent;
 }
 
 /*
