@@ -209,6 +209,11 @@ function RoleRow({
           role={role}
           saved={savedText}
           home={row.current?.closest<HTMLElement>("[data-surface]") ?? null}
+          // Opened from the menu, its item is gone by close: focus goes back
+          // to the row's menu, the control that chose Your own.
+          returnFocus={() =>
+            row.current?.querySelector<HTMLElement>("[data-choice-trigger]")?.focus()
+          }
           onClose={() => setWriting(false)}
           onSave={(text) => onSave({ mode: "custom", text })}
         />
@@ -226,12 +231,14 @@ function StyleWriter({
   role,
   saved,
   home,
+  returnFocus,
   onClose,
   onSave,
 }: {
   role: ReplyStyleRole
   saved: string
   home: HTMLElement | null
+  returnFocus: () => void
   onClose: () => void
   onSave: (text: string) => Promise<boolean>
 }) {
@@ -262,6 +269,7 @@ function StyleWriter({
       title={`How ${who} write${role === "coordinator" ? "s" : ""}`}
       description="New chats are told this, in your words. A chat already started keeps its style."
       initialFocus={field}
+      onReturnFocus={returnFocus}
       onOpenChange={(open) => {
         if (!open && !saving) onClose()
       }}

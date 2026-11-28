@@ -9377,15 +9377,29 @@ const steps = {
       // A role not on your own words has nothing to view.
       if ((await control.locator('[data-reply-style-view="thread"]').count()) > 0)
         failures.push("Threads offered View before it had words of its own")
-      // Your own opens the writer, apart from the row, and Cancel keeps nothing.
+      // Your own opens the writer, apart from the row, with the caret in its
+      // field; Escape closes it, keeps nothing, and hands focus back to the
+      // row's menu (the menu item that opened it is gone by then).
       const writer = run.page.locator('[data-reply-style-writer="thread"]')
+      const field = writer.locator('[data-reply-style-text="thread"]')
+      const focused = (target) =>
+        target.evaluate((element) => element === element.ownerDocument.activeElement)
+      const holdsFocus = (target, what) =>
+        waitFor(() => focused(target).catch(() => false), 5_000).then((held) => {
+          if (!held) failures.push(what)
+        })
       await pickChoice(run.page, threads, "custom")
       await writer.waitFor({ timeout: 10_000 })
-      await writer.locator('[data-reply-style-text="thread"]').fill("Never saved.")
-      await writer.getByRole("button", { name: "Cancel" }).click({ timeout: 10_000 })
+      await holdsFocus(field, "the writer opened without the caret in its field")
+      await run.page.keyboard.type("Never saved.")
+      await run.page.keyboard.press(keys.escape)
       await writer.waitFor({ state: "detached", timeout: 5_000 })
+      await holdsFocus(
+        threads.locator("[data-choice-trigger]"),
+        "closing the writer left focus off the Threads menu",
+      )
       if ((await run.client.replyStyle.read()).nessa.thread !== undefined)
-        failures.push("Cancel in the writer saved a style")
+        failures.push("closing the writer with Escape saved a style")
       await pickChoice(run.page, threads, "custom")
       await writer.locator('[data-reply-style-text="thread"]').fill(`  ${marker}  `)
       await shot("writer", writer)
@@ -9411,16 +9425,20 @@ const steps = {
         10_000,
       )
       if (!shown) failures.push("the Threads row never showed Your own after Save")
-      await control.locator('[data-reply-style-view="thread"]').click({ timeout: 10_000 })
-      const viewed = await writer
-        .locator('[data-reply-style-text="thread"]')
-        .inputValue({ timeout: 10_000 })
+      // View, from the keyboard: the writer opens on the words saved, and
+      // Escape hands focus back to View.
+      const view = control.locator('[data-reply-style-view="thread"]')
+      await view.focus({ timeout: 10_000 })
+      await run.page.keyboard.press("Enter")
+      await holdsFocus(field, "View opened the writer without the caret in its field")
+      const viewed = await field.inputValue({ timeout: 10_000 })
       if (viewed !== marker)
         failures.push(
           `View opened the writer on ${JSON.stringify(viewed)}, not the words saved`,
         )
-      await writer.getByRole("button", { name: "Cancel" }).click({ timeout: 10_000 })
+      await run.page.keyboard.press(keys.escape)
       await writer.waitFor({ state: "detached", timeout: 5_000 })
+      await holdsFocus(view, "closing the writer from View left focus off View")
       await shot("talk")
     } finally {
       await close()
