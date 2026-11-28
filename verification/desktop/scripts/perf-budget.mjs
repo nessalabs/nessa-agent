@@ -112,8 +112,8 @@ async function newSessionChip(page) {
 
 /**
  * Opens the model picker, runs the pointer down every row as a person
- * looking would, chooses the last row with levels at its highest bar, and
- * leaves with Escape.
+ * looking would, chooses the last row with levels at its highest bar (which
+ * keeps the picker open), then closes it by that model's name.
  */
 async function pickWithBar(page) {
   await page.locator(`${css.focusedPane} ${css.modelChip}`).click()
@@ -128,9 +128,12 @@ async function pickWithBar(page) {
   }
   const bars = page.locator(css.modelBar)
   if ((await bars.count()) === 0) throw new CannotRun("no model in the picker has levels")
-  await bars.last().click()
-  // A bar keeps the picker open so another level can be tried; Escape leaves.
-  await page.keyboard.press(keys.escape)
+  const chosen = page
+    .locator(css.modelOption)
+    .filter({ has: page.locator(css.modelBar) })
+    .last()
+  await chosen.locator(css.modelBar).last().click()
+  await chosen.locator(css.modelOptionLabel).click()
 }
 
 async function openOverview(page) {

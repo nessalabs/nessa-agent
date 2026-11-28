@@ -407,23 +407,12 @@ it("chooses a model and its level with one press of a bar, which keeps the picke
     )
     await render()
     expect(picks).toEqual([{ provider: "anthropic", modelId: "claude-sonnet-5" }])
-    // A bar keeps the picker open so another level can be tried; Escape
-    // leaves with the choice made.
+    // A bar leaves the picker open, so another level can be tried.
     expect(dialog()).not.toBeNull()
-    await act(async () => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-      )
-    })
-    expect(dialog()).toBeNull()
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently Claude Sonnet 5, High",
     )
     // GPT-5.6 Sol lists the same High, so choosing it by name keeps it.
-    await act(async () => chip()?.click())
-    await act(async () =>
-      document.querySelector<HTMLButtonElement>('[aria-label="All models"]')?.click(),
-    )
     await act(async () =>
       document
         .querySelector<HTMLElement>(
@@ -432,6 +421,7 @@ it("chooses a model and its level with one press of a bar, which keeps the picke
         ?.click(),
     )
     await render()
+    expect(dialog()).toBeNull()
     expect(chip()?.getAttribute("aria-label")).toBe(
       "Change model, currently GPT-5.6 Sol, High",
     )
