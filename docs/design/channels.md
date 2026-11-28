@@ -161,7 +161,8 @@ caller's own default channel and the same audit. Started by its owner
 coordinator's role and job; the same id created by anyone else is an
 ordinary thread. It works in the gateway's workspace and is told it is the
 channel's main agent. Erased, it is replaced by a new id, as a made
-channel's is.
+channel's is, and `default_coordinator_replacements` keeps the retired id,
+the new one, the owner and the cause in the same write.
 
 ```mermaid
 sequenceDiagram

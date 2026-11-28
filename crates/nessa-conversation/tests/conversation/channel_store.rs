@@ -624,6 +624,27 @@ async fn a_default_coordinator_is_made_once_per_owner_and_its_switch_survives_a_
             .unwrap(),
         None
     );
+    // The replacement is kept: which one retired, which took its place, for
+    // whom, and why, readable after a reopen.
+    drop(reopened);
+    let check = Connection::open(directory.path().join("conversations/channels.sqlite3")).unwrap();
+    let kept: (String, String, String, String, String) = check
+        .query_row(
+            "SELECT retired, organization_id, owner_id, coordinator, cause FROM default_coordinator_replacements",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        kept,
+        (
+            first.coordinator_id().to_string(),
+            "org".to_owned(),
+            "owner".to_owned(),
+            next.coordinator_id().to_string(),
+            "coordinator_conversation_erased".to_owned(),
+        )
+    );
 }
 
 #[tokio::test]

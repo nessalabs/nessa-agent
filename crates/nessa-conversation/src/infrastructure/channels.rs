@@ -403,10 +403,22 @@ impl ChannelStore for LocalChannelStore {
             }
             // An erased default-channel coordinator is replaced by a new id,
             // so the owner's next coordinator is a new conversation.
+            // The replacement is recorded first, from the row it replaces,
+            // so the retired and new ids are kept together.
+            let next = uuid::Uuid::new_v4().to_string();
+            transaction
+                .execute(
+                    "INSERT INTO default_coordinator_replacements \
+                     (retired, organization_id, owner_id, coordinator, cause) \
+                     SELECT coordinator, organization_id, owner_id, ?2, 'coordinator_conversation_erased' \
+                     FROM default_coordinators WHERE coordinator = ?1",
+                    params![conversation.to_string(), next],
+                )
+                .map_err(failed)?;
             transaction
                 .execute(
                     "UPDATE default_coordinators SET coordinator = ?2 WHERE coordinator = ?1",
-                    params![conversation.to_string(), uuid::Uuid::new_v4().to_string()],
+                    params![conversation.to_string(), next],
                 )
                 .map_err(failed)?;
             transaction.execute("DELETE FROM conversation_reply_styles WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
