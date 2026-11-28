@@ -14,10 +14,11 @@ use crate::{
         },
         domain::Cloud,
         infrastructure::{
-            agent37_template, boat_image, Agent37Provider, Agent37VaultSettings, BoatApp,
-            BoatOAuthHttps, BoatProvider, FileCloudBoxAudit, FileCloudBoxStore, FileCloudChoice,
-            LocalBoxHost, LocalBoxSettings, LoopbackCallbacks, ProviderActiveWorkChecker,
-            SdkAgent37Enrollment, VaultSettings, WorkspaceCloudBoxProvider,
+            agent37_template, boat_cloud_box_image, boat_image, Agent37Provider,
+            Agent37VaultSettings, BoatApp, BoatOAuthHttps, BoatProvider, FileCloudBoxAudit,
+            FileCloudBoxStore, FileCloudChoice, LocalBoxHost, LocalBoxSettings, LoopbackCallbacks,
+            ProviderActiveWorkChecker, SdkAgent37Enrollment, VaultSettings,
+            WorkspaceCloudBoxProvider,
         },
     },
 };
@@ -336,7 +337,7 @@ pub(super) async fn product_state(
                     settings: box_settings,
                     provider: Arc::new(WorkspaceCloudBoxProvider::new(
                         box_provider.clone(),
-                        boat_image(),
+                        boat_cloud_box_image(),
                     )),
                 },
                 CloudBoxBackend {
@@ -350,7 +351,7 @@ pub(super) async fn product_state(
             ],
             Arc::new(FileCloudBoxStore::new(namespace.join("cloud-boxes"))),
             Arc::new(ProviderActiveWorkChecker::new(vec![
-                (Cloud::Boat, box_provider, boat_image()),
+                (Cloud::Boat, box_provider, boat_cloud_box_image()),
                 (Cloud::Agent37, agent37_provider, agent37_template()),
             ])),
             audit,

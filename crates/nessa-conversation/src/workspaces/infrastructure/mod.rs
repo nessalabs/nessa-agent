@@ -25,4 +25,4 @@ pub use local_box_host::{LocalBoxHost, LocalBoxSettings};
 pub use settings::VaultSettings;
 
 mod release;
-pub use release::{agent37_template, boat_image};
+pub use release::{agent37_template, boat_cloud_box_image, boat_image};
