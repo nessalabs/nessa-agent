@@ -20,6 +20,7 @@ import {
   removeInstalledApp,
   runningInstalledApps,
   stopInstalledApp,
+  type HostAppPackage,
 } from "../../../host"
 import { Choice, Group, ItemRow, RowAction } from "../../settings/ui/settings-controls"
 import {
@@ -188,15 +189,26 @@ export function InstalledAppsTab() {
       setDraft("")
       // Its launcher: an app of its own in Applications or the menu.
       await placeInstalledApp(review.appId, pkg, review.digest)
-      if (signsIn(review)) await handCredential(review.appId)
+      if (signsIn(review)) await handCredential(review.appId, pkg, review.digest)
     })
 
   // The credential goes from the gateway to the app's launcher and nowhere
-  // else; issuing again ends the one before.
-  const handCredential = async (appId: string) => {
+  // else; issuing again ends the one before. An app opened from the Dock or
+  // menu while this ran started with the one issuing ended, so it starts
+  // again. An app's host reads the credential only once it holds its running
+  // lock, so one not running when asked after the hand reads the new one.
+  const handCredential = async (
+    appId: string,
+    pkg: HostAppPackage,
+    digest: string,
+  ) => {
     if (!gateway) return
     const issued = await gateway.issueCredential(appId, requestId())
     await handInstalledAppCredential(appId, issued.credential, issued.expiresAt)
+    if ((await runningInstalledApps()).includes(appId)) {
+      await stopInstalledApp(appId)
+      await openInstalledApp(appId, pkg, digest)
+    }
   }
 
   const open = (appId: string) =>
@@ -214,7 +226,7 @@ export function InstalledAppsTab() {
         !(await installedAppHasCredential(appId)) &&
         !(await runningInstalledApps()).includes(appId)
       )
-        await handCredential(appId)
+        await handCredential(appId, pkg, review.digest)
       await openInstalledApp(appId, pkg, review.digest)
     })
 

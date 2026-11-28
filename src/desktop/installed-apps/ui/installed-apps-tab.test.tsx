@@ -312,6 +312,31 @@ it("issues no credential under a server the host says is running", async () => {
   expect(host.openInstalledApp).toHaveBeenCalledTimes(1)
 })
 
+it("starts again an app opened while its credential was replaced", async () => {
+  const gateway = keeping()
+  host.confirmAppInstall.mockResolvedValue(true)
+  draw(gateway)
+  await settle()
+  await pickKind("node")
+  type("[data-create-app-id]", "notes")
+  await press("[data-create-app]")
+  host.stopInstalledApp.mockClear()
+  // Not running when asked; opened from the Dock while the new one was
+  // issued, so it started with the one issuing ended.
+  host.runningInstalledApps
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce(["notes"])
+  await press('[data-installed-app-open="notes"]')
+  expect(gateway.issueCredential).toHaveBeenCalledTimes(2)
+  expect(host.stopInstalledApp).toHaveBeenCalledWith("notes")
+  expect(host.handInstalledAppCredential.mock.invocationCallOrder[1]).toBeLessThan(
+    host.stopInstalledApp.mock.invocationCallOrder[0] ?? 0,
+  )
+  expect(host.stopInstalledApp.mock.invocationCallOrder[0]).toBeLessThan(
+    host.openInstalledApp.mock.invocationCallOrder[0] ?? 0,
+  )
+})
+
 it("hands a page no credential", async () => {
   const gateway = keeping()
   host.confirmAppInstall.mockResolvedValue(true)

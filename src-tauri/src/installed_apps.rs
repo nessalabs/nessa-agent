@@ -151,11 +151,30 @@ pub struct GatewayPlace {
     pub instance: Option<String>,
 }
 
+/// The time of day, for when a kept credential ends.
+pub trait WallClock: Send + Sync {
+    /// Now, in Unix seconds; None when the clock cannot be read.
+    fn now(&self) -> Option<u64>;
+}
+
+/// The system's own clock.
+pub struct SystemClock;
+
+impl WallClock for SystemClock {
+    fn now(&self) -> Option<u64> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_secs())
+    }
+}
+
 /// Installed apps on this desktop: their launchers, and the system that asks.
 pub struct InstalledApps {
     launchers: Arc<dyn Launchers>,
     system: Arc<dyn AppSystem>,
     gateway: GatewayPlace,
+    clock: Arc<dyn WallClock>,
     /// One change to the launchers at a time, so a reconcile never removes a
     /// launcher placed while it ran.
     changing: Mutex<()>,
@@ -166,11 +185,13 @@ impl InstalledApps {
         launchers: Arc<dyn Launchers>,
         system: Arc<dyn AppSystem>,
         gateway: GatewayPlace,
+        clock: Arc<dyn WallClock>,
     ) -> Self {
         Self {
             launchers,
             system,
             gateway,
+            clock,
             changing: Mutex::new(()),
         }
     }
@@ -333,10 +354,11 @@ impl InstalledApps {
 
     /// Whether `app_id`'s launcher holds a credential that still works for
     /// [`RENEW_BEFORE`] more: the desktop page issues a new one when not.
+    /// A clock that cannot be read says not, so the page issues one.
     pub fn has_credential(&self, app_id: &str) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs());
+        let Some(now) = self.clock.now() else {
+            return false;
+        };
         is_app(app_id)
             && self
                 .launchers
@@ -417,6 +439,7 @@ pub fn native_installed_apps(
         Arc::new(launchers),
         Arc::new(NativeAppSystem(app.clone())),
         gateway,
+        Arc::new(SystemClock),
     ));
     apps.watch();
     Some(apps)
@@ -679,6 +702,21 @@ mod tests {
         }
     }
 
+    /// The time every test reads: 2026-11-28, as Unix seconds.
+    const NOW: u64 = 1_795_852_800;
+
+    struct Fixed(Option<u64>);
+
+    impl WallClock for Fixed {
+        fn now(&self) -> Option<u64> {
+            self.0
+        }
+    }
+
+    fn clock() -> Arc<dyn WallClock> {
+        Arc::new(Fixed(Some(NOW)))
+    }
+
     fn place() -> GatewayPlace {
         GatewayPlace {
             stage: "dev".into(),
@@ -688,13 +726,17 @@ mod tests {
     }
 
     fn host() -> (tempfile::TempDir, Arc<System>, InstalledApps) {
+        host_at(clock())
+    }
+
+    fn host_at(clock: Arc<dyn WallClock>) -> (tempfile::TempDir, Arc<System>, InstalledApps) {
         let dir = tempfile::tempdir().unwrap();
         let built = dir.path().join("nessa-app-host");
         std::fs::write(&built, b"host").unwrap();
         let launchers =
             AppLaunchers::new(Layout::Folder, dir.path().join("apps"), None, built, None);
         let system = Arc::new(System::default());
-        let apps = InstalledApps::new(Arc::new(launchers), system.clone(), place());
+        let apps = InstalledApps::new(Arc::new(launchers), system.clone(), place(), clock);
         (dir, system, apps)
     }
 
@@ -763,6 +805,16 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_that_cannot_be_read_has_the_credential_issued_again() {
+        let (_dir, _system, apps) = host_at(Arc::new(Fixed(None)));
+        let (package, digest) = starter_with("notes", Some(ServerRuntime::Node));
+        apps.place("notes", package, &digest).unwrap();
+        apps.hand_credential("notes", "secret".into(), Some(NOW + 365 * 24 * 60 * 60))
+            .unwrap();
+        assert!(!apps.has_credential("notes"));
+    }
+
+    #[test]
     fn a_dynamic_app_says_it_runs_a_program_and_keeps_its_credential_private() {
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -777,14 +829,14 @@ mod tests {
         apps.place("notes", package.clone(), &digest).unwrap();
         assert!(!apps.has_credential("notes"));
         // One that ends within a month is due a new one.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        apps.hand_credential("notes", "soon".into(), Some(now + 60))
+        let month = RENEW_BEFORE.as_secs();
+        apps.hand_credential("notes", "soon".into(), Some(NOW + month))
             .unwrap();
         assert!(!apps.has_credential("notes"));
-        apps.hand_credential("notes", "secret".into(), Some(now + 365 * 24 * 60 * 60))
+        apps.hand_credential("notes", "later".into(), Some(NOW + month + 1))
+            .unwrap();
+        assert!(apps.has_credential("notes"));
+        apps.hand_credential("notes", "secret".into(), Some(NOW + 365 * 24 * 60 * 60))
             .unwrap();
         assert!(apps.has_credential("notes"));
         let kept = dir
@@ -924,7 +976,7 @@ mod tests {
     fn faked() -> (Arc<Fake>, Arc<System>, InstalledApps) {
         let launchers = Arc::new(Fake::default());
         let system = Arc::new(System::default());
-        let apps = InstalledApps::new(launchers.clone(), system.clone(), place());
+        let apps = InstalledApps::new(launchers.clone(), system.clone(), place(), clock());
         (launchers, system, apps)
     }
 
