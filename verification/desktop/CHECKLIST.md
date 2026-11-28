@@ -457,6 +457,11 @@ _ADR 238 › Focus follows the focused pane_; keys in
   flight. _Check:_ `focus.mjs` (`focus-fast-frames`).
 - [ ] **Closing ⌘K without a pick, or Settings, gives focus back** to what
   opened it. _Check:_ `focus.mjs` (`focus-panes`).
+- [ ] **A channel's "Your own" writer takes the caret and gives focus back.**
+  Choosing Your own, or View, opens the writer with the caret in its field.
+  Escape closes it and saves nothing. Focus returns to the row's menu when the
+  writer came from the menu (its item is gone by then), and to View when it
+  came from View. _Check:_ `conversation-stress.mjs --only style`.
 - [ ] **Replacing a workspace layout retires queued focus settlement**: deliver
   all held callbacks after the old workspace unmounts (at least one must have
   been queued); they enqueue zero new frame

@@ -1,0 +1,226 @@
+/*
+ * A channel's settings: one sheet of one size on every page, so moving
+ * between pages never moves its edges. A plain list of pages down the side
+ * (the kit Dialog's `aside`, which also holds the title), and the page
+ * beside it: a title, then rows split by hairlines. No cards, tiles or
+ * badges; one ink. The only motion confirms what the person just did: a page
+ * fades in, a check settles, the cloud's rows open under Cloud box.
+ */
+.channel-settings[data-size="full"] {
+  --nessa-dialog-aside-width: 11.5rem;
+  --channel-settings-ease: var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+  inline-size: 100%;
+  max-inline-size: 45rem;
+  block-size: min(30rem, 100%);
+}
+
+/* The pages, as text: the chosen one sits on the window's selected wash. */
+.channel-settings-tabs {
+  display: grid;
+  gap: 1px;
+  margin-top: 8px;
+}
+
+.channel-settings-tab {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--desktop-radius-xs);
+  background: none;
+  color: var(--desktop-muted);
+  font: inherit;
+  font-size: var(--desktop-text-body);
+  text-align: start;
+  cursor: default;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .channel-settings-tab:hover {
+    background: var(--desktop-hover);
+    color: var(--foreground);
+  }
+}
+
+.channel-settings-tab[aria-selected="true"] {
+  background: var(--desktop-selected);
+  color: var(--foreground);
+}
+
+.channel-settings-tab:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: -2px;
+}
+
+/* A page arrives by fading in; it never slides, so the sheet stays still. */
+.channel-settings-page {
+  padding: 8px 12px 24px;
+  transition: opacity var(--desktop-medium) var(--channel-settings-ease);
+}
+
+@starting-style {
+  .channel-settings-page {
+    opacity: 0;
+  }
+}
+
+.channel-settings-title {
+  margin: 0 0 16px;
+  color: var(--foreground);
+  font-size: var(--desktop-text-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+/* Rows split by hairlines, the group closed above and below. */
+.channel-settings-rows {
+  border-bottom: 1px solid var(--settings-hairline);
+}
+
+.channel-settings-rows :is(.settings-row, .channel-settings-place) {
+  border-top: 1px solid var(--settings-hairline);
+}
+
+/* Words line up with the page's title, past the settings surface's own inset. */
+.channel-settings .channel-settings-rows .settings-row {
+  padding: 8px 0;
+}
+
+.channel-settings .channel-settings-rows .settings-row > :first-child {
+  min-height: 28px;
+}
+
+/* A place to run: tap the row, and a check settles at its end. */
+.channel-settings-place {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  inline-size: 100%;
+  min-height: 48px;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  cursor: default;
+}
+
+.channel-settings-place:focus-visible {
+  outline: var(--desktop-focus-outline);
+  outline-offset: -2px;
+  border-radius: var(--desktop-radius-xs);
+}
+
+.channel-settings-place-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channel-settings-place-detail {
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}
+
+.channel-settings-folder {
+  color: var(--desktop-muted);
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-caption);
+  overflow-wrap: anywhere;
+}
+
+.channel-settings-check {
+  flex: none;
+  inline-size: 14px;
+  block-size: 14px;
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity var(--desktop-fast) ease,
+    transform var(--desktop-base) var(--channel-settings-ease);
+}
+
+[aria-checked="true"] > .channel-settings-check {
+  opacity: 1;
+  transform: none;
+}
+
+/*
+ * The cloud's rows, under Cloud box: they open by growing from nothing to
+ * their own height (a grid row from 0fr to 1fr), and fade in as they do.
+ * Closed, they are inert and take no room.
+ */
+.channel-settings-cloud {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms var(--channel-settings-ease);
+}
+
+.channel-settings-cloud[data-open] {
+  grid-template-rows: 1fr;
+}
+
+.channel-settings-cloud > div {
+  overflow: hidden;
+}
+
+.channel-settings-cloud-rows {
+  padding-inline-start: 16px;
+  opacity: 0;
+  transition: opacity var(--desktop-base) ease;
+}
+
+.channel-settings-cloud[data-open] .channel-settings-cloud-rows {
+  opacity: 1;
+}
+
+/* A new provider's row crossfades in place. */
+.channel-settings-swap {
+  transition: opacity var(--desktop-fast) ease;
+}
+
+@starting-style {
+  .channel-settings-swap {
+    opacity: 0;
+  }
+}
+
+.channel-settings-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.channel-settings-value {
+  color: var(--desktop-muted);
+}
+
+.channel-settings-key {
+  inline-size: 12rem;
+  font-family: var(--nessa-font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channel-settings-cloud,
+  .channel-settings-check {
+    transition: opacity var(--desktop-fast) ease;
+  }
+
+  .channel-settings-check {
+    transform: none;
+  }
+}
+
+.channel-settings-failure {
+  margin: 0 0 8px;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+}

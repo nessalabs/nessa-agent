@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
  * A made channel's coordinator, switched in its settings: a switch in flight
- * holds the row, and a refusal says why. Every agent runs on this gateway's
- * own machine (ADR 1417), so there is no place to choose.
+ * holds the row, and a refusal says why. The sheet's other pages (Where it
+ * runs, How agents talk) are walked by the conversation stress step `style`.
  */
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
