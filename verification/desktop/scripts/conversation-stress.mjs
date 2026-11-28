@@ -6009,8 +6009,15 @@ const steps = {
         await openGateways(page)
         // Busy: a terminal runs on the box, opened by another session.
         await action("Sleep").click()
+        const settingsText = async () =>
+          fold(
+            await page
+              .locator(css.settings)
+              .innerText()
+              .catch(() => ""),
+          )
         const refused = await waitFor(
-          async () => (await pageText(page)).includes("This Cloud Box is still at work"),
+          async () => (await settingsText()).includes("This Cloud Box is still at work"),
           15_000,
         )
         await sleep(1_000)
@@ -6018,7 +6025,10 @@ const steps = {
           failures.push("Sleep stopped the box while a terminal ran there")
         if ((await status()) !== "connected" || !boxGatewayRunning(root, vm))
           failures.push(`a refused Sleep left the box ${await status()}`)
-        if (!refused) failures.push("the refused Sleep said nothing on the page")
+        if (!refused)
+          failures.push(
+            `the refused Sleep did not say why: ${(await settingsText()).slice(0, 600)}`,
+          )
         await shot("busy")
       })
       if (failures.length) return
