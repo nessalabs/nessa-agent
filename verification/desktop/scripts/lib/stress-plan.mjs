@@ -279,7 +279,7 @@ export const KNOBS = {
   },
   coordinators: {
     default: 1,
-    what: "times a channel is made with its coordinator on (the first chat is its coordinator, told its job), switched off in its settings (a new chat there is an ordinary thread), and on again (the same coordinator chat); and one is made with it off",
+    what: "times a channel is made with its coordinator on (the first chat is its coordinator, told its job), switched off in its settings (a new chat there is an ordinary thread), and on again (the same coordinator chat); and one is made with it off. Then the built-in Conversations channel: its own coordinator listed first, told its job, switched off and on in its settings",
   },
   asks: {
     default: 1,

@@ -6,7 +6,8 @@ use crate::application::{
 };
 use crate::domain::{
     Channel, ChannelDefaults, ChannelFolder, ChannelId, ChannelName, ChannelNotes, ChannelParts,
-    ChannelPath, ChannelResources, ReplyStyle, RoleStyles, StyleRole, StyleText,
+    ChannelPath, ChannelResources, DefaultCoordinator, ReplyStyle, RoleStyles, StyleRole,
+    StyleText,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::{
@@ -32,6 +33,7 @@ const UPGRADES: &[nessa_local_database::Upgrade] = &[
     nessa_local_database::Upgrade::new(5, include_str!("channels-any-place.sql")),
     nessa_local_database::Upgrade::new(6, include_str!("channels-reply-styles.sql")),
     nessa_local_database::Upgrade::new(7, include_str!("channels-coordinator-switch.sql")),
+    nessa_local_database::Upgrade::new(8, include_str!("channels-default-coordinator.sql")),
 ];
 const WRITTEN_COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, folder_made, agent, model, mode, notes, resources, created_at, coordinator_placement, thread_placement, coordinator_on";
 const COLUMNS: &str = "channel, organization_id, owner_id, request_id, name, folder, \
@@ -399,6 +401,26 @@ impl ChannelStore for LocalChannelStore {
                 }
                 transaction.execute("DELETE FROM channel_conversations WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
             }
+            // An erased default-channel coordinator is replaced by a new id,
+            // so the owner's next coordinator is a new conversation.
+            // The replacement is recorded first, from the row it replaces,
+            // so the retired and new ids are kept together.
+            let next = uuid::Uuid::new_v4().to_string();
+            transaction
+                .execute(
+                    "INSERT INTO default_coordinator_replacements \
+                     (retired, organization_id, owner_id, coordinator, cause) \
+                     SELECT coordinator, organization_id, owner_id, ?2, 'coordinator_conversation_erased' \
+                     FROM default_coordinators WHERE coordinator = ?1",
+                    params![conversation.to_string(), next],
+                )
+                .map_err(failed)?;
+            transaction
+                .execute(
+                    "UPDATE default_coordinators SET coordinator = ?2 WHERE coordinator = ?1",
+                    params![conversation.to_string(), next],
+                )
+                .map_err(failed)?;
             transaction.execute("DELETE FROM conversation_reply_styles WHERE conversation = ?1", [conversation.to_string()]).map_err(failed)?;
             transaction.commit().map_err(failed)?;
             Ok(())
@@ -433,6 +455,98 @@ impl ChannelStore for LocalChannelStore {
             Ok(changed)
         })
     }
+
+    fn default_coordinator(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+    ) -> ConversationFuture<'_, DefaultCoordinator> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            // Read first, so a list only writes the once.
+            if let Some(kept) = default_coordinator(connection, &organization, &owner)? {
+                return Ok(kept);
+            }
+            // Two first reads at once both try; the first row stays.
+            connection
+                .execute(
+                    "INSERT INTO default_coordinators (organization_id, owner_id, coordinator) \
+                     VALUES (?1, ?2, ?3) ON CONFLICT (organization_id, owner_id) DO NOTHING",
+                    params![organization, owner, uuid::Uuid::new_v4().to_string()],
+                )
+                .map_err(failed)?;
+            default_coordinator(connection, &organization, &owner)?
+                .ok_or(ConversationError::Metadata)
+        })
+    }
+
+    fn set_default_coordinator_on(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        on: bool,
+    ) -> ConversationFuture<'_, DefaultCoordinator> {
+        let (organization, owner) = (organization.as_str().to_owned(), owner.as_str().to_owned());
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "INSERT INTO default_coordinators (organization_id, owner_id, coordinator, coordinator_on) \
+                     VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT (organization_id, owner_id) DO UPDATE SET coordinator_on = excluded.coordinator_on",
+                    params![organization, owner, uuid::Uuid::new_v4().to_string(), on],
+                )
+                .map_err(failed)?;
+            default_coordinator(connection, &organization, &owner)?
+                .ok_or(ConversationError::Metadata)
+        })
+    }
+
+    fn default_coordinator_of(
+        &self,
+        conversation: &ConversationId,
+    ) -> ConversationFuture<'_, Option<(OrganizationId, PrincipalId)>> {
+        let conversation = conversation.to_string();
+        self.run(move |connection| {
+            connection
+                .query_row(
+                    "SELECT organization_id, owner_id FROM default_coordinators WHERE coordinator = ?1",
+                    [conversation],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(failed)?
+                .map(|(organization, owner)| {
+                    Ok((
+                        OrganizationId::new(organization).map_err(|_| unreadable("default"))?,
+                        PrincipalId::new(owner).map_err(|_| unreadable("default"))?,
+                    ))
+                })
+                .transpose()
+        })
+    }
+}
+
+/// `owner`'s default-channel coordinator row, read back.
+fn default_coordinator(
+    connection: &Connection,
+    organization: &str,
+    owner: &str,
+) -> Result<Option<DefaultCoordinator>, ConversationError> {
+    connection
+        .query_row(
+            "SELECT coordinator, coordinator_on FROM default_coordinators \
+             WHERE organization_id = ?1 AND owner_id = ?2",
+            params![organization, owner],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+        )
+        .optional()
+        .map_err(failed)?
+        .map(|(coordinator, on)| {
+            ConversationId::new(&coordinator)
+                .map(|coordinator| DefaultCoordinator::new(coordinator, on))
+                .map_err(|_| unreadable("default"))
+        })
+        .transpose()
 }
 
 /// A style as one row's `style` and `text` columns.

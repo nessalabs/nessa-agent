@@ -18,7 +18,8 @@ new conversation in it starts with, and where its agents work:
 
 Every conversation is in exactly one channel for its whole life. A
 conversation with no stored channel is in the **default channel**, whose folder
-is the gateway's configured workspace. The default channel is never stored.
+is the gateway's configured workspace. The default channel is never stored;
+only its coordinator is, one for each owner (below).
 
 ## A request names a channel, never a folder
 
@@ -122,7 +123,7 @@ the person up to date. It is on unless the person turns it off when making
 the channel (`channel.create` with `coordinator: false`), and it can be
 switched at any time in the channel's settings (`channel.setCoordinator`).
 Only the owner switches it: the gateway checks Cedar's channel-settings
-action, refuses the default channel, and audits each switch as
+action and audits each switch as
 `channel_coordinator`, from what it was to what it became. Switches are taken
 one at a time, so each record names the state it replaced.
 
@@ -147,11 +148,48 @@ switching the coordinator, rewording the job later, or upgrading a file whose
 coordinators were pinned before jobs existed (they keep `job` NULL) never
 changes a saved prompt or restarts a session.
 
+The default channel, Conversations, has a coordinator too, one for each
+owner. The channel itself is never stored, so its coordinator is kept by its
+owner in `default_coordinators` (`channels.sqlite3` v9): a random id, chosen
+the first time the owner's channels are read, with the coordinator on. A
+store upgraded from v8 has no rows, so every existing owner gains one, on,
+the first time they list their channels, and their chats already in
+Conversations stay ordinary threads. `channel.setCoordinator` with
+`channelId: default` switches it, under the same Cedar action on the
+caller's own default channel and the same audit. Started by its owner
+(`conversation.create` in the default channel, with that id) it is pinned the
+coordinator's role and job; the same id created by anyone else is an
+ordinary thread. It works in the gateway's workspace and is told it is the
+channel's main agent. Erased, it is replaced by a new id, as a made
+channel's is, and `default_coordinator_replacements` keeps the retired id,
+the new one, the owner and the cause in the same write.
+
+```mermaid
+sequenceDiagram
+    actor Person
+    participant List as Session list
+    participant Gateway
+    participant Store as Channel store
+    Person->>List: opens Conversations
+    List->>Gateway: channel.list
+    Gateway->>Store: default_coordinator(owner)
+    Store-->>Gateway: the owner's row, made on the first read
+    Gateway-->>List: default, coordinatorConversationId, coordinatorOn true
+    List-->>Person: Coordinator first, then the chats already there
+    Person->>List: sends the coordinator's first message
+    List->>Gateway: conversation.create with that id, no channel
+    Gateway->>Store: whose default coordinator is it?
+    Store-->>Gateway: this owner's
+    Gateway-->>List: a coordinator, pinned its job
+```
+
 The stress step `coordinator` makes a channel with it on (its coordinator is
 the list's first row before a word is said, and opens from there; its first
 chat is the coordinator, told its job), switches it off in settings (a new chat there
 is a thread, told no job), on again (the same chat still answers), and makes
-a second channel with it off.
+a second channel with it off. It then checks Conversations: its coordinator is
+listed first, told its job once started, and switched off and on in its
+settings keeping the same chat.
 
 ## Changing where a channel runs
 

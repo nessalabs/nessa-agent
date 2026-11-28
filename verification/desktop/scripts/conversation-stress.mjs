@@ -8361,10 +8361,12 @@ const steps = {
     await unfolded(failures)
     await channelShowsList(run.page, failures)
     if (failures.length) return
-    // The main conversation is the pane left. Not opened from its row: the
-    // row beside it quotes the window, the main conversation's title with it.
-    // Asked from the main conversation's composer: it is the whole window now,
-    // the session list shown again by the channel.
+    // Conversations opens at its coordinator, so the main chat is opened
+    // again, by its id: the row beside it quotes the window, the main
+    // conversation's title with it. Asked from the main conversation's
+    // composer: it is the whole window now, the session list shown again by
+    // the channel.
+    await openStressConversation(run.page, run.main.id, run.main.title)
     await windowRead(
       run,
       run.main.id,
@@ -9484,21 +9486,21 @@ const steps = {
           .getByText(made.name, { exact: true })
           .first()
           .hover({ timeout: 15_000 })
+        // The window names Conversations by its own id, a made channel by the gateway's.
+        const shown = made.windowId ?? made.channelId
         await run.page
-          .locator(
-            `${css.channelSettingsOpen}[data-channel-settings-open="${made.channelId}"]`,
-          )
+          .locator(`${css.channelSettingsOpen}[data-channel-settings-open="${shown}"]`)
           .click({ timeout: 10_000 })
-        const control = dialog.locator(`[data-channel-coordinator="${made.channelId}"]`)
+        const control = dialog.locator(`[data-channel-coordinator="${shown}"]`)
         await control
           .locator("[data-choice-trigger]:enabled")
           .waitFor({ timeout: 10_000 })
         await pickChoice(run.page, control, on ? "on" : "off")
-        const shown = await waitFor(
+        const switched = await waitFor(
           async () => (await control.getAttribute("data-coordinator-on")) === String(on),
           10_000,
         )
-        if (!shown)
+        if (!switched)
           failures.push(
             `the channel settings never showed the coordinator ${on ? "on" : "off"}`,
           )
@@ -9506,7 +9508,7 @@ const steps = {
           await run.page.screenshot({
             path: join(
               run.evidence,
-              `coordinator-${run.engine}-${on ? "on" : "off"}.png`,
+              `coordinator-${run.engine}-${made.windowId ? "conversations-" : ""}${on ? "on" : "off"}.png`,
             ),
           })
       } finally {
@@ -9702,6 +9704,88 @@ const steps = {
         failures.push(
           "a channel made without a coordinator names no main chat to turn on",
         )
+      // The built-in Conversations channel has the person's own coordinator,
+      // on from the start: listed first before a word is said, told its job
+      // once started, and switched off and on in its settings as a made
+      // channel's is, keeping the same chat. Chats already there stay
+      // ordinary threads below it.
+      const builtIn = await listedNow("default")
+      if (!builtIn?.coordinatorOn || !builtIn.coordinatorConversationId)
+        failures.push(
+          `Conversations is listed without its coordinator on: ${JSON.stringify(builtIn)}`,
+        )
+      else {
+        const conversations = {
+          ...builtIn,
+          windowId: "gateway-conversations",
+        }
+        const main = conversations.coordinatorConversationId
+        await run.page
+          .locator(`${css.sidebar} nav`)
+          .getByText("Conversations", { exact: true })
+          .first()
+          .click({ timeout: 15_000 })
+        const begun = run.page.locator(
+          `[data-list-group="coordinator"] [data-session-row="${main}"]`,
+        )
+        const start = run.page.locator(
+          `[data-list-group="coordinator"] [data-coordinator-start="${main}"]`,
+        )
+        const offered = await waitFor(
+          async () =>
+            ((await start.count()) === 1 || (await begun.count()) > 0) &&
+            (await run.page
+              .locator("[data-list-group]")
+              .first()
+              .getAttribute("data-list-group")) === "coordinator",
+          10_000,
+        )
+        if (!offered) failures.push("Conversations does not list its coordinator first")
+        if (run.evidence)
+          await run.page.screenshot({
+            path: join(run.evidence, `coordinator-${run.engine}-conversations.png`),
+          })
+        // Earlier chats there are still threads, below the coordinator.
+        const { conversations: listed } = await run.client.conversation.list({})
+        const own = listed.find((each) => each.conversationId === run.main.id)
+        if (run.main.id === main || (own && own.channelId !== undefined))
+          failures.push(
+            "the run's own chat in Conversations is no longer an ordinary thread",
+          )
+        if ((await start.count()) === 1) {
+          await start.click({ timeout: 10_000 })
+          const text = prompt(run, STRESS.channel, step, " Conversations coordinator")
+          const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+          await home.locator(css.field).waitFor({ timeout: 15_000 })
+          await home.locator(css.field).fill(text)
+          await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+          const opened = await waitFor(
+            () => selectedStressConversation(run.page, text),
+            30_000,
+          )
+          if (opened !== main)
+            failures.push(
+              `the first message to Conversations' coordinator went to ${opened}, not ${main}`,
+            )
+          else {
+            run.checked.push(main)
+            const { view } = await settled(
+              run,
+              main,
+              new Set(),
+              text,
+              "completed",
+              failures,
+            )
+            if (told && !replyTo(view, text).includes(job))
+              failures.push("Conversations' coordinator was not told its job")
+          }
+        }
+        if (await switchTo(conversations, false)) {
+          await pinnedCheck(conversations, false)
+          if (await switchTo(conversations, true)) await pinnedCheck(conversations, true)
+        }
+      }
     } finally {
       await run.page
         .locator(`${css.sidebar} nav`)

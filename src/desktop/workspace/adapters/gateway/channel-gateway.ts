@@ -65,8 +65,8 @@ export function channelGateway(options: {
       }
     },
     async setCoordinator(channelId, on, requestId) {
-      const id = gatewayChannelId(channelId)
-      if (id === undefined) throw new ChannelCreationError("forbidden")
+      // The default channel has a coordinator too, named by its own id here.
+      const id = gatewayChannelId(channelId) ?? "default"
       try {
         const { channels } = await options.connected()
         if (!channels.setCoordinator) throw new ChannelCreationError("unavailable")

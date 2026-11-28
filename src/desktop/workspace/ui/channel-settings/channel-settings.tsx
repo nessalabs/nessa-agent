@@ -13,7 +13,8 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectChannel } from "../../adapters/store/selectors"
 
 /**
- * Whether a made channel has a coordinator, switched at any time. Off keeps
+ * Whether a channel has a coordinator, switched at any time: a made one, or
+ * the default one, Conversations. Off keeps
  * its chat and its threads; the channel just opens without it. On again,
  * the same chat is its coordinator. Saves as it is chosen.
  */
@@ -94,6 +95,9 @@ export function ChannelSettingsButton({
   const trigger = useRef<HTMLButtonElement>(null)
   const replyStyle = useReplyStyleGateway()
   const scope = gatewayChannelId(channelId)
+  const switchable = useWorkspaceSelector(
+    (state) => selectChannel(state, channelId)?.coordinatorOn !== undefined,
+  )
   return (
     <>
       <IconButton
@@ -120,15 +124,20 @@ export function ChannelSettingsButton({
           }}
           size="md"
           title={`#${name} settings`}
-          description={scope === undefined ? "The default for every channel." : undefined}
+          description={
+            scope === undefined
+              ? "Its coordinator, and how agents talk in every channel."
+              : undefined
+          }
         >
           {/* Every agent runs on this gateway's own machine (ADR 1417), so a
-          channel has no place to choose: only whether it has a coordinator. */}
-          {scope === undefined ? null : (
+          channel has no place to choose: only whether it has a coordinator.
+          The default channel has one too. */}
+          {switchable ? (
             <div className="settings-boat settings-surface channel-settings-section">
               <ChannelCoordinatorControl channelId={channelId} />
             </div>
-          )}
+          ) : null}
           {/* The default channel's dialog sets the Nessa level, which every
           channel follows unless it has its own. */}
           {replyStyle ? (

@@ -430,6 +430,34 @@ impl Channel {
     }
 }
 
+/// The default channel's coordinator, one for each owner. The default
+/// channel is never stored, so its main conversation is kept apart from it,
+/// by its owner: its id is chosen at random the first time the owner's
+/// channels are read, and is replaced only when that conversation is erased.
+/// Off keeps the conversation, as a made channel's switch does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultCoordinator {
+    coordinator: nessa_protocol::conversation::domain::ConversationId,
+    on: bool,
+}
+
+impl DefaultCoordinator {
+    pub fn new(
+        coordinator: nessa_protocol::conversation::domain::ConversationId,
+        on: bool,
+    ) -> Self {
+        Self { coordinator, on }
+    }
+    /// The default channel's main conversation for its owner.
+    pub fn coordinator_id(&self) -> nessa_protocol::conversation::domain::ConversationId {
+        self.coordinator.clone()
+    }
+    /// Whether it is on. It starts on.
+    pub fn coordinator_on(&self) -> bool {
+        self.on
+    }
+}
+
 /// What a person asks a new channel to be, before the gateway has chosen
 /// its id or made its folder. `folder` is the one the person chose, if any;
 /// it is checked by the folder port before it is kept.

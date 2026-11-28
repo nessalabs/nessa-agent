@@ -373,7 +373,10 @@ async fn a_channel_with_no_folder_gets_one_made_and_a_retry_answers_it() {
         .await
         .unwrap();
     assert_eq!(
-        listing.default_folder.as_deref(),
+        listing
+            .default
+            .as_ref()
+            .map(|default| default.folder.as_str()),
         Some(absolute("/work/default").as_str())
     );
     assert_eq!(listing.channels, vec![made]);
@@ -1147,8 +1150,9 @@ async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
     let fixture = Fixture::new();
     let made = fixture.channel("request-1", None).await;
     assert!(made.coordinator_on());
-    // The default channel has no coordinator to switch, and neither another
-    // person nor an unknown id learns whether a channel exists.
+    // The default channel's is switched by `set_default_coordinator`, and
+    // neither another person nor an unknown id learns whether a channel
+    // exists.
     for (who, id) in [
         ("person", ChannelId::default_channel()),
         ("other", made.id().clone()),
@@ -1226,6 +1230,178 @@ async fn only_the_owner_switches_a_coordinator_and_on_again_is_the_same_chat() {
             },
         ]
     );
+}
+
+/// The person's default-channel coordinator, as their channel list names it.
+async fn default_coordinator(fixture: &Fixture, who: &str) -> crate::domain::DefaultCoordinator {
+    fixture
+        .service
+        .list_channels(&caller(who, "list"))
+        .await
+        .unwrap()
+        .default
+        .and_then(|default| default.coordinator)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_default_channel_has_its_owners_own_coordinator_switched_as_a_made_ones() {
+    use crate::application::{ChannelError, SettingsChange, SettingsOutcome};
+    use crate::domain::StyleRole;
+    let fixture = Fixture::new();
+    // On from the first read, the same at every read, and each owner's own.
+    let first = default_coordinator(&fixture, "person").await;
+    assert!(first.coordinator_on());
+    assert_eq!(default_coordinator(&fixture, "person").await, first);
+    let theirs = default_coordinator(&fixture, "other").await;
+    assert_ne!(theirs.coordinator_id(), first.coordinator_id());
+    // Switched off and on again by its owner: the same chat, audited each way.
+    let off = fixture
+        .service
+        .set_default_coordinator(&caller("person", "switch"), false)
+        .await
+        .unwrap();
+    let off = off.coordinator.unwrap();
+    assert!(!off.coordinator_on());
+    assert_eq!(off.coordinator_id(), first.coordinator_id());
+    assert!(!default_coordinator(&fixture, "person")
+        .await
+        .coordinator_on());
+    // Another person's switch is their own: it leaves this one off.
+    fixture
+        .service
+        .set_default_coordinator(&caller("other", "switch"), true)
+        .await
+        .unwrap();
+    assert!(!default_coordinator(&fixture, "person")
+        .await
+        .coordinator_on());
+    let on = fixture
+        .service
+        .set_default_coordinator(&caller("person", "switch"), true)
+        .await
+        .unwrap()
+        .coordinator
+        .unwrap();
+    assert_eq!(on, first);
+    let records = fixture.settings.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 4);
+    assert_eq!(
+        records[0].change,
+        SettingsChange::ChannelCoordinator {
+            channel: ChannelId::default_channel(),
+            before: true,
+            after: false,
+            coordinator: first.coordinator_id(),
+        }
+    );
+    assert_eq!(
+        fixture.settings.outcomes()[2..],
+        [
+            SettingsOutcome::Requested,
+            SettingsOutcome::Applied {
+                changed: true,
+                coordinator: Some(first.coordinator_id()),
+            },
+        ]
+    );
+    // A switch that cannot be recorded changes nothing.
+    fixture
+        .settings
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .set_default_coordinator(&caller("person", "switch"), false)
+            .await,
+        Err(ChannelError::Unavailable)
+    );
+    fixture
+        .settings
+        .failing
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert!(default_coordinator(&fixture, "person")
+        .await
+        .coordinator_on());
+    // Started by its owner in the default channel, it is the coordinator:
+    // told its job, and that it is the main agent, in the workspace.
+    let id = first.coordinator_id();
+    fixture
+        .service
+        .create(
+            id.clone(),
+            caller("person", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (job, _) = fixture.service.role_and_style(&id).await.unwrap();
+    assert_eq!(job.as_deref(), StyleRole::Coordinator.job());
+    let place = fixture.service.agent_place(&id).await.unwrap().unwrap();
+    assert_eq!(place.folder, PathBuf::from(absolute("/work/default")));
+    assert!(
+        place
+            .instructions
+            .contains("You are the main agent for this channel."),
+        "{}",
+        place.instructions
+    );
+    // The same id is not another person's coordinator, and an ordinary chat
+    // in Conversations stays a thread, told no job and no place.
+    let chat = new_id();
+    fixture
+        .service
+        .create(
+            chat.clone(),
+            caller("person", "chat"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fixture.service.role_and_style(&chat).await.unwrap().0, None);
+    assert_eq!(fixture.service.agent_place(&chat).await.unwrap(), None);
+    assert!(!fixture
+        .service
+        .is_default_coordinator_of(&id, &caller("other", "create"))
+        .await
+        .unwrap());
+    // Created first by someone else, another person's coordinator id is an
+    // ordinary thread for them: no job, and not told it is the main agent.
+    let squatted = theirs.coordinator_id();
+    fixture
+        .service
+        .create(
+            squatted.clone(),
+            caller("person", "squat"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.service.role_and_style(&squatted).await.unwrap().0,
+        None
+    );
+    assert_eq!(fixture.service.agent_place(&squatted).await.unwrap(), None);
+    assert!(!fixture
+        .service
+        .is_default_coordinator_of(&theirs.coordinator_id(), &caller("person", "create"))
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn an_erased_default_coordinator_is_replaced_by_a_new_chat() {
+    let fixture = Fixture::new();
+    let first = default_coordinator(&fixture, "person").await;
+    fixture
+        .service
+        .forget_channel_of(&first.coordinator_id())
+        .await
+        .unwrap();
+    let next = default_coordinator(&fixture, "person").await;
+    assert_ne!(next.coordinator_id(), first.coordinator_id());
+    assert!(next.coordinator_on());
 }
 
 #[tokio::test]

@@ -54,7 +54,7 @@ use crate::domain::{
 pub use agent_tools::{AccessRequestOutcome, ASK_OWNER_TOOL, READ_TURN_TOOL, REQUEST_ACCESS_TOOL};
 pub use channels::{
     AgentBrief, AgentPlace, ChannelError, ChannelFolders, ChannelListing, ChannelStore,
-    FolderRefusal,
+    DefaultChannel, FolderRefusal,
 };
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
