@@ -173,7 +173,7 @@ mod tests {
     use crate::scaffold_package;
 
     fn starter(app: &str) -> VerifiedPackage {
-        scaffold_package(app.to_owned(), "1.0.0".to_owned()).unwrap()
+        scaffold_package(app.to_owned(), "1.0.0".to_owned(), None).unwrap()
     }
 
     #[test]

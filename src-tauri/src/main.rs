@@ -172,6 +172,8 @@ fn main() {
             call_pill::call_pill_drag,
             installed_apps::installed_app_confirm,
             installed_apps::installed_app_place,
+            installed_apps::installed_app_credential,
+            installed_apps::installed_app_has_credential,
             installed_apps::installed_app_open,
             installed_apps::installed_app_stop,
             installed_apps::installed_app_remove,

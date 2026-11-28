@@ -6,13 +6,18 @@
 //!     read <launcher>/app.json ── verify every byte (nessa-app-package)
 //!     lock <launcher>/running.lock (held = running; a second launch leaves)
 //!     one window: the app's own files under nessa-app://, nothing else
+//!     a dynamic app: its server first (nessa_app_package::start_server),
+//!       on 127.0.0.1, the one other place its page may reach, with this
+//!       launch's token in `window.nessaApp`; it ends with this process
 //! ```
 //!
 //! Each launcher holds its own copy of this binary, so each app is its own
 //! process with its own Dock or taskbar entry and icon, and runs with Nessa's
-//! main window, or Nessa itself, closed. It reads no gateway credential and
-//! registers no command: its page can load the package's files and nothing
-//! more (`APP_CONTENT_SECURITY_POLICY`), and may navigate nowhere else.
+//! main window, or Nessa itself, closed. Its page holds no gateway credential
+//! and has no command to call: it can load the package's files and nothing
+//! more (`APP_CONTENT_SECURITY_POLICY`), and may navigate nowhere else. A
+//! dynamic app's server holds the app's own credential, which Nessa kept in
+//! the launcher at install; its page reaches that server and nothing more.
 //!
 //! On macOS the launcher's folder is the bundle's `Contents/Resources/
 //! nessa-app`; elsewhere it is named with `--app <folder>`.
@@ -43,20 +48,26 @@ mod host {
     use std::fs::File;
     use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
     use fs2::FileExt;
     use nessa_app_package::{
-        content_type, read_launcher_record, VerifiedPackage, APP_CONTENT_SECURITY_POLICY,
-        LAUNCHER_RECORD, MAX_LAUNCHER_RECORD_BYTES, RUNNING_LOCK, RUNNING_PID,
+        content_type, read_launcher_record, start_server, VerifiedPackage,
+        APP_CONTENT_SECURITY_POLICY, LAUNCHER_RECORD, MAX_LAUNCHER_RECORD_BYTES, RUNNING_LOCK,
+        RUNNING_PID,
     };
     use tauri::http::{header, Method, Request, Response, StatusCode};
     use tauri::webview::{NewWindowResponse, PageLoadEvent};
-    use tauri::{Builder, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
+    use tauri::{Builder, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 
     const SCHEME: &str = "nessa-app";
+
+    /// `@nessa/client` as one module, built with this host
+    /// (`scripts/desktop/app-client-bundle.mjs` from `build.rs`): what a
+    /// dynamic app's server imports as `@nessa/client`.
+    const APP_CLIENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app-client.mjs"));
     const WINDOW: &str = "app";
 
     /// Set to a URL by the Linux native smoke: once the page has loaded, the
@@ -100,6 +111,31 @@ mod host {
             return Ok(());
         };
         let title = package.manifest().app_id().as_str().to_owned();
+        // A dynamic app's server runs before its page loads; one that does
+        // not start is said in the window, in place of the page.
+        let (server, page) = match package.manifest().server() {
+            None => (None, Page::Files),
+            Some(_) => match start_server(&package, &folder, APP_CLIENT, None) {
+                Ok(server) => match server_policy(&server.origin()) {
+                    Some(policy) => {
+                        let page = Page::WithServer {
+                            policy,
+                            script: server_script(&server.origin(), server.token()),
+                        };
+                        (Some(server), page)
+                    }
+                    None => (
+                        None,
+                        Page::Failed(
+                            "this Nessa cannot let the app's page reach its server".into(),
+                        ),
+                    ),
+                },
+                Err(refusal) => (None, Page::Failed(refusal.to_string())),
+            },
+        };
+        let page = Arc::new(page);
+        let server = Arc::new(Mutex::new(server));
         let origin = origin();
         let entry = origin
             .join(package.manifest().entrypoint())
@@ -107,9 +143,10 @@ mod host {
         let probe = std::env::var(PROBE).ok();
 
         let served = package.clone();
+        let shown = page.clone();
         let builder = Builder::<Wry>::default()
             .register_uri_scheme_protocol(SCHEME, move |_context, request| {
-                respond(&served, &request)
+                respond(&served, &shown, &request)
             })
             .on_page_load(move |webview, payload| {
                 if payload.event() != PageLoadEvent::Finished {
@@ -146,6 +183,10 @@ mod host {
                 .incognito(true)
                 .data_directory(webview_data.clone())
                 .initialization_script_for_all_frames(NO_PEER_CONNECTIONS)
+                .initialization_script(match page.as_ref() {
+                    Page::WithServer { script, .. } => script.as_str(),
+                    _ => "",
+                })
                 .on_navigation(move |next| same_origin(next, &allowed))
                 // `window.open` and target=_blank open nothing.
                 .on_new_window(|_, _| NewWindowResponse::Deny);
@@ -163,8 +204,62 @@ mod host {
             })
             .build(tauri::generate_context!("app-host/tauri.conf.json"))
             .map_err(|error| format!("could not start the app: {error}"))?
-            .run(|_, _| {});
+            .run(move |_, event| {
+                // The server ends with the app: its stdin closes however
+                // this process ends, and here it is also asked to stop.
+                if let RunEvent::Exit = event {
+                    drop(server.lock().map(|mut held| held.take()));
+                }
+            });
         Ok(())
+    }
+
+    /// What the window shows.
+    enum Page {
+        /// A static app's files.
+        Files,
+        /// A dynamic app's files, which may reach its server and nothing else.
+        WithServer { policy: String, script: String },
+        /// Why a dynamic app's server did not start.
+        Failed(String),
+    }
+
+    /// The app's policy, with its server the one more place it may connect.
+    pub(super) fn server_policy(origin: &str) -> Option<String> {
+        const CONNECT: &str = "connect-src 'self' nessa-app:;";
+        APP_CONTENT_SECURITY_POLICY.contains(CONNECT).then(|| {
+            APP_CONTENT_SECURITY_POLICY
+                .replace(CONNECT, &format!("connect-src 'self' nessa-app: {origin};"))
+        })
+    }
+
+    /// Hands the page its server's address and this launch's token, before
+    /// any of its own scripts run; it cannot be changed afterwards.
+    pub(super) fn server_script(origin: &str, token: &str) -> String {
+        let value = serde_json::json!({ "server": origin, "token": token });
+        format!(
+            "Object.defineProperty(window, \"nessaApp\", {{ value: Object.freeze({value}), writable: false, configurable: false }})"
+        )
+    }
+
+    /// The window's page when a dynamic app's server did not start.
+    fn failure_page(title: &str, words: &str) -> Vec<u8> {
+        let escape = |text: &str| {
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+        };
+        format!(
+            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>{title}</title>\
+             <style>:root{{color-scheme:light dark;font:14px/1.5 system-ui,sans-serif}}\
+             body{{margin:0;padding:32px;max-width:560px}}h1{{font-size:18px;margin:0 0 8px}}\
+             pre{{white-space:pre-wrap;color:GrayText;font-size:12px}}</style>\
+             <h1>{title} could not start</h1><pre>{words}</pre></html>",
+            title = escape(title),
+            words = escape(words),
+        )
+        .into_bytes()
     }
 
     /// The launcher's folder: named with `--app`, or, in a macOS bundle, its
@@ -250,7 +345,11 @@ mod host {
 
     /// The package's file at the request's path, under the app's policy, or
     /// nothing.
-    fn respond(package: &VerifiedPackage, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    fn respond(
+        package: &VerifiedPackage,
+        page: &Page,
+        request: &Request<Vec<u8>>,
+    ) -> Response<Vec<u8>> {
         let uri = request.uri();
         let path = uri.path().strip_prefix('/').unwrap_or_default();
         let path = if path.is_empty() {
@@ -260,19 +359,30 @@ mod host {
         };
         let host = uri.host().unwrap_or_default();
         let ours = host == "localhost" || host == format!("{SCHEME}.localhost");
-        match package
-            .asset(path)
-            .filter(|_| ours && request.method() == Method::GET)
-        {
+        let policy = match page {
+            Page::WithServer { policy, .. } => policy.as_str(),
+            _ => APP_CONTENT_SECURITY_POLICY,
+        };
+        let failed = match page {
+            Page::Failed(words) if path == package.manifest().entrypoint() => {
+                Some(failure_page(package.manifest().app_id().as_str(), words))
+            }
+            _ => None,
+        };
+        let bytes = match failed {
+            Some(bytes) => Some(bytes),
+            None => package.asset(path).map(<[u8]>::to_vec),
+        };
+        match bytes.filter(|_| ours && request.method() == Method::GET) {
             Some(bytes) => Response::builder()
                 .header(header::CONTENT_TYPE, content_type(path))
                 .header(header::CACHE_CONTROL, "no-store")
-                .header("content-security-policy", APP_CONTENT_SECURITY_POLICY)
+                .header("content-security-policy", policy)
                 .header("x-content-type-options", "nosniff")
-                .body(bytes.to_vec()),
+                .body(bytes),
             None => Response::builder()
                 .status(StatusCode::NOT_FOUND)
-                .header("content-security-policy", APP_CONTENT_SECURITY_POLICY)
+                .header("content-security-policy", policy)
                 .body(Vec::new()),
         }
         .unwrap_or_else(|_| Response::new(Vec::new()))
@@ -366,5 +476,25 @@ mod host {
                 )?,
             ],
         )
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod tests {
+    use super::host::{server_policy, server_script};
+
+    #[test]
+    fn a_dynamic_page_may_reach_its_own_server_and_nothing_else() {
+        let policy = server_policy("http://127.0.0.1:4100").expect("the policy names connect-src");
+        let connect = policy
+            .split(';')
+            .find(|directive| directive.trim().starts_with("connect-src"))
+            .unwrap();
+        assert_eq!(
+            connect.trim(),
+            "connect-src 'self' nessa-app: http://127.0.0.1:4100"
+        );
+        let script = server_script("http://127.0.0.1:4100", "t\"</script>");
+        assert!(script.contains(r#""token":"t\"</script>""#), "{script}");
     }
 }

@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use base64::{engine::general_purpose::STANDARD, Engine};
 
 use crate::{
-    scaffold_package, verify_package, AssetIntegrityError, PackageError, VerifiedPackage,
-    MAX_PATH_BYTES,
+    scaffold_package, verify_package, AssetIntegrityError, PackageError, ServerRuntime,
+    VerifiedPackage, MAX_PATH_BYTES,
 };
 
 const MAX_INLINE_BYTES: usize = 16 * 1024;
@@ -65,21 +65,24 @@ impl From<PackageError> for InlineRefusal {
             | PackageError::ConflictingPaths
             | PackageError::InvalidEntrypoint
             | PackageError::InvalidIcon
+            | PackageError::InvalidServer
             | PackageError::InvalidDigest => Self::ManifestInvalid,
         }
     }
 }
 
-/// Build and encode the same verified static starter as the package owner.
+/// Build and encode the same verified starter as the package owner: static,
+/// or a dynamic app whose server `server` runs.
 ///
 /// # Errors
 /// Rejects invalid declarations or content outside the small inline profile.
 pub fn scaffold_inline_package(
     app_id: String,
     package_version: String,
+    server: Option<ServerRuntime>,
 ) -> Result<InlinePackage, InlineRefusal> {
     checked_total(app_id.len(), package_version.len())?;
-    encode_inline_package(&scaffold_package(app_id, package_version)?)
+    encode_inline_package(&scaffold_package(app_id, package_version, server)?)
 }
 
 /// Encode verified bytes in the inline profile, as `apps.read` hands an
@@ -189,7 +192,7 @@ mod tests {
     use super::*;
 
     fn starter() -> InlinePackage {
-        scaffold_inline_package("sample-app".to_owned(), "preview + 1".to_owned()).unwrap()
+        scaffold_inline_package("sample-app".to_owned(), "preview + 1".to_owned(), None).unwrap()
     }
 
     #[test]
@@ -201,7 +204,7 @@ mod tests {
         assert_eq!(digest.len(), 64);
         assert_eq!(digest, verify_inline_package(&input).unwrap().digest());
         let other = verify_inline_package(
-            &scaffold_inline_package("sample-app".to_owned(), "2".to_owned()).unwrap(),
+            &scaffold_inline_package("sample-app".to_owned(), "2".to_owned(), None).unwrap(),
         )
         .unwrap();
         assert_ne!(
@@ -240,11 +243,11 @@ mod tests {
         );
 
         assert_eq!(
-            scaffold_inline_package("nessa".to_owned(), "preview".to_owned()),
+            scaffold_inline_package("nessa".to_owned(), "preview".to_owned(), None),
             Err(InlineRefusal::ManifestInvalid)
         );
         assert_eq!(
-            scaffold_inline_package("sample-app".to_owned(), " ".to_owned()),
+            scaffold_inline_package("sample-app".to_owned(), " ".to_owned(), None),
             Err(InlineRefusal::ManifestInvalid)
         );
     }
@@ -312,7 +315,7 @@ mod tests {
             Err(InlineRefusal::InlineLimit)
         );
         assert_eq!(
-            scaffold_inline_package("sample-app".to_owned(), "v".repeat(MAX_INLINE_BYTES)),
+            scaffold_inline_package("sample-app".to_owned(), "v".repeat(MAX_INLINE_BYTES), None,),
             Err(InlineRefusal::InlineLimit)
         );
     }

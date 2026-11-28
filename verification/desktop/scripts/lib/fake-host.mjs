@@ -92,7 +92,10 @@ export const STARTING = {
  * is refused while the app runs, as the host refuses it, and is kept in
  * `window.__fakeHostAppRemoved`. Keeping only the gateway's apps
  * (`installed_app_keep_only`) stops and removes every other launcher, kept in
- * `window.__fakeHostAppRemoved` too. Opening or stopping tells the desktop window
+ * `window.__fakeHostAppRemoved` too. A dynamic app's credential
+ * (`installed_app_credential`) is kept with its launcher, and each one handed
+ * is kept in `window.__fakeHostAppCredentials`; a launcher removed loses it.
+ * Opening or stopping tells the desktop window
  * `nessa://installed-apps-changed`. The fake does not verify the bytes or run
  * an app; the real host does, its unit tests hold the launchers, and the
  * Linux native smoke runs `nessa-app-host` itself.
@@ -113,6 +116,8 @@ export function gatewayHost({
   // Placed launchers by app, and the apps running now.
   const launchers = new Map()
   const runningApps = new Set()
+  const appCredentials = new Map()
+  window.__fakeHostAppCredentials = []
   window.__fakeHostAppAnswers = []
   window.__fakeHostAppConfirms = []
   window.__fakeHostAppOpens = []
@@ -285,9 +290,23 @@ export function gatewayHost({
         if (runningApps.has(args.appId))
           return Promise.reject(`${args.appId} is still open`)
         launchers.delete(args.appId)
+        appCredentials.delete(args.appId)
         window.__fakeHostAppRemoved.push(args.appId)
         return Promise.resolve(null)
       }
+      if (command === "installed_app_credential") {
+        if (!launchers.has(args.appId))
+          return Promise.reject(`${args.appId} has no launcher`)
+        appCredentials.set(args.appId, args.credential)
+        window.__fakeHostAppCredentials.push({
+          appId: args.appId,
+          credential: args.credential,
+          expiresAt: args.expiresAt,
+        })
+        return Promise.resolve(null)
+      }
+      if (command === "installed_app_has_credential")
+        return Promise.resolve(appCredentials.has(args.appId))
       if (command === "installed_app_keep_only") {
         const removed = [...launchers.keys()]
           .filter((appId) => !args.appIds.includes(appId))
@@ -295,6 +314,7 @@ export function gatewayHost({
         for (const appId of removed) {
           runningApps.delete(appId)
           launchers.delete(appId)
+          appCredentials.delete(appId)
           window.__fakeHostAppRemoved.push(appId)
         }
         if (removed.length > 0) appsChanged()

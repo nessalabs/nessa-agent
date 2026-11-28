@@ -1,7 +1,7 @@
 mod build_stage;
 mod titlebar_geometry;
 
-use std::{collections::BTreeSet, env, fs, path::PathBuf};
+use std::{collections::BTreeSet, env, fs, path::PathBuf, process::Command};
 
 use serde_json::Value;
 use tauri_utils::{config::parse::read_from, platform::Target};
@@ -36,12 +36,51 @@ fn main() {
     }
     println!("cargo:rustc-env=NESSA_BUNDLE_STAGE={stage}");
     write_titlebar_height();
+    bundle_app_client();
 
     let attributes = tauri_build::Attributes::new().plugin(
         "dev-console",
         tauri_build::InlinedPlugin::new().commands(&["forward_webview_console"]),
     );
     tauri_build::try_build(attributes).expect("failed to build Tauri application metadata")
+}
+
+/// `@nessa/client` as one module, for `nessa-app-host` to hand a dynamic
+/// app's server. A debug build without the frontend's dependencies gets a
+/// module that says so when imported; a release build must have the client.
+fn bundle_app_client() {
+    println!("cargo:rerun-if-changed=../packages/nessa-client/src");
+    println!("cargo:rerun-if-changed=../scripts/desktop/app-client-bundle.mjs");
+    // A debug build made before `pnpm install` holds the stub; installing
+    // the dependencies builds the real client on the next build.
+    println!("cargo:rerun-if-changed=../node_modules/.modules.yaml");
+    println!("cargo:rerun-if-changed=../pnpm-lock.yaml");
+    let out = PathBuf::from(env::var("OUT_DIR").expect("Cargo must provide OUT_DIR"))
+        .join("app-client.mjs");
+    let built = Command::new("node")
+        .arg("../scripts/desktop/app-client-bundle.mjs")
+        .arg(&out)
+        .status();
+    match built {
+        Ok(status) if status.success() && out.is_file() => {}
+        failed => {
+            let why = match failed {
+                Ok(status) => format!("the bundle script ended {status}"),
+                Err(error) => format!("node did not run: {error}"),
+            };
+            if env::var("PROFILE").as_deref() == Ok("release") {
+                panic!("could not bundle @nessa/client for dynamic apps: {why}");
+            }
+            println!(
+                "cargo:warning=dynamic apps get no @nessa/client in this build ({why}); run pnpm install"
+            );
+            fs::write(
+                &out,
+                "throw new Error(\"This Nessa was built without @nessa/client for apps.\")\n",
+            )
+            .expect("OUT_DIR must be writable");
+        }
+    }
 }
 
 /// Hands the page's titlebar height to the host, which centres the traffic

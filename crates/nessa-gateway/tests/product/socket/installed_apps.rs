@@ -116,6 +116,64 @@ async fn a_caller_without_credential_manage_installs_nothing() {
 }
 
 #[tokio::test]
+async fn a_dynamic_starter_names_its_server_and_what_it_asks_for() {
+    let (state, session, _kept, _folder) =
+        owner(&["credential.manage"], MembershipRole::Admin).await;
+    let made = payload(
+        dispatch(
+            &state,
+            &session,
+            with(
+                "1",
+                "apps.starter",
+                json!({ "appId": "notes", "packageVersion": "1.0.0", "server": "bun" }),
+            ),
+        )
+        .await,
+    );
+    assert_eq!(
+        made["review"]["server"],
+        json!({ "entry": "server/main.mjs", "runtime": "bun" })
+    );
+    assert_eq!(
+        made["review"]["requestedCapabilities"],
+        json!(["list", "read", "create", "send"])
+    );
+    // Its review says the same, and a static starter names no server.
+    let reviewed = payload(
+        dispatch(
+            &state,
+            &session,
+            with("2", "apps.review", json!({ "package": made["package"] })),
+        )
+        .await,
+    );
+    assert_eq!(reviewed, made["review"]);
+    let plain = payload(
+        dispatch(
+            &state,
+            &session,
+            with(
+                "3",
+                "apps.starter",
+                json!({ "appId": "notes", "packageVersion": "1.0.0" }),
+            ),
+        )
+        .await,
+    );
+    assert!(plain["review"].get("server").is_none());
+    let unknown = with(
+        "4",
+        "apps.starter",
+        json!({ "appId": "notes", "packageVersion": "1.0.0", "server": "deno" }),
+    );
+    assert_eq!(
+        code_of(dispatch(&state, &session, unknown).await),
+        "invalid_request"
+    );
+}
+
+#[tokio::test]
 async fn the_owner_installs_the_reviewed_package_reads_it_back_and_removes_it() {
     let (state, session, kept, _folder) =
         owner(&["credential.manage"], MembershipRole::Admin).await;

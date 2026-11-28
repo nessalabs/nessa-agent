@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use nessa_app_package::{
     encode_inline_package, scaffold_inline_package, verify_inline_package, InlinePackage,
-    InlineRefusal, RequestedCapability, VerifiedPackage,
+    InlineRefusal, RequestedCapability, ServerRuntime, VerifiedPackage,
 };
 use nessa_auth::application::app_credential::{AppCapabilities, AppCapability, AppCredentials};
 use nessa_auth::application::ports::PortFuture;
@@ -71,6 +71,9 @@ pub struct Review {
     /// What the app asks to do in Nessa, in a fixed order. Installing it
     /// approves exactly these.
     pub requested_capabilities: Vec<AppCapability>,
+    /// A dynamic app's program: its entry, and what runs it. None for a
+    /// static app.
+    pub server: Option<(String, ServerRuntime)>,
 }
 
 impl Review {
@@ -83,6 +86,9 @@ impl Review {
             asset_count: package.assets().count(),
             digest: package.digest(),
             requested_capabilities: requested(package),
+            server: manifest
+                .server()
+                .map(|server| (server.entry().to_owned(), server.runtime())),
         }
     }
 }
@@ -376,9 +382,15 @@ impl InstalledApps {
         Ok(revoked)
     }
 
-    /// The starter package for a new app. Nothing is kept.
-    pub fn starter(&self, app_id: String, package_version: String) -> Result<Checked, AppsError> {
-        let package = scaffold_inline_package(app_id, package_version)?;
+    /// The starter package for a new app: static, or with a server that
+    /// `server` runs. Nothing is kept.
+    pub fn starter(
+        &self,
+        app_id: String,
+        package_version: String,
+        server: Option<ServerRuntime>,
+    ) -> Result<Checked, AppsError> {
+        let package = scaffold_inline_package(app_id, package_version, server)?;
         let review = Review::of(&verify_inline_package(&package)?);
         Ok(Checked { package, review })
     }

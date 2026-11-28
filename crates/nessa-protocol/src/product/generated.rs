@@ -1846,6 +1846,29 @@ pub struct AppReview {
     pub asset_count: u64,
     pub digest: String,
     pub requested_capabilities: Vec<AppCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<AppServer>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppServer {
+    pub entry: String,
+    pub runtime: AppServerRuntime,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AppServerRuntime {
+    #[serde(rename = "node")]
+    Node,
+    #[serde(rename = "bun")]
+    Bun,
+}
+impl AppServerRuntime {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Bun => "bun",
+        }
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AppCapability {
@@ -1879,6 +1902,8 @@ impl AppCapability {
 pub struct AppsStarterParams {
     pub app_id: String,
     pub package_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<AppServerRuntime>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -1796,7 +1796,18 @@ export interface AppReview {
   digest: string
   /** What the app asks to do in Nessa, in a fixed order. Empty for an app that asks for nothing. Installing the app approves exactly these: apps.issueCredential issues a credential that holds them and nothing else. */
   requestedCapabilities: AppCapability[]
+  /** The program a dynamic app runs on this computer while it is open. Absent for a static app, which runs no program. */
+  server?: AppServer
 }
+/** A dynamic app's own program. The app runs it with the runtime it names, as the person, while the app is open, and it reaches Nessa only with the app's own credential. */
+export interface AppServer {
+  /** The package's script the runtime starts. */
+  entry: string
+  runtime: AppServerRuntime
+}
+/** What runs a dynamic app's program: Node.js or Bun, as installed on this computer. */
+export const AppServerRuntime = { Node: "node", Bun: "bun" } as const
+export type AppServerRuntime = (typeof AppServerRuntime)[keyof typeof AppServerRuntime]
 /** One thing an app may do with its own conversations. list: list them (conversation.list). read: read one (conversation.read, conversation.readEarlier, conversation.receipt, conversation.messageStatus). create: start one (conversation.create). subscribe: page through its catalogue (conversation.observe). stop: stop a turn (conversation.stop). send: send a message or steer (conversation.send, conversation.steer). An app sees only conversations it created, never the owner's. */
 export const AppCapability = {
   List: "list",
@@ -1807,12 +1818,14 @@ export const AppCapability = {
   Send: "send",
 } as const
 export type AppCapability = (typeof AppCapability)[keyof typeof AppCapability]
-/** Make the starter static app package for a new app (apps.starter). Nothing is installed or kept. */
+/** Make the starter app package for a new app (apps.starter): static, or dynamic with a server. Nothing is installed or kept. */
 export interface AppsStarterParams {
   /** The app's identity: lowercase letters, digits, underscores and hyphens, starting with a letter or digit, never nessa. */
   appId: string
   /** The version label the package declares. */
   packageVersion: string
+  /** Make a dynamic app whose program this runtime runs: a page, and a server that starts chats through @nessa/client and asks for list, read, create and send. Absent: a static app. */
+  server?: AppServerRuntime
 }
 /** A verified package and its review (apps.starter, apps.read). */
 export interface AppsPackageResult {

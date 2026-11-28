@@ -4707,6 +4707,10 @@
           "maxItems": 6,
           "uniqueItems": true,
           "description": "What the app asks to do in Nessa, in a fixed order. Empty for an app that asks for nothing. Installing the app approves exactly these: apps.issueCredential issues a credential that holds them and nothing else."
+        },
+        "server": {
+          "$ref": "#/$defs/AppServer",
+          "description": "The program a dynamic app runs on this computer while it is open. Absent for a static app, which runs no program."
         }
       },
       "required": [
@@ -4718,6 +4722,27 @@
         "requestedCapabilities"
       ]
     },
+    "AppServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A dynamic app's own program. The app runs it with the runtime it names, as the person, while the app is open, and it reaches Nessa only with the app's own credential.",
+      "properties": {
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "x-utf8MaxBytes": 240,
+          "description": "The package's script the runtime starts."
+        },
+        "runtime": { "$ref": "#/$defs/AppServerRuntime" }
+      },
+      "required": ["entry", "runtime"]
+    },
+    "AppServerRuntime": {
+      "type": "string",
+      "enum": ["node", "bun"],
+      "description": "What runs a dynamic app's program: Node.js or Bun, as installed on this computer."
+    },
     "AppCapability": {
       "type": "string",
       "enum": ["list", "read", "create", "subscribe", "stop", "send"],
@@ -4726,7 +4751,7 @@
     "AppsStarterParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Make the starter static app package for a new app (apps.starter). Nothing is installed or kept.",
+      "description": "Make the starter app package for a new app (apps.starter): static, or dynamic with a server. Nothing is installed or kept.",
       "properties": {
         "appId": {
           "type": "string",
@@ -4742,6 +4767,10 @@
           "maxLength": 128,
           "x-utf8MaxBytes": 128,
           "description": "The version label the package declares."
+        },
+        "server": {
+          "$ref": "#/$defs/AppServerRuntime",
+          "description": "Make a dynamic app whose program this runtime runs: a page, and a server that starts chats through @nessa/client and asks for list, read, create and send. Absent: a static app."
         }
       },
       "required": ["appId", "packageVersion"]

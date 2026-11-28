@@ -7,7 +7,8 @@
 //!           Contents/MacOS/<app>           a copy of nessa-app-host
 //!           Contents/Resources/AppIcon.icns   from the package's PNG icon
 //!           Contents/Resources/nessa-app/  app.json, host.sha256, running.lock,
-//!                                          running.pid
+//!                                          running.pid; a dynamic app's
+//!                                          credential.json and server/
 //! Linux   <config>/installed-apps/<app>/   app.json, <app>, icon.png, locks
 //!         $XDG_DATA_HOME/applications/so.nessa.app[.<stage>].<app>.desktop
 //! Windows <config>/installed-apps/<app>/   app.json, <app>.exe, locks
@@ -37,7 +38,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fs2::FileExt;
 use nessa_app_package::{
-    launcher_record, VerifiedPackage, LAUNCHER_RECORD, RUNNING_LOCK, RUNNING_PID,
+    launcher_record, VerifiedPackage, APP_CREDENTIAL, LAUNCHER_RECORD, MAX_APP_CREDENTIAL_BYTES,
+    RUNNING_LOCK, RUNNING_PID,
 };
 use sha2::{Digest, Sha256};
 
@@ -151,14 +153,35 @@ impl AppLaunchers {
 
     /// The launcher's folder: its record and running lock.
     fn folder(&self, app: &str) -> PathBuf {
+        self.folder_in(&self.launcher(app))
+    }
+
+    /// The folder inside a launcher laid out at `launcher`.
+    fn folder_in(&self, launcher: &Path) -> PathBuf {
         match self.layout {
-            Layout::Bundle => self
-                .launcher(app)
+            Layout::Bundle => launcher
                 .join("Contents")
                 .join("Resources")
                 .join("nessa-app"),
-            Layout::Folder => self.launcher(app),
+            Layout::Folder => launcher.to_owned(),
         }
+    }
+
+    /// Keep `record`, a dynamic app's credential, in its launcher: written
+    /// whole, readable by this user alone, then swapped in.
+    fn write_credential(&self, app: &str, record: &[u8]) -> Result<(), String> {
+        let folder = self.folder(app);
+        if !folder.join(LAUNCHER_RECORD).is_file() {
+            return Err(format!("{app} has no launcher"));
+        }
+        let written = folder.join(format!(".{APP_CREDENTIAL}.{}", std::process::id()));
+        let kept = private_file(&written, record)
+            .and_then(|()| fs::rename(&written, folder.join(APP_CREDENTIAL)));
+        if let Err(error) = kept {
+            let _ = fs::remove_file(&written);
+            return Err(format!("could not keep {app}'s credential: {error}"));
+        }
+        Ok(())
     }
 
     fn executable(&self, app: &str) -> PathBuf {
@@ -255,7 +278,9 @@ impl AppLaunchers {
             .root
             .join(format!(".{app}.placing-{}", std::process::id()));
         let _ = fs::remove_dir_all(&staging);
-        let written = self.write_launcher(package, &record, &host, &staging);
+        let written = self
+            .write_launcher(package, &record, &host, &staging)
+            .and_then(|()| self.carry_credential(package, &staging));
         let swapped = written.and_then(|()| swap_in(&staging, &self.launcher(app)));
         if let Err(error) = swapped {
             let _ = fs::remove_dir_all(&staging);
@@ -274,6 +299,21 @@ impl AppLaunchers {
             written.map_err(|error| place_error(app, &error))?;
         }
         Ok(())
+    }
+
+    /// A new launcher for a dynamic app in `staging` keeps the credential the
+    /// old one held, so a new Nessa's host does not cost it its sign-in. A
+    /// static app has no server to use one, so none is kept for it.
+    fn carry_credential(&self, package: &VerifiedPackage, staging: &Path) -> io::Result<()> {
+        if package.manifest().server().is_none() {
+            return Ok(());
+        }
+        let app = package.manifest().app_id().as_str();
+        match fs::read(self.folder(app).join(APP_CREDENTIAL)) {
+            Ok(record) => private_file(&self.folder_in(staging).join(APP_CREDENTIAL), &record),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Whether `app`'s launcher holds exactly `record`, and a copy of the
@@ -506,6 +546,33 @@ impl Launchers for AppLaunchers {
             .filter(|app| self.is_running(app))
             .collect()
     }
+
+    fn keep_credential(&self, app: &str, record: &[u8]) -> Result<(), String> {
+        self.write_credential(app, record)
+    }
+
+    fn credential(&self, app: &str) -> Option<Vec<u8>> {
+        let file = File::open(self.folder(app).join(APP_CREDENTIAL)).ok()?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(
+            &mut std::io::Read::take(file, MAX_APP_CREDENTIAL_BYTES as u64 + 1),
+            &mut bytes,
+        )
+        .ok()?;
+        Some(bytes)
+    }
+}
+
+/// Write `bytes` to a new file at `path` only this user can read.
+fn private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let mut options = File::options();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Whether a host holds `lock`. The host holds it exclusively; a probe takes
@@ -797,7 +864,7 @@ mod tests {
     use nessa_app_package::{read_launcher_record, scaffold_package};
 
     fn starter(app: &str) -> VerifiedPackage {
-        scaffold_package(app.to_owned(), "1.0.0".to_owned()).unwrap()
+        scaffold_package(app.to_owned(), "1.0.0".to_owned(), None).unwrap()
     }
 
     fn launchers(layout: Layout) -> (tempfile::TempDir, AppLaunchers) {

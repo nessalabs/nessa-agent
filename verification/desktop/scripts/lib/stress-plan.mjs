@@ -289,6 +289,10 @@ export const KNOBS = {
     default: 1,
     what: "installed apps that sign in with their own credential: the owner issues it after install with exactly the capabilities the package requests; the app connects with @nessa/client and sees, creates and runs only its own conversations, never the owner's; every method outside its capabilities is forbidden; uninstalling revokes it and its open session is closed",
   },
+  dynamicApps: {
+    default: 1,
+    what: "dynamic apps made in Settings with a Node server: the Install dialog says it runs its own program, the gateway issues its credential and the host is handed it; the app's server, run as its app host runs it with Nessa's own @nessa/client, refuses a call without its launch token, starts a chat that runs in Nessa, and lists only its own chats",
+  },
   telemetries: {
     default: 1,
     what: "typed turns checked in the turn-origin audit (person, the window's client, not spoken) and as a turn span exported to a fake OpenTelemetry collector, with none of the message's words",
@@ -445,6 +449,8 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.apps, () => ({ kind: "apps" }))
   // After the shuffle, so the new knob does not reshuffle a seed.
   add(knobs.appCredentials, () => ({ kind: "appCredentials" }))
+  // After the shuffle, so the new knob does not reshuffle a seed.
+  add(knobs.dynamicApps, () => ({ kind: "dynamicApps" }))
   if (knobs.pairedCatalogues > 0)
     steps.push({ kind: "pairedCatalogue", cycles: knobs.pairedCatalogues })
   for (let slot = 0; slot < knobs.sharedChats; slot += 1)

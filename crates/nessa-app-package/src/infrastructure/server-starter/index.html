@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Nessa app</title>
+<style>
+  :root { color-scheme: light dark; font: 14px/1.45 system-ui, sans-serif; }
+  body { margin: 0; padding: 24px; max-width: 560px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  form { display: flex; gap: 8px; margin-bottom: 16px; }
+  input { flex: 1; padding: 8px 10px; font: inherit; border-radius: 8px; border: 1px solid #8884; }
+  button { padding: 8px 14px; font: inherit; border-radius: 8px; border: 0; background: CanvasText; color: Canvas; }
+  button:active { transform: scale(0.97); }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 8px 0; border-top: 1px solid #8882; }
+  p { color: GrayText; }
+</style>
+<h1>Nessa app</h1>
+<form id="start">
+  <input name="text" placeholder="Start a chat" autocomplete="off" required>
+  <button>Start</button>
+</form>
+<ul id="chats"></ul>
+<p id="status"></p>
+<script>
+  // Nessa hands this window its server's address and a token for it.
+  const { server, token } = window.nessaApp
+  const call = async (method, path, body) => {
+    const response = await fetch(server + path, {
+      method,
+      headers: { "content-type": "application/json", "x-nessa-app-token": token },
+      body: body && JSON.stringify(body),
+    })
+    const answer = await response.json()
+    if (!response.ok) throw new Error(answer.error)
+    return answer
+  }
+  const status = document.getElementById("status")
+  const show = async () => {
+    const chats = await call("GET", "/chats")
+    document.getElementById("chats").replaceChildren(
+      ...chats.map((chat) => {
+        const row = document.createElement("li")
+        row.textContent = chat.title ?? "New chat"
+        return row
+      }),
+    )
+    status.textContent = chats.length ? "" : "No chats yet."
+  }
+  document.getElementById("start").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    const form = event.currentTarget
+    try {
+      await call("POST", "/chats", { text: form.text.value })
+      form.reset()
+      await show()
+    } catch (error) {
+      status.textContent = error.message
+    }
+  })
+  // While its server signs in to Nessa it says so; the list follows once in.
+  const first = () =>
+    show().catch((error) => {
+      status.textContent = error.message
+      setTimeout(first, 2000)
+    })
+  first()
+</script>
+</html>

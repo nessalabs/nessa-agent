@@ -193,7 +193,6 @@ impl HostDependencies {
     /// missing or unreadable. `setup` shows it; it is never returned to Tauri.
     pub fn assemble(app: &AppHandle, stage: String) -> Result<Self, StartupRefusal> {
         let config_root = local_data::config_root(app, &stage);
-        let installed_apps = crate::installed_apps::native_installed_apps(app, &stage);
         let settings: Arc<dyn SettingsStore> = Arc::new(SettingsFile::at(config_root.clone()));
         // These fields own the service registration and its credential
         // namespace. A corrupt or unreadable authority cannot be replaced by
@@ -216,6 +215,20 @@ impl HostDependencies {
             durable.claude.configuration_directory,
         )
         .map_err(|error| StartupRefusal::ServiceConfiguration(error.to_string()))?;
+        // A dynamic app's server finds this gateway as any Nessa client here
+        // does: from the endpoint it publishes under this data root.
+        let installed_apps = crate::installed_apps::native_installed_apps(
+            app,
+            &stage,
+            crate::installed_apps::GatewayPlace {
+                stage: service_configuration.stage().to_owned(),
+                data_dir: service_configuration
+                    .data_root()
+                    .to_str()
+                    .map(str::to_owned),
+                instance: service_configuration.instance().map(str::to_owned),
+            },
+        );
         let service_namespace = service_namespace(
             Some(service_configuration.data_root().to_path_buf()),
             service_configuration.stage(),

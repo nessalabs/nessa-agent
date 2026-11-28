@@ -9,7 +9,7 @@ use serde::{
 use sha2::{Digest, Sha256};
 
 use crate::domain::static_package::{self, AssetDeclaration, ManifestDeclarations};
-use crate::{PackageError, PackageManifest, VerifiedPackage, MAX_MANIFEST_BYTES};
+use crate::{PackageError, PackageManifest, ServerRuntime, VerifiedPackage, MAX_MANIFEST_BYTES};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -19,8 +19,18 @@ struct Manifest {
     package_version: String,
     entrypoint: String,
     icon: Option<String>,
+    /// A dynamic app's program; absent for a static app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<Object<Server>>,
     requested_capabilities: Vec<String>,
     assets: Vec<Object<Asset>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Server {
+    entry: String,
+    runtime: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -64,43 +74,74 @@ const STARTER_HTML: &[u8] = b"<!doctype html>\n<html lang=\"en\">\n<meta charset
 const STARTER_ICON: &str = "icon.png";
 const STARTER_ICON_PNG: &[u8] = include_bytes!("starter-icon.png");
 
-/// Build one inert, deterministic static starter. The app ID and version are
-/// written only to the manifest; they are not inserted into the HTML.
+/// A dynamic starter's page: it talks to the app's own server.
+const SERVER_STARTER_HTML: &[u8] = include_bytes!("server-starter/index.html");
+/// A dynamic starter's server: it talks to Nessa with `@nessa/client`.
+const SERVER_STARTER_ENTRY: &str = "server/main.mjs";
+const SERVER_STARTER_MAIN: &[u8] = include_bytes!("server-starter/main.mjs");
+/// What a dynamic starter asks for: to list, read, start and write in its
+/// own chats, which is what its server does.
+const SERVER_STARTER_CAPABILITIES: [&str; 4] = ["list", "read", "create", "send"];
+
+/// Build one deterministic starter. The app ID and version are written only
+/// to the manifest; they are not inserted into any file.
+///
+/// Without `server` it is an inert static page. With one, it is a dynamic
+/// app: a page, and a server run by that runtime which starts chats in Nessa
+/// through `@nessa/client`, asking for exactly what it uses.
 ///
 /// # Errors
 /// Returns the same typed declaration/verification errors as `verify_package`.
 pub fn scaffold_package(
     app_id: String,
     package_version: String,
+    server: Option<ServerRuntime>,
 ) -> Result<VerifiedPackage, PackageError> {
+    let mut files: Vec<(&str, &[u8])> = vec![(STARTER_ICON, STARTER_ICON_PNG)];
+    match server {
+        None => files.push((STARTER_ENTRYPOINT, STARTER_HTML)),
+        Some(_) => {
+            files.push((STARTER_ENTRYPOINT, SERVER_STARTER_HTML));
+            files.push((SERVER_STARTER_ENTRY, SERVER_STARTER_MAIN));
+        }
+    }
     let manifest = Manifest {
         schema_version: SCHEMA_VERSION,
         app_id,
         package_version,
         entrypoint: STARTER_ENTRYPOINT.to_owned(),
         icon: Some(STARTER_ICON.to_owned()),
-        requested_capabilities: Vec::new(),
-        assets: [
-            (STARTER_ICON, STARTER_ICON_PNG),
-            (STARTER_ENTRYPOINT, STARTER_HTML),
-        ]
-        .into_iter()
-        .map(|(path, bytes)| {
-            Object(Asset {
-                path: path.to_owned(),
-                size_bytes: bytes.len() as u64,
-                sha256: hex::encode(Sha256::digest(bytes)),
+        server: server.map(|runtime| {
+            Object(Server {
+                entry: SERVER_STARTER_ENTRY.to_owned(),
+                runtime: runtime.as_str().to_owned(),
             })
-        })
-        .collect(),
+        }),
+        requested_capabilities: match server {
+            None => Vec::new(),
+            Some(_) => SERVER_STARTER_CAPABILITIES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+        },
+        assets: files
+            .iter()
+            .map(|(path, bytes)| {
+                Object(Asset {
+                    path: (*path).to_owned(),
+                    size_bytes: bytes.len() as u64,
+                    sha256: hex::encode(Sha256::digest(bytes)),
+                })
+            })
+            .collect(),
     };
     let json = serde_json::to_vec(&manifest).map_err(|_| PackageError::MalformedManifest)?;
     verify_package(
         json,
-        BTreeMap::from([
-            (STARTER_ENTRYPOINT.to_owned(), STARTER_HTML.to_vec()),
-            (STARTER_ICON.to_owned(), STARTER_ICON_PNG.to_vec()),
-        ]),
+        files
+            .into_iter()
+            .map(|(path, bytes)| (path.to_owned(), bytes.to_vec()))
+            .collect(),
     )
 }
 
@@ -158,6 +199,9 @@ pub fn parse_manifest(manifest: Vec<u8>) -> Result<PackageManifest, PackageError
             package_version: input.package_version,
             entrypoint: input.entrypoint,
             icon: input.icon,
+            server: input
+                .server
+                .map(|Object(server)| (server.entry, server.runtime)),
             requested_capabilities: input.requested_capabilities,
             assets: declarations,
         },

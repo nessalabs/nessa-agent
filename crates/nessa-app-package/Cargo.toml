@@ -11,6 +11,7 @@ disposable-store = ["dep:nessa-local-database"]
 
 [dependencies]
 base64 = "0.22"
+getrandom = "0.3"
 nessa-local-database = { path = "../nessa-local-database", optional = true }
 nessa-types = { path = "../nessa-types" }
 sha2 = "0.10"

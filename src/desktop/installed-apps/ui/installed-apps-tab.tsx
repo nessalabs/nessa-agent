@@ -8,9 +8,11 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import type { InstalledApp } from "@nessa/client"
+import type { AppReview, AppServerRuntime, InstalledApp } from "@nessa/client"
 import {
   confirmAppInstall,
+  handInstalledAppCredential,
+  installedAppHasCredential,
   keepOnlyInstalledApps,
   onInstalledAppsChanged,
   openInstalledApp,
@@ -19,7 +21,7 @@ import {
   runningInstalledApps,
   stopInstalledApp,
 } from "../../../host"
-import { Group, ItemRow, RowAction } from "../../settings/ui/settings-controls"
+import { Choice, Group, ItemRow, RowAction } from "../../settings/ui/settings-controls"
 import {
   refusalWords,
   type InstalledAppsGateway,
@@ -34,7 +36,11 @@ import {
  *     Cancel ──▶ nothing is sent, nothing kept
  *     Install ──▶ apps.install {package, reviewedDigest} ── gateway verifies again
  *         ──▶ host places its launcher (an app of its own, with its icon)
- * Open ── apps.read ──▶ host verifies again, places, runs it (own process, no network)
+ *         ──▶ a dynamic app (it runs node or bun): apps.issueCredential ──▶ host keeps
+ *             the credential in its launcher, for its own server to sign in with
+ * Open ── apps.read ──▶ host verifies again, places, runs it (own process; a
+ *         dynamic app's server is the one thing its page reaches) ── a dynamic
+ *         app whose launcher holds no credential is issued one first
  * Stop ── host ends it      Uninstall ── Stop, apps.uninstall, launcher removed
  * each list read ── host keeps only the listed apps' launchers
  * ```
@@ -76,6 +82,20 @@ type Listing =
   | { readonly kind: "unread" }
   | { readonly kind: "ready"; readonly apps: readonly InstalledApp[] }
 
+/** What a new app is: a page, or a page with a server that runtime runs. */
+type Kind = "page" | AppServerRuntime
+
+const KINDS: readonly { id: Kind; label: string }[] = [
+  { id: "page", label: "Page" },
+  { id: "node", label: "Node server" },
+  { id: "bun", label: "Bun server" },
+]
+
+/** Whether `review`'s app runs a server that signs in to Nessa. */
+function signsIn(review: AppReview): boolean {
+  return review.server !== undefined && review.requestedCapabilities.length > 0
+}
+
 /** What happened last, said under the list. */
 type Said = { readonly tone: "problem"; readonly words: string }
 
@@ -87,6 +107,7 @@ export function InstalledAppsTab() {
   const [said, setSaid] = useState<Said>()
   const [retry, setRetry] = useState(0)
   const [draft, setDraft] = useState("")
+  const [kind, setKind] = useState<Kind>("page")
   const saidId = useId()
   const revision = useRef(0)
   // Changes started here, so a list read before one started is never used
@@ -150,22 +171,50 @@ export function InstalledAppsTab() {
   const create = () =>
     run("create", async () => {
       if (!gateway) return
-      const { package: pkg, review } = await gateway.starter(draft.trim(), "1.0.0")
-      if (!(await confirmAppInstall(review))) return
+      const { package: pkg, review } = await gateway.starter(
+        draft.trim(),
+        "1.0.0",
+        kind === "page" ? undefined : kind,
+      )
+      if (!(await confirmAppInstall(review, pkg))) return
       try {
         await gateway.install(pkg, review.digest, requestId())
       } finally {
         reread()
       }
+      // Installed again over an app that is open, it stops: issuing ends
+      // the credential its server holds.
+      await stopInstalledApp(review.appId)
       setDraft("")
       // Its launcher: an app of its own in Applications or the menu.
       await placeInstalledApp(review.appId, pkg, review.digest)
+      if (signsIn(review)) await handCredential(review.appId)
     })
+
+  // The credential goes from the gateway to the app's launcher and nowhere
+  // else; issuing again ends the one before.
+  const handCredential = async (appId: string) => {
+    if (!gateway) return
+    const issued = await gateway.issueCredential(appId, requestId())
+    await handInstalledAppCredential(appId, issued.credential, issued.expiresAt)
+  }
 
   const open = (appId: string) =>
     run(`open:${appId}`, async () => {
       if (!gateway) return
       const { package: pkg, review } = await gateway.read(appId)
+      await placeInstalledApp(appId, pkg, review.digest)
+      // One missing, or ending within a month, is issued again, but never
+      // under a server that is running: issuing ends the one it signed in
+      // with. The host is asked now, not the list drawn, since an app opened
+      // from the Dock shows here only after a moment. It is renewed on the
+      // Open after it stops.
+      if (
+        signsIn(review) &&
+        !(await installedAppHasCredential(appId)) &&
+        !(await runningInstalledApps()).includes(appId)
+      )
+        await handCredential(appId)
       await openInstalledApp(appId, pkg, review.digest)
     })
 
@@ -273,13 +322,23 @@ export function InstalledAppsTab() {
         setting="create-app"
         unavailable={!ready}
         control={
-          <RowAction
-            disabled={!!busy || draft.trim() === ""}
-            onClick={() => void create()}
-            data-create-app=""
-          >
-            {busy === "create" ? "Creating…" : "Create"}
-          </RowAction>
+          <span className="settings-installed-app-actions">
+            <Choice
+              key="kind"
+              label="Kind of app"
+              value={kind}
+              options={KINDS}
+              onChange={setKind}
+              data-create-app-kind=""
+            />
+            <RowAction
+              disabled={!!busy || draft.trim() === ""}
+              onClick={() => void create()}
+              data-create-app=""
+            >
+              {busy === "create" ? "Creating…" : "Create"}
+            </RowAction>
+          </span>
         }
       />
       {said && (

@@ -250,9 +250,13 @@ export {
 export { type CheckedAppPackage } from "./presentation/apps-api.js"
 export {
   AppsErrorCode,
+  AppCapability,
   type AppPackage,
   type AppPackageAsset,
   type AppReview,
+  AppServerRuntime,
+  type AppServer,
+  type AppsIssueCredentialResult,
   type InstalledApp,
 } from "./generated/product.js"
 export { type VoiceApi } from "./presentation/voice-api.js"
