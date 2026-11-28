@@ -72,7 +72,9 @@ the sign-in keeps waiting: it is a stale tab or someone else's page. A
 redirect naming another issuer, Cancel on Boat (`access_denied`), a refused
 code, ten minutes without an answer, or a connection that fails validation
 each end the sign-in as `signIn {failed, cause}`; a grant that could not be
-saved is revoked in Boat.
+saved is revoked in Boat. The ten minutes bound only the wait for the
+browser: once this sign-in's visit arrives, the exchange and the save run to
+their end, so a grant is always either saved or revoked.
 
 ## Renewal
 

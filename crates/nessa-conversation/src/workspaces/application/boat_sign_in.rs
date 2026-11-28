@@ -240,23 +240,17 @@ impl BoatSignIn {
             }
         };
         let task = tokio::spawn(async move {
-            let outcome = match tokio::time::timeout(
-                deadline,
-                wait(
-                    &mut *pending,
-                    &*oauth,
-                    &workspaces,
-                    &redirect,
-                    &state,
-                    &verifier,
-                    &commit,
-                ),
+            let outcome = wait(
+                &mut *pending,
+                &*oauth,
+                &workspaces,
+                &redirect,
+                &state,
+                &verifier,
+                &commit,
+                crate::timer::clock::now() + deadline,
             )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => Err(SignInFailure::Expired),
-            };
+            .await;
             let mut attempt = lock(&shared);
             if attempt.id == id {
                 attempt.task = None;
@@ -272,9 +266,13 @@ impl BoatSignIn {
     }
 }
 
-/// Wait for the browser, then exchange and save. A visit that carries
-/// another attempt's state is answered Failed and waited past: it is a
-/// stale tab, or someone else's page, never this sign-in.
+/// Wait for the browser until `until`, then exchange and save. A visit
+/// that carries another attempt's state is answered Failed and waited
+/// past: it is a stale tab, or someone else's page, never this sign-in.
+/// The deadline bounds only the wait for the browser: once this sign-in's
+/// visit arrives, the exchange runs to its end, so a grant Boat issued is
+/// either saved or revoked, and a save that started is never cut short.
+#[allow(clippy::too_many_arguments)]
 async fn wait(
     pending: &mut dyn PendingCallback,
     oauth: &dyn BoatAuthorization,
@@ -283,9 +281,13 @@ async fn wait(
     state: &str,
     verifier: &str,
     commit: &(dyn Fn() -> bool + Send + Sync),
+    until: tokio::time::Instant,
 ) -> Result<(), SignInFailure> {
     loop {
-        let Some((query, page)) = pending.arrived().await else {
+        let Ok(arrived) = tokio::time::timeout_at(until, pending.arrived()).await else {
+            return Err(SignInFailure::Expired);
+        };
+        let Some((query, page)) = arrived else {
             return Err(SignInFailure::Unreachable);
         };
         if query.state.as_deref() != Some(state) {

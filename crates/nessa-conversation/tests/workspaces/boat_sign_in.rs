@@ -535,6 +535,27 @@ async fn cancel_while_the_sign_in_is_saving_lets_the_save_finish_and_report() {
 }
 
 #[tokio::test]
+async fn the_deadline_passing_while_the_sign_in_is_saving_lets_the_save_finish_and_report() {
+    let mut rig = rig(FakeBoat::new());
+    rig.sign_in = rig.sign_in.with_deadline(Duration::from_millis(100));
+    rig.vault.save_delay_ms.store(300, Ordering::SeqCst);
+    let url = rig.sign_in.start().await.unwrap();
+    let query = CallbackQuery {
+        code: Some("code-1".into()),
+        state: Some(query_of(&url, "state")),
+        iss: Some("https://boat.test".into()),
+        error: None,
+    };
+    let (reply, page) = oneshot::channel();
+    rig.visits.send((query, reply)).await.unwrap();
+    // The browser came back in time; the save outlives the deadline.
+    assert_eq!(page.await.unwrap(), CallbackPage::Connected);
+    assert_eq!(settled(&rig.sign_in).await, SignInState::Idle);
+    assert!(rig.vault.saved.lock().unwrap().is_some());
+    assert!(rig.boat.revoked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_refused_renewal_signs_out_and_an_unreachable_boat_keeps_a_live_token() {
     let boat = Arc::new(FakeBoat::new());
     let vault = Arc::new(Memory::default());
