@@ -47,6 +47,8 @@ beforeEach(() => {
   stored.clear()
   refuse.read = false
   refuse.write = false
+  // Storage cleared, as another window would: no refused choice carries over.
+  window.dispatchEvent(new StorageEvent("storage", { key: null }))
   seen[0] = []
   seen[1] = []
   host = document.createElement("div")
@@ -116,5 +118,29 @@ describe("a stored preference", () => {
       window.dispatchEvent(new StorageEvent("storage", { key: "test.colour" }))
     })
     expect(seen[1].at(-1)).toBe("red")
+  })
+
+  it("is read and chosen outside React as the hook does", () => {
+    mount()
+    expect(colour.current()).toBe("grey")
+    act(() => colour.choose("blue"))
+    expect(colour.current()).toBe("blue")
+    expect(seen[0].at(-1)).toBe("blue")
+    expect(seen[1].at(-1)).toBe("blue")
+  })
+
+  it("works the next change out from a choice storage refused to keep", () => {
+    mount()
+    refuse.write = true
+    act(() => colour.choose("red"))
+    expect(colour.current()).toBe("red")
+    expect(seen[1].at(-1)).toBe("red")
+    // Another window's change to the key is what is in force after it.
+    refuse.write = false
+    stored.set("test.colour", "blue")
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "test.colour" }))
+    })
+    expect(colour.current()).toBe("blue")
   })
 })

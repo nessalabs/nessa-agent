@@ -9,7 +9,7 @@
 import { attempt } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { content, css, keys, names } from "./lib/selectors.mjs"
+import { content, css, keys, names, selectorFor } from "./lib/selectors.mjs"
 import { settingsTabFailures } from "./lib/settings-tabs.mjs"
 import {
   contentIs,
@@ -164,6 +164,16 @@ await main(meta, async ({ options, rep, url }) => {
           .catch(() =>
             failures.push("Advanced's page did not open from its sidebar entry"),
           )
+        // It opens on Mode. This window is in Advanced mode (`lib/browser.mjs`),
+        // so its switch is on and the features to choose are listed under it.
+        const modeSwitch = page.locator(
+          `${selectorFor.settingRow("advanced-mode")} [role="switch"]`,
+        )
+        if ((await modeSwitch.getAttribute("aria-checked").catch(() => null)) !== "true")
+          failures.push("Advanced › Mode does not show Advanced mode on")
+        if ((await page.locator(`${css.settingsPanel} [data-feature]`).count()) === 0)
+          failures.push("Advanced mode lists no features to choose")
+        await page.locator(css.settingsTab, { hasText: "Experimental" }).click()
         const advanced = await page.evaluate(
           ({ tab, panel, control, masthead, heading }) => {
             const page = document.querySelector(panel)

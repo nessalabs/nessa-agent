@@ -46,6 +46,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("menuPanel"), knobs.menuPanels)
   assert.equal(count("menu"), knobs.menus)
   assert.equal(count("composer"), knobs.composers)
+  assert.equal(count("appMode"), knobs.appModes)
   assert.equal(count("waitingRow"), knobs.waitingRows)
   assert.equal(count("stream"), knobs.streams)
   assert.equal(count("onboarding"), knobs.onboardings)
@@ -149,9 +150,14 @@ test("positive model steps retain default and raised counts, run last but for ha
         steps
           .slice(first)
           .every((step) =>
-            ["model", "picker", "failedControl", "handoff", "unsigned"].includes(
-              step.kind,
-            ),
+            [
+              "model",
+              "picker",
+              "appMode",
+              "failedControl",
+              "handoff",
+              "unsigned",
+            ].includes(step.kind),
           ),
       )
       let mode = "ask"
@@ -203,6 +209,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         runs: "0",
         composers: "0",
         pickers: "0",
+        appModes: "0",
         raises: "0",
         telemetries: "0",
         apps: "0",

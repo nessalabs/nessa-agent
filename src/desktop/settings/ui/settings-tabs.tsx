@@ -68,6 +68,12 @@ import { TerminalResumeRows } from "./terminal-resume-rows"
 import { NativeHooksRows } from "./native-hooks-rows"
 import { PermissionRuleRows, TrustedAppRows } from "./permission-rule-rows"
 import { ReviewNoticeRows } from "./review-notice-rows"
+import {
+  appFeatures,
+  changeFeatures,
+  featureOn,
+  useFeatureSettings,
+} from "../../app-mode"
 
 /**
  * What each tab shows. Every setting shown is real and remembered: theme,
@@ -98,6 +104,7 @@ export const settingsTabPages: Record<SettingsTabId, ComponentType> = {
   gateways: GatewaysTab,
   access: AccessTab,
   "native-hooks": NativeHooksRows,
+  mode: ModeTab,
   experimental: ExperimentalTab,
   setup: SetupTab,
   about: AboutTab,
@@ -376,6 +383,50 @@ function AccessTab() {
 }
 
 /* ——— Advanced ——— */
+
+/**
+ * The app's mode. Simple shows a fixed set of features and offers no
+ * choice; Advanced lists every feature with its own switch
+ * (`app-mode/model/app-mode.ts` owns the list and what each mode shows).
+ */
+function ModeTab() {
+  const settings = useFeatureSettings()
+  const advanced = settings.mode === "advanced"
+  return (
+    <>
+      <Group>
+        <Row id="advanced-mode">
+          <Toggle
+            checked={advanced}
+            onChange={(on) =>
+              changeFeatures({ kind: "mode", mode: on ? "advanced" : "simple" })
+            }
+          />
+        </Row>
+      </Group>
+      {advanced ? (
+        <Group title="Features">
+          {appFeatures.map((feature) => (
+            <ItemRow
+              key={feature.id}
+              label={feature.label}
+              detail={feature.detail}
+              data-feature={feature.id}
+              control={
+                <Toggle
+                  checked={featureOn(settings, feature.id)}
+                  onChange={(on) =>
+                    changeFeatures({ kind: "feature", id: feature.id, on })
+                  }
+                />
+              }
+            />
+          ))}
+        </Group>
+      ) : null}
+    </>
+  )
+}
 
 /** Previews of features not settled yet, each a switch. */
 function ExperimentalTab() {

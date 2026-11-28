@@ -185,14 +185,66 @@ describe("Advanced", () => {
     expect(navItem("Advanced")?.querySelector("svg.settings-nav-icon")).not.toBeNull()
   })
 
+  const openTab = (name: string) =>
+    act(async () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+        .find((tab) => tab.textContent?.trim() === name)
+        ?.click(),
+    )
+
+  it("opens on Mode: Simple, until Advanced mode lists the features to choose", async () => {
+    localStorage.removeItem("nessa.desktop.app-mode")
+    try {
+      await mount()
+      await act(async () => setOpen(true))
+      await act(async () => navItem("Advanced")?.click())
+      // Mode first, then Experimental and Setup.
+      expect(tabNames()).toEqual(["Mode", "Experimental", "Setup"])
+      const panel = () => document.querySelector("#settings-panel")
+      const switches = () => [
+        ...(panel()?.querySelectorAll<HTMLButtonElement>('[role="switch"]') ?? []),
+      ]
+      // Simple: one switch, and no features to choose.
+      expect(panel()?.textContent).toContain("Advanced mode")
+      expect(switches().map((each) => each.getAttribute("aria-checked"))).toEqual([
+        "false",
+      ])
+      expect(panel()?.querySelector("[data-feature]")).toBeNull()
+      await act(async () => switches()[0]?.click())
+      // Advanced: every feature, with Advanced's default.
+      const feature = panel()?.querySelector('[data-feature="composer-model-picker"]')
+      expect(feature?.textContent).toContain("Model in the composer")
+      const pick = feature?.querySelector<HTMLButtonElement>('[role="switch"]')
+      expect(pick?.getAttribute("aria-checked")).toBe("true")
+      await act(async () => pick?.click())
+      expect(pick?.getAttribute("aria-checked")).toBe("false")
+      expect(
+        JSON.parse(localStorage.getItem("nessa.desktop.app-mode") ?? "null"),
+      ).toEqual({
+        mode: "advanced",
+        picks: { "composer-model-picker": false },
+      })
+      // Simple again: the list goes, and the pick is kept for next time.
+      await act(async () => switches()[0]?.click())
+      expect(panel()?.querySelector("[data-feature]")).toBeNull()
+      expect(
+        JSON.parse(localStorage.getItem("nessa.desktop.app-mode") ?? "null"),
+      ).toEqual({
+        mode: "simple",
+        picks: { "composer-model-picker": false },
+      })
+    } finally {
+      localStorage.removeItem("nessa.desktop.app-mode")
+    }
+  })
+
   it("shows its Experimental tab, with the previews on offer", async () => {
     await mount()
     await act(async () => setOpen(true))
     await act(async () => navItem("Advanced")?.click())
     expect(document.querySelector("#settings-heading")?.textContent).toBe("Advanced")
     expect(document.querySelector(".settings-dek")).toBeNull()
-    // Experimental first, beside Setup.
-    expect(tabNames()).toEqual(["Experimental", "Setup"])
+    await openTab("Experimental")
     // Each preview is a switch, off until turned on.
     const panel = document.querySelector("#settings-panel")
     expect(panel?.textContent).toContain("Subagents")

@@ -289,6 +289,7 @@ export const css = {
   modelStar: '[data-slot="model-level-picker-star"]', // a row's star, aria-pressed
   modelPickerFast: '[data-slot="model-level-picker-fast"]', // Fast beside search
   composerFast: ".desktop-composer-fast", // class: Fast beside the composer's model chip
+  composerMore: ".desktop-composer-more", // class: Simple's + in the composer's row, a menu with Attach files and Model (`MoreMenu`)
   // The line where a conversation's agent ran on in a new session
   // (src/desktop/workspace/ui/transcript/message.tsx); data-handoff is switch or fork
   handoffLine: '[data-role="handoff"]',
@@ -425,6 +426,7 @@ export const localLifetimeRoles = {
 export const selectorFor = {
   /** A row in the open Settings tab, by its catalogue id. */
   settingRow: (id) => `#settings-panel [data-setting="${id}"]`,
+  appFeature: (id) => `#settings-panel [data-feature="${id}"]`, // a feature's row under Advanced › Mode, listed only in Advanced
   railItem: (id) => `[data-rail-item="${id}"]`, // a place on the side rail: agents, notes, …
   appFrameIn: (place) => `[data-app-frame="${place}"]`, // the app's frame in one place: inline, panel, window
   fixtureControl: (name) => `[data-fixture="${name}"]`, // a control inside the fixture app's own document
@@ -507,6 +509,7 @@ export const storage = {
   sideRail: "nessa.desktop.side-rail", // "on" offers the side rail (Advanced › Experimental)
   overviewFilter: "nessa.desktop.workspace.overview-filter", // the Agents overview's filter, as JSON (`remembered-filter.ts`)
   starredModels: "nessa.desktop.starred-models", // the model picker's stars, as JSON (`starred-models-preference.ts`)
+  appMode: "nessa.desktop.app-mode", // Simple or Advanced and the features picked, as JSON (`app-mode-preference.ts`)
 }
 
 /** The number each overview filter choice shows and answers to (`choiceKey`). */

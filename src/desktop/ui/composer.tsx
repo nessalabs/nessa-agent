@@ -5,7 +5,9 @@ import {
 } from "@nessa-ui/react/composer-access-mode"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import { ModelFastMode } from "@nessa-ui/react/model-capability-controls"
+import { useFeature } from "../app-mode"
 import { pastedFiles } from "../adapters/pasted-files"
+import { shortModelName } from "../model/composer-options"
 import type { DraftImage } from "../workspace/model/draft-images"
 import { defaultThinkingLevel } from "../model/composer-options"
 import { nextPageMode } from "../model/page-mode"
@@ -18,6 +20,13 @@ import { ComposerSpoken } from "./composer-spoken"
 import { DesktopIcon } from "./icons"
 import { IconButton } from "./icon-button"
 import { tooltip } from "./tooltip"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuItem,
+  MenuShortcut,
+} from "./menu"
 
 const noImages: readonly DraftImage[] = []
 
@@ -181,8 +190,27 @@ export function Composer({
   const [thinking, setThinking] = useState(defaultThinkingLevel)
 
   const [fast, setFast] = useState(false)
+  // Simple keeps the model under +; Advanced shows it in the row unless the
+  // person turned that off (`app-mode`).
+  const modelInRow = useFeature("composer-model-picker")
+  const [pickerOpen, setPickerOpen] = useState(false)
   const warning = [modelNote, access?.note, attached?.note].find(
     (note) => note?.tone === "warning",
+  )
+
+  const picker = (
+    <ComposerModelPicker
+      disabled={modelDisabled}
+      value={shown}
+      onModelChange={onModelChange}
+      thinking={thinking}
+      onThinkingChange={setThinking}
+      fast={{ pressed: fast, onPressedChange: setFast }}
+      className="desktop-chip desktop-chip-model"
+      // Held here in both modes, so a mode change never leaves it open unseen.
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
+    />
   )
 
   return (
@@ -271,44 +299,61 @@ export function Composer({
         </div>
         <div className="desktop-composer-row">
           <div className="desktop-composer-controls">
-            {attached ? (
-              <AttachButton onFiles={attached.onPaste} note={attached.note} />
-            ) : null}
-            <span
-              className="desktop-tip-anchor"
-              {...said(modelNote)}
-              {...tooltip(
-                modelNote?.text ??
-                  (onModelChange
-                    ? "Model and thinking"
-                    : "Thinking. Start a new conversation to choose another model"),
-                { side: "above" },
-              )}
-            >
-              <ComposerModelPicker
-                disabled={modelDisabled}
-                value={shown}
-                onModelChange={onModelChange}
-                thinking={thinking}
-                onThinkingChange={setThinking}
-                fast={{ pressed: fast, onPressedChange: setFast }}
-                className="desktop-chip desktop-chip-model"
-              />
-            </span>
-            <span
-              className="desktop-tip-anchor"
-              {...tooltip(model?.fastMode ? "Fast mode" : "This model has no Fast mode", {
-                side: "above",
-              })}
-            >
-              {/* Fast is remembered while switching models, but only on for one that has it. */}
-              <ModelFastMode
-                pressed={fast && model?.fastMode === true}
-                onPressedChange={setFast}
-                disabled={!model?.fastMode}
-                className="desktop-chip desktop-composer-fast"
-              />
-            </span>
+            {modelInRow ? (
+              <>
+                {attached ? (
+                  <AttachButton onFiles={attached.onPaste} note={attached.note} />
+                ) : null}
+                <span
+                  className="desktop-tip-anchor"
+                  {...said(modelNote)}
+                  {...tooltip(
+                    modelNote?.text ??
+                      (onModelChange
+                        ? "Model and thinking"
+                        : "Thinking. Start a new conversation to choose another model"),
+                    { side: "above" },
+                  )}
+                >
+                  {picker}
+                </span>
+                <span
+                  className="desktop-tip-anchor"
+                  {...tooltip(
+                    model?.fastMode ? "Fast mode" : "This model has no Fast mode",
+                    { side: "above" },
+                  )}
+                >
+                  {/* Fast is remembered while switching models, but only on for one that has it. */}
+                  <ModelFastMode
+                    pressed={fast && model?.fastMode === true}
+                    onPressedChange={setFast}
+                    disabled={!model?.fastMode}
+                    className="desktop-chip desktop-composer-fast"
+                  />
+                </span>
+              </>
+            ) : (
+              <>
+                <MoreMenu
+                  attach={attached}
+                  model={model ? shortModelName(model) : undefined}
+                  modelDisabled={modelDisabled}
+                  modelNote={
+                    modelNote ??
+                    (onModelChange
+                      ? undefined
+                      : {
+                          tone: "neutral",
+                          text: "Thinking. Start a new conversation to choose another model",
+                        })
+                  }
+                  onModel={() => setPickerOpen(true)}
+                />
+                {/* Opened from +; its chip is not shown, and focus goes back to +. */}
+                <span hidden>{picker}</span>
+              </>
+            )}
           </div>
           <div className="desktop-composer-controls">
             <ComposerAccessMode
@@ -426,10 +471,32 @@ function VoiceControls({ voice }: { voice: ComposerVoice }) {
 }
 
 /**
- * The composer's Attach button: opens the system's file picker and offers
- * every file picked to `onFiles`, as a paste of them would be. The input is
- * emptied after each pick, so picking the same file again is a pick too.
+ * The system's file picker, behind a hidden input: `pick` opens it and every
+ * file picked is offered to `onFiles`, as a paste of them would be. The input
+ * is emptied after each pick, so picking the same file again is a pick too.
  */
+function useFilePicker(onFiles: ((files: File[]) => void) | undefined) {
+  const input = useRef<HTMLInputElement>(null)
+  const element = onFiles ? (
+    <input
+      ref={input}
+      type="file"
+      multiple
+      hidden
+      aria-hidden="true"
+      tabIndex={-1}
+      className="desktop-composer-attach-input"
+      onChange={(event) => {
+        const files = Array.from(event.currentTarget.files ?? [])
+        event.currentTarget.value = ""
+        if (files.length) onFiles(files)
+      }}
+    />
+  ) : null
+  return { element, pick: () => input.current?.click() }
+}
+
+/** The composer's Attach button: opens the system's file picker. */
 function AttachButton({
   onFiles,
   note,
@@ -437,33 +504,83 @@ function AttachButton({
   onFiles: (files: File[]) => void
   note?: ComposerNote
 }) {
-  const input = useRef<HTMLInputElement>(null)
+  const files = useFilePicker(onFiles)
   return (
     <>
-      <input
-        ref={input}
-        type="file"
-        multiple
-        hidden
-        aria-hidden="true"
-        tabIndex={-1}
-        className="desktop-composer-attach-input"
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? [])
-          event.currentTarget.value = ""
-          if (files.length) onFiles(files)
-        }}
-      />
+      {files.element}
       <button
         type="button"
         className="desktop-chip desktop-composer-attach"
         aria-label="Attach files"
         {...said(note)}
         {...tooltip(note?.text ?? "Attach files", { side: "above" })}
-        onClick={() => input.current?.click()}
+        onClick={files.pick}
       >
         <DesktopIcon name="attach" />
       </button>
+    </>
+  )
+}
+
+/**
+ * Simple's +: what the row leaves out, in a menu — attach files, and the
+ * model, which opens the same picker the model's chip opens. Each item says
+ * its own note, and + says them all (its tooltip, and the dot of a warning),
+ * since the controls they belong to are not in the row.
+ */
+function MoreMenu({
+  attach,
+  model,
+  modelDisabled,
+  modelNote,
+  onModel,
+}: {
+  attach: ComposerImages | undefined
+  /** The model's short name, where the catalogue lists it. */
+  model: string | undefined
+  modelDisabled: boolean
+  modelNote: ComposerNote | undefined
+  onModel: () => void
+}) {
+  const files = useFilePicker(attach?.onPaste)
+  const notes = [attach?.note, modelNote].filter((each) => each !== undefined)
+  const note: ComposerNote | undefined = notes.length
+    ? {
+        tone: notes.some((each) => each.tone === "warning") ? "warning" : "neutral",
+        text: notes.map((each) => each.text).join("\n"),
+      }
+    : undefined
+  return (
+    <>
+      {files.element}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="desktop-chip desktop-composer-more"
+            aria-label="More"
+            {...said(note)}
+            {...tooltip(note?.text ?? (attach ? "Attach files and model" : "Model"), {
+              side: "above",
+            })}
+          >
+            <DesktopIcon name="add" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="top" align="start" sideOffset={6}>
+          {attach ? (
+            <MenuItem onSelect={files.pick} {...said(attach.note)}>
+              <DesktopIcon name="file" />
+              Attach files
+            </MenuItem>
+          ) : null}
+          <MenuItem disabled={modelDisabled} onSelect={onModel} {...said(modelNote)}>
+            <DesktopIcon name="thinking" />
+            Model
+            {model ? <MenuShortcut>{model}</MenuShortcut> : null}
+          </MenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </>
   )
 }

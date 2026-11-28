@@ -1515,8 +1515,9 @@ html:not(.dark) [data-surface] {
   background: color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 
-/* Attach files: an icon-only chip, as square as the chip is tall. */
-.desktop-composer-attach {
+/* Attach files, and Simple's + (`MoreMenu`): an icon-only chip, as square as the chip is tall. */
+.desktop-composer-attach,
+.desktop-composer-more {
   width: 30px;
   justify-content: center;
   padding: 0;
