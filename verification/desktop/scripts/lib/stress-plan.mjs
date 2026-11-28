@@ -229,6 +229,10 @@ export const KNOBS = {
     default: 1,
     what: "times GitHub is connected through a fake GitHub, an agent reads through the broker without receiving the sign-in, then disconnected",
   },
+  boatSignIns: {
+    default: 1,
+    what: "times Boat is connected by Sign in with Boat through a fake Boat (no token field): a Cancel on Boat's page said on the row, then a sign-in whose browser comes back to the gateway, the account named, its one-minute access token renewed on later reads, no token in the page or log, and Disconnect revoking it",
+  },
   voices: {
     default: 1,
     what: "voice calls through a fake realtime provider: a key saved in Settings, Talk, spoken words sent tidied and the reply handed back, the microphone muted, a turn stopped by voice, and away from the window the floating pill: its mute and speaker switches, gone when the window is back in front, and End on it",
@@ -401,6 +405,7 @@ export function plan(knobs, accessScenario = "full") {
   add(knobs.runs, () => ({ kind: "run" }))
   add(knobs.composers, () => ({ kind: "composer" }))
   add(knobs.githubs, () => ({ kind: "github" }))
+  add(knobs.boatSignIns, () => ({ kind: "boatSignIn" }))
   add(knobs.voices, () => ({ kind: "voice" }))
   add(knobs.passphrases, () => ({ kind: "passphrase" }))
   add(knobs.channels, () => ({ kind: "channel" }))

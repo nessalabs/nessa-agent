@@ -499,6 +499,7 @@ import {
   startFakeGithub,
   disposableGithubEnvironment,
 } from "./lib/fake-github.mjs"
+import { FAKE_BOAT_LOGIN, startFakeBoat } from "./lib/fake-boat.mjs"
 import { startFakeRealtime } from "./lib/fake-realtime.mjs"
 import { otelIds, startFakeOtlp } from "./lib/fake-otlp.mjs"
 import { freePort } from "./lib/server.mjs"
@@ -5777,6 +5778,228 @@ const steps = {
       if (stored()) failures.push(`config.json still holds ${name} after Remove`)
       await closeSettings(page)
     })
+    // The gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  /**
+   * Sign in with Boat, the one way Boat is connected (no token field):
+   * Settings › Accounts › Boat opens Boat in the browser (a popup here); a
+   * Cancel on Boat's page is said on the row; a sign-in comes back to the
+   * gateway's loopback callback, which exchanges the code with PKCE and
+   * saves the connection. The row then names the account; the access token
+   * renews through Boat on later reads; no token reaches the page or the
+   * log; Disconnect revokes the sign-in in Boat.
+   */
+  async boatSignIn(run, step, failures) {
+    const boat = run.stack.boat
+    if (!boat) {
+      failures.push("the stack was started without the fake Boat")
+      return
+    }
+    const row = run.page.locator(css.boat)
+    const state = () => row.getAttribute("data-boat-state").catch(() => null)
+    const shot = (name) =>
+      run.evidence
+        ? run.page
+            .screenshot({ path: join(run.evidence, `boat-${name}.png`) })
+            .catch(() => {})
+        : undefined
+    // One click on Sign in with Boat, and Boat's page in the browser.
+    // One click on Sign in with Boat, and Boat's page in the browser. The
+    // window here stands in for the app, whose link to Boat is a navigation
+    // the host hands to the system browser (src-tauri/src/links.rs): that
+    // hand-off is played here by taking the link's click, and the page is
+    // opened in a page of its own, as that browser would.
+    const signIn = async () => {
+      await run.page.evaluate((base) => {
+        window.__boatHanded = null
+        const click = HTMLAnchorElement.prototype.click
+        window.__boatClick = click
+        HTMLAnchorElement.prototype.click = function () {
+          if (this.href.startsWith(base)) window.__boatHanded = this.href
+          else click.call(this)
+        }
+      }, boat.base)
+      try {
+        await row.getByRole("button", { name: names.boatSignIn }).click()
+        await unlockVault(run.page)
+        let url = null
+        await waitFor(
+          async () => (url = await run.page.evaluate(() => window.__boatHanded)),
+          30_000,
+        )
+        if (!url) return "no page was opened"
+        const page = await run.page.context().newPage()
+        try {
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 })
+          return await page.locator("h1").textContent({ timeout: 30_000 })
+        } catch (error) {
+          return `the browser failed: ${error.message}`
+        } finally {
+          await page.close().catch(() => {})
+        }
+      } finally {
+        await run.page
+          .evaluate(() => {
+            HTMLAnchorElement.prototype.click = window.__boatClick
+          })
+          .catch(() => {})
+      }
+    }
+    await run.exclusive(async () => {
+      const needsUnlock = (await run.client.vault.status()).state === "locked"
+      await openAccounts(run.page)
+      if (needsUnlock) await run.page.locator('[data-vault-dialog="unlock"]').waitFor()
+      await unlockVault(run.page, { expectedContainer: "[data-settings-layers]" })
+      if (!(await waitFor(async () => (await state()) === "disconnected", 30_000))) {
+        failures.push(`Boat was ${await state()} before Sign in with Boat`)
+        return
+      }
+      if ((await row.locator("input").count()) > 0)
+        failures.push("the Boat row offers a field, though signing in is the only way")
+      await shot("signed-out")
+      // Cancel on Boat's page: nothing is saved, and the row says so.
+      boat.deny()
+      const cancelled = await signIn()
+      if (cancelled !== "Nessa could not connect to Boat")
+        failures.push(
+          `after Cancel on Boat the browser says ${JSON.stringify(cancelled)}`,
+        )
+      if (
+        !(await waitFor(
+          async () =>
+            (await row.textContent()).includes("Sign-in was cancelled on Boat."),
+          15_000,
+        ))
+      )
+        failures.push(
+          `the row does not say the sign-in was cancelled: ${await row.textContent()}`,
+        )
+      await shot("cancelled")
+      // Approved: the browser comes back, and the row names the account.
+      const said = await signIn()
+      if (said !== "Nessa is connected to Boat")
+        failures.push(`after approving, the browser says ${JSON.stringify(said)}`)
+      const connected = await waitFor(
+        async () =>
+          (await state()) === "connected" &&
+          (await row.textContent()).includes(`Connected as ${FAKE_BOAT_LOGIN}`),
+        30_000,
+      )
+      if (!connected) {
+        failures.push(
+          `the row is ${await state()} after Boat approved: ${await row.textContent()}`,
+        )
+        return
+      }
+      await shot("connected")
+      await closeSettings(run.page)
+    })
+    if (failures.length) return
+    // A new account: signing in made `nessa` and set it to the posture
+    // Nessa admits, from Boat's default, which Nessa would refuse.
+    const made = boat.nessa()
+    if (boat.calls.createEnvironment !== 1 || boat.calls.updateEnvironment !== 1)
+      failures.push(
+        `a new account's sign-in made ${boat.calls.createEnvironment} and set ${boat.calls.updateEnvironment} environments`,
+      )
+    if (!made?.passAgentsCredentials || made.passGithub || made.passSecrets)
+      failures.push(`the nessa environment it made is ${JSON.stringify(made)}`)
+    const asked = boat.lastAuthorize() ?? {}
+    if (asked.code_challenge_method !== "S256" || !asked.code_challenge)
+      failures.push("the sign-in did not ask Boat with a PKCE S256 challenge")
+    if (
+      !String(asked.scope ?? "")
+        .split(" ")
+        .includes("account.read")
+    )
+      failures.push(`the sign-in asked for scopes ${JSON.stringify(asked.scope)}`)
+    // The access token lasts a minute: reads renew it, and each renewed one works.
+    const renewedBefore = boat.calls.refresh
+    for (let read = 0; read < 2; read++) {
+      const status = await run.client.boat.status()
+      if (
+        status.state !== "connected" ||
+        status.via !== "signIn" ||
+        status.login !== FAKE_BOAT_LOGIN
+      )
+        failures.push(`a read after sign-in says ${JSON.stringify(status)}`)
+    }
+    if (boat.calls.refresh < renewedBefore + 2)
+      failures.push(
+        `two reads of a due sign-in renewed it ${boat.calls.refresh - renewedBefore} times`,
+      )
+    const log = run.stack.gateway.log()
+    const page = await run.page.content()
+    for (const token of boat.issued)
+      if (log.includes(token) || page.includes(token)) {
+        failures.push("a Boat token reached the gateway log or the page")
+        break
+      }
+    if (failures.length) return
+    await run.exclusive(async () => {
+      await openAccounts(run.page)
+      await row.getByRole("button", { name: names.boatDisconnect }).click()
+      await unlockVault(run.page)
+      if (!(await waitFor(async () => (await state()) === "disconnected", 30_000)))
+        failures.push(`the row is ${await state()} after Disconnect`)
+      await closeSettings(run.page)
+    })
+    if (boat.calls.revoke < 1 || boat.live() !== 0)
+      failures.push(
+        `Disconnect left ${boat.live()} live Boat refresh tokens (${boat.calls.revoke} revokes)`,
+      )
+    if (failures.length) return
+    // An account that already has `nessa`: Nessa never changes it. In the
+    // admitted posture it is used as it is; in any other the sign-in fails
+    // and says why, and the grant is revoked. The browser here is a plain
+    // fetch that follows Boat's redirect to the gateway, as a browser does.
+    const approve = async () => {
+      const started = await run.client.boat.signIn()
+      const url = started.signIn?.url
+      if (!url) return started
+      await fetch(url).catch(() => {})
+      let status = started
+      await waitFor(
+        async () => (status = await run.client.boat.status()).signIn?.state !== "waiting",
+        30_000,
+      )
+      return status
+    }
+    const settings = {
+      create: boat.calls.createEnvironment,
+      update: boat.calls.updateEnvironment,
+    }
+    boat.environment({ passGithub: true })
+    const refused = await approve()
+    if (
+      refused.state !== "disconnected" ||
+      refused.signIn?.cause !== "boat_environment_blocks_credentials"
+    )
+      failures.push(
+        `an existing nessa that passes GitHub ended the sign-in ${JSON.stringify(refused)}`,
+      )
+    if (!boat.nessa()?.passGithub)
+      failures.push("Nessa changed an existing nessa environment")
+    if (boat.live() !== 0)
+      failures.push("a refused sign-in left its refresh token live in Boat")
+    boat.environment({})
+    const kept = await approve()
+    if (kept.state !== "connected" || kept.login !== FAKE_BOAT_LOGIN)
+      failures.push(
+        `an existing admitted nessa ended the sign-in ${JSON.stringify(kept)}`,
+      )
+    if (
+      boat.calls.createEnvironment !== settings.create ||
+      boat.calls.updateEnvironment !== settings.update
+    )
+      failures.push("signing in to an account that has nessa made or changed one")
+    if (
+      (await run.client.boat.disconnect()).state !== "disconnected" ||
+      boat.live() !== 0
+    )
+      failures.push("Disconnect after the second sign-in left it connected in Boat")
     // The gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
@@ -15117,6 +15340,10 @@ async function startStack(options) {
     throw error
   }
   const github = knobs.githubs > 0 ? await startFakeGithub() : null
+  // The `boatSignIn` step's Boat. Its access tokens last a minute, inside
+  // the gateway's five-minute renewal margin, so every read of the
+  // connection after sign-in renews it through the fake.
+  const boat = knobs.boatSignIns > 0 ? await startFakeBoat({ expiresIn: 60 }) : null
   // The `voice` step's realtime provider, on this machine.
   const realtime = knobs.voices > 0 ? await startFakeRealtime() : null
   // The `telemetry` step's collector. With it the gateway exports for the
@@ -15135,6 +15362,7 @@ async function startStack(options) {
           NESSA_GITHUB_APP: github.app(join(directory, "github-app.json")),
         }
       : {}),
+    ...(boat ? { NESSA_BOAT_APP: boat.app(join(directory, "boat-app.json")) } : {}),
     // The `tunnel` step's cloudflared (debug builds only).
     NESSA_TUNNEL_PROGRAM: fakeCloudflared(directory),
   }
@@ -15228,6 +15456,7 @@ async function startStack(options) {
   } catch (error) {
     await stack?.close()
     await github?.close()
+    await boat?.close()
     await realtime?.close()
     await collector?.close()
     rmSync(directory, { recursive: true, force: true })
@@ -15239,6 +15468,7 @@ async function startStack(options) {
       await close()
     } finally {
       await github?.close()
+      await boat?.close()
       await realtime?.close()
       await collector?.close()
       rmSync(directory, { recursive: true, force: true })
@@ -15252,6 +15482,7 @@ async function startStack(options) {
     nativeAddress,
     nativeListen,
     github,
+    boat,
     realtime,
     collector,
     scenario,

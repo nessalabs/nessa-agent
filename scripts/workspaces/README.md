@@ -77,3 +77,15 @@ absence, then requires `environment_unavailable` on the saved assignment. This
 checks durable recovery with a fresh connection. A surviving live connection may
 instead retain an earlier unconfirmed cleanup after external deletion; the runner
 does not reset that live state or infer cleanup from the provider's deletion reply.
+
+## Sign in with Boat, live
+
+`boat-sign-in-live.mjs` signs a temporary gateway in to the real Boat through
+the released OAuth app (`protocol/defaults/boat-app.json`), then disconnects.
+It opens Boat's page in this machine's browser and waits for you to approve.
+It creates no VM and prints no token.
+
+```sh
+cargo build -p nessa-server --bin nessa
+node scripts/workspaces/boat-sign-in-live.mjs
+```

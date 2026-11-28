@@ -1597,6 +1597,11 @@ html:not(.dark) :is(.settings, .settings-surface) .settings-card {
 .settings-boat-fields .settings-button {
   flex: none;
 }
+/* While the browser is out: the line saying so, then its two buttons. */
+.settings-boat-waiting {
+  display: grid;
+  gap: 6px;
+}
 /* A token is one short paste: the field need not span the page. */
 .settings-boat-fields .settings-input {
   flex: 0 1 260px;

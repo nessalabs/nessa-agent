@@ -296,7 +296,7 @@ export const settingsEntries = [
     tab: "accounts",
     label: "Boat",
     detail: "Cloud workspaces using your connected agent subscriptions.",
-    keywords: "cloud vm compute workspace token chatgpt claude",
+    keywords: "cloud vm compute workspace sign in chatgpt claude",
   },
   {
     id: "agent37",

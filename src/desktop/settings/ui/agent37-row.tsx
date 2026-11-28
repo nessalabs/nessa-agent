@@ -10,7 +10,7 @@ import {
 import { NessaAgent37Error, type Agent37Status } from "@nessa/client"
 import { Dialog } from "@nessa-ui/react/dialog"
 import type { Agent37Gateway } from "../adapters/agent37-gateway"
-import { useVaultUnlock } from "../../../vault"
+import { useVaultSettled, useVaultUnlock } from "../../../vault"
 import { setting } from "../model/settings-catalogue"
 import { FoundSetting, ItemRow, RowAction } from "./settings-controls"
 
@@ -48,6 +48,7 @@ export function Agent37Row({
 } = {}) {
   const gateway = useContext(Agent37Context)
   const ensure = useVaultUnlock()
+  const settled = useVaultSettled()
   const found = useContext(FoundSetting) === "agent37"
   const entry = setting("agent37")
   const reads = useRef(0)
@@ -77,7 +78,7 @@ export function Agent37Row({
     return () => {
       current = false
     }
-  }, [gateway, round])
+  }, [gateway, round, settled])
   const act = async (
     action: (gateway: Agent37Gateway) => Promise<void>,
     fallback: (cause: unknown) => string,

@@ -1,6 +1,7 @@
 import { Agent37Provider } from "./settings/ui/agent37-row"
 import { TerminalSourceProvider } from "./workspace/ui/terminals/terminal-source"
 import { BoatProvider } from "./settings/ui/boat-row"
+import { openInBrowser } from "./settings/adapters/boat-gateway"
 import { ReplyStyleProvider } from "./settings/ui/reply-style-control"
 import { InstalledAppsProvider } from "./installed-apps/ui/installed-apps-tab"
 import { DevicesProvider } from "./devices"
@@ -188,6 +189,7 @@ const dependencies = createDesktopDependencies({
   vault: hasNativeHost() ? nativeVault : undefined,
   signInToProvider,
   paths: channelPaths,
+  openInBrowser: openInBrowser(hasNativeHost()),
   providerLoginAvailable,
   // The window's navigation policy hands an http(s) address to the person's
   // browser and keeps the window where it is (src-tauri/src/links.rs).

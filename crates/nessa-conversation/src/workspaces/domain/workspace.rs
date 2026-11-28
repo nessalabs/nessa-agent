@@ -125,6 +125,48 @@ pub struct BoatConnection {
     pub account: BoatAccount,
     pub environment: String,
     pub image: String,
+    /// Present when the account came from Sign in with Boat: what renews
+    /// `account`'s token, which then lasts only until `expires_at_ms`.
+    /// Absent for a pasted API token, which does not expire.
+    pub grant: Option<BoatGrant>,
+}
+
+/// What Sign in with Boat left: the refresh token that renews the access
+/// token, when that access token stops working, and whose account it is.
+/// Boat rotates the refresh token on every renewal, so only the newest one
+/// ever works.
+#[derive(Clone)]
+pub struct BoatGrant {
+    pub refresh: Secret,
+    /// Wall-clock milliseconds since the Unix epoch.
+    pub expires_at_ms: u64,
+    /// The Boat login the person signed in as, shown in Settings.
+    pub login: String,
+}
+impl BoatGrant {
+    pub fn new(refresh: String, expires_at_ms: u64, login: String) -> Result<Self, Failure> {
+        if !token_shaped(&refresh)
+            || login.is_empty()
+            || login.len() > 256
+            || login.chars().any(char::is_control)
+        {
+            return Err(Failure::InvalidInput);
+        }
+        Ok(Self {
+            refresh: Secret::new(refresh.into_bytes()),
+            expires_at_ms,
+            login,
+        })
+    }
+    /// Whether the access token is past, or within `margin_ms` of, its end.
+    pub fn due(&self, now_ms: u64, margin_ms: u64) -> bool {
+        now_ms.saturating_add(margin_ms) >= self.expires_at_ms
+    }
+}
+
+/// A token Boat could have issued: 1 to 4096 characters, no whitespace.
+fn token_shaped(token: &str) -> bool {
+    !token.is_empty() && token.chars().count() <= 4096 && !token.chars().any(char::is_whitespace)
 }
 impl BoatConnection {
     pub fn new(token: String, environment: String, image: String) -> Result<Self, Failure> {
@@ -135,12 +177,7 @@ impl BoatConnection {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
         };
-        if token.is_empty()
-            || token.chars().count() > 4096
-            || token.chars().any(char::is_whitespace)
-            || !name(&environment)
-            || !name(&image)
-        {
+        if !token_shaped(&token) || !name(&environment) || !name(&image) {
             return Err(Failure::InvalidInput);
         }
         Ok(Self {
@@ -149,7 +186,14 @@ impl BoatConnection {
             },
             environment,
             image,
+            grant: None,
         })
+    }
+    /// The same connection, renewed by `grant`: its token is an access
+    /// token Sign in with Boat issued.
+    pub fn with_grant(mut self, grant: BoatGrant) -> Self {
+        self.grant = Some(grant);
+        self
     }
     /// The spec a new VM is made with: this connection's environment, and
     /// `pinned` (the image this build pins) or else the image saved here.

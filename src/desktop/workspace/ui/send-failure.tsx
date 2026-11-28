@@ -7,7 +7,7 @@ import { useRememberedValue } from "../adapters/store/remembered-session"
 import { selectFailedMessage } from "../adapters/store/selectors"
 import { failureCopy } from "./failure-copy"
 import { agentName, agentOf } from "../model/workspace-index"
-import { BoatTokenForm, useBoatConnection } from "../../settings/ui/boat-row"
+import { BoatSignIn, useBoatConnection } from "../../settings/ui/boat-row"
 
 /**
  * What a chat's dock offers for its refused message: only a way to fix
@@ -78,7 +78,7 @@ function BoatRecovery() {
   return (
     <div className="settings-boat" data-boat-connect>
       <p role="status">Chats on Boat need Boat connected on this Nessa.</p>
-      <BoatTokenForm connection={boat} />
+      <BoatSignIn connection={boat} />
       {boat.error && <p role="alert">{boat.error}</p>}
     </div>
   )
