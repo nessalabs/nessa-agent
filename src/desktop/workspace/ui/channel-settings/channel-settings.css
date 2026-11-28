@@ -52,7 +52,7 @@
 }
 
 .channel-settings-tab:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: -2px;
 }
 
@@ -113,7 +113,7 @@
 }
 
 .channel-settings-place:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--desktop-focus-outline);
   outline-offset: -2px;
   border-radius: var(--desktop-radius-xs);
 }
