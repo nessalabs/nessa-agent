@@ -510,12 +510,20 @@ export interface ListGroup {
   readonly id: string
   readonly label: string
   readonly ids: readonly string[]
+  /**
+   * The coordinator's group before its chat has begun: the conversation the
+   * channel keeps for it, which the list offers to start in place of a row.
+   */
+  readonly start?: string
 }
 
 /**
  * The session list's groups for the current view and a search, as ids: the
  * channel's coordinator on top while it is on, then running sessions kept in
- * a group above the rest unless `runningFirst` is off.
+ * a group above the rest unless `runningFirst` is off. A coordinator that is
+ * on is always there: before its chat has begun its group holds no row and
+ * says which conversation to start (`start`). A search lists only what it
+ * finds, so it leaves that out.
  */
 export function selectListGroups(
   state: Root,
@@ -526,7 +534,7 @@ export function selectListGroups(
   const channel = selectChannel(state, view.channelId)
   const coordinatorId =
     channel?.coordinatorOn === false ? undefined : channel?.coordinatorConversationId
-  return groupByStatus(
+  const groups: ListGroup[] = groupByStatus(
     listed(state).filter(
       (session) => inView(session, view) && matchesSearch(session, query),
     ),
@@ -536,6 +544,15 @@ export function selectListGroups(
     label: group.label,
     ids: group.sessions.map((session) => session.id),
   }))
+  const begun =
+    coordinatorId === undefined || selectSession(state, coordinatorId) !== undefined
+  // As `matchesSearch` reads it: spaces alone are no search.
+  return begun || query.trim()
+    ? groups
+    : [
+        { id: "coordinator", label: "Coordinator", ids: [], start: coordinatorId },
+        ...groups,
+      ]
 }
 
 /** Whether two list readings show the same rows in the same groups. */
@@ -549,6 +566,7 @@ export function sameListGroups(
       (group, index) =>
         group.id === b[index].id &&
         group.label === b[index].label &&
+        group.start === b[index].start &&
         group.ids.length === b[index].ids.length &&
         group.ids.every((id, row) => id === b[index].ids[row]),
     )

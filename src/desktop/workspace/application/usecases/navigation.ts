@@ -14,6 +14,7 @@ import {
 } from "../../model/window-fit"
 import {
   channelOf,
+  draftOf,
   keepShownFailures,
   listedSessions,
   sameContent,
@@ -82,8 +83,9 @@ export function selectChannel(
 }
 
 /**
- * Opens a channel from the sidebar that lists sessions inline: its newest
- * session, in place or beside, or a new session's home when it has none.
+ * Opens a channel from the sidebar that lists sessions inline, in place or
+ * beside: its coordinator's chat while that is on, begun or not; otherwise
+ * its newest session, or a new session's home when it has none.
  */
 export function openChannel(
   state: WorkspaceState,
@@ -114,6 +116,12 @@ export function openChannel(
     return beside
       ? openBeside(disclosed, { sessionId: latest.id, room })
       : openSession(disclosed, { sessionId: latest.id })
+  // A coordinator's chat not yet begun may be a draft already, shown in
+  // another pane or kept for what was typed in it: that one opens.
+  if (main && draftOf(state, main))
+    return beside
+      ? openBeside(disclosed, { sessionId: main, room })
+      : openSession(disclosed, { sessionId: main })
   if (!draftId) return disclosed
   return createDraft(disclosed, {
     draftId: main ?? draftId,
